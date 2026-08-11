@@ -37,8 +37,12 @@ Requirements: Rust 1.85 or newer (developed against 1.97).
 | Format               | `cargo fmt` / `cargo fmt --check`                |
 | Lint                 | `cargo clippy --all-targets -- -D warnings`      |
 
-Example: `cargo run -- build path/to/program.mink` loads a MINK source file
-and runs the (not yet implemented) build pipeline.
+Examples:
+- `cargo run -- check path/to/program.mink` loads a MINK source file and runs
+  lexical analysis (exit 0 when the file lexes cleanly, exit 1 with
+diagnostics otherwise).
+- `cargo run -- build path/to/program.mink` loads a MINK source file and runs
+the (not yet implemented) build pipeline.
 
 See [`docs/implementation/ENGINEERING_FOUNDATION.md`](docs/implementation/ENGINEERING_FOUNDATION.md)
 for engineering decisions and the compiler subsystem layout.

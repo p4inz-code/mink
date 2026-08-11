@@ -1,11 +1,26 @@
-//! Lexical analysis (placeholder).
+//! Lexical analysis: converts MINK source text into a token stream.
 //!
-//! Planned responsibility: turn MINK source text into a token stream,
-//! preserving an accurate source [`Span`](crate::source::Span) on every
-//! token and emitting lexical diagnostics through the diagnostics
-//! subsystem.
+//! The lexer turns a [`SourceFile`](crate::source::SourceFile) into a
+//! deterministic sequence of [`Token`]s with accurate byte-based
+//! [`Span`](crate::source::Span)s, reporting lexical problems as
+//! [`LexError`]s instead of panicking. It is the first stage of the compiler
+//! pipeline (see `docs/compiler/COMPILER_ARCHITECTURE.md` §2–3).
 //!
-//! Reference: `docs/compiler/COMPILER_ARCHITECTURE.md` §3 (Frontend).
+//! Two usage styles are supported:
 //!
-//! Not yet implemented; this module exists to establish the subsystem
-//! layout so later sessions can implement it incrementally.
+//! - one-shot: [`lex`] returns a complete [`Lexed`] stream (used by the
+//!   driver and tests), and
+//! - pull-based: [`Lexer::new`] + [`Lexer::next_token`] for a future parser
+//!   that needs incremental consumption and lookahead.
+//!
+//! Lexical decisions and the provisional token/keyword set are documented in
+//! `docs/implementation/LEXER_IMPLEMENTATION.md`.
+
+mod error;
+mod keywords;
+mod scanner;
+mod token;
+
+pub use error::{LexError, LexErrorKind};
+pub use scanner::{Lexed, Lexer, lex};
+pub use token::{Token, TokenKind};

@@ -88,7 +88,7 @@ fn build_with_valid_source_reports_not_implemented() {
 
 #[test]
 fn recognized_commands_report_not_implemented() {
-    for command in ["check", "run", "test", "fmt"] {
+    for command in ["run", "test", "fmt"] {
         let output = mink().arg(command).output().unwrap();
         assert_eq!(output.status.code(), Some(2), "for command '{command}'");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -111,6 +111,72 @@ fn unknown_command_fails_cleanly() {
 #[test]
 fn build_without_path_reports_usage_error() {
     let output = mink().arg("build").output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing path"), "stderr was: {stderr}");
+}
+
+#[test]
+fn check_with_valid_source_passes() {
+    // Note: the filename is unique to this test; the shared helper writes to
+    // a per-process temp dir and parallel tests must not reuse names.
+    let path = temp_source("check_valid.mink", "fn main() {}\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("passed lexical analysis"),
+        "stdout was: {stdout}"
+    );
+}
+
+#[test]
+fn check_with_empty_source_passes() {
+    let path = temp_source("empty.mink", "");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn check_with_invalid_lexical_source_fails() {
+    let path = temp_source("bad.mink", "let x = \"unterminated\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unterminated string literal"),
+        "stderr was: {stderr}"
+    );
+    assert!(
+        stderr.contains("-->"),
+        "stderr should include a location: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_missing_file_fails() {
+    let missing = std::env::temp_dir().join(format!(
+        "mink_cli_test_{}_missing_check.mink",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&missing);
+    let output = mink().arg("check").arg(&missing).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("failed to read"), "stderr was: {stderr}");
+}
+
+#[test]
+fn check_without_path_reports_usage_error() {
+    let output = mink().arg("check").output().unwrap();
 
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);

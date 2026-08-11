@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use crate::driver::{self, BuildError};
-use crate::source::SourceMap;
+use crate::driver::{self, BuildError, CheckReport};
+use crate::source::{SourceFile, SourceMap, Span};
 
 /// Version string from the package manifest (e.g. `0.1.0`).
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -21,7 +21,7 @@ Usage:
 
 Commands:
   build <path>    Load a MINK source file and run the build pipeline
-  check <path>    Type-check a MINK source file (not yet implemented)
+  check <path>    Run lexical analysis on a MINK source file
   run <path>      Build and execute a MINK source file (not yet implemented)
   test [path]     Run MINK tests (not yet implemented)
   fmt [path]      Format MINK source (not yet implemented)
@@ -43,6 +43,9 @@ enum Command {
     Version,
     Help,
     Build {
+        path: PathBuf,
+    },
+    Check {
         path: PathBuf,
     },
     /// A recognized command whose implementation has not landed yet.
@@ -75,6 +78,28 @@ pub fn main(args: &[String]) -> ExitCode {
                 }
             }
         }
+        Ok(Command::Check { path }) => {
+            let mut sources = SourceMap::new();
+            match driver::check(&mut sources, &path) {
+                Ok(report) => {
+                    if report.errors.is_empty() {
+                        println!(
+                            "mink: check: '{}' passed lexical analysis ({} tokens)",
+                            path.display(),
+                            report.token_count
+                        );
+                        ExitCode::SUCCESS
+                    } else {
+                        print_lex_errors(&sources, &report);
+                        ExitCode::from(1)
+                    }
+                }
+                Err(error) => {
+                    eprintln!("mink: error: {error}");
+                    build_error_exit_code(&error)
+                }
+            }
+        }
         Ok(Command::NotImplemented { name }) => {
             eprintln!("mink: error: '{name}' is not yet implemented");
             ExitCode::from(2)
@@ -85,6 +110,33 @@ pub fn main(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// Prints lexical diagnostics for `report` to stderr.
+///
+/// This is a minimal, temporary rendering until the structured diagnostic
+/// engine lands (see `docs/implementation/LEXER_IMPLEMENTATION.md`). Each
+/// error is printed with its stable code, message, and source location.
+fn print_lex_errors(sources: &SourceMap, report: &CheckReport) {
+    let Some(file) = sources.get(report.source_id) else {
+        return;
+    };
+    for error in &report.errors {
+        eprintln!("mink: error[{}]: {}", error.kind().code(), error.kind());
+        let span = error.span();
+        print_span_location(file, span);
+    }
+}
+
+/// Prints a `--> file:line:column` location line for `span`.
+fn print_span_location(file: &SourceFile, span: Span) {
+    let line_col = file.line_col(span.start());
+    eprintln!(
+        "  --> {}:{}:{}",
+        file.name().display(),
+        line_col.line,
+        line_col.column
+    );
 }
 
 /// Maps a build failure to a process exit code.
@@ -111,7 +163,14 @@ fn parse(args: &[String]) -> Result<Command, String> {
                 path: PathBuf::from(path),
             })
         }
-        "check" => Ok(Command::NotImplemented { name: "check" }),
+        "check" => {
+            let path = args
+                .get(1)
+                .ok_or("missing path argument for 'check' (usage: mink check <path>)")?;
+            Ok(Command::Check {
+                path: PathBuf::from(path),
+            })
+        }
         "run" => Ok(Command::NotImplemented { name: "run" }),
         "test" => Ok(Command::NotImplemented { name: "test" }),
         "fmt" => Ok(Command::NotImplemented { name: "fmt" }),

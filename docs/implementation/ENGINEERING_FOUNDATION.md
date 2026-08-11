@@ -62,9 +62,9 @@ interfaces stabilize.
 | Module          | Role                                                              |
 | --------------- | ----------------------------------------------------------------- |
 | `cli`           | Argument parsing and command dispatch (build/check/run/test/fmt)  |
-| `driver`        | Compiler pipeline orchestration (currently: load + "not implemented") |
+| `driver`        | Compiler pipeline orchestration (load + lexical check; parser pending) |
 | `source`        | Source files, ids, spans, line/column mapping (implemented)       |
-| `lexer`         | Placeholder — tokenization with accurate spans                    |
+| `lexer`         | Tokenization with accurate spans + lexical diagnostics (implemented — see LEXER_IMPLEMENTATION.md) |
 | `parser`        | Placeholder — syntax tree with error recovery                     |
 | `ast`           | Placeholder — typed syntax representation                         |
 | `semantics`     | Placeholder — name resolution, type checking, semantic rules      |
@@ -108,3 +108,6 @@ yet implemented.
 - Workspace/crate split once subsystem interfaces stabilize
 - Placement and format of AI-readable diagnostics once the diagnostic
   engine lands (per `docs/ai/AI_TOOLING_ARCHITECTURE.md`)
+- Lexer-specific deferrals (Unicode identifiers, byte literals, fuzz
+  harness, doc-comment metadata) are tracked in
+  `docs/implementation/LEXER_IMPLEMENTATION.md` §8
