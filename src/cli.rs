@@ -1,0 +1,120 @@
+//! Command-line interface for the MINK compiler.
+//!
+//! Parses the process arguments, dispatches to the requested command, and
+//! maps outcomes to process exit codes. Intentionally dependency-free and
+//! minimal; it will grow alongside the commands it serves.
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use crate::driver::{self, BuildError};
+use crate::source::SourceMap;
+
+/// Version string from the package manifest (e.g. `0.1.0`).
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const USAGE: &str = "\
+MINK compiler — implementation foundation
+
+Usage:
+  mink <command> [arguments]
+
+Commands:
+  build <path>    Load a MINK source file and run the build pipeline
+  check <path>    Type-check a MINK source file (not yet implemented)
+  run <path>      Build and execute a MINK source file (not yet implemented)
+  test [path]     Run MINK tests (not yet implemented)
+  fmt [path]      Format MINK source (not yet implemented)
+  version         Print the compiler version
+  help            Print this help
+
+Options:
+  -h, --help      Print help
+  -V, --version   Print version
+
+Exit codes:
+  0   success
+  1   usage or input error
+  2   command not yet implemented
+";
+
+/// A parsed command-line invocation.
+enum Command {
+    Version,
+    Help,
+    Build {
+        path: PathBuf,
+    },
+    /// A recognized command whose implementation has not landed yet.
+    NotImplemented {
+        name: &'static str,
+    },
+}
+
+/// Entry point for the compiler process. Returns the process exit code.
+///
+/// Prints help and version information to stdout; reports all errors to
+/// stderr.
+pub fn main(args: &[String]) -> ExitCode {
+    match parse(args) {
+        Ok(Command::Version) => {
+            println!("mink {VERSION}");
+            ExitCode::SUCCESS
+        }
+        Ok(Command::Help) => {
+            print!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        Ok(Command::Build { path }) => {
+            let mut sources = SourceMap::new();
+            match driver::build(&mut sources, &path) {
+                Ok(_source_id) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("mink: error: {error}");
+                    build_error_exit_code(&error)
+                }
+            }
+        }
+        Ok(Command::NotImplemented { name }) => {
+            eprintln!("mink: error: '{name}' is not yet implemented");
+            ExitCode::from(2)
+        }
+        Err(message) => {
+            eprintln!("mink: error: {message}");
+            eprintln!("Run 'mink help' for usage.");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Maps a build failure to a process exit code.
+fn build_error_exit_code(error: &BuildError) -> ExitCode {
+    match error {
+        BuildError::Io { .. } => ExitCode::from(1),
+        BuildError::NotImplemented => ExitCode::from(2),
+    }
+}
+
+/// Parses `args` (everything after the program name) into a [`Command`].
+fn parse(args: &[String]) -> Result<Command, String> {
+    let Some(first) = args.first() else {
+        return Ok(Command::Help);
+    };
+    match first.as_str() {
+        "help" | "-h" | "--help" => Ok(Command::Help),
+        "version" | "-V" | "--version" => Ok(Command::Version),
+        "build" => {
+            let path = args
+                .get(1)
+                .ok_or("missing path argument for 'build' (usage: mink build <path>)")?;
+            Ok(Command::Build {
+                path: PathBuf::from(path),
+            })
+        }
+        "check" => Ok(Command::NotImplemented { name: "check" }),
+        "run" => Ok(Command::NotImplemented { name: "run" }),
+        "test" => Ok(Command::NotImplemented { name: "test" }),
+        "fmt" => Ok(Command::NotImplemented { name: "fmt" }),
+        other => Err(format!("unknown command '{other}'")),
+    }
+}

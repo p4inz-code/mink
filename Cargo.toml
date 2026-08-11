@@ -1,0 +1,22 @@
+[package]
+name = "mink"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "MINK compiler — a general-purpose systems programming language"
+keywords = ["compiler", "language", "mink"]
+categories = ["compilers"]
+publish = false
+
+[lib]
+name = "mink"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mink"
+path = "src/main.rs"
+
+[dependencies]
+# Intentionally empty. The compiler foundation is dependency-free;
+# see docs/implementation/ENGINEERING_FOUNDATION.md §2.

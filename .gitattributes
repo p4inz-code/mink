@@ -1,0 +1,12 @@
+# Normalize line endings to LF in the repository and in working copies.
+* text=auto
+
+*.rs  text eol=lf
+*.toml text eol=lf
+*.md  text eol=lf
+*.mink text eol=lf
+
+# Keep binary artifacts untouched.
+*.png binary
+*.jpg binary
+*.ico binary
