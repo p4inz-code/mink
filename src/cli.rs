@@ -21,7 +21,7 @@ Usage:
 
 Commands:
   build <path>    Load a MINK source file and run the build pipeline
-  check <path>    Lex and parse a MINK source file
+  check <path>    Lex, parse, and semantically analyze a MINK source file
   run <path>      Build and execute a MINK source file (not yet implemented)
   test [path]     Run MINK tests (not yet implemented)
   fmt [path]      Format MINK source (not yet implemented)
@@ -84,7 +84,7 @@ pub fn main(args: &[String]) -> ExitCode {
                 Ok(report) => {
                     if report.errors.is_empty() {
                         println!(
-                            "mink: check: '{}' passed parsing ({} tokens)",
+                            "mink: check: '{}' passed parsing and semantic analysis ({} tokens)",
                             path.display(),
                             report.token_count
                         );
@@ -117,7 +117,9 @@ pub fn main(args: &[String]) -> ExitCode {
 /// This is a minimal, temporary rendering until the structured diagnostic
 /// engine lands (see `docs/implementation/PARSER_IMPLEMENTATION.md`). Each
 /// error is printed with its stable code, message, and source location,
-/// whether it is lexical or syntactic.
+/// whether it is lexical, syntactic, or semantic; errors that reference a
+/// related location (such as the original declaration of a duplicate
+/// definition) print a note for that location too.
 fn print_errors(sources: &SourceMap, report: &CheckReport) {
     let Some(file) = sources.get(report.source_id) else {
         return;
@@ -125,6 +127,10 @@ fn print_errors(sources: &SourceMap, report: &CheckReport) {
     for error in &report.errors {
         eprintln!("mink: error[{}]: {}", error.code(), error);
         print_span_location(file, error.span());
+        if let Some(related) = error.related_span() {
+            eprintln!("  = note: previous declaration is here");
+            print_span_location(file, related);
+        }
     }
 }
 

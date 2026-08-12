@@ -67,7 +67,7 @@ interfaces stabilize.
 | `lexer`         | Tokenization with accurate spans + lexical diagnostics (implemented — see LEXER_IMPLEMENTATION.md) |
 | `parser`        | Syntax tree with error recovery (implemented — see PARSER_IMPLEMENTATION.md) |
 | `ast`           | Typed syntax representation (implemented — see PARSER_IMPLEMENTATION.md) |
-| `semantics`     | Placeholder — name resolution, type checking, semantic rules      |
+| `semantics`     | Name resolution + semantic validation (implemented — see SEMANTIC_ANALYSIS_IMPLEMENTATION.md); type checking remains a future milestone |
 | `diagnostics`   | Placeholder — structured diagnostic engine (§10 of the compiler spec) |
 
 ## 5. Source Infrastructure Design

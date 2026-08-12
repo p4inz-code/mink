@@ -177,9 +177,12 @@ error kinds are designed to feed it rather than be replaced.
 - **Recursion depth** is bounded by the call stack (a nested-expression
   chain costs roughly 30 frames per level). Arbitrarily deep nesting is not
   a goal of this milestone; pathological depth is a future robustness item.
-- **No semantic validation** — for example `break` outside a loop, duplicate
-  names, or invalid assignment targets that are not obviously non-places are
-  not diagnosed (semantics milestone).
+- **Semantic validation is out of scope for the parser** — for example
+  `break` outside a loop, duplicate names, or assignment to immutable
+  bindings are not the parser's concern. Semantic analysis landed in session
+  05 (see `SEMANTIC_ANALYSIS_IMPLEMENTATION.md`); assignment-target
+  validation that *is* syntactically obvious (non-place targets, `E-P04`)
+  remains parser-side.
 - **Type annotations, `->` return types, and generics syntax are rejected**
   as syntax errors until the type-system milestone defines them.
 - **Unicode identifiers** remain a lexer limitation (ASCII only).

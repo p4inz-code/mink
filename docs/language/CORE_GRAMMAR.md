@@ -116,8 +116,11 @@ Loop        := 'loop' Block
 - `else` must be followed by a block or a further `if` (else-if chains nest).
 - A `;` alone is an empty statement and is accepted silently.
 - Expression statements must end with `;`.
-- Whether `break`/`continue` appear inside a loop is a semantic (later)
-  question; the syntax accepts them anywhere.
+- Whether `break`/`continue` appear inside a loop is a semantic question
+  (resolved in session 05: they are rejected outside loop bodies, and
+  `return` is rejected outside function bodies). The syntax accepts them
+  anywhere; see `docs/language/CORE_LANGUAGE.md` §24 and
+  `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
 
 ## 8. Expressions
 

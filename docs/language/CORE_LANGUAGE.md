@@ -303,11 +303,52 @@ Valid MINK programs should remain source-compatible across language evolution wh
 
 Compiler migrations, deprecation diagnostics, and automated upgrade tools should be part of the long-term ecosystem.
 
-## 24. Specification Status
+## 24. Declaration and Name Semantics (Session 05)
+
+Resolved in session 05 and authoritative for the implemented milestone; the
+full design record is `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
+
+- **Scopes.** Module scope holds top-level declarations. Every function body
+  is the function's *declaration scope*: parameters and the body's own
+  `let`/`const` declarations share one scope. Every other block (`if`/`else`
+  bodies, `while`, `for`, `loop` bodies) introduces a nested block scope.
+  `for` loop variables are declared in the loop body's scope.
+- **Declaration order.** Module scope is order-independent: a top-level
+  declaration is visible throughout its module, before and after its own
+  position (functions may call each other in any order). A consequence is
+  that a module-level binding is visible in its own initializer
+  (`let x = x;` at module scope resolves the initializer to the binding
+  itself). All other scopes require declaration-before-use: a name is
+  visible from its declaration point to the end of its scope, and a binding
+  is not visible in its own initializer.
+- **Duplicates.** A scope may not declare the same name twice. A duplicate
+  declaration is an error; the first declaration wins for resolution.
+  Because parameters share the function scope with body declarations, a
+  parameter/local name collision is a duplicate.
+- **Shadowing.** A nested scope may declare a name that exists in an
+  enclosing scope (shadowing); references resolve to the innermost
+  declaration. Same-scope shadowing (redeclaration) is not allowed.
+- **Mutability.** `let` bindings are immutable by default; `let mut`
+  bindings are mutable. Parameters, `for` variables, `const` bindings, and
+  function names are immutable. Assignment (including compound assignment)
+  to an immutable or constant name is a semantic error. Assignment through
+  member/index targets resolves the base expression but defers target
+  writability to the type-system milestone.
+- **Control-flow context.** `break` and `continue` are valid only inside a
+  loop body (`while`, `for`, `loop`); `return` is valid only inside a
+  function body. Out-of-context uses are semantic errors (module-level
+  `return` is additionally rejected by the grammar, which allows only
+  declarations at module scope).
+- **Namespaces.** Functions, bindings, constants, parameters, and loop
+  variables share one name namespace per scope at this stage; a type/value
+  namespace split arrives with the type-system milestone.
+
+## 25. Specification Status
 
 This document establishes the core language direction. The core grammar for
 the implemented milestone — including the keyword list — is frozen in
-`docs/language/CORE_GRAMMAR.md`; the remaining language surface (types,
-modules, patterns, async, memory semantics, ABI, runtime behavior, compiler
-architecture) continues to be finalized in the dedicated technical
+`docs/language/CORE_GRAMMAR.md`; the semantic rules implemented for the
+current milestone are recorded in §24 above. The remaining language surface
+(types, modules, patterns, async, memory semantics, ABI, runtime behavior,
+compiler architecture) continues to be finalized in the dedicated technical
 specifications before architecture freeze.

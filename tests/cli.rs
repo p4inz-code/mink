@@ -128,7 +128,7 @@ fn check_with_valid_source_passes() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("passed parsing (6 tokens)"),
+        stdout.contains("passed parsing and semantic analysis (6 tokens)"),
         "stdout was: {stdout}"
     );
 }
@@ -311,18 +311,24 @@ fn check_with_unicode_source_passes() {
 #[test]
 fn check_with_precedence_matrix_passes() {
     // Every precedence level and associativity form in the frozen grammar
-    // must parse cleanly.
+    // must parse cleanly — and, since `mink check` now runs semantic
+    // analysis, the identifiers it uses must resolve.
     let path = temp_source(
         "precedence.mink",
         concat!(
+            "fn foo(v) { v; }\n",
             "fn f() {\n",
-            "    let a = 1 + 2 * 3;\n",
-            "    let b = 1 << 2 + 3;\n",
+            "    let x = 1; let y = 2; let z = 3;\n",
+            "    let p = 1; let q = 2; let r = 3;\n",
+            "    let m = 1; let n = 2; let o = 3;\n",
+            "    let mut a = 1 + 2 * 3;\n",
+            "    let mut b = 1 << 2 + 3;\n",
             "    let c = x == y < z;\n",
             "    let d = p && q || r;\n",
             "    let e = m | n ^ o & p;\n",
             "    let f = a + b == c && d;\n",
-            "    let g = a = b = c;\n",
+            "    let mut g = 0;\n",
+            "    g = a = b = c;\n",
             "    let h = 0 .. 10;\n",
             "    let i = foo(1).member[0](x);\n",
             "}\n",
@@ -369,4 +375,181 @@ fn check_with_missing_closer_at_eof_fails() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("E-P13"), "stderr was: {stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// Semantic analysis diagnostics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_with_valid_semantic_program_passes() {
+    // A program whose names all resolve, with valid mutable assignment and
+    // control-flow context, passes with exit 0.
+    let path = temp_source(
+        "sem_valid.mink",
+        "let base = 1;\nfn f() {\n    let mut x = base;\n    x = 2;\n    loop { break; }\n    return;\n}\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("passed parsing and semantic analysis"),
+        "stdout was: {stdout}"
+    );
+}
+
+#[test]
+fn check_with_unresolved_identifier_fails() {
+    let path = temp_source("sem_unresolved.mink", "fn f() { missing; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-S01"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot find name `missing` in this scope"),
+        "stderr was: {stderr}"
+    );
+    assert!(stderr.contains("-->"), "stderr was: {stderr}");
+}
+
+#[test]
+fn check_with_duplicate_declaration_reports_original() {
+    let path = temp_source("sem_duplicate.mink", "let x = 1;\nlet x = 2;\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-S02"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("duplicate definition of `x`"),
+        "stderr was: {stderr}"
+    );
+    // The original declaration location is reported as a note.
+    assert!(
+        stderr.contains("note: previous declaration is here"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_immutable_assignment_fails() {
+    let path = temp_source("sem_immutable.mink", "fn f() { let x = 1; x = 2; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-S03"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot assign to `x`: it is not mutable"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_const_assignment_fails() {
+    let path = temp_source("sem_const_assign.mink", "const x = 1;\nfn f() { x = 2; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-S04"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot assign to `x`: it is a constant"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_break_outside_loop_fails() {
+    let path = temp_source("sem_break.mink", "fn f() { break; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-S05"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("`break` outside of a loop"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_continue_outside_loop_fails() {
+    let path = temp_source("sem_continue.mink", "fn f() { continue; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-S06"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("`continue` outside of a loop"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_multiple_semantic_errors_reports_all() {
+    let path = temp_source("sem_many.mink", "fn f() { alpha; beta; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.matches("E-S01").count(), 2, "stderr was: {stderr}");
+}
+
+#[test]
+fn check_with_return_at_module_scope_fails_as_syntax() {
+    // The frozen grammar only allows declarations at module scope, so a
+    // module-level `return;` is rejected by the parser (exit 1) — the
+    // `return`-outside-function rule is enforced by the grammar itself.
+    let path = temp_source("sem_return_module.mink", "return;\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-P01"), "stderr was: {stderr}");
+}
+
+#[test]
+fn check_skips_semantics_when_parse_fails() {
+    // A syntax error suppresses semantic analysis: the `break;` in the same
+    // source must not produce a cascading E-S05.
+    let path = temp_source("sem_parse_skip.mink", "fn f() { break; let x = ; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-P03"), "stderr was: {stderr}");
+    assert!(!stderr.contains("E-S05"), "stderr was: {stderr}");
+}
+
+#[test]
+fn check_with_lexical_and_semantic_sources_distinguish_stages() {
+    // A lexical error skips semantics entirely; a semantically invalid but
+    // lexically valid source reports a semantic code.
+    let lex_path = temp_source("sem_lex_skip.mink", "@ let x = 1;\n");
+    let lex_output = mink().arg("check").arg(&lex_path).output().unwrap();
+    let _ = std::fs::remove_file(&lex_path);
+    assert_eq!(lex_output.status.code(), Some(1));
+    let lex_stderr = String::from_utf8_lossy(&lex_output.stderr);
+    assert!(!lex_stderr.contains("E-S"), "stderr was: {lex_stderr}");
+
+    let sem_path = temp_source("sem_lex_valid.mink", "fn f() { unknown; }\n");
+    let sem_output = mink().arg("check").arg(&sem_path).output().unwrap();
+    let _ = std::fs::remove_file(&sem_path);
+    assert_eq!(sem_output.status.code(), Some(1));
+    let sem_stderr = String::from_utf8_lossy(&sem_output.stderr);
+    assert!(sem_stderr.contains("E-S01"), "stderr was: {sem_stderr}");
 }
