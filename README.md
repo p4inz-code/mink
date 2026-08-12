@@ -15,9 +15,12 @@ Source code is licensed under Apache License 2.0.
 ## Status
 
 MINK is in the **implementation phase**. The compiler engineering foundation
-(session 01) is established: a Rust-based compiler workspace with source
-infrastructure, a working CLI entry point, and a test suite. Language and
-architecture specifications live in [`docs/`](docs/).
+(session 01), the lexer and token system (session 02), and the parser and
+AST (session 03) are established: a Rust-based compiler workspace with
+source infrastructure, lexical and syntactic analysis, a working CLI entry
+point, and a test suite. Language and architecture specifications live in
+[`docs/`](docs/); the frozen core grammar is in
+[`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md).
 
 ## Repository Layout
 
@@ -39,8 +42,8 @@ Requirements: Rust 1.85 or newer (developed against 1.97).
 
 Examples:
 - `cargo run -- check path/to/program.mink` loads a MINK source file and runs
-  lexical analysis (exit 0 when the file lexes cleanly, exit 1 with
-diagnostics otherwise).
+  lexical and syntax analysis (exit 0 when the file parses cleanly, exit 1
+  with diagnostics otherwise).
 - `cargo run -- build path/to/program.mink` loads a MINK source file and runs
 the (not yet implemented) build pipeline.
 

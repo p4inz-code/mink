@@ -21,7 +21,7 @@ Usage:
 
 Commands:
   build <path>    Load a MINK source file and run the build pipeline
-  check <path>    Run lexical analysis on a MINK source file
+  check <path>    Lex and parse a MINK source file
   run <path>      Build and execute a MINK source file (not yet implemented)
   test [path]     Run MINK tests (not yet implemented)
   fmt [path]      Format MINK source (not yet implemented)
@@ -84,13 +84,13 @@ pub fn main(args: &[String]) -> ExitCode {
                 Ok(report) => {
                     if report.errors.is_empty() {
                         println!(
-                            "mink: check: '{}' passed lexical analysis ({} tokens)",
+                            "mink: check: '{}' passed parsing ({} tokens)",
                             path.display(),
                             report.token_count
                         );
                         ExitCode::SUCCESS
                     } else {
-                        print_lex_errors(&sources, &report);
+                        print_errors(&sources, &report);
                         ExitCode::from(1)
                     }
                 }
@@ -112,19 +112,19 @@ pub fn main(args: &[String]) -> ExitCode {
     }
 }
 
-/// Prints lexical diagnostics for `report` to stderr.
+/// Prints diagnostics for `report` to stderr.
 ///
 /// This is a minimal, temporary rendering until the structured diagnostic
-/// engine lands (see `docs/implementation/LEXER_IMPLEMENTATION.md`). Each
-/// error is printed with its stable code, message, and source location.
-fn print_lex_errors(sources: &SourceMap, report: &CheckReport) {
+/// engine lands (see `docs/implementation/PARSER_IMPLEMENTATION.md`). Each
+/// error is printed with its stable code, message, and source location,
+/// whether it is lexical or syntactic.
+fn print_errors(sources: &SourceMap, report: &CheckReport) {
     let Some(file) = sources.get(report.source_id) else {
         return;
     };
     for error in &report.errors {
-        eprintln!("mink: error[{}]: {}", error.kind().code(), error.kind());
-        let span = error.span();
-        print_span_location(file, span);
+        eprintln!("mink: error[{}]: {}", error.code(), error);
+        print_span_location(file, error.span());
     }
 }
 

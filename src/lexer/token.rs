@@ -12,8 +12,10 @@ use crate::source::Span;
 ///
 /// Keyword recognition is deterministic and happens while lexing: an
 /// identifier whose text matches a reserved word becomes the keyword's token
-/// kind, never [`TokenKind::Ident`]. The keyword set is deliberately small and
-/// provisional (see `docs/implementation/LEXER_IMPLEMENTATION.md`).
+/// kind, never [`TokenKind::Ident`]. The keyword set is deliberately small
+/// and was frozen with the grammar in session 03 (see
+/// `docs/language/CORE_GRAMMAR.md` §10 and
+/// `docs/implementation/LEXER_IMPLEMENTATION.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TokenKind {
     /// An identifier: ASCII `[A-Za-z_][A-Za-z0-9_]*`.
@@ -38,6 +40,8 @@ pub enum TokenKind {
     Fn,
     /// The keyword `let`.
     Let,
+    /// The keyword `mut` (mutable binding modifier).
+    Mut,
     /// The keyword `const`.
     Const,
     /// The keyword `type`.
@@ -184,6 +188,7 @@ impl TokenKind {
             self,
             Self::Fn
                 | Self::Let
+                | Self::Mut
                 | Self::Const
                 | Self::Type
                 | Self::Struct

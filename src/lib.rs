@@ -5,9 +5,10 @@
 //! implementation: the CLI driver, the compiler pipeline, and the shared
 //! source infrastructure that every later stage builds upon.
 //!
-//! The lexer is implemented (see `docs/implementation/LEXER_IMPLEMENTATION.md`);
-//! the `parser`, `ast`, `semantics`, and `diagnostics` modules are structural
-//! placeholders at this stage; see
+//! The lexer and the parser/AST are implemented (see
+//! `docs/implementation/LEXER_IMPLEMENTATION.md` and
+//! `docs/implementation/PARSER_IMPLEMENTATION.md`); the `semantics` and
+//! `diagnostics` modules are structural placeholders at this stage; see
 //! `docs/implementation/ENGINEERING_FOUNDATION.md` for the layout rationale.
 
 #![forbid(unsafe_code)]

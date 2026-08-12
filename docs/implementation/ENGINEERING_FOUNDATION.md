@@ -62,11 +62,11 @@ interfaces stabilize.
 | Module          | Role                                                              |
 | --------------- | ----------------------------------------------------------------- |
 | `cli`           | Argument parsing and command dispatch (build/check/run/test/fmt)  |
-| `driver`        | Compiler pipeline orchestration (load + lexical check; parser pending) |
+| `driver`        | Compiler pipeline orchestration (load; lexical + syntax check)    |
 | `source`        | Source files, ids, spans, line/column mapping (implemented)       |
 | `lexer`         | Tokenization with accurate spans + lexical diagnostics (implemented — see LEXER_IMPLEMENTATION.md) |
-| `parser`        | Placeholder — syntax tree with error recovery                     |
-| `ast`           | Placeholder — typed syntax representation                         |
+| `parser`        | Syntax tree with error recovery (implemented — see PARSER_IMPLEMENTATION.md) |
+| `ast`           | Typed syntax representation (implemented — see PARSER_IMPLEMENTATION.md) |
 | `semantics`     | Placeholder — name resolution, type checking, semantic rules      |
 | `diagnostics`   | Placeholder — structured diagnostic engine (§10 of the compiler spec) |
 

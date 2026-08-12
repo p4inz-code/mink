@@ -128,7 +128,7 @@ fn check_with_valid_source_passes() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("passed lexical analysis"),
+        stdout.contains("passed parsing (6 tokens)"),
         "stdout was: {stdout}"
     );
 }
@@ -158,6 +158,74 @@ fn check_with_invalid_lexical_source_fails() {
         stderr.contains("-->"),
         "stderr should include a location: {stderr}"
     );
+}
+
+#[test]
+fn check_with_invalid_syntax_fails_with_parser_error() {
+    let path = temp_source("bad_syntax.mink", "fn main {}\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E-P08"),
+        "stderr should include the parser error code: {stderr}"
+    );
+    assert!(stderr.contains("expected '('"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("-->"),
+        "stderr should include a location: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_multiple_syntax_errors_reports_all() {
+    let path = temp_source("many_syntax_errors.mink", "let x = ; let y = ;\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.matches("E-P03").count(),
+        2,
+        "both independent errors should be reported: {stderr}"
+    );
+}
+
+#[test]
+fn check_reports_lexical_and_syntax_errors_together() {
+    // `@` is a lexical error (no token); the unterminated `let` declaration
+    // is a syntax error. Both must be reported in one run.
+    let path = temp_source("mixed_errors.mink", "@ let x = 1");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E-L01"),
+        "stderr should include the lexical error code: {stderr}"
+    );
+    assert!(
+        stderr.contains("E-P06"),
+        "stderr should include the syntax error code: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_representative_program_passes() {
+    let path = temp_source(
+        "representative.mink",
+        "fn main() {\n    let x = 1 + 2 * 3;\n    if x > 0 {\n        return x;\n    } else {\n        return 0;\n    }\n}\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("passed parsing"), "stdout was: {stdout}");
 }
 
 #[test]

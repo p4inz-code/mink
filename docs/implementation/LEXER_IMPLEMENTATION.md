@@ -77,11 +77,14 @@ interning required at this stage. Matching is exact and case-sensitive:
 - `fn` is the `Fn` keyword; `Fn`, `fn_`, `fnn` are identifiers.
 - `true`, `false`, `null` are reserved words but classified as literals.
 
-The keyword set is **provisional**: the core language specification
+The keyword set is **frozen** with the grammar freeze in session 03 (see
+`docs/language/CORE_GRAMMAR.md` §10): the core language specification
 (`docs/language/CORE_LANGUAGE.md` §5) deliberately keeps the reserved set
-small and defers freezing it until the grammar is designed. Every keyword
-currently reserved names a construct the specification describes. Changing
-the set is a one-place edit in `keywords.rs`.
+small. Every reserved word names a construct the specification describes.
+Freezing the grammar added one keyword — `mut`, for `let mut` mutable
+bindings — and `true`/`false`/`null` remain reserved words classified as
+literals. Changing the set remains a one-place edit in `keywords.rs` and a
+`TokenKind` variant, and now requires a grammar decision.
 
 ## 3. Lexer Architecture
 
@@ -118,9 +121,11 @@ without `*/` is an `UnterminatedBlockComment` error.
 
 ## 4. Lexical Decisions
 
-The specification does not yet freeze exact lexical forms; the following
-decisions are the simplest technically sound representations, chosen
-conventionally and **subject to revision when the grammar freezes**.
+The specification does not fix exact lexical forms; the following decisions
+are the simplest technically sound representations, chosen conventionally.
+The grammar froze in session 03 (`docs/language/CORE_GRAMMAR.md`); the only
+lexical change it required was adding the `mut` keyword (§2). All other
+forms below stand as implemented.
 
 ### Identifiers
 

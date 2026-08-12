@@ -13,8 +13,9 @@
 //! - pull-based: [`Lexer::new`] + [`Lexer::next_token`] for a future parser
 //!   that needs incremental consumption and lookahead.
 //!
-//! Lexical decisions and the provisional token/keyword set are documented in
-//! `docs/implementation/LEXER_IMPLEMENTATION.md`.
+//! Lexical decisions are documented in
+//! `docs/implementation/LEXER_IMPLEMENTATION.md`; the frozen grammar (and the
+//! keyword set it fixed) is in `docs/language/CORE_GRAMMAR.md`.
 
 mod error;
 mod keywords;

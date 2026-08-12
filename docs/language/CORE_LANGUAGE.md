@@ -25,7 +25,11 @@ A MINK source file may contain:
 - Tests
 - Compile-time declarations
 
-The exact grammar will be defined by the parser specification.
+The core grammar implemented by the current compiler milestone is frozen in
+`docs/language/CORE_GRAMMAR.md`; it covers declarations (`fn`, `let`, `let
+mut`, `const`), statements, control flow, and expressions. The remaining
+categories above arrive with their dedicated milestones (type system,
+module system, pattern matching, and so on).
 
 ## 3. Lexical Model
 
@@ -57,11 +61,17 @@ Public naming conventions should be documented by the standard library rather th
 
 ## 5. Keywords
 
-MINK should maintain a deliberately small reserved-keyword set.
+MINK maintains a deliberately small reserved-keyword set.
 
-Keywords should be reserved only when their special syntactic meaning justifies reservation.
+Keywords are reserved only when their special syntactic meaning justifies
+reservation. The keyword list was frozen together with the core grammar in
+session 03 (`docs/language/CORE_GRAMMAR.md` §10):
 
-The final keyword list will be frozen after the grammar is designed.
+`async await break const continue else enum false fn for if impl in let loop
+match mod mut null pub return struct trait true type unsafe use while`
+
+The boolean and null literals (`true`, `false`, `null`) are reserved words
+classified as literals rather than keywords.
 
 ## 6. Literals
 
@@ -295,6 +305,9 @@ Compiler migrations, deprecation diagnostics, and automated upgrade tools should
 
 ## 24. Specification Status
 
-This document establishes the core language direction but does not yet freeze final grammar, exact keywords, memory semantics, ABI, runtime behavior, or compiler architecture.
-
-Those decisions will be finalized in the dedicated technical specifications before architecture freeze.
+This document establishes the core language direction. The core grammar for
+the implemented milestone — including the keyword list — is frozen in
+`docs/language/CORE_GRAMMAR.md`; the remaining language surface (types,
+modules, patterns, async, memory semantics, ABI, runtime behavior, compiler
+architecture) continues to be finalized in the dedicated technical
+specifications before architecture freeze.
