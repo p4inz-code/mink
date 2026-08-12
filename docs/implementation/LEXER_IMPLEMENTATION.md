@@ -17,7 +17,8 @@ At the end of this session the following works end to end:
 
     MINK source → SourceFile → Lexer → Token stream → spans + lexical diagnostics
 
-The parser, semantic analysis, and type system are intentionally out of scope.
+The parser (sessions 03/04) builds directly on this lexer; semantic analysis
+and the type system remain future milestones.
 
 ## 2. Token Architecture
 
@@ -35,8 +36,8 @@ pub struct Token {
 - `Token` is `Copy`, `Eq`, `Hash`, and carries **no source text**. The exact
   text a token covers is recovered from the owning `SourceFile` through its
   `Span` (`SourceFile::span_text`). This keeps tokens small, allocation-free,
-  and cheap to buffer — properties a future parser needs for arbitrary
-  lookahead, and tooling (formatting, highlighting, LSP) needs for fidelity.
+  and cheap to buffer — properties the parser relies on for its lookahead
+  window, and tooling (formatting, highlighting, LSP) needs for fidelity.
 - `TokenKind` is a plain unit enum; keyword recognition happens at lex time,
   so the parser never compares strings to find keywords.
 
@@ -53,7 +54,7 @@ The kind enum covers every lexical category the current specification needs:
 | Char literals       | `Char`                                                                |
 | Boolean literals    | `True`, `False`                                                       |
 | Null literal        | `Null`                                                                |
-| Keywords            | `Fn Let Const Type Struct Enum Trait Impl Mod Use Pub If Else Match Loop While For In Return Break Continue Async Await Unsafe` |
+| Keywords            | `Fn Let Mut Const Type Struct Enum Trait Impl Mod Use Pub If Else Match Loop While For In Return Break Continue Async Await Unsafe` |
 | Delimiters          | `( ) { } [ ]`                                                         |
 | Punctuation         | `, ; : . :: -> =>`                                                    |
 | Arithmetic ops      | `+ - * / %` and `+= -= *= /= %=`                                      |
@@ -99,9 +100,9 @@ Two usage styles are provided:
   (including the final `Eof`) plus every lexical error. Used by the driver.
 - **Pull-based**: `Lexer::new(&SourceFile)` + `Lexer::next_token() ->
   Option<Token>` returns tokens one at a time, ending with the `Eof` token
-  and then `None`. Errors accumulate in `Lexer::errors()`. This is the shape
-  a future parser consumes, and because tokens are `Copy`, lookahead is a
-  simple buffered window.
+  and then  `None`. Errors accumulate in `Lexer::errors()`. This is the shape the
+  parser consumes (session 03), and because tokens are `Copy`, lookahead is
+  a simple buffered window.
 
 `Lexed` exposes `tokens()`, `errors()`, `is_valid()`, `into_parts()`, and
 `into_errors()`.
@@ -170,8 +171,11 @@ forms below stand as implemented.
 The set in §2 is the conventional minimal set covering the categories the
 specification names (arithmetic, comparison, equality, boolean logic,
 assignment, bitwise, range construction, optional handling). No speculative
-operators were added. `->` (return type), `=>` (match arm), and `::` (path
-separator) are provisional conventional choices.
+operators were added. `:` (type annotation), `->` (return type), `=>` (match
+arm), `::` (path separator), and `?` (optional handling) are lexed but not
+part of any grammar production; the parser rejects them with diagnostics
+until their milestones land (see `docs/language/CORE_GRAMMAR.md` §10 and
+`docs/implementation/PARSER_IMPLEMENTATION.md` §13).
 
 ### Comments
 
@@ -214,18 +218,20 @@ final namespace.
 
 ## 7. CLI Integration
 
-`mink check <path>` loads a `.mink` file and runs lexical analysis:
+`mink check <path>` loads a `.mink` file and runs lexical **and** syntax
+analysis (the parser, since session 03):
 
-- valid input → prints `passed lexical analysis`, exit code 0;
+- valid input → prints `passed parsing (N tokens)`, exit code 0;
 - invalid input → prints each diagnostic (code, message, `--> path:line:col`)
-  to stderr, exit code 1;
+  to stderr, exit code 1; lexical and syntax errors are reported together,
+  source-ordered;
 - unreadable file → I/O error, exit code 1;
 - never panics.
 
 Diagnostics are currently rendered with a minimal ad-hoc formatter in
 `src/cli.rs`; the structured diagnostic engine (per
 `docs/language/ERROR_SYSTEM.md`) will replace it. `mink build` remains
-`NotImplemented` — compilation is not part of this session.
+`NotImplemented` — compilation is not part of these sessions.
 
 ## 8. Deferred / Not Implemented
 
@@ -236,8 +242,9 @@ Intentionally deferred, with rationale:
 - **Byte literals** (`b"..."`) — spec lists byte sequences as a literal
   category but no syntax; deferred until the grammar freezes.
 - **Raw strings** — not specified; deferred.
-- **Escape/literal decoding** — raw text preserved via spans; interpretation
-  belongs to the AST stage.
+- **Escape/literal decoding** — raw text preserved via spans; the AST keeps
+  spans rather than decoded values, so interpretation belongs to a later
+  literal-interpretation/semantics milestone.
 - **Numeric base prefixes for floats** (e.g. hex floats) — not specified.
 - **Nested block comments** — spec does not require nesting; simplest
   non-nesting form chosen.

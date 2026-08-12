@@ -205,8 +205,10 @@ Freezing the grammar required one minimal lexer change:
   table plus a `TokenKind::Mut` variant; identifiers like `mutt` and `_mut`
   are unaffected.
 
-No other lexical forms changed. `->` (return type), `::` (path separator),
-and `=>` (match arm) remain lexed but unused by this grammar, as documented
+No other lexical forms changed. `:` (type annotation), `->` (return type),
+`?` (optional handling), `::` (path separator), and `=>` (match arm) remain
+lexed but unused by this grammar; the parser rejects them with diagnostics
+(verified by regression tests in `tests/parser_hardening.rs`), as documented
 in `docs/implementation/LEXER_IMPLEMENTATION.md`.
 
 ## 11. Status

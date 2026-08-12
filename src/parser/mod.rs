@@ -453,6 +453,11 @@ impl<'a> Parser<'a> {
                     match self.current_kind() {
                         TokenKind::Comma => {
                             let _ = self.bump();
+                            // A recovered comma before `)` is a trailing comma:
+                            // finish the list without a second error.
+                            if self.current_kind() == TokenKind::RParen {
+                                break;
+                            }
                         }
                         TokenKind::RParen => break,
                         TokenKind::Eof => {
@@ -920,6 +925,14 @@ impl<'a> Parser<'a> {
             return Ok((args, close));
         }
         loop {
+            // End of input after (or instead of) an argument means the
+            // argument list itself is unclosed — mirroring the parameter-list
+            // check, this reports `UnclosedParen` rather than a generic
+            // `UnexpectedEof` on the next expression.
+            if self.current_kind() == TokenKind::Eof {
+                self.report_unclosed(TokenKind::LParen, ParseErrorKind::UnclosedParen);
+                return Err(());
+            }
             args.push(self.parse_expression()?);
             match self.current_kind() {
                 TokenKind::Comma => {
@@ -952,6 +965,11 @@ impl<'a> Parser<'a> {
                     match self.current_kind() {
                         TokenKind::Comma => {
                             let _ = self.bump();
+                            // A recovered comma before `)` is a trailing comma:
+                            // finish the list without a second error.
+                            if self.current_kind() == TokenKind::RParen {
+                                break;
+                            }
                         }
                         TokenKind::RParen => break,
                         TokenKind::Eof => {

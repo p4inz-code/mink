@@ -2,7 +2,7 @@
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 03 — Parser + AST
+**Session:** 03 — Parser + AST; 04 — Parser hardening + grammar consistency
 
 ## 1. Objective
 
@@ -227,10 +227,23 @@ Parser and AST coverage lives in `tests/parser.rs` (88 tests) and covers:
 - depth and scale (deep grouping, a 500-function program with token-count
   checks)
 
-CLI behavior for parser diagnostics is covered in `tests/cli.rs`
-(syntax-error exit codes, multiple errors, combined lexical+syntax
-reporting, representative programs). The lexer keyword-freeze change is
-covered in `tests/lexer.rs`.
+Session 04 added `tests/parser_hardening.rs` (62 tests): a full delimiter
+matrix (stray, mismatched, nested, and EOF-delimited delimiters with exact
+opener/offender spans), an exhaustive precedence/associativity matrix over
+the frozen operator table, postfix combinations with exact spans,
+syntactic assignment-target validation, statement/item boundary recovery,
+recovery-stress corpora, a second deterministic pseudo-random corpus
+(1,000 inputs) plus an expanded targeted malformed corpus, excluded-syntax
+regressions for every excluded keyword and token, unicode byte-span
+accuracy, and long-chain scale behavior (500-term binary chains, 200-deep
+unary/postfix chains, 200-argument calls).
+
+CLI behavior for parser diagnostics is covered in `tests/cli.rs` (25 tests:
+syntax-error exit codes, multiple errors, combined lexical+syntax
+reporting, representative programs, excluded-syntax rejection, recovery
+non-cascades, unicode sources). The lexer keyword-freeze change is covered
+in `tests/lexer.rs`. Total suite: 237 tests (25 CLI + 50 lexer + 88 parser
++ 62 parser hardening + 12 source).
 
 ## 12. Quality Gates
 
@@ -241,3 +254,61 @@ As before:
     cargo test
     cargo build
     git diff --check
+
+## 13. Session 04 — Hardening and Grammar-Consistency Audit
+
+Session 04 audited the session-03 parser, its tests, and every authoritative
+grammar description against the implementation. Findings and changes:
+
+### Grammar consistency
+
+- The keyword table, the token set, and `docs/language/CORE_GRAMMAR.md` were
+  cross-checked against the parser. The only stale content was in the docs:
+  the lexer implementation record still described `mink check` as
+  lexical-only, its keyword table omitted `Mut`, and `CORE_GRAMMAR.md` §10
+  listed the lexed-but-unused tokens without `:` and `?`. All three were
+  corrected in this session.
+- Every excluded keyword (`struct`, `enum`, `type`, `trait`, `impl`, `mod`,
+  `use`, `pub`, `match`, `async`, `await`, `unsafe`) and every excluded
+  token (`:`, `->`, `?`, `::`, `=>`) is now regression-tested to be rejected
+  at both item and statement positions — never silently accepted.
+
+### Parser fixes
+
+- **Trailing comma at end of input in a call** (`g(1,`): the argument list
+  previously fell through to `parse_expression`, reporting a generic
+  `UnexpectedEof` plus an `UnclosedBrace` cascade. The argument loop now
+  checks for end of input at the top (mirroring `parse_params`), reporting
+  `UnclosedParen` at the call's opener — one error, the useful one.
+- **Comma-recovery cascade** (`f(a b,)` / `g(1 2,)`): a recovered comma
+  immediately before `)` no longer triggers a second `ExpectedExpression`
+  error; the list terminates cleanly after the one diagnostic.
+
+### Verified invariants
+
+- Delimiter handling: stray, mismatched, nested, and EOF cases report the
+  useful location (the offending closer or the innermost unclosed opener)
+  with at most one error per root cause.
+- Precedence and associativity: the full 13-level table was re-verified by
+  exact tree-shape assertions, including mixed-operator same-level chains
+  (`a + b - c`, `a % b * c`) and cross-level mixes.
+- Recovery: error counts are bounded per root cause (20 independent errors
+  in one file yield exactly 20 diagnostics), later items/statements survive
+  a broken neighbor, and `{ ... }` groups are skipped as units.
+- Safety: two deterministic malformed corpora (3,000 inputs total) never
+  panic and keep every error and AST span in bounds.
+- Spans: byte-exact across multi-byte UTF-8 in literals, chars, and
+  comments; the half-open byte-range semantics are unchanged.
+
+### Known intentional limits confirmed by the audit
+
+- Excluded operators such as `?` and `::` are rejected through the
+  statement-terminator diagnostics (`E-P06`) pointing at the offending
+  token, rather than dedicated messages — acceptable while they are not
+  part of any production, and regression-tested.
+- Recursion depth remains call-stack bounded (documented in §8); long
+  *chains* of binary operators, postfix operations, and arguments are
+  iterative and scale linearly (tested to 200–500 elements).
+
+No semantic analysis was introduced; assignment-target validation remains
+syntactic only.

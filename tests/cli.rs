@@ -250,3 +250,123 @@ fn check_without_path_reports_usage_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("missing path"), "stderr was: {stderr}");
 }
+
+#[test]
+fn check_with_excluded_declaration_fails() {
+    // `struct` is a reserved keyword but deliberately excluded from the
+    // frozen grammar; the parser must reject it, not silently accept it.
+    let path = temp_source("excluded_decl.mink", "struct Point {}\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-P01"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("expected a top-level declaration"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_excluded_construct_inside_function_fails() {
+    // A closure is excluded from the frozen grammar; it must be rejected
+    // inside a function body too.
+    let path = temp_source("excluded_stmt.mink", "fn f() { let g = |x| x; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-P03"), "stderr was: {stderr}");
+}
+
+#[test]
+fn check_recovery_does_not_cascade() {
+    // One malformed for-loop header must produce exactly one diagnostic;
+    // recovery must not emit cascades from the same root cause.
+    let path = temp_source("no_cascade.mink", "fn f() { for x 0..10 { } }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.matches("E-P12").count(), 1, "stderr was: {stderr}");
+}
+
+#[test]
+fn check_with_unicode_source_passes() {
+    // Unicode inside string literals and comments must parse with correct
+    // byte spans and a successful exit.
+    let path = temp_source(
+        "unicode_ok.mink",
+        "fn main() { /* 世界 */ let s = \"héllo 世界\"; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn check_with_precedence_matrix_passes() {
+    // Every precedence level and associativity form in the frozen grammar
+    // must parse cleanly.
+    let path = temp_source(
+        "precedence.mink",
+        concat!(
+            "fn f() {\n",
+            "    let a = 1 + 2 * 3;\n",
+            "    let b = 1 << 2 + 3;\n",
+            "    let c = x == y < z;\n",
+            "    let d = p && q || r;\n",
+            "    let e = m | n ^ o & p;\n",
+            "    let f = a + b == c && d;\n",
+            "    let g = a = b = c;\n",
+            "    let h = 0 .. 10;\n",
+            "    let i = foo(1).member[0](x);\n",
+            "}\n",
+        ),
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("passed parsing"), "stdout was: {stdout}");
+}
+
+#[test]
+fn check_with_nested_constructs_passes() {
+    let path = temp_source(
+        "nested.mink",
+        concat!(
+            "fn main() {\n",
+            "    for i in 0..10 {\n",
+            "        while i > 0 {\n",
+            "            loop {\n",
+            "                if i == 3 { break; }\n",
+            "                continue;\n",
+            "            }\n",
+            "        }\n",
+            "    }\n",
+            "    return;\n",
+            "}\n",
+        ),
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn check_with_missing_closer_at_eof_fails() {
+    let path = temp_source("unclosed.mink", "fn f() { g(1,\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-P13"), "stderr was: {stderr}");
+}
