@@ -16,7 +16,10 @@
 //! The type representation — core types, inference variables, the
 //! unknown/error type, and unification — and every typing rule are
 //! documented in `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md` and
-//! `docs/language/CORE_LANGUAGE.md` §26.
+//! `docs/language/CORE_LANGUAGE.md` §26. The inference behavior —
+//! constraint propagation, bidirectional checking, function/return
+//! inference, recursion, and unresolved-type handling — is documented in
+//! `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md`.
 
 mod checker;
 mod error;

@@ -9,7 +9,8 @@
 use std::path::Path;
 
 use mink::ast::{
-    AssignOp, Ast, Block, Expr, ExprKind, FnItem, Ident, Item, ItemKind, Param, Stmt, StmtKind,
+    AssignOp, Ast, BinaryOp, Block, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind, Param,
+    Stmt, StmtKind, UnaryOp,
 };
 use mink::parser;
 use mink::semantics::{SemanticErrorKind, SemanticResult, SymbolKind};
@@ -853,9 +854,16 @@ fn while_condition_must_be_bool() {
 }
 
 #[test]
-fn if_on_unknown_condition_is_deferred() {
-    let src = "fn f() { return; } fn g() { if f() { } }";
-    let (_sources, _ast, _semantic, types) = check_src(src);
+fn if_on_error_condition_is_deferred() {
+    // Session 07 pins *unconstrained* conditions to `Bool`, but error-typed
+    // conditions (from unresolved names) still defer silently: the root
+    // semantic error is reported and no type noise is added on top.
+    let src = "fn f() { if missing { } }";
+    let (_sources, _ast, semantic, types) = check_src(src);
+    assert_eq!(
+        error_spans(&semantic, SemanticErrorKind::UnresolvedName).len(),
+        1
+    );
     assert!(!types.has_errors());
 }
 
@@ -1214,6 +1222,482 @@ fn empty_program_type_checks() {
     assert!(types.expr_types().is_empty());
     // The arena still exists (it holds the placeholder and interned types).
     assert!(!types.types().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Inference (session 07)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn chained_declarations_resolve_through_use() {
+    // Module-scope declarations are order-independent and their inference
+    // variables link transitively: the head of the chain resolves once the
+    // chain meets a concrete type.
+    let src = "let a = b; let b = c; const c = 1; fn f() { a + 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    for name in ["a", "b", "c"] {
+        assert_eq!(
+            type_name(&types, symbol_ty(&types, &_semantic, name)),
+            "Int"
+        );
+    }
+}
+
+#[test]
+fn mutually_constrained_declarations_resolve() {
+    // `x` and `y` constrain each other; the constraint `x + 1` pins the
+    // shared variable and both resolve.
+    let src = "let x = y; let y = x + 1; fn f() { x; y; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    for name in ["x", "y"] {
+        assert_eq!(
+            type_name(&types, symbol_ty(&types, &_semantic, name)),
+            "Int"
+        );
+    }
+}
+
+#[test]
+fn deep_inference_chain_resolves_deterministically() {
+    // A 200-link declaration chain ending in a concrete type: the head
+    // reference must resolve through the whole chain (exercises path
+    // compression) without leaking unresolved variables.
+    let mut src = String::new();
+    for i in 0..200 {
+        src.push_str(&format!("let v{i} = v{}; ", i + 1));
+    }
+    src.push_str("const v200 = 1; fn f() { v0 + 1; }");
+    let (_sources, _ast, _semantic, types) = check_src(&src);
+    assert!(!types.has_errors());
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "v0")),
+        "Int"
+    );
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "v200")),
+        "Int"
+    );
+}
+
+#[test]
+fn parameter_type_inferred_from_argument_and_body() {
+    // The parameter is constrained by the body (`return p`) and by the
+    // call-site argument (`f(1)`); both share one inference variable.
+    let src = "fn f(p) { return p; } fn g() { let x = f(1); x + 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let f = _semantic.symbols().iter().find(|s| s.name == "f").unwrap();
+    let f_ty = types.symbol_type(f.id).unwrap();
+    assert_eq!(type_name(&types, f_ty), "fn(Int) -> Int");
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "x")), "Int");
+}
+
+#[test]
+fn return_inference_from_single_path() {
+    let src = "fn f() { return 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let f = _semantic.symbols().iter().find(|s| s.name == "f").unwrap();
+    let f_ty = types.symbol_type(f.id).unwrap();
+    assert_eq!(type_name(&types, f_ty), "fn() -> Int");
+}
+
+#[test]
+fn return_inference_across_branches() {
+    // Multiple return paths unify with the same result variable; the
+    // parameter is pinned by the condition.
+    let src = "fn f(c) { if c { return 1; } return 2; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let f = _semantic.symbols().iter().find(|s| s.name == "f").unwrap();
+    let f_ty = types.symbol_type(f.id).unwrap();
+    assert_eq!(type_name(&types, f_ty), "fn(Bool) -> Int");
+}
+
+#[test]
+fn recursive_function_infers_parameters_and_result() {
+    // `n > 0` pins the parameter to `Int`; `return 0` pins the result to
+    // `Int`; the recursive call unifies the result with itself.
+    let src = "fn f(n) { if n > 0 { return f(n - 1); } return 0; } fn g() { let x = f(3); x; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let f = _semantic.symbols().iter().find(|s| s.name == "f").unwrap();
+    let f_ty = types.symbol_type(f.id).unwrap();
+    assert_eq!(type_name(&types, f_ty), "fn(Int) -> Int");
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "x")), "Int");
+}
+
+#[test]
+fn mutually_recursive_functions_type_check() {
+    let src = "fn even(n) { if n == 0 { return true; } return odd(n - 1); }\n\
+               fn odd(n) { if n == 0 { return false; } return even(n - 1); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let even = _semantic
+        .symbols()
+        .iter()
+        .find(|s| s.name == "even")
+        .unwrap();
+    let odd = _semantic
+        .symbols()
+        .iter()
+        .find(|s| s.name == "odd")
+        .unwrap();
+    assert_eq!(
+        type_name(&types, types.symbol_type(even.id).unwrap()),
+        "fn(Int) -> Bool"
+    );
+    assert_eq!(
+        type_name(&types, types.symbol_type(odd.id).unwrap()),
+        "fn(Int) -> Bool"
+    );
+}
+
+#[test]
+fn mutually_constrained_calls_resolve() {
+    // `f` returns `g(p)` and `g` returns `q`: the two functions share
+    // parameter and result variables, so one call-site argument (`f(1)`)
+    // resolves both signatures.
+    let src = "fn f(p) { return g(p); } fn g(q) { return q; } fn h() { let x = f(1); x; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    for name in ["f", "g"] {
+        let symbol = _semantic.symbols().iter().find(|s| s.name == name).unwrap();
+        assert_eq!(
+            type_name(&types, types.symbol_type(symbol.id).unwrap()),
+            "fn(Int) -> Int"
+        );
+    }
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "x")), "Int");
+}
+
+#[test]
+fn conflicting_returns_across_branches_are_rejected() {
+    let src = "fn f(c) { if c { return 1; } return 1.5; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T01");
+    assert_eq!(errors[0].expected(), Some("Int"));
+    assert_eq!(errors[0].actual(), Some("Float"));
+    assert_eq!(errors[0].span(), text_span(src, "1.5"));
+}
+
+#[test]
+fn unconstrained_condition_is_pinned_to_bool() {
+    // The expected type `Bool` flows into the condition, so the otherwise
+    // unconstrained function result is determined rather than leaked.
+    let src = "fn f() { return; } fn g() { if f() { } }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let f = _semantic.symbols().iter().find(|s| s.name == "f").unwrap();
+    let f_ty = types.symbol_type(f.id).unwrap();
+    assert_eq!(type_name(&types, f_ty), "fn() -> Bool");
+}
+
+#[test]
+fn while_condition_pins_unconstrained_expression_to_bool() {
+    let src = "fn f() { return; } fn g() { while f() { break; } }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let f = _semantic.symbols().iter().find(|s| s.name == "f").unwrap();
+    let f_ty = types.symbol_type(f.id).unwrap();
+    assert_eq!(type_name(&types, f_ty), "fn() -> Bool");
+}
+
+#[test]
+fn result_driven_arithmetic_pins_callee_result() {
+    // Using an unconstrained call result in arithmetic pins the callee's
+    // result type through the concrete-constraint path.
+    let src = "fn f() { return; } fn g() { let x = f() + 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let f = _semantic.symbols().iter().find(|s| s.name == "f").unwrap();
+    let f_ty = types.symbol_type(f.id).unwrap();
+    assert_eq!(type_name(&types, f_ty), "fn() -> Int");
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "x")), "Int");
+}
+
+#[test]
+fn pinned_condition_conflicts_with_numeric_use() {
+    // The condition pins the function result to `Bool`; using it as a
+    // number later is a genuine operator error.
+    let src = "fn f() { return; } fn g() { if f() { } f() + 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].operator(), Some("+"));
+    assert_eq!(errors[0].actual(), Some("types `Bool` and `Int`"));
+}
+
+#[test]
+fn logical_operands_are_pinned_to_bool() {
+    let src = "fn f() { return; } fn g() { let a = f(); let b = f(); let r = a && b; a; b; r; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    for name in ["a", "b", "r"] {
+        assert_eq!(
+            type_name(&types, symbol_ty(&types, &_semantic, name)),
+            "Bool"
+        );
+    }
+}
+
+#[test]
+fn shift_operands_are_pinned_to_int() {
+    let src = "fn f() { return; } fn g() { let a = f(); let b = f(); let r = a << b; a; b; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    for name in ["a", "b", "r"] {
+        assert_eq!(
+            type_name(&types, symbol_ty(&types, &_semantic, name)),
+            "Int"
+        );
+    }
+}
+
+#[test]
+fn unary_not_pins_operand_to_bool() {
+    let src = "fn f() { return; } fn g() { let a = f(); let b = !a; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "a")),
+        "Bool"
+    );
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "b")),
+        "Bool"
+    );
+}
+
+#[test]
+fn unary_bitwise_not_pins_operand_to_int() {
+    let src = "fn f() { return; } fn g() { let a = f(); let b = ~a; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "a")), "Int");
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "b")), "Int");
+}
+
+#[test]
+fn unary_negation_defers_on_ambiguous_operand() {
+    // `-` accepts both numerics, so an unconstrained operand cannot be
+    // pinned: it stays unresolved rather than being guessed.
+    let src = "fn f() { return; } fn g() { let a = f(); let b = -a; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "a")),
+        "unresolved"
+    );
+}
+
+#[test]
+fn unknown_iterable_is_pinned_to_range() {
+    let src = "fn f() { return; } fn g() { let r = f(); for i in r { i; } }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    // The structure of `r` is determined (a range); only its element type
+    // is genuinely unknown at this point.
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "r")),
+        "Range<unresolved>"
+    );
+}
+
+#[test]
+fn pinned_range_propagates_to_loop_variable() {
+    // `for` pins the iterable to `Range<T>`; using the loop variable in
+    // arithmetic resolves `T` and flows back into the iterable's type.
+    let src = "fn f() { return; } fn g() { let r = f(); for i in r { i + 1; } }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "r")),
+        "Range<Int>"
+    );
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "i")), "Int");
+}
+
+#[test]
+fn no_determinable_type_leaks_unresolved() {
+    // Every type the language can determine must be determined: conditions,
+    // logical operands, shift operands, and unary operands pin their
+    // variables, so none of these symbols stays unresolved.
+    let src = "fn a() { return; } fn b() { return; } fn c() { return; }\n\
+               fn g() { if a() { } let l = a() && true; let s = b() << 1; let n = !c(); l; s; n; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    for name in ["a", "b", "c", "l", "s", "n"] {
+        let ty = symbol_ty(&types, &_semantic, name);
+        assert!(
+            types.types().is_resolved(ty),
+            "`{name}` must be fully resolved, was {}",
+            type_name(&types, ty)
+        );
+    }
+}
+
+#[test]
+fn genuinely_ambiguous_types_stay_unresolved() {
+    // Arithmetic on two unconstrained operands cannot be pinned (Int and
+    // Float are both valid); staying unresolved is the honest outcome.
+    let src = "fn f() { return; } fn g() { let a = f(); let b = f(); let r = a + b; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    for name in ["a", "b", "r"] {
+        assert_eq!(
+            type_name(&types, symbol_ty(&types, &_semantic, name)),
+            "unresolved"
+        );
+    }
+}
+
+#[test]
+fn incompatible_constraints_through_calls_are_rejected() {
+    // The body pins `p` to `Int`; the second call-site argument conflicts.
+    let src = "fn f(p) { p + 1; } fn g() { f(1); f(1.5); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].expected(), Some("Int"));
+    assert_eq!(errors[0].actual(), Some("Float"));
+    assert_eq!(errors[0].span(), text_span(src, "1.5"));
+}
+
+#[test]
+fn incompatible_constraints_via_condition_and_call_are_rejected() {
+    // The condition pins `p` to `Bool`; the later call argument conflicts.
+    let src = "fn f(p) { p; } fn g() { if f(true) { } f(1); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].expected(), Some("Bool"));
+    assert_eq!(errors[0].actual(), Some("Int"));
+    assert_eq!(errors[0].span(), text_span(src, "1"));
+}
+
+#[test]
+fn error_type_blocks_further_constraints_silently() {
+    // An unresolved initializer poisons the declaration; conditions,
+    // operators, and logical uses of the poisoned value stay quiet.
+    let src = "fn f() { let x = missing; if x { } x + 1; x && true; }";
+    let (_sources, _ast, semantic, types) = check_src(src);
+    assert_eq!(
+        error_spans(&semantic, SemanticErrorKind::UnresolvedName).len(),
+        1
+    );
+    assert!(!types.has_errors());
+}
+
+#[test]
+fn independent_inference_conflicts_are_all_reported() {
+    let src = "fn f(p) { p; } fn g(q) { q; } fn h() { f(1); f(1.5); g(true); g(1); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert_eq!(errors.len(), 2);
+}
+
+/// Hand-built ASTs exercising the session-07 pin paths with unresolved
+/// identifiers (parser-rejected shapes that tooling may still produce) must
+/// not panic: conditions, iterables, and unary/binary operands that are
+/// error types stay quiet.
+#[test]
+fn hand_built_inference_shapes_do_not_panic() {
+    let mut sources = SourceMap::new();
+    let id = sources.add(Path::new("weird_infer.mink"), "");
+    let file_id = sources.get(id).unwrap().id();
+    let mut pos = 0u32;
+    let mut next_span = move || {
+        let span = Span::new(file_id, pos..pos + 1);
+        pos += 1;
+        span
+    };
+    let ident = |name: &str, span: Span| Expr {
+        kind: ExprKind::Ident(Ident {
+            name: name.to_string(),
+            span,
+        }),
+        span,
+    };
+    let u = ident("u", next_span());
+    let v = ident("v", next_span());
+    let w = ident("w", next_span());
+    let x = ident("x", next_span());
+    let y = ident("y", next_span());
+    let empty = Block {
+        stmts: Vec::new(),
+        span: next_span(),
+    };
+    let stmts = vec![
+        Stmt {
+            kind: StmtKind::If(IfStmt {
+                cond: u,
+                then_block: empty.clone(),
+                else_branch: None,
+                span: next_span(),
+            }),
+            span: next_span(),
+        },
+        Stmt {
+            kind: StmtKind::For {
+                name: Ident {
+                    name: "i".to_string(),
+                    span: next_span(),
+                },
+                iterable: v,
+                body: empty.clone(),
+            },
+            span: next_span(),
+        },
+        Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    operand: Box::new(w),
+                },
+                span: next_span(),
+            }),
+            span: next_span(),
+        },
+        Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::Binary {
+                    op: BinaryOp::And,
+                    lhs: Box::new(x),
+                    rhs: Box::new(y),
+                },
+                span: next_span(),
+            }),
+            span: next_span(),
+        },
+    ];
+    let ast = Ast::new(vec![Item {
+        kind: ItemKind::Fn(FnItem {
+            name: Ident {
+                name: "f".to_string(),
+                span: next_span(),
+            },
+            params: Vec::new(),
+            body: Block {
+                stmts,
+                span: next_span(),
+            },
+        }),
+        span: next_span(),
+    }]);
+    let semantic = mink::semantics::analyze(&ast);
+    let types = mink::typecheck::check(&ast, &semantic);
+    // The five unresolved identifiers are semantic errors; type analysis
+    // pins nothing (error types absorb) and reports nothing extra.
+    assert_eq!(
+        error_spans(&semantic, SemanticErrorKind::UnresolvedName).len(),
+        5
+    );
+    assert!(!types.has_errors());
 }
 
 /// Spans of all semantic errors of `kind`.

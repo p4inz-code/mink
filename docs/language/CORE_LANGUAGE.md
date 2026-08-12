@@ -405,3 +405,34 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   so one root error (an unresolved name, an invalid operator) never
   cascades into misleading secondary diagnostics; independent errors are
   still all reported.
+
+### 26.1 Inference Decisions (Session 07)
+
+- **Constraint model.** Inference is constraint-based over the union-find
+  inference variables of session 06: declaration chains, recursion, and
+  mutually constrained calls resolve transitively and deterministically;
+  unification path-compresses chains. There is no separate constraint
+  solver.
+- **Bidirectional checking.** Where the context determines the type, the
+  expected type flows into the expression: `if`/`while` conditions pin
+  their expression to `Bool`; `for` iterables pin to `Range<T>`; `&&` and
+  `||` pin both operands to `Bool`; `<<`, `>>`, `&`, `^`, and `|` pin both
+  operands to `Int`; `!` pins its operand to `Bool`; `~` pins its operand
+  to `Int`.
+- **No guessing.** Positions with several valid types are never guessed:
+  `-`, and arithmetic or comparison/equality on two unconstrained
+  operands, stay unresolved until a real constraint decides. An unresolved
+  type by itself is never an error; only a constraint that contradicts a
+  resolved requirement is.
+- **Return inference.** A function's result type is inferred from its
+  typed `return` expressions; multiple return paths must agree, and
+  conflicting returns are `E-T01` at the conflicting return. Bare `return;`
+  carries no value and contributes nothing.
+- **Recursion.** Recursive calls unify a function's result with itself
+  (an identity constraint); a function's type resolves once any path
+  provides a concrete constraint. Mutually constrained functions share
+  parameter/result variables and resolve together.
+- **Resolution test.** `TypeTable::is_resolved` reports whether a type is
+  fully determined (not an unresolved variable). The checker is expected
+  to leave no determinable type unresolved: every pinned context above
+  resolves its variables.

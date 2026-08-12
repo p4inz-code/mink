@@ -742,6 +742,81 @@ fn check_with_multiple_type_errors_reports_all() {
 }
 
 #[test]
+fn check_with_inference_program_passes() {
+    // Recursion, argument-driven inference, and return inference all
+    // resolve; the program is well-typed and passes.
+    let path = temp_source(
+        "infer_ok.mink",
+        "fn f(n) { if n > 0 { return f(n - 1); } return 0; }\n\
+         fn g() { let x = f(3); x + 1; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.is_empty(), "stderr was: {stderr}");
+}
+
+#[test]
+fn check_with_incompatible_call_constraints_fails() {
+    // The body pins the parameter to `Int`; the second call site passes a
+    // `Float`, which conflicts with the inferred signature.
+    let path = temp_source(
+        "infer_call.mink",
+        "fn f(p) { p + 1; } fn g() { f(1); f(1.5); }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T01"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("expected `Int`, found `Float`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_conflicting_returns_fails() {
+    let path = temp_source(
+        "infer_return.mink",
+        "fn f(c) { if c { return 1; } return 1.5; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T01"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("expected `Int`, found `Float`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_pinned_condition_conflict_fails() {
+    // The condition pins the function result to `Bool`; using it as a
+    // number afterwards is a genuine operator error.
+    let path = temp_source(
+        "infer_cond.mink",
+        "fn f() { return; } fn g() { if f() { } f() + 1; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T02"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot apply operator `+` to types `Bool` and `Int`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
 fn check_reports_semantic_and_type_errors_together() {
     // An unresolved name (semantic) and an incompatible assignment (type)
     // in the same source are both reported; the unresolved name does not

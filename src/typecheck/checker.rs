@@ -14,6 +14,15 @@
 //! guarded, and the unknown/error type (`docs/implementation/
 //! TYPE_SYSTEM_IMPLEMENTATION.md` §8) absorbs failed sub-expressions so
 //! independent errors are reported without cascades.
+//!
+//! Inference (session 07) is constraint-based and bidirectional where an
+//! expected type genuinely determines the answer: conditions pin their
+//! expression to `Bool`, `for` iterables pin to `Range<T>`, and the
+//! boolean/integer operators pin their unconstrained operands. Inference
+//! variables form a union-find structure (see
+//! [`TypeTable::unify`](super::ty::TypeTable::unify)), so chains,
+//! recursion, and mutually constrained calls all resolve deterministically;
+//! see `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md`.
 
 use std::collections::HashMap;
 
@@ -234,8 +243,7 @@ impl<'a> Checker<'a> {
             StmtKind::Break | StmtKind::Continue => {}
             StmtKind::If(stmt) => self.check_if(stmt),
             StmtKind::While { cond, body } => {
-                let cond_ty = self.expr_type(cond);
-                self.require_bool(cond_ty, cond.span);
+                self.check_condition(cond);
                 self.check_block(body);
             }
             StmtKind::For {
@@ -255,8 +263,7 @@ impl<'a> Checker<'a> {
     }
 
     fn check_if(&mut self, stmt: &IfStmt) {
-        let cond_ty = self.expr_type(&stmt.cond);
-        self.require_bool(cond_ty, stmt.cond.span);
+        self.check_condition(&stmt.cond);
         self.check_block(&stmt.then_block);
         match &stmt.else_branch {
             Some(ElseBranch::If(nested)) => self.check_if(nested),
@@ -266,8 +273,11 @@ impl<'a> Checker<'a> {
     }
 
     /// Types a `for` loop variable from the iterable's element type. Only
-    /// ranges are iterable at this stage; unconstrained or unknown
-    /// iterables defer silently.
+    /// ranges are iterable at this stage. An unconstrained iterable is
+    /// pinned to `Range<T>` with a fresh element variable (bidirectional
+    /// checking: `for` imposes the expected type `Range<_>`), so its type
+    /// is determined by the first real constraint; unknown/error iterables
+    /// defer silently — their root cause is reported elsewhere.
     fn check_for_var(&mut self, name: &Ident, iter_ty: TypeId, span: Span) {
         let Some(symbol) = self.decls.get(&name.span.start()).copied() else {
             return;
@@ -278,7 +288,13 @@ impl<'a> Checker<'a> {
             Some(TypeKind::Range(elem)) => {
                 let _ = self.types.unify(var, *elem);
             }
-            Some(TypeKind::Infer(_)) | Some(TypeKind::Error) | None => {}
+            Some(TypeKind::Infer(_)) => {
+                let elem = self.types.push(TypeKind::Infer(None));
+                let range = self.types.push(TypeKind::Range(elem));
+                let _ = self.types.unify(canon, range);
+                let _ = self.types.unify(var, elem);
+            }
+            Some(TypeKind::Error) | None => {}
             Some(_) => {
                 self.errors
                     .push(TypeError::not_iterable(span, self.display(canon)));
@@ -304,18 +320,16 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Requires a condition expression to be boolean. Unknown and error
-    /// types are accepted silently — their root cause is reported
-    /// elsewhere, and an unconstrained variable cannot be judged yet.
-    fn require_bool(&mut self, ty: TypeId, span: Span) {
-        let canon = self.types.canonical(ty);
-        match self.types.kind(canon) {
-            Some(TypeKind::Bool) | Some(TypeKind::Infer(_)) | Some(TypeKind::Error) | None => {}
-            Some(_) => {
-                self.errors
-                    .push(TypeError::mismatch(span, "Bool", self.display(canon), None));
-            }
-        }
+    /// Checks a condition expression against the expected type `Bool`.
+    ///
+    /// This is the bidirectional direction of the checker: the expected
+    /// type flows down into the expression, so an unconstrained condition
+    /// is pinned to `Bool` (and its chain of inference variables with it)
+    /// instead of leaking as unresolved. Error-typed conditions stay
+    /// silently unknown — their root cause is reported elsewhere.
+    fn check_condition(&mut self, cond: &Expr) {
+        let expected = self.bool_ty();
+        let _ = self.check_expr_against(cond, expected);
     }
 
     // ------------------------------------------------------------------
@@ -393,38 +407,94 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Types `expr` and then unifies its type with the expected type
+    /// `expected`, returning the unified type.
+    ///
+    /// This is the bidirectional checking mechanism of the checker: type
+    /// information flows down from the context (the expected type) as well
+    /// as up from the expression. An unconstrained expression adopts
+    /// `expected`; a conflicting concrete type is a mismatch diagnostic
+    /// (expected type, actual type, exact expression span).
+    /// Types `expr` and then unifies its type with the expected type
+    /// `expected`, returning the unified type.
+    ///
+    /// This is the bidirectional checking mechanism of the checker: type
+    /// information flows down from the context (the expected type) as well
+    /// as up from the expression. An unconstrained expression adopts
+    /// `expected`; a conflicting concrete type is a mismatch diagnostic
+    /// (expected type, actual type, exact expression span).
+    ///
+    /// On conflict the freshly pushed error type is returned, but the
+    /// expression's recorded type (see [`Checker::expr_type`]) stays the
+    /// actual concrete type: the mismatch diagnostic already marks the
+    /// program invalid, so later stages see the error through
+    /// [`TypeResult::has_errors`].
+    fn check_expr_against(&mut self, expr: &Expr, expected: TypeId) -> TypeId {
+        let actual = self.expr_type(expr);
+        match self.types.unify(actual, expected) {
+            Ok(ty) => ty,
+            Err(_) => {
+                self.errors.push(TypeError::mismatch(
+                    expr.span,
+                    self.display(expected),
+                    self.display(actual),
+                    None,
+                ));
+                self.types.push(TypeKind::Error)
+            }
+        }
+    }
+
     /// Types a prefix unary operation. `-` requires a numeric operand,
     /// `!` a boolean one, and `~` an integer one; the result type is the
     /// operand type.
+    ///
+    /// `!` and `~` pin an unconstrained operand to `Bool`/`Int` (their
+    /// result type uniquely determines the operand type); `-` cannot pin,
+    /// since both `Int` and `Float` are valid, so its unconstrained
+    /// operand stays unresolved until another constraint decides.
     fn check_unary(&mut self, op: UnaryOp, operand_ty: TypeId, span: Span) -> TypeId {
         let canon = self.types.canonical(operand_ty);
         if self.types.is_error(canon) {
             return self.types.push(TypeKind::Error);
         }
-        let valid = match op {
-            UnaryOp::Neg => matches!(
-                self.types.kind(canon),
-                Some(TypeKind::Int | TypeKind::Float | TypeKind::Infer(_))
-            ),
-            UnaryOp::Not => matches!(
-                self.types.kind(canon),
-                Some(TypeKind::Bool | TypeKind::Infer(_))
-            ),
-            UnaryOp::BitNot => matches!(
-                self.types.kind(canon),
-                Some(TypeKind::Int | TypeKind::Infer(_))
-            ),
-        };
-        if valid {
-            canon
-        } else {
-            self.errors.push(TypeError::invalid_operator(
-                span,
-                op.symbol(),
-                format!("type `{}`", self.display(canon)),
-            ));
-            self.types.push(TypeKind::Error)
+        match op {
+            UnaryOp::Neg => {
+                if self.is_numeric(canon) {
+                    canon
+                } else if matches!(self.types.kind(canon), Some(TypeKind::Infer(_))) {
+                    // Numeric disjunction: cannot pin, defer honestly.
+                    canon
+                } else {
+                    self.unary_error(op, canon, span)
+                }
+            }
+            UnaryOp::Not => {
+                let expected = self.bool_ty();
+                match self.types.unify(canon, expected) {
+                    Ok(_) => expected,
+                    Err(_) => self.unary_error(op, canon, span),
+                }
+            }
+            UnaryOp::BitNot => {
+                let expected = self.int_ty();
+                match self.types.unify(canon, expected) {
+                    Ok(_) => expected,
+                    Err(_) => self.unary_error(op, canon, span),
+                }
+            }
         }
+    }
+
+    /// Reports an invalid unary operand combination and returns the
+    /// poisoned error type.
+    fn unary_error(&mut self, op: UnaryOp, operand_ty: TypeId, span: Span) -> TypeId {
+        self.errors.push(TypeError::invalid_operator(
+            span,
+            op.symbol(),
+            format!("type `{}`", self.display(operand_ty)),
+        ));
+        self.types.push(TypeKind::Error)
     }
 
     /// Types an infix binary operation, reporting incompatible operand
@@ -473,12 +543,24 @@ impl<'a> Checker<'a> {
             (true, true) => {
                 let _ = self.types.unify(l, r);
                 match category {
-                    OpCategory::Comparison | OpCategory::Equality | OpCategory::Logical => {
-                        Some(self.bool_ty())
+                    // The operands' type is determined by the operator:
+                    // pin the linked variable so it cannot leak unresolved.
+                    OpCategory::Logical => {
+                        let expected = self.bool_ty();
+                        let _ = self.types.unify(l, expected);
+                        Some(expected)
                     }
-                    OpCategory::Arithmetic | OpCategory::Shift | OpCategory::Bitwise => {
-                        Some(self.types.canonical(l))
+                    OpCategory::Shift | OpCategory::Bitwise => {
+                        let expected = self.int_ty();
+                        let _ = self.types.unify(l, expected);
+                        Some(expected)
                     }
+                    // Comparison/equality produce `Bool` regardless, and
+                    // arithmetic preserves the operand type; neither can
+                    // pin (any scalar / both numerics are valid), so the
+                    // linked operands stay unresolved until constrained.
+                    OpCategory::Comparison | OpCategory::Equality => Some(self.bool_ty()),
+                    OpCategory::Arithmetic => Some(self.types.canonical(l)),
                 }
             }
             (true, false) => self.rule_with_concrete(category, r, l),
@@ -774,6 +856,10 @@ impl<'a> Checker<'a> {
 
     fn bool_ty(&mut self) -> TypeId {
         self.types.push(TypeKind::Bool)
+    }
+
+    fn int_ty(&mut self) -> TypeId {
+        self.types.push(TypeKind::Int)
     }
 
     fn is_numeric(&self, id: TypeId) -> bool {

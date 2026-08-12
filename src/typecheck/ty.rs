@@ -163,6 +163,17 @@ impl TypeTable {
         matches!(self.kind(id), Some(TypeKind::Error))
     }
 
+    /// Whether `id` currently denotes a fully determined type: following
+    /// resolved inference variables must not end at an unresolved one.
+    ///
+    /// The error type counts as resolved — it is a known, deliberate
+    /// outcome — so this answers the inference question "has every
+    /// determinable type been determined?" (see
+    /// `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md` §5).
+    pub fn is_resolved(&self, id: TypeId) -> bool {
+        !matches!(self.kind(id), Some(TypeKind::Infer(_)))
+    }
+
     /// Attempts to unify `a` and `b`, returning the unified type.
     ///
     /// This is the single authoritative type-comparison mechanism:

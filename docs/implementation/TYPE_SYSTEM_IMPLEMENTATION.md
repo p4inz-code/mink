@@ -2,7 +2,7 @@
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 06 — Type System Foundation
+**Session:** 06–07 — Type System Foundation & Type Inference
 
 ## 1. Objective
 
@@ -161,6 +161,21 @@ The current grammar has no type annotations, so the checker performs the
   (arithmetic, shift, bitwise) and `Bool` for comparison, equality, and
   logical operators, whose result is `Bool` regardless of operand types.
 
+Session 07 added the **bidirectional direction** (expected types flowing
+into expressions) where the context determines the answer — see
+`docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md`:
+
+- `if`/`while` conditions are checked against the expected type `Bool`
+  (`check_expr_against`), so an unconstrained condition is pinned to
+  `Bool` instead of leaking unresolved;
+- `for` iterables are pinned to `Range<T>` with a fresh element variable;
+- `&&`/`||` pin both operands to `Bool`; `<<`/`>>`/`&`/`^`/`|` pin both
+  operands to `Int` (both-unknown operands no longer leak);
+- `!` pins its operand to `Bool` and `~` to `Int`;
+- `-` and arithmetic/comparison/equality on unconstrained operands are
+  genuinely ambiguous and stay unresolved until a real constraint decides
+  (documented limitation, §23).
+
 Three type states are clearly distinguished:
 
 | State      | Meaning                                                       |
@@ -279,7 +294,11 @@ rule each (`docs/language/CORE_LANGUAGE.md` §26):
 
 Scalar types are `Int`, `Float`, `Bool`, `Char`, `Str`, and `Null`. Range
 and function types are not comparable. An unconstrained operand adopts the
-operator's requirement when the other operand fixes it (§6); an `Error`
+operator's requirement when the other operand fixes it (§6); where both
+operands are unconstrained, the logical operators pin them to `Bool` and
+the shift/bitwise operators pin them to `Int` (session 07), while
+comparison/equality (result `Bool`) and arithmetic (result is the operand
+type) cannot pin and leave the linked operands unresolved. An `Error`
 operand poisons the result silently (§8).
 
 ### 13.1 Numeric mixing — documented decision
@@ -300,13 +319,17 @@ and reject everything else (`1 && true` is an error). This matches
 
 ## 14. Control-Flow Typing
 
-- `if` and `while` conditions must be `Bool` (`E-T01`); unknown or error
-  conditions defer silently.
+- `if` and `while` conditions are checked against the expected type `Bool`
+  (`E-T01` on conflict); an unconstrained condition is **pinned to `Bool`**
+  (session 07), while unknown/error conditions defer silently.
 - `return expr;` unifies the expression with the enclosing function's
-  result variable; conflicting return types are `E-T01`. Bare `return;`
-  contributes nothing.
-- `for` iterables must be `Range` types (`E-T06` otherwise); the loop
-  variable unifies with the element type.
+  result variable, so a function's result type is inferred from its return
+  expressions and multiple paths must agree; conflicting return types are
+  `E-T01`. Bare `return;` contributes nothing.
+- `for` iterables must be `Range` types (`E-T06` otherwise); an
+  unconstrained iterable is **pinned to `Range<T>`** with a fresh element
+  variable (session 07), and the loop variable unifies with the element
+  type.
 - `break`/`continue` are control-flow only; they have no type.
 
 ## 15. Assignment Typing
@@ -416,8 +439,10 @@ remains `NotImplemented` (exit `2`). The CLI success message is now
   lookup is O(log n) binary search over a span-sorted vector.
 - Concrete types are interned, so literal/type identity is cheap and the
   arena stays small.
-- Canonicalization follows at most one union-find chain per lookup;
-  unification is constant-time for scalar types.
+- Canonicalization follows at most one union-find chain per lookup and
+  `unify` path-compresses the chains it walks (session 07), so long
+  declaration/inference chains (hundreds of linked variables) resolve in
+  amortized near-constant time.
 - No AST mutation, no global state, no unsafe code.
 
 ## 22. Security and Robustness
@@ -441,9 +466,13 @@ Compiler input is untrusted. The checker:
   signature syntax, no generic function typing, no closures.
 - A function with no typed `return` keeps an unresolved result type; calls
   through it defer honestly.
-- An unconstrained variable used in an operation is unified with the
-  operator's requirement at its first constraint (order-sensitive, single
-  pass); full bidirectional inference is a later milestone.
+- Inference is a single forward pass: an unconstrained variable adopts the
+  requirement of its first constraint, and the bidirectional directions
+  (conditions → `Bool`, iterables → `Range<T>`, boolean/integer operators
+  → their operand type) are the only expected-type propagation. Genuinely
+  ambiguous uses — `-`, arithmetic or comparison/equality on two
+  unconstrained operands — stay unresolved until a later constraint or a
+  future constraint solver decides (§26 of `TYPE_INFERENCE_IMPLEMENTATION.md`).
 - Equality is allowed for the six scalar types only; range and function
   equality are rejected until their semantics are specified.
 - `null` is its own concrete type, not an optional/absence mechanism
@@ -451,8 +480,10 @@ Compiler input is untrusted. The checker:
 
 ## 24. Tests
 
-Coverage lives in `tests/typecheck.rs` (94 tests) and the type CLI smoke
-tests in `tests/cli.rs` (12 new). Categories:
+Coverage lives in `tests/typecheck.rs` (122 tests) and the type CLI smoke
+tests in `tests/cli.rs` (16 type tests). Session 07 added the inference
+categories in `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md` §7.
+Categories:
 
 - **Literals**: integer/float/string/char/bool/null typing and expression
   recording.
@@ -480,10 +511,19 @@ tests in `tests/cli.rs` (12 new). Categories:
   types, inference resolution, expression lookup by span.
 - **Robustness**: deep nesting, 200 functions, 300-term chains, hand-built
   unusual ASTs, unresolved names everywhere — no panics.
+- **Inference (session 07)**: chained/mutually constrained declarations,
+  deep 200-link chains, parameter/return inference, recursion, mutual
+  recursion, argument-driven and result-driven resolution, conflicting
+  returns and incompatible constraints, pinning (conditions, iterables,
+  logical/shift/bitwise/unary operands), no-leak assertions via
+  `is_resolved`, genuinely ambiguous deferral, error-type blocking, and
+  hand-built pin-path ASTs.
 
 The CLI tests verify actual exit codes and stderr content for valid
 programs (exit 0), type errors (exit 1), mixed semantic+type sources, and
-the updated success message.
+the updated success message; session 07 added inference CLI tests for a
+recursive program, incompatible call constraints, conflicting returns, and
+pinned-condition conflicts.
 
 ## 25. Quality Gates
 
@@ -495,18 +535,20 @@ As before:
     cargo build
     git diff --check
 
-Total suite after session 06: **426 tests** (48 CLI + 50 lexer + 88 parser
-+ 62 parser hardening + 72 semantics + 12 source + 94 typecheck), all
+Total suite after session 07: **458 tests** (52 CLI + 50 lexer + 88 parser
++ 62 parser hardening + 72 semantics + 12 source + 122 typecheck), all
 passing.
 
-## 26. Session 07 Boundary
+## 26. Later Milestones
 
-The type-system foundation deliberately stops before advanced features.
-Cleanly deferred to later milestones:
+The type-system foundation (sessions 06–07) deliberately stops before
+advanced features. Cleanly deferred to later milestones:
 
 - implicit conversions and numeric promotion rules;
 - user-defined types (structs, enums, tuples) and member/index typing;
 - generics, traits/interfaces, type aliases, optional/result types;
-- a full inference engine (bidirectional constraint solving);
+- a general bidirectional inference engine beyond the pinned
+  expected-type directions of session 07 (see
+  `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md` §6);
 - pattern matching and exhaustiveness;
 - HIR/MIR lowering, optimization, code generation, runtime.
