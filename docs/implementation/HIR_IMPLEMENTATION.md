@@ -10,7 +10,7 @@ HIR (High-level Intermediate Representation) is the first real compiler IR
 layer, sitting between the typed front end and the future MIR:
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
-        → HIR → (future MIR) → (future backend) → executable
+        → HIR → MIR → (future optimization) → (future backend) → executable
 
 The AST answers *"what was written"*, semantic analysis answers *"which
 declaration does each name refer to"*, type analysis answers *"what type
@@ -105,7 +105,7 @@ succeeds and preserves:
 ## 5. Control-Flow Representation
 
 Control flow is represented structurally, exactly as written, in the shape
-future MIR lowering expects:
+MIR lowering consumes (session 09):
 
 - nested **blocks** (`HirBlock`) with statements in order;
 - **branches** — `HirIf` with an optional `HirElseBranch` (`If` for
@@ -116,9 +116,13 @@ future MIR lowering expects:
 - **jumps** — `Break`, `Continue`, and `Return(Option<HirExpr>)` (the
   value is `None` for a bare `return;`).
 
-MIR itself is not implemented in this session; HIR preserves enough
-structure (nested blocks, explicit branches, loops, jumps) that MIR
-lowering can later linearize it into basic blocks.
+MIR lowering (session 09) consumes this structure to linearize it into
+basic blocks: `if`/`else` becomes a conditional branch with two branch
+blocks and a shared continuation, `while`/`for`/`loop` become block
+machines with explicit break/continue targets, and `break`/`continue`/
+`return` become jumps and returns. HIR preserves enough structure (nested
+blocks, explicit branches, loops, jumps) that the HIR → MIR boundary needs
+no re-analysis.
 
 ## 6. Error Handling
 
@@ -147,21 +151,24 @@ reported no errors:
 - a lowering failure on a clean front end is an internal compiler error
   and is reported as `E-H01`…`E-H03` (exit 1);
 - a front end with semantic or type errors is **not** lowered — lowering an
-  inconsistent front end would only add misleading diagnostics;
-- `mink check` therefore validates through HIR: valid programs report
-  `passed parsing, semantic analysis, type checking, and HIR lowering
-  (N tokens)` and exit 0; every error class exits 1;
-- `mink build` remains `NotImplemented` (exit 2) — HIR generation is not
-  compilation, and no claim of compilation is made.
+  inconsistent front end would only add misleading diagnostics;- `mink check` therefore validates through HIR (and, since session 09,
+  through MIR): valid programs report `passed parsing, semantic analysis,
+  type checking, HIR lowering, and MIR lowering (N tokens)` and exit 0;
+  every error class exits 1;
+- `mink build` remains `NotImplemented` (exit 2) — HIR and MIR generation
+  are not compilation, and no claim of compilation is made.
 
-## 8. Future MIR Boundary
+## 8. MIR Boundary
 
 HIR is the *last high-level* IR: it still matches the source's structural
 shape (one node per source construct, no flattening, no temporaries, no
-basic blocks). MIR (session 09) will lower this tree into a linear,
-control-flow-graph representation. Nothing in HIR pre-commits to a
-particular MIR design; the explicit control-flow nodes and canonical types
-are the intended seam.
+basic blocks). MIR (session 09, `src/mir/`, `docs/implementation/MIR_IMPLEMENTATION.md`)
+consumes this tree and produces a linear, control-flow-graph
+representation: basic blocks, statements, and terminators, with
+`if`/`else`, `while`, `for`, `loop`, `break`, `continue`, and `return`
+lowered into explicit jumps, branches, and returns. The explicit
+control-flow nodes and canonical types in HIR are the seam MIR lowering
+consumes; nothing in HIR pre-commits to a particular MIR design beyond it.
 
 ## 9. Known Limitations
 
@@ -183,8 +190,8 @@ are the intended seam.
 ## 10. Tests
 
 Coverage lives in `tests/hir.rs` (25 tests) plus the internal-failure unit
-tests in `src/hir/lower.rs` (2) and the CLI tests in `tests/cli.rs` (3 new,
-55 total):
+tests in `src/hir/lower.rs` (2) and the CLI tests in `tests/cli.rs` (58
+total):
 
 - **Literals**: every literal kind lowers with its type.
 - **Identifiers/declarations**: references preserve `SymbolId` and type;
@@ -215,6 +222,6 @@ tests in `src/hir/lower.rs` (2) and the CLI tests in `tests/cli.rs` (3 new,
     cargo build
     git diff --check
 
-Full suite after session 08: **488 tests** (55 CLI + 50 lexer + 88 parser +
-62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR + 2
-HIR internal), all passing.
+Full suite after session 09: **537 tests** (58 CLI + 50 lexer + 88 parser +
+62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR +
+34 MIR + 14 lib unit tests), all passing.

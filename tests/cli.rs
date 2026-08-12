@@ -129,7 +129,7 @@ fn check_with_valid_source_passes() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(
-            "passed parsing, semantic analysis, type checking, and HIR lowering (6 tokens)"
+            "passed parsing, semantic analysis, type checking, HIR lowering, and MIR lowering (6 tokens)"
         ),
         "stdout was: {stdout}"
     );
@@ -396,7 +396,9 @@ fn check_with_valid_semantic_program_passes() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("passed parsing, semantic analysis, type checking, and HIR lowering"),
+        stdout.contains(
+            "passed parsing, semantic analysis, type checking, HIR lowering, and MIR lowering"
+        ),
         "stdout was: {stdout}"
     );
 }
@@ -834,10 +836,12 @@ fn check_with_control_flow_program_reaches_hir() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("passed parsing, semantic analysis, type checking, and HIR lowering"),
+        stdout.contains(
+            "passed parsing, semantic analysis, type checking, HIR lowering, and MIR lowering"
+        ),
         "stdout was: {stdout}"
     );
-    assert!(stdout.contains("HIR lowering"), "stdout was: {stdout}");
+    assert!(stdout.contains("MIR lowering"), "stdout was: {stdout}");
 }
 
 #[test]
@@ -867,6 +871,82 @@ fn check_with_type_error_does_not_claim_hir() {
         !stdout.contains("HIR lowering"),
         "stdout must not claim HIR lowering, was: {stdout}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// MIR (control-flow IR) diagnostics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_with_deep_control_flow_reaches_mir() {
+    // Deeply nested control flow — for/while/loop with break and continue,
+    // branches inside loops — must lower to a valid MIR control-flow graph
+    // and pass with exit 0.
+    let path = temp_source(
+        "mir_deep.mink",
+        concat!(
+            "fn main() {\n",
+            "    for i in 0..10 {\n",
+            "        while i > 0 {\n",
+            "            loop {\n",
+            "                if i == 3 { break; }\n",
+            "                continue;\n",
+            "            }\n",
+            "        }\n",
+            "        if i == 9 { break; }\n",
+            "    }\n",
+            "    return;\n",
+            "}\n",
+        ),
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("MIR lowering"), "stdout was: {stdout}");
+}
+
+#[test]
+fn check_with_module_items_reach_mir() {
+    // Module-level bindings, constants, function references, and calls all
+    // lower through MIR together.
+    let path = temp_source(
+        "mir_items.mink",
+        concat!(
+            "let base = 1;\n",
+            "const limit = 10;\n",
+            "fn add(a, b) { return a + b; }\n",
+            "fn main() {\n",
+            "    let mut x = base;\n",
+            "    x = add(x, limit);\n",
+            "    for i in 0..x { if i > 2 { return; } }\n",
+            "    return;\n",
+            "}\n",
+        ),
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("MIR lowering"), "stdout was: {stdout}");
+}
+
+#[test]
+fn check_with_range_value_iteration_reaches_mir() {
+    // A `for` loop over a range-typed variable (not a syntactic range)
+    // iterates a range value and must reach MIR.
+    let path = temp_source(
+        "mir_range_value.mink",
+        "fn main() { let r = 0 ..= 5; for i in r { i; } return; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("MIR lowering"), "stdout was: {stdout}");
 }
 
 #[test]

@@ -13,7 +13,7 @@ The compiler must support correctness, performance, incremental compilation, cro
 
 Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis → HIR → MIR → Optimization → Backend / Code Generation → Object / Executable / Library
 
-The stages through HIR are implemented (`src/hir/`, `docs/implementation/HIR_IMPLEMENTATION.md`): HIR is the typed, symbol-resolved, owned IR produced from the AST plus the semantic and type results, and `mink check` validates through it. MIR, optimization, and the backend are later milestones.
+The stages through MIR are implemented (`src/hir/`, `src/mir/`, `docs/implementation/HIR_IMPLEMENTATION.md`, `docs/implementation/MIR_IMPLEMENTATION.md`): HIR is the typed, symbol-resolved, owned IR produced from the AST plus the semantic and type results, MIR is the control-flow-oriented IR (basic blocks, statements, and terminators) lowered from HIR and structurally validated, and `mink check` validates through MIR. Optimization and the backend are later milestones.
 
 Compiler stages must have clearly separated responsibilities.
 
@@ -37,11 +37,11 @@ It may include exhaustiveness, unreachable code, invalid control flow, ownership
 
 ## 5. Intermediate Representations
 
-MINK should use HIR after semantic analysis and MIR for lower-level optimization and code generation.
+MINK uses HIR after semantic analysis and MIR for lower-level optimization and code generation.
 
-HIR should retain information needed for diagnostics, desugaring, generic processing, and analysis.
+HIR retains information needed for diagnostics, desugaring, generic processing, and analysis: it is a typed, symbol-resolved, owned tree mirroring the source structure, with explicit control-flow nodes (`if`/`else`, loops, `break`/`continue`/`return`).
 
-MIR should make control flow, values, calls, memory operations, resource operations, and async state explicit enough for optimization.
+MIR makes control flow, values, calls, memory operations, and resource operations explicit enough for optimization: every function is a graph of basic blocks, each block is an ordered list of statements ending in exactly one terminator (return, jump, or conditional branch), and control-flow constructs have been lowered into explicit jumps and branches. MIR also carries the loop state machine for `for` loops (range iteration via `RangeNext`/`RangeFinished`) and preserves exact source spans and canonical types.
 
 ## 6. Optimization
 
