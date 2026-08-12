@@ -7,7 +7,7 @@
 ## 1. Purpose
 
 HIR (High-level Intermediate Representation) is the first real compiler IR
-layer, sitting between the typed front end and the future MIR:
+layer, sitting between the typed front end and the MIR:
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
         → HIR → MIR → (future optimization) → (future backend) → executable
@@ -151,7 +151,8 @@ reported no errors:
 - a lowering failure on a clean front end is an internal compiler error
   and is reported as `E-H01`…`E-H03` (exit 1);
 - a front end with semantic or type errors is **not** lowered — lowering an
-  inconsistent front end would only add misleading diagnostics;- `mink check` therefore validates through HIR (and, since session 09,
+  inconsistent front end would only add misleading diagnostics;
+- `mink check` therefore validates through HIR (and, since session 09,
   through MIR): valid programs report `passed parsing, semantic analysis,
   type checking, HIR lowering, and MIR lowering (N tokens)` and exit 0;
   every error class exits 1;

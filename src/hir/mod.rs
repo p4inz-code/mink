@@ -21,7 +21,8 @@
 //!
 //! Control flow is represented explicitly — nested blocks, if/else
 //! branches, while/for/loop, break/continue, and returns — in the shape
-//! future MIR lowering expects. MIR itself is a later milestone.
+//! MIR lowering (session 09) consumes (see
+//! `docs/implementation/MIR_IMPLEMENTATION.md`).
 //!
 //! Lowering is deterministic: nodes and errors are produced in source
 //! order. For a valid front end (clean semantic and type analysis)
@@ -32,7 +33,7 @@
 //! The pipeline continues from type analysis:
 //!
 //! ```text
-//! AST → semantic analysis → type analysis → HIR lowering → future MIR
+//! AST → semantic analysis → type analysis → HIR lowering → MIR lowering
 //! ```
 
 mod error;
