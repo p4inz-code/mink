@@ -128,7 +128,9 @@ fn check_with_valid_source_passes() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("passed parsing, semantic analysis, and type checking (6 tokens)"),
+        stdout.contains(
+            "passed parsing, semantic analysis, type checking, and HIR lowering (6 tokens)"
+        ),
         "stdout was: {stdout}"
     );
 }
@@ -394,7 +396,7 @@ fn check_with_valid_semantic_program_passes() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("passed parsing, semantic analysis, and type checking"),
+        stdout.contains("passed parsing, semantic analysis, type checking, and HIR lowering"),
         "stdout was: {stdout}"
     );
 }
@@ -813,6 +815,57 @@ fn check_with_pinned_condition_conflict_fails() {
     assert!(
         stderr.contains("cannot apply operator `+` to types `Bool` and `Int`"),
         "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_control_flow_program_reaches_hir() {
+    // A representative program exercising declarations, calls, and control
+    // flow lowers to HIR after a clean front end; the success message
+    // reports the HIR stage.
+    let path = temp_source(
+        "hir_ok.mink",
+        "fn f(n) { if n > 0 { return f(n - 1); } return 0; }\n\
+         fn g() {\n    for i in 0..5 {\n        if i % 2 == 0 {\n            loop { break; }\n        }\n    }\n    return;\n}\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("passed parsing, semantic analysis, type checking, and HIR lowering"),
+        "stdout was: {stdout}"
+    );
+    assert!(stdout.contains("HIR lowering"), "stdout was: {stdout}");
+}
+
+#[test]
+fn check_with_empty_source_reaches_hir() {
+    let path = temp_source("hir_empty.mink", "");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("HIR lowering"), "stdout was: {stdout}");
+}
+
+#[test]
+fn check_with_type_error_does_not_claim_hir() {
+    // A program with a type error exits 1 and reports the type error; it
+    // must not claim that HIR lowering ran.
+    let path = temp_source("hir_no_lower.mink", "fn f() { let mut x = 1; x = true; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T01"), "stderr was: {stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("HIR lowering"),
+        "stdout must not claim HIR lowering, was: {stdout}"
     );
 }
 

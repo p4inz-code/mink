@@ -11,7 +11,9 @@ The compiler must support correctness, performance, incremental compilation, cro
 
 ## 2. High-Level Pipeline
 
-Source → Lexer → Parser → Syntax Representation → Name Resolution → Type Checking → Semantic Analysis → HIR → MIR → Optimization → Backend / Code Generation → Object / Executable / Library
+Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis → HIR → MIR → Optimization → Backend / Code Generation → Object / Executable / Library
+
+The stages through HIR are implemented (`src/hir/`, `docs/implementation/HIR_IMPLEMENTATION.md`): HIR is the typed, symbol-resolved, owned IR produced from the AST plus the semantic and type results, and `mink check` validates through it. MIR, optimization, and the backend are later milestones.
 
 Compiler stages must have clearly separated responsibilities.
 

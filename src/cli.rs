@@ -22,8 +22,8 @@ Usage:
 
 Commands:
   build <path>    Load a MINK source file and run the build pipeline
-  check <path>    Lex, parse, semantically analyze, and type check a MINK
-                  source file
+  check <path>    Lex, parse, semantically analyze, type check, and lower a
+                  MINK source file to HIR
   run <path>      Build and execute a MINK source file (not yet implemented)
   test [path]     Run MINK tests (not yet implemented)
   fmt [path]      Format MINK source (not yet implemented)
@@ -86,7 +86,7 @@ pub fn main(args: &[String]) -> ExitCode {
                 Ok(report) => {
                     if report.errors.is_empty() {
                         println!(
-                            "mink: check: '{}' passed parsing, semantic analysis, and type checking ({} tokens)",
+                            "mink: check: '{}' passed parsing, semantic analysis, type checking, and HIR lowering ({} tokens)",
                             path.display(),
                             report.token_count
                         );

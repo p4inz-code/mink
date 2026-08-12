@@ -106,6 +106,29 @@ impl TypeResult {
             .map(|index| self.expr_types[index].1)
     }
 
+    /// The type of the expression covering **exactly** `span`, if recorded.
+    ///
+    /// [`TypeResult::expr_type`] matches by span start, which is ambiguous
+    /// when one expression is a prefix of another (`1` and `1 + 2` share a
+    /// start). This lookup requires the full span to match, which uniquely
+    /// identifies one expression node; it is what HIR lowering uses to give
+    /// every lowered expression its precise type.
+    ///
+    /// Parser-produced expression nodes cover unique exact spans; only
+    /// hand-built ASTs could contain two nodes with the same exact span,
+    /// and for those the first in stable (traversal) order wins.
+    pub fn expr_type_exact(&self, span: Span) -> Option<TypeId> {
+        let start = span.start();
+        let lower = self
+            .expr_types
+            .partition_point(|(expr_span, _)| expr_span.start() < start);
+        self.expr_types[lower..]
+            .iter()
+            .take_while(|(expr_span, _)| expr_span.start() == start)
+            .find(|(expr_span, _)| *expr_span == span)
+            .map(|(_, ty)| *ty)
+    }
+
     /// Every recorded expression type, in span order: `(expression span,
     /// type)`.
     pub fn expr_types(&self) -> &[(Span, TypeId)] {
