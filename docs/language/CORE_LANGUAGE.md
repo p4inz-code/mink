@@ -348,7 +348,60 @@ full design record is `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
 This document establishes the core language direction. The core grammar for
 the implemented milestone — including the keyword list — is frozen in
 `docs/language/CORE_GRAMMAR.md`; the semantic rules implemented for the
-current milestone are recorded in §24 above. The remaining language surface
-(types, modules, patterns, async, memory semantics, ABI, runtime behavior,
-compiler architecture) continues to be finalized in the dedicated technical
-specifications before architecture freeze.
+current milestone are recorded in §24 above, and the type-system decisions
+in §26. The remaining language surface (modules, patterns, async, memory
+semantics, ABI, runtime behavior, compiler architecture) continues to be
+finalized in the dedicated technical specifications before architecture
+freeze.
+
+## 26. Type-System Decisions (Session 06)
+
+Resolved in session 06 and authoritative for the implemented milestone; the
+full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
+
+- **Core types.** The current milestone defines exactly the scalar types
+  `Int`, `Float`, `Bool`, `Char`, `Str`, and `Null`, plus `Range<T>` and
+  function types. `Int` and `Float` are single types; exact widths are a
+  runtime/ABI decision. No other types exist yet (no tuples, structs,
+  enums, generics, optional/result types, …) — they arrive with later
+  milestones per `docs/language/TYPE_SYSTEM.md`.
+- **Literals.** Integer, floating-point, string, character, boolean, and
+  `null` literals have the corresponding types above.
+- **No implicit conversions.** MINK defines no implicit numeric
+  conversions at this stage: mixed integer/float operations, comparisons,
+  equality, and ranges are rejected rather than silently coerced
+  (`1 + 2.5` is an error). Conversions arrive with an explicit design.
+- **Null.** `null` has its own distinct `Null` type; it is not a bottom
+  type and unifies only with itself. The optional/absence mechanism is a
+  future milestone.
+- **No truthiness.** `&&`, `||`, and `!` require `Bool` operands; `if` and
+  `while` conditions must be `Bool`. Non-boolean operands are type errors.
+- **Operators.** Arithmetic (`+ - * / %`) requires the same numeric type;
+  bitwise and shift (`& ^ | << >>`) require `Int`; comparisons require the
+  same numeric type; equality (`== !=`) requires the same scalar type
+  (`Int`, `Float`, `Bool`, `Char`, `Str`, `Null`); ranges require the same
+  numeric type for both endpoints. Result types are the operand type for
+  arithmetic, `Bool` for comparisons/equality/logical, and `Range<T>` for
+  ranges.
+- **Declarations.** `let`, `let mut`, and `const` bindings are typed from
+  their initializers (the grammar has no annotations). Mutability is a
+  semantic property and is unchanged by typing. Module-scope declaration
+  types are order-independent like their names.
+- **Calls.** Calls check that the callee is callable, that the argument
+  count matches the declared parameters, and that each argument is
+  compatible with its parameter. Function parameter and result types are
+  inferred from usage at this stage; there is no signature syntax yet.
+- **Iteration.** Only ranges are iterable at this stage; a `for` variable
+  has the range's element type, and iterating a non-range is a type error.
+- **Member/index deferral.** Member access, indexing, and their
+  writability depend on user-defined types, which do not exist yet; they
+  are deferred (never silently accepted as a specific type, never a
+  fabricated error).
+- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T06`
+  (mismatch, invalid operator, invalid range, not callable, wrong argument
+  count, not iterable). They carry the exact offending span, rendered
+  expected/actual types where useful, and a related span for assignments.
+- **Cascade control.** An unknown/error type absorbs failed sub-expressions
+  so one root error (an unresolved name, an invalid operator) never
+  cascades into misleading secondary diagnostics; independent errors are
+  still all reported.

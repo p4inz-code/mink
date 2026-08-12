@@ -1,12 +1,13 @@
 //! Compiler pipeline orchestration.
 //!
 //! Owns the sequence Source → Lexer → Parser → AST → Semantic Analysis →
-//! Backend (see `docs/compiler/COMPILER_ARCHITECTURE.md` §2). The driver runs
-//! source loading plus lexical, syntactic, and semantic analysis: the parser
-//! consumes the token stream and produces the AST, and when the source is
-//! lexically and syntactically valid, the semantic analyzer validates it and
-//! reports semantic problems together with any lexical/syntax errors. Type
-//! checking and the backend are not yet implemented.
+//! Type Analysis → Backend (see `docs/compiler/COMPILER_ARCHITECTURE.md`
+//! §2). The driver runs source loading plus lexical, syntactic, semantic,
+//! and type analysis: the parser consumes the token stream and produces the
+//! AST, and when the source is lexically and syntactically valid, the
+//! semantic analyzer validates it and the type checker types it. Type
+//! errors are reported together with any lexical/syntax/semantic errors.
+//! The backend is not yet implemented.
 
 use std::fmt;
 use std::io;
@@ -16,6 +17,7 @@ use crate::lexer::LexError;
 use crate::parser::{self, ParseError};
 use crate::semantics::{self, SemanticError, SemanticResult};
 use crate::source::{SourceId, SourceMap, Span};
+use crate::typecheck::{self, TypeError, TypeResult};
 
 /// Errors produced while running the build pipeline.
 #[derive(Debug)]
@@ -53,8 +55,8 @@ impl std::error::Error for BuildError {
     }
 }
 
-/// A single problem found by `check`: a lexical, a syntax, or a semantic
-/// error.
+/// A single problem found by `check`: a lexical, a syntax, a semantic, or
+/// a type error.
 ///
 /// All kinds carry a stable code, a human-readable message, and the exact
 /// source span they apply to, so the CLI (and future diagnostic engine) can
@@ -67,16 +69,19 @@ pub enum CheckError {
     Parse(ParseError),
     /// A semantic error produced by the semantic analyzer.
     Semantic(SemanticError),
+    /// A type error produced by the type checker.
+    Type(TypeError),
 }
 
 impl CheckError {
     /// The stable machine-readable code of this error (e.g. `E-L01`,
-    /// `E-P03`, `E-S01`).
+    /// `E-P03`, `E-S01`, `E-T01`).
     pub fn code(&self) -> &'static str {
         match self {
             Self::Lex(error) => error.kind().code(),
             Self::Parse(error) => error.kind().code(),
             Self::Semantic(error) => error.kind().code(),
+            Self::Type(error) => error.kind().code(),
         }
     }
 
@@ -86,14 +91,17 @@ impl CheckError {
             Self::Lex(error) => error.span(),
             Self::Parse(error) => error.span(),
             Self::Semantic(error) => error.span(),
+            Self::Type(error) => error.span(),
         }
     }
 
     /// A related source span, when this error references another location
-    /// (for example the original declaration of a duplicate definition).
+    /// (for example the original declaration of a duplicate definition, or
+    /// the target of a mismatched assignment).
     pub fn related_span(&self) -> Option<Span> {
         match self {
             Self::Semantic(error) => error.original(),
+            Self::Type(error) => error.related(),
             Self::Lex(_) | Self::Parse(_) => None,
         }
     }
@@ -105,38 +113,47 @@ impl fmt::Display for CheckError {
             Self::Lex(error) => error.fmt(f),
             Self::Parse(error) => error.fmt(f),
             Self::Semantic(error) => error.fmt(f),
+            Self::Type(error) => error.fmt(f),
         }
     }
 }
 
-/// The result of running lexical, syntactic, and (where applicable) semantic
-/// analysis on one source file.
+/// The result of running lexical, syntactic, semantic, and (where
+/// applicable) type analysis on one source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckReport {
     /// The id of the checked source file.
     pub source_id: SourceId,
     /// Number of tokens produced, excluding the final `Eof` token.
     pub token_count: usize,
-    /// Lexical, syntax, and semantic errors, in source order. Empty for
-    /// valid input.
+    /// Lexical, syntax, semantic, and type errors, in source order. Empty
+    /// for valid input.
     pub errors: Vec<CheckError>,
     /// The semantic-analysis result, present when the source was lexically
     /// and syntactically valid and analysis therefore ran. `None` when
     /// lexical or syntax errors made analysis unsafe or meaningless.
     pub semantic: Option<SemanticResult>,
+    /// The type-analysis result, present whenever semantic analysis ran.
+    /// `None` when lexical or syntax errors suppressed analysis.
+    pub types: Option<TypeResult>,
 }
 
-/// Loads `path` and runs lexical, syntactic, and semantic analysis over it.
+/// Loads `path` and runs lexical, syntactic, semantic, and type analysis
+/// over it.
 ///
 /// On success returns a [`CheckReport`] describing the token stream, any
-/// lexical/syntax/semantic errors, and — when the source is lexically and
-/// syntactically valid — the [`SemanticResult`] of analyzing the parsed AST.
-/// The caller decides how to surface them. An I/O failure to read the file is
-/// reported as [`BuildError::Io`].
+/// lexical/syntax/semantic/type errors, and — when the source is
+/// lexically and syntactically valid — the [`SemanticResult`] and
+/// [`TypeResult`] of analyzing the parsed AST. The caller decides how to
+/// surface them. An I/O failure to read the file is reported as
+/// [`BuildError::Io`].
 ///
 /// Semantic analysis runs only when parsing produced a usable AST (no
 /// lexical or syntax errors); otherwise the existing error behavior is
-/// preserved and no cascading semantic diagnostics are generated.
+/// preserved and no cascading semantic diagnostics are generated. Type
+/// analysis runs whenever semantic analysis ran: the type checker consumes
+/// the semantic result directly and its unknown/error type keeps semantic
+/// errors from cascading into misleading type diagnostics.
 pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildError> {
     let source_id = sources.load(path).map_err(|source| BuildError::Io {
         path: path.to_path_buf(),
@@ -153,24 +170,27 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
         .map(CheckError::Lex)
         .collect();
     errors.extend(parsed.parse_errors().iter().copied().map(CheckError::Parse));
-    // Semantic analysis only when the source is lexically and syntactically
-    // valid; a broken token stream or tree makes further analysis unsafe or
-    // meaningless, and skipping it avoids cascades.
-    let semantic = if parsed.is_valid() {
-        let result = semantics::analyze(parsed.ast());
-        errors.extend(result.errors().iter().cloned().map(CheckError::Semantic));
-        Some(result)
+    // Semantic and type analysis only when the source is lexically and
+    // syntactically valid; a broken token stream or tree makes further
+    // analysis unsafe or meaningless, and skipping it avoids cascades.
+    let (semantic, types) = if parsed.is_valid() {
+        let semantic = semantics::analyze(parsed.ast());
+        let types = typecheck::check(parsed.ast(), &semantic);
+        errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
+        errors.extend(types.errors().iter().cloned().map(CheckError::Type));
+        (Some(semantic), Some(types))
     } else {
-        None
+        (None, None)
     };
-    // Report problems in source order regardless of which stage produced them
-    // (a stable sort keeps equal-position errors in stage order).
+    // Report problems in source order regardless of which stage produced
+    // them (a stable sort keeps equal-position errors in stage order).
     errors.sort_by_key(|error| error.span().start());
     Ok(CheckReport {
         source_id,
         token_count: parsed.token_count(),
         errors,
         semantic,
+        types,
     })
 }
 

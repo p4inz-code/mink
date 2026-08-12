@@ -5,11 +5,12 @@
 //! implementation: the CLI driver, the compiler pipeline, and the shared
 //! source infrastructure that every later stage builds upon.
 //!
-//! The lexer, the parser/AST, and semantic analysis are implemented (see
-//! `docs/implementation/LEXER_IMPLEMENTATION.md`,
-//! `docs/implementation/PARSER_IMPLEMENTATION.md`, and
-//! `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`); the
-//! `diagnostics` module is a structural placeholder at this stage; see
+//! The lexer, the parser/AST, semantic analysis, and the type-system
+//! foundation are implemented (see `docs/implementation/LEXER_IMPLEMENTATION.md`,
+//! `docs/implementation/PARSER_IMPLEMENTATION.md`,
+//! `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`, and
+//! `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`); the `diagnostics`
+//! module is a structural placeholder at this stage; see
 //! `docs/implementation/ENGINEERING_FOUNDATION.md` for the layout rationale.
 
 #![forbid(unsafe_code)]
@@ -23,3 +24,4 @@ pub mod lexer;
 pub mod parser;
 pub mod semantics;
 pub mod source;
+pub mod typecheck;

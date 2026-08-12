@@ -7,7 +7,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use crate::driver::{self, BuildError, CheckReport};
+use crate::driver::{self, BuildError, CheckError, CheckReport};
+use crate::semantics::SemanticErrorKind;
 use crate::source::{SourceFile, SourceMap, Span};
 
 /// Version string from the package manifest (e.g. `0.1.0`).
@@ -21,7 +22,8 @@ Usage:
 
 Commands:
   build <path>    Load a MINK source file and run the build pipeline
-  check <path>    Lex, parse, and semantically analyze a MINK source file
+  check <path>    Lex, parse, semantically analyze, and type check a MINK
+                  source file
   run <path>      Build and execute a MINK source file (not yet implemented)
   test [path]     Run MINK tests (not yet implemented)
   fmt [path]      Format MINK source (not yet implemented)
@@ -84,7 +86,7 @@ pub fn main(args: &[String]) -> ExitCode {
                 Ok(report) => {
                     if report.errors.is_empty() {
                         println!(
-                            "mink: check: '{}' passed parsing and semantic analysis ({} tokens)",
+                            "mink: check: '{}' passed parsing, semantic analysis, and type checking ({} tokens)",
                             path.display(),
                             report.token_count
                         );
@@ -117,9 +119,10 @@ pub fn main(args: &[String]) -> ExitCode {
 /// This is a minimal, temporary rendering until the structured diagnostic
 /// engine lands (see `docs/implementation/PARSER_IMPLEMENTATION.md`). Each
 /// error is printed with its stable code, message, and source location,
-/// whether it is lexical, syntactic, or semantic; errors that reference a
-/// related location (such as the original declaration of a duplicate
-/// definition) print a note for that location too.
+/// whether it is lexical, syntactic, semantic, or a type error; errors that
+/// reference a related location (such as the original declaration of a
+/// duplicate definition, or the target of a mismatched assignment) print a
+/// note for that location too.
 fn print_errors(sources: &SourceMap, report: &CheckReport) {
     let Some(file) = sources.get(report.source_id) else {
         return;
@@ -128,7 +131,15 @@ fn print_errors(sources: &SourceMap, report: &CheckReport) {
         eprintln!("mink: error[{}]: {}", error.code(), error);
         print_span_location(file, error.span());
         if let Some(related) = error.related_span() {
-            eprintln!("  = note: previous declaration is here");
+            let note = match error {
+                CheckError::Semantic(semantic)
+                    if semantic.kind() == SemanticErrorKind::DuplicateDefinition =>
+                {
+                    "previous declaration is here"
+                }
+                _ => "related location is here",
+            };
+            eprintln!("  = note: {note}");
             print_span_location(file, related);
         }
     }

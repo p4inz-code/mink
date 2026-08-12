@@ -1050,8 +1050,9 @@ fn driver_check_skips_semantics_when_parsing_fails() {
             .iter()
             .all(|e| matches!(e, CheckError::Parse(_)))
     );
-    // No semantic analysis: no semantic diagnostics, no result.
+    // No semantic or type analysis: no diagnostics, no results.
     assert!(report.semantic.is_none());
+    assert!(report.types.is_none());
 }
 
 #[test]
@@ -1062,6 +1063,7 @@ fn driver_check_skips_semantics_on_lexical_errors() {
     let _ = std::fs::remove_file(&path);
 
     assert!(report.semantic.is_none());
+    assert!(report.types.is_none());
     assert!(
         report
             .errors

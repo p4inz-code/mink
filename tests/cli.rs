@@ -128,7 +128,7 @@ fn check_with_valid_source_passes() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("passed parsing and semantic analysis (6 tokens)"),
+        stdout.contains("passed parsing, semantic analysis, and type checking (6 tokens)"),
         "stdout was: {stdout}"
     );
 }
@@ -312,23 +312,22 @@ fn check_with_unicode_source_passes() {
 fn check_with_precedence_matrix_passes() {
     // Every precedence level and associativity form in the frozen grammar
     // must parse cleanly — and, since `mink check` now runs semantic
-    // analysis, the identifiers it uses must resolve.
+    // analysis and type checking, its identifiers must resolve and its
+    // operators must be well-typed (each level uses type-valid operands).
     let path = temp_source(
         "precedence.mink",
         concat!(
             "fn foo(v) { v; }\n",
             "fn f() {\n",
             "    let x = 1; let y = 2; let z = 3;\n",
-            "    let p = 1; let q = 2; let r = 3;\n",
-            "    let m = 1; let n = 2; let o = 3;\n",
             "    let mut a = 1 + 2 * 3;\n",
             "    let mut b = 1 << 2 + 3;\n",
-            "    let c = x == y < z;\n",
-            "    let d = p && q || r;\n",
-            "    let e = m | n ^ o & p;\n",
-            "    let f = a + b == c && d;\n",
+            "    let c = x == y;\n",
+            "    let d = true && false || true;\n",
+            "    let e = 1 | 2 ^ 3 & 4;\n",
+            "    let f = a + b == 5 && d;\n",
             "    let mut g = 0;\n",
-            "    g = a = b = c;\n",
+            "    g = a = b = 5;\n",
             "    let h = 0 .. 10;\n",
             "    let i = foo(1).member[0](x);\n",
             "}\n",
@@ -395,7 +394,7 @@ fn check_with_valid_semantic_program_passes() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("passed parsing and semantic analysis"),
+        stdout.contains("passed parsing, semantic analysis, and type checking"),
         "stdout was: {stdout}"
     );
 }
@@ -552,4 +551,213 @@ fn check_with_lexical_and_semantic_sources_distinguish_stages() {
     assert_eq!(sem_output.status.code(), Some(1));
     let sem_stderr = String::from_utf8_lossy(&sem_output.stderr);
     assert!(sem_stderr.contains("E-S01"), "stderr was: {sem_stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// Type-analysis diagnostics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_with_typed_valid_program_passes() {
+    // A well-typed program exercising literals, operators, assignment,
+    // ranges, calls, and typed returns passes with exit 0.
+    let path = temp_source(
+        "type_valid.mink",
+        concat!(
+            "fn add(a, b) { return a + b; }\n",
+            "fn main() {\n",
+            "    let x = 1 + 2 * 3;\n",
+            "    let mut y = x;\n",
+            "    y = add(x, 1);\n",
+            "    if y > 0 { return; }\n",
+            "    for i in 0..10 { let z = i; z; }\n",
+            "    let b = true && false;\n",
+            "    let r = 0 .. 10;\n",
+            "    r;\n",
+            "}\n",
+        ),
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn check_with_invalid_operator_types_fails() {
+    let path = temp_source(
+        "type_operator.mink",
+        "fn f() { let x = 1; let y = x + true; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T02"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot apply operator `+` to types `Int` and `Bool`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_incompatible_assignment_fails() {
+    let path = temp_source("type_assign.mink", "fn f() { let mut x = 1; x = true; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T01"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("expected `Int`, found `Bool`"),
+        "stderr was: {stderr}"
+    );
+    assert!(
+        stderr.contains("related location is here"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_invalid_call_fails() {
+    let path = temp_source("type_call.mink", "fn f() { let x = 1; x(2); }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T04"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot call a value of type `Int`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_incorrect_arity_fails() {
+    let path = temp_source("type_arity.mink", "fn f(p) {} fn g() { f(1, 2); }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T05"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("expected `1` arguments, found `2`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_invalid_comparison_fails() {
+    let path = temp_source(
+        "type_compare.mink",
+        "fn f() { let x = 1; let y = x < true; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T02"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot apply operator `<` to types `Int` and `Bool`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_invalid_logical_operation_fails() {
+    let path = temp_source(
+        "type_logical.mink",
+        "fn f() { let x = 1; let y = x && true; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T02"), "stderr was: {stderr}");
+}
+
+#[test]
+fn check_with_invalid_condition_fails() {
+    let path = temp_source("type_condition.mink", "fn f() { if 1 { } }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T01"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("expected `Bool`, found `Int`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_invalid_range_fails() {
+    let path = temp_source("type_range.mink", "fn f() { let r = 0 .. \"a\"; }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T03"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot construct a range with operands of types `Int` and `Str`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_non_range_iterable_fails() {
+    let path = temp_source("type_iter.mink", "fn f() { for i in 1 { } }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-T06"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("cannot iterate over a value of type `Int`"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn check_with_multiple_type_errors_reports_all() {
+    let path = temp_source(
+        "type_many.mink",
+        "fn f() { let mut a = 1; a = true; let mut b = 2; b = \"s\"; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(stderr.matches("E-T01").count(), 2, "stderr was: {stderr}");
+}
+
+#[test]
+fn check_reports_semantic_and_type_errors_together() {
+    // An unresolved name (semantic) and an incompatible assignment (type)
+    // in the same source are both reported; the unresolved name does not
+    // cascade into type noise.
+    let path = temp_source(
+        "type_sem_mixed.mink",
+        "fn f() { missing; let mut x = 1; x = true; }\n",
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("E-S01"), "stderr was: {stderr}");
+    assert!(stderr.contains("E-T01"), "stderr was: {stderr}");
+    // Exactly one of each: no cascade from the unresolved name.
+    assert_eq!(stderr.matches("E-S01").count(), 1, "stderr was: {stderr}");
+    assert_eq!(stderr.matches("E-T01").count(), 1, "stderr was: {stderr}");
 }
