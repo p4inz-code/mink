@@ -71,19 +71,23 @@ fn build_with_missing_file_fails_with_io_error() {
 }
 
 #[test]
-fn build_with_valid_source_reports_not_implemented() {
-    let path = temp_source("valid.mink", "fn main() {}\n");
+fn build_with_valid_source_produces_executable() {
+    let path = temp_source("valid.mink", "fn main() { return 42; }\n");
     let output = mink().arg("build").arg(&path).output().unwrap();
-    let _ = std::fs::remove_file(&path);
+    let exe = path.with_extension("exe");
 
-    // The file loads, so the failure is the unimplemented pipeline, not an
-    // I/O error.
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("not yet implemented"),
-        "stderr was: {stderr}"
+        stdout.contains("mink: build:") && stdout.contains("x86_64-windows-pe"),
+        "stdout was: {stdout}"
     );
+    // The generated executable exists, runs, and returns the program's
+    // exit code.
+    let run = std::process::Command::new(&exe).status().unwrap();
+    assert_eq!(run.code(), Some(42), "generated binary exit code");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&exe);
 }
 
 #[test]
@@ -999,26 +1003,26 @@ fn check_with_constant_condition_reaches_optimized_mir() {
 #[test]
 fn check_with_optimizable_program_keeps_exit_behavior() {
     // Optimizing a foldable program must not change exit behavior: valid
-    // input exits 0, `build` remains 2 (no backend yet).
+    // input exits 0, and `build` compiles and runs the optimized program.
     let path = temp_source(
         "opt_exit.mink",
         concat!(
             "fn main() {\n",
             "    let flag = true && true;\n",
-            "    if flag { return; }\n",
-            "    return;\n",
+            "    if flag { return 3; }\n",
+            "    return 4;\n",
             "}\n",
         ),
     );
     let check = mink().arg("check").arg(&path).output().unwrap();
     assert_eq!(check.status.code(), Some(0));
     let build = mink().arg("build").arg(&path).output().unwrap();
-    assert_eq!(
-        build.status.code(),
-        Some(2),
-        "backend code generation is not implemented"
-    );
+    assert_eq!(build.status.code(), Some(0), "build should succeed");
+    let exe = path.with_extension("exe");
+    let run = std::process::Command::new(&exe).status().unwrap();
+    assert_eq!(run.code(), Some(3), "generated binary exit code");
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&exe);
 }
 
 #[test]

@@ -197,6 +197,6 @@ total):
     cargo build
     git diff --check
 
-Full suite after session 10: **585 tests** (61 CLI + 50 lexer + 88 parser +
+Full suite after session 11: **622 tests** (61 CLI + 50 lexer + 88 parser +
 62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR +
-34 MIR + 38 optimization + 21 lib unit tests), all passing.
+34 MIR + 38 optimization + 21 lib unit + 37 backend), all passing.

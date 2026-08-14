@@ -1,0 +1,690 @@
+//! Integration tests for the native backend: lowering the optimized MIR
+//! into the backend instruction representation — functions, locals,
+//! instructions, terminators, statics, and range iteration — preserving
+//! types, spans, and deterministic ordering, and rejecting everything
+//! outside the native subset (floating point, strings, member/index
+//! places, non-constant module bindings, unsupported targets, missing or
+//! invalid entry points) with structured errors, never panics. Malformed
+//! hand-built instructions are rejected by the verifier (`E-B07`).
+//!
+//! The design is documented in `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`.
+
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use mink::backend::{
+    self, BInstKind, BOperand, BProgram, BTerminator, BType, BackendErrorKind, Target,
+};
+use mink::driver;
+use mink::mir::{BlockId, LocalId, MirProgram};
+use mink::source::{SourceMap, Span};
+
+/// A unique per-call suffix, so tests running in parallel never share a
+/// temp source file.
+static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+fn unique_source(kind: &str) -> std::path::PathBuf {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "mink_backend_{kind}_{}_{n}.mink",
+        std::process::id()
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Runs the front end on `src` and lowers the optimized MIR into backend
+/// instructions, asserting every stage is clean.
+fn lower_backend(src: &str) -> (MirProgram, BProgram) {
+    let mut sources = SourceMap::new();
+    let path = unique_source("test");
+    std::fs::write(&path, src).unwrap();
+    let report = driver::check(&mut sources, &path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        report.errors.is_empty(),
+        "front end must be clean: {:?}",
+        report.errors
+    );
+    let mir = report.mir.as_ref().expect("clean program lowers to MIR");
+    let program = backend::lower(mir, &sources)
+        .unwrap_or_else(|errors| panic!("clean MIR must lower: {errors:?}"));
+    if let Err(errors) = backend::verify(&program) {
+        panic!("lowering must produce valid instructions: {errors:?}");
+    }
+    (mir.clone(), program)
+}
+
+/// The lowered instructions of the function named `name`.
+fn function<'p>(program: &'p BProgram, name: &str) -> &'p mink::backend::BFunction {
+    program
+        .functions
+        .iter()
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("no function named `{name}`"))
+}
+
+/// The instructions of a function's entry block.
+fn entry_insts(f: &mink::backend::BFunction) -> &[mink::backend::BInst] {
+    &f.blocks[0].insts
+}
+
+/// The terminator of a function's entry block.
+fn entry_term(f: &mink::backend::BFunction) -> &BTerminator {
+    &f.blocks[0].terminator
+}
+
+/// The span of `needle` in `src` (registered as file id 0).
+fn text_span(src: &str, needle: &str) -> Span {
+    let start = src
+        .find(needle)
+        .unwrap_or_else(|| panic!("`{needle}` not found in `{src}`"));
+    Span::new(
+        mink::source::SourceId::new(0),
+        start as u32..start as u32 + needle.len() as u32,
+    )
+}
+
+/// The backend errors for `src`, or a panic when lowering succeeds.
+fn lower_errors(src: &str) -> Vec<mink::backend::BackendError> {
+    let mut sources = SourceMap::new();
+    let path = unique_source("err");
+    std::fs::write(&path, src).unwrap();
+    let report = driver::check(&mut sources, &path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        report.errors.is_empty(),
+        "the source itself must be valid MINK: {:?}",
+        report.errors
+    );
+    let mir = report.mir.expect("clean program lowers to MIR");
+    match backend::lower(&mir, &sources) {
+        Ok(_) => panic!("expected backend errors for: {src}"),
+        Err(errors) => errors,
+    }
+}
+
+/// The error kinds of `lower_errors`.
+fn error_kinds(src: &str) -> Vec<BackendErrorKind> {
+    lower_errors(src).iter().map(|e| e.kind()).collect()
+}
+
+/// The error kinds of compiling `src` all the way through [`backend::compile`]
+/// (entry-point validation included).
+fn compile_error_kinds(src: &str) -> Vec<BackendErrorKind> {
+    let mut sources = SourceMap::new();
+    let path = unique_source("cmp");
+    std::fs::write(&path, src).unwrap();
+    let report = driver::check(&mut sources, &path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        report.errors.is_empty(),
+        "the source itself must be valid MINK: {:?}",
+        report.errors
+    );
+    let mir = report.mir.expect("clean program");
+    match backend::compile(&mir, &sources, Target::native()) {
+        Ok(_) => panic!("expected backend errors for: {src}"),
+        Err(errors) => errors.iter().map(|e| e.kind()).collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Program structure
+// ---------------------------------------------------------------------------
+
+#[test]
+fn empty_program_lowers() {
+    let (_mir, program) = lower_backend("");
+    assert!(program.functions.is_empty());
+    assert!(program.statics.is_empty());
+}
+
+#[test]
+fn items_lower_in_source_order() {
+    let (_mir, program) =
+        lower_backend("const base = 1; fn f() { return; } let mut x = 2; fn g() { return; }");
+    assert_eq!(
+        program
+            .statics
+            .iter()
+            .map(|s| format!("{}:{}", s.name, s.mutable))
+            .collect::<Vec<_>>(),
+        ["base:false", "x:true"]
+    );
+    assert_eq!(
+        program
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>(),
+        ["f", "g"]
+    );
+}
+
+#[test]
+fn lowering_is_deterministic() {
+    let src = "fn main() { let mut s = 0; for i in 0..10 { s = s + i; } return s; }";
+    let (_mir, first) = lower_backend(src);
+    let (_mir, second) = lower_backend(src);
+    assert_eq!(first, second);
+}
+
+// ---------------------------------------------------------------------------
+// Functions, locals, and instructions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn function_lowers_with_params_locals_and_entry() {
+    // `f` is called from `main`, which pins its parameter types to `Int`.
+    // The copy `x = a` survives optimization because `x` is read in a
+    // later block, where copy propagation cannot reach.
+    let src =
+        "fn f(a, b) { let x = a; if b > 0 { return x; } return 0; } fn main() { f(1, 2); return; }";
+    let (_mir, program) = lower_backend(src);
+    let f = function(&program, "f");
+    assert_eq!(f.params, [LocalId::new(0), LocalId::new(1)]);
+    assert_eq!(f.result, BType::Int);
+    assert!(f.locals.len() >= 3, "params, local, and comparison temps");
+    assert_eq!(f.locals[0].name, "a");
+    assert_eq!(f.locals[0].ty, BType::Int);
+    assert_eq!(f.locals[1].name, "b");
+    assert_eq!(f.locals[2].name, "x");
+    let insts = entry_insts(f);
+    assert!(insts.iter().any(|i| i.kind
+        == BInstKind::LoadLocal {
+            target: LocalId::new(2),
+            src: LocalId::new(0)
+        }));
+    assert!(matches!(entry_term(f), BTerminator::Branch { .. }));
+    assert_eq!(function(&program, "main").result, BType::Unit);
+}
+
+#[test]
+fn copies_across_blocks_are_preserved() {
+    // `x = a` in the entry block is read from a later block, so the copy
+    // instruction survives; the earlier LoadLocal assertion depends on it.
+    let (_mir, program) = lower_backend(
+        "fn f(a) { let x = a; if a > 0 { return x; } return 0; } fn main() { f(1); return; }",
+    );
+    let f = function(&program, "f");
+    let insts = entry_insts(f);
+    assert!(insts.iter().any(|i| i.kind
+        == BInstKind::LoadLocal {
+            target: LocalId::new(1),
+            src: LocalId::new(0)
+        }));
+}
+
+#[test]
+fn constants_decode_from_source_text() {
+    // Module bindings are never optimized away, so the decoded values are
+    // always present in the static table.
+    let src = "const a = 42; const b = 0x2A; const c = 1_000; const d = true; const e = false; fn main() { return a; }";
+    let (_mir, program) = lower_backend(src);
+    let values = program
+        .statics
+        .iter()
+        .map(|s| (s.name.as_str(), s.value, s.ty))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        [
+            ("a", 42, BType::Int),
+            ("b", 42, BType::Int),
+            ("c", 1000, BType::Int),
+            ("d", 1, BType::Bool),
+            ("e", 0, BType::Bool),
+        ]
+    );
+}
+
+#[test]
+fn constant_locals_survive_across_blocks() {
+    // A constant stored in one block and read in another produces a
+    // LoadConst in the entry block.
+    let (_mir, program) =
+        lower_backend("fn main() { let a = 42; if a > 0 { return a; } return 0; }");
+    let f = function(&program, "main");
+    let consts = entry_insts(f)
+        .iter()
+        .filter_map(|i| match i.kind {
+            BInstKind::LoadConst { value, .. } => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(consts, [42]);
+}
+
+#[test]
+fn arithmetic_and_shift_lower() {
+    // Every result feeds the next let, so no store is dead; the binary
+    // operators appear in source order.
+    let (_mir, program) = lower_backend(
+        "fn main() { let a = 1 + 2; let b = a - 3; let c = b * 4; let d = c / 2; let e = d % 3; let f = e << 2; let g = f >> 1; let h = g & 3; let i = h | 2; let j = i ^ 1; return j; }",
+    );
+    let f = function(&program, "main");
+    use mink::ast::BinaryOp::*;
+    let mut ops = Vec::new();
+    for inst in entry_insts(f) {
+        if let BInstKind::Binary { op, .. } = inst.kind {
+            ops.push(op);
+        }
+    }
+    assert_eq!(
+        ops,
+        [Add, Sub, Mul, Div, Rem, Shl, Shr, BitAnd, BitOr, BitXor]
+    );
+}
+
+#[test]
+fn comparisons_and_logical_lower() {
+    // `p`, `q` pin to Int (comparisons), `r`, `s` to Bool (logical ops);
+    // every result feeds the final return so nothing is dead.
+    let (_mir, program) = lower_backend(
+        "fn f(p, q, r, s) { let a = p < q; let b = p <= q; let c = p > q; let d = p >= q; let e = p == q; let f = p != q; let g = r && s; let h = r || s; let i = !r; let j = -p; let k = ~p; return a && b && c && d && e && f && g && h && i && (j < k); } fn main() { f(1, 2, true, false); return; }",
+    );
+    let f = function(&program, "f");
+    use mink::ast::BinaryOp::*;
+    let mut ops = Vec::new();
+    for inst in entry_insts(f) {
+        if let BInstKind::Binary { op, .. } = inst.kind {
+            ops.push(op);
+        }
+    }
+    assert!(ops.starts_with(&[Lt, Le, Gt, Ge, Eq, Ne, And, Or]));
+    let mut unary = Vec::new();
+    for inst in entry_insts(f) {
+        if let BInstKind::Unary { op, .. } = inst.kind {
+            unary.push(op);
+        }
+    }
+    use mink::ast::UnaryOp::*;
+    assert!(unary.starts_with(&[Not, Neg, BitNot]));
+}
+
+#[test]
+fn call_lowers_with_function_index_and_args() {
+    // The call is observable, so it survives even though `x` is never read.
+    let (_mir, program) =
+        lower_backend("fn add(a, b) { return a + b; } fn main() { let x = add(1, 2); return; }");
+    let f = function(&program, "main");
+    let insts = entry_insts(f);
+    let BInstKind::Call {
+        callee,
+        args,
+        target,
+    } = insts
+        .iter()
+        .find_map(|i| match &i.kind {
+            BInstKind::Call { .. } => Some(&i.kind),
+            _ => None,
+        })
+        .expect("expected a call instruction")
+    else {
+        unreachable!()
+    };
+    assert_eq!(*callee, 0, "add is the first function");
+    assert_eq!(*args, [BOperand::Const(1), BOperand::Const(2)]);
+    let _ = target.raw();
+}
+
+#[test]
+fn module_binding_reads_and_writes_lower() {
+    let (_mir, program) =
+        lower_backend("let mut x = 1; const base = 2; fn f() { x = x + base; return; }");
+    // Statics: x and base, in source order, decoded values.
+    assert_eq!(program.statics.len(), 2);
+    assert_eq!(program.statics[0].name, "x");
+    assert!(program.statics[0].mutable);
+    assert_eq!(program.statics[0].value, 1);
+    assert_eq!(program.statics[0].ty, BType::Int);
+    assert_eq!(program.statics[1].name, "base");
+    assert_eq!(program.statics[1].value, 2);
+    let f = function(&program, "f");
+    let kinds = entry_insts(f)
+        .iter()
+        .map(|inst| &inst.kind)
+        .collect::<Vec<_>>();
+    // x + base: LoadStatic(base), LoadStatic(x), Binary, StoreStatic(x).
+    assert!(kinds.iter().any(|k| matches!(
+        k,
+        BInstKind::LoadStatic {
+            static_index: 1,
+            ..
+        }
+    )));
+    assert!(kinds.iter().any(|k| matches!(
+        k,
+        BInstKind::LoadStatic {
+            static_index: 0,
+            ..
+        }
+    )));
+    assert!(kinds.iter().any(|k| matches!(k, BInstKind::Binary { .. })));
+    assert!(kinds.iter().any(|k| matches!(
+        k,
+        BInstKind::StoreStatic {
+            static_index: 0,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn range_iteration_lowers_to_init_next_finished() {
+    let (_mir, program) =
+        lower_backend("fn main() { let mut s = 0; for i in 0..5 { s = s + i; } return s; }");
+    let f = function(&program, "main");
+    let mut init = 0;
+    let mut next = 0;
+    let mut finished = 0;
+    for block in &f.blocks {
+        for inst in &block.insts {
+            match inst.kind {
+                BInstKind::RangeInit { inclusive, .. } => {
+                    assert!(!inclusive);
+                    init += 1;
+                }
+                BInstKind::RangeNext { .. } => next += 1,
+                BInstKind::RangeFinished { .. } => finished += 1,
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(init, 1);
+    assert_eq!(next, 1);
+    assert_eq!(finished, 1);
+    // The loop variable and range slots are typed.
+    assert!(f.locals.iter().any(|l| l.ty == BType::Range));
+}
+
+// ---------------------------------------------------------------------------
+// Errors: unsupported constructs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn float_literal_is_rejected() {
+    let kinds = error_kinds("fn main() { return 1.5; }");
+    assert_eq!(kinds, [BackendErrorKind::UnsupportedType]);
+}
+
+#[test]
+fn string_literal_is_rejected() {
+    let kinds = error_kinds("fn main() { let s = \"hi\"; return; }");
+    assert!(kinds.contains(&BackendErrorKind::UnsupportedType));
+}
+
+#[test]
+fn char_and_null_are_rejected() {
+    let kinds = error_kinds("fn main() { let c = 'a'; return; }");
+    assert!(kinds.contains(&BackendErrorKind::UnsupportedType));
+    let kinds = error_kinds("fn main() { let n = null; return; }");
+    assert!(kinds.contains(&BackendErrorKind::UnsupportedType));
+}
+
+#[test]
+fn float_parameter_is_rejected() {
+    // The call site pins the parameter to Float.
+    let kinds = error_kinds("fn f(p) { return p; } fn main() { f(1.5); return; }");
+    assert!(kinds.contains(&BackendErrorKind::UnsupportedType));
+}
+
+#[test]
+fn member_access_is_rejected() {
+    let kinds = error_kinds("fn main() { let o = 1; o.f; return; }");
+    assert_eq!(kinds, [BackendErrorKind::UnsupportedRvalue]);
+}
+
+#[test]
+fn index_access_is_rejected() {
+    let kinds = error_kinds("fn main() { let a = 1; a[0]; return; }");
+    assert_eq!(kinds, [BackendErrorKind::UnsupportedRvalue]);
+}
+
+#[test]
+fn member_assignment_is_rejected() {
+    let kinds = error_kinds("fn main() { let mut o = 1; o.f = 2; return; }");
+    assert_eq!(kinds, [BackendErrorKind::UnsupportedPlace]);
+}
+
+#[test]
+fn range_return_is_rejected() {
+    let kinds = error_kinds("fn main() { return 0 .. 10; }");
+    assert_eq!(kinds, [BackendErrorKind::UnsupportedType]);
+}
+
+#[test]
+fn non_constant_module_binding_is_rejected() {
+    // A module binding whose initializer references another binding needs
+    // runtime initialization.
+    let kinds = error_kinds("const a = 1; const b = a; fn main() { return; }");
+    assert_eq!(kinds, [BackendErrorKind::UnsupportedStatic]);
+}
+
+#[test]
+fn function_used_as_value_is_rejected() {
+    // The local `h` receives the function type, which is rejected when the
+    // local is classified.
+    let kinds = error_kinds("fn f() { return; } fn main() { let h = f; return; }");
+    assert_eq!(kinds, [BackendErrorKind::UnsupportedType]);
+}
+
+#[test]
+fn calling_a_module_binding_is_rejected_by_the_front_end() {
+    // Calling a module binding is a type error long before the backend;
+    // the backend never sees such a call.
+    let mut sources = SourceMap::new();
+    let path = unique_source("callee");
+    std::fs::write(&path, "const x = 1; fn main() { x(); return; }").unwrap();
+    let report = driver::check(&mut sources, &path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        !report.errors.is_empty(),
+        "front end must reject calling a binding"
+    );
+}
+
+#[test]
+fn missing_entry_point_is_rejected() {
+    let kinds = compile_error_kinds("fn helper() { return; }");
+    assert_eq!(kinds, [BackendErrorKind::NoEntryPoint]);
+}
+
+#[test]
+fn entry_point_with_parameters_is_rejected() {
+    let kinds = compile_error_kinds("fn main(p) { return p; }");
+    assert_eq!(kinds, [BackendErrorKind::InvalidEntryPoint]);
+}
+
+#[test]
+fn entry_point_with_range_result_is_rejected() {
+    let kinds = error_kinds("fn main() { return 0 .. 10; }");
+    // The range result is rejected at the function level (E-B03) before
+    // the entry check.
+    assert_eq!(kinds, [BackendErrorKind::UnsupportedType]);
+}
+
+#[test]
+fn unsupported_target_is_rejected() {
+    let mut sources = SourceMap::new();
+    let path = unique_source("tgt");
+    std::fs::write(&path, "fn main() { return; }").unwrap();
+    let report = driver::check(&mut sources, &path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let mir = report.mir.expect("clean program");
+    let errors = backend::compile(&mir, &sources, Target::X86_64LinuxElf).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].kind(), BackendErrorKind::UnsupportedTarget);
+    assert_eq!(errors[0].code(), "E-B11");
+}
+
+#[test]
+fn target_parse_round_trip() {
+    assert_eq!(
+        Target::parse("x86_64-windows-pe"),
+        Some(Target::X86_64WindowsPe)
+    );
+    assert_eq!(
+        Target::parse("x86_64-linux-elf"),
+        Some(Target::X86_64LinuxElf)
+    );
+    assert_eq!(
+        Target::parse("aarch64-linux-elf"),
+        Some(Target::AArch64LinuxElf)
+    );
+    assert_eq!(Target::parse("bogus"), None);
+    assert_eq!(Target::X86_64WindowsPe.name(), "x86_64-windows-pe");
+}
+
+// ---------------------------------------------------------------------------
+// Error structure
+// ---------------------------------------------------------------------------
+
+#[test]
+fn errors_carry_codes_and_spans() {
+    let errors = lower_errors("fn main() { return 1.5; }");
+    let error = &errors[0];
+    assert_eq!(error.code(), "E-B03");
+    assert_eq!(
+        error.span(),
+        text_span("fn main() { return 1.5; }", "fn main() { return 1.5; }")
+    );
+    assert!(error.detail().is_some());
+}
+
+#[test]
+fn independent_errors_are_all_reported() {
+    // Two unsupported constructs in one program: both reported, in source
+    // order. (The string binding is in its own function so the float
+    // function's result-type error cannot short-circuit it.)
+    let src = "fn g() { let s = \"a\"; return; } fn main() { return 1.5; }";
+    let errors = lower_errors(src);
+    let kinds = errors.iter().map(|e| e.kind()).collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        [
+            BackendErrorKind::UnsupportedType,
+            BackendErrorKind::UnsupportedType
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Verifier (malformed hand-built instructions)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dangling_local_reference_is_a_verification_error() {
+    let (_mir, mut program) =
+        lower_backend("fn main() { let a = 1; if a > 0 { return a; } return 0; }");
+    let main = &mut program.functions[0];
+    // Corrupt the LoadConst to target a nonexistent local.
+    let inst = main.blocks[0]
+        .insts
+        .iter_mut()
+        .find(|i| matches!(i.kind, BInstKind::LoadConst { .. }))
+        .expect("a LoadConst in the entry block");
+    let span = inst.span;
+    if let BInstKind::LoadConst { target, .. } = &mut inst.kind {
+        *target = LocalId::new(99);
+    }
+    let errors = backend::verify(&program).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind() == BackendErrorKind::InvalidBackendIr)
+    );
+    assert_eq!(errors[0].code(), "E-B07");
+    assert!(errors[0].span() == span || errors.iter().any(|e| e.span() == span));
+}
+
+#[test]
+fn dangling_block_reference_is_a_verification_error() {
+    let (_mir, mut program) = lower_backend("fn main() { return; }");
+    let main = &mut program.functions[0];
+    main.blocks[0].terminator = BTerminator::Jump {
+        target: BlockId::new(55),
+        span: Span::new(mink::source::SourceId::new(0), 0..0),
+    };
+    let errors = backend::verify(&program).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].kind(), BackendErrorKind::InvalidBackendIr);
+    assert!(errors[0].detail().unwrap().contains("55"));
+}
+
+#[test]
+fn unordered_blocks_are_a_verification_error() {
+    let (_mir, mut program) = lower_backend("fn main() { return; }");
+    program.functions[0].blocks[0].id = BlockId::new(7);
+    let errors = backend::verify(&program).unwrap_err();
+    assert!(!errors.is_empty());
+    assert!(
+        errors
+            .iter()
+            .all(|e| e.kind() == BackendErrorKind::InvalidBackendIr)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Emission
+// ---------------------------------------------------------------------------
+
+/// Compiles `src` all the way to an image.
+fn emit_image(src: &str) -> mink::backend::EmittedImage {
+    let mut sources = SourceMap::new();
+    let path = unique_source("img");
+    std::fs::write(&path, src).unwrap();
+    let report = driver::check(&mut sources, &path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let mir = report.mir.expect("clean program");
+    backend::compile(&mir, &sources, Target::native()).expect("compile succeeds")
+}
+
+#[test]
+fn image_is_a_pe_executable() {
+    let image = emit_image("fn main() { return 42; }");
+    assert_eq!(image.bytes[0..2], *b"MZ");
+    let e_lfanew = u32::from_le_bytes(image.bytes[0x3C..0x40].try_into().unwrap()) as usize;
+    assert_eq!(&image.bytes[e_lfanew..e_lfanew + 4], b"PE\0\0");
+    // Machine: x64; 2 sections (.text, .reloc) for a program with no
+    // bindings.
+    assert_eq!(
+        u16::from_le_bytes(image.bytes[e_lfanew + 4..e_lfanew + 6].try_into().unwrap()),
+        0x8664
+    );
+    // Entry point RVA points into .text (RVA 0x1000).
+    let opt = e_lfanew + 24;
+    let entry = u32::from_le_bytes(image.bytes[opt + 16..opt + 20].try_into().unwrap());
+    assert_eq!(entry, 0x1000);
+    assert_eq!(image.entry, "main");
+    assert_eq!(image.functions, 1);
+    assert_eq!(image.statics, 0);
+}
+
+#[test]
+fn image_with_bindings_has_data_section() {
+    let image = emit_image("const base = 1; fn main() { return base; }");
+    let e_lfanew = u32::from_le_bytes(image.bytes[0x3C..0x40].try_into().unwrap()) as usize;
+    let nsects = u16::from_le_bytes(image.bytes[e_lfanew + 6..e_lfanew + 8].try_into().unwrap());
+    assert_eq!(nsects, 3, ".text + .data + .reloc");
+    assert_eq!(image.statics, 1);
+}
+
+#[test]
+fn emission_is_deterministic() {
+    let src = "fn main() { let mut s = 0; for i in 0..10 { s = s + i; } return s; }";
+    assert_eq!(emit_image(src).bytes, emit_image(src).bytes);
+}
+
+#[test]
+fn many_functions_emit() {
+    let mut src = String::from("fn main() { return 1; }");
+    for i in 0..50 {
+        src.push_str(&format!("fn f{i}(p) {{ return p + {i}; }}"));
+    }
+    let image = emit_image(&src);
+    assert_eq!(image.functions, 51);
+}

@@ -9,13 +9,17 @@
 //! syntactically valid, the semantic analyzer validates it and the type
 //! checker types it. When semantic and type analysis report no errors, HIR
 //! lowering runs, and when HIR lowering succeeds, MIR lowering, MIR
-//! validation, and MIR optimization run. Errors are reported together
-//! across stages. The backend is not yet implemented.
+//! validation, and MIR optimization run. [`check`] reports the result;
+//! [`build`] additionally compiles the optimized MIR into a native
+//! executable image for the requested [`Target`] and writes it to disk
+//! (see `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`). Errors
+//! are reported together across stages.
 
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::backend::{self, BackendError, Target};
 use crate::hir::{self, HirError, HirProgram};
 use crate::lexer::LexError;
 use crate::mir::{self, MirError, MirProgram};
@@ -23,6 +27,39 @@ use crate::parser::{self, ParseError};
 use crate::semantics::{self, SemanticError, SemanticResult};
 use crate::source::{SourceId, SourceMap, Span};
 use crate::typecheck::{self, TypeError, TypeResult};
+
+/// Options controlling a [`build`] run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildOptions {
+    /// The target to compile for.
+    pub target: Target,
+}
+
+impl Default for BuildOptions {
+    /// The host's native target (the first implemented target,
+    /// `x86_64-windows-pe`).
+    fn default() -> Self {
+        Self {
+            target: Target::native(),
+        }
+    }
+}
+
+/// The outcome of a successful [`build`]: where the executable was written
+/// and what it contains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildOutcome {
+    /// The id of the built source file.
+    pub source_id: SourceId,
+    /// The path of the written executable.
+    pub output: PathBuf,
+    /// The target the executable was compiled for.
+    pub target: Target,
+    /// The number of compiled functions.
+    pub functions: usize,
+    /// The number of compiled module bindings.
+    pub statics: usize,
+}
 
 /// Errors produced while running the build pipeline.
 #[derive(Debug)]
@@ -34,8 +71,20 @@ pub enum BuildError {
         /// The underlying I/O error.
         source: io::Error,
     },
-    /// The pipeline has not been implemented past the syntax-analysis stage.
-    NotImplemented,
+    /// The source failed front-end analysis (lexing, parsing, semantic
+    /// analysis, type checking, HIR lowering, MIR lowering, or MIR
+    /// optimization); the report carries every diagnostic.
+    FrontEnd(Box<CheckReport>),
+    /// The optimized MIR could not be compiled by the backend; every
+    /// backend diagnostic is included.
+    Backend(Box<[BackendError]>),
+    /// The executable image could not be written to disk.
+    Output {
+        /// The path that could not be written.
+        path: PathBuf,
+        /// The underlying I/O error.
+        source: io::Error,
+    },
 }
 
 impl fmt::Display for BuildError {
@@ -44,8 +93,14 @@ impl fmt::Display for BuildError {
             Self::Io { path, source } => {
                 write!(f, "failed to read '{}': {source}", path.display())
             }
-            Self::NotImplemented => {
-                write!(f, "the build pipeline is not yet implemented")
+            Self::FrontEnd(report) => {
+                write!(f, "{} front-end error(s)", report.errors.len())
+            }
+            Self::Backend(errors) => {
+                write!(f, "{} backend error(s)", errors.len())
+            }
+            Self::Output { path, source } => {
+                write!(f, "failed to write '{}': {source}", path.display())
             }
         }
     }
@@ -54,8 +109,8 @@ impl fmt::Display for BuildError {
 impl std::error::Error for BuildError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io { source, .. } => Some(source),
-            Self::NotImplemented => None,
+            Self::Io { source, .. } | Self::Output { source, .. } => Some(source),
+            Self::FrontEnd(_) | Self::Backend(_) => None,
         }
     }
 }
@@ -257,17 +312,45 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
     })
 }
 
-/// Runs the compiler pipeline for a single MINK source file.
+/// Runs the full compiler pipeline for a single MINK source file and writes
+/// a native executable.
 ///
-/// Returns the id of the source file registered in `sources`. Current status:
-/// the driver registers the file and then reports
-/// [`BuildError::NotImplemented`] because code generation is not implemented
-/// yet. Use [`check`] to run the front end through optimization that is
-/// implemented.
-pub fn build(sources: &mut SourceMap, path: &Path) -> Result<SourceId, BuildError> {
-    let _id = sources.load(path).map_err(|source| BuildError::Io {
-        path: path.to_path_buf(),
+/// Runs the same front end as [`check`]; when the front end is clean, the
+/// optimized MIR is compiled by the backend for `options.target` and the
+/// resulting executable image is written next to the source (the source
+/// path with its extension replaced by `exe`). On success returns the
+/// [`BuildOutcome`] describing the artifact. Front-end, backend, and
+/// output failures are reported as [`BuildError`] variants.
+pub fn build(
+    sources: &mut SourceMap,
+    path: &Path,
+    options: BuildOptions,
+) -> Result<BuildOutcome, BuildError> {
+    let report = check(sources, path)?;
+    if !report.errors.is_empty() {
+        return Err(BuildError::FrontEnd(Box::new(report)));
+    }
+    let mir = report
+        .mir
+        .expect("a clean front end always lowers, validates, and optimizes to MIR");
+    let image = backend::compile(&mir, sources, options.target)
+        .map_err(|errors| BuildError::Backend(errors.into_boxed_slice()))?;
+    let output = executable_path(path);
+    std::fs::write(&output, &image.bytes).map_err(|source| BuildError::Output {
+        path: output.clone(),
         source,
     })?;
-    Err(BuildError::NotImplemented)
+    Ok(BuildOutcome {
+        source_id: report.source_id,
+        output,
+        target: options.target,
+        functions: image.functions,
+        statics: image.statics,
+    })
+}
+
+/// The executable path for a source file: the source path with its
+/// extension replaced by `exe` (`foo.mink` → `foo.exe`, `main` → `main.exe`).
+fn executable_path(path: &Path) -> PathBuf {
+    path.with_extension("exe")
 }

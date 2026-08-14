@@ -10,7 +10,7 @@ MIR (Mid-level Intermediate Representation) is the second compiler IR
 layer, sitting between the typed HIR and the optimization/backend stages:
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
-        → HIR → MIR → Optimization → (future backend) → executable
+        → HIR → MIR → Optimization → Native Backend → executable
 
 Where HIR mirrors the source's structural shape (nested blocks, one node
 per source construct, no flattening), MIR is **linear and
@@ -24,12 +24,8 @@ MIR is a **durable output**, not a transient view: like the HIR it was
 lowered from, it owns all of its data (names are copied strings, spans and
 ids are copied values) and carries its own cloned type table, so it remains
 valid after the HIR and the front end are dropped. Tooling (optimization,
-a future backend, diagnostics) can rely on it without borrowing anything
+the native backend, diagnostics) can rely on it without borrowing anything
 upstream.
-
-MIR is **not executable**: no code generation, runtime, or backend exists
-yet, and `mink build` remains unimplemented (exit 2). No claim of
-compilation is made.
 
 ## 2. HIR-to-MIR Boundary
 
@@ -250,17 +246,19 @@ succeeded:
 - `mink check` therefore validates through MIR: valid programs report
   `passed parsing, semantic analysis, type checking, HIR lowering, and MIR
   lowering (N tokens)` and exit 0; every error class exits 1;
-- `mink build` remains `NotImplemented` (exit 2) — MIR generation is not
-  compilation, and no claim of compilation is made.
+- `mink build` compiles the optimized MIR through the native backend (see
+  `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`) and writes an
+  executable; `mink check` still stops after optimization.
 
-## 9. Future Backend Boundary
+## 9. Backend Boundary
 
-MIR is the *lowest* IR implemented so far: control flow is explicit (basic
-blocks, terminators), values are operand/rvalue pairs, and calls, ranges,
-and range iteration are distinct rvalue forms. The optimization passes
-(see `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`) consume this
-graph and rewrite it in place, and a future backend will consume the
-optimized graph. Nothing in MIR pre-commits to a particular backend; the
+The native backend (`src/backend/`) consumes the **optimized** MIR graph:
+control flow is explicit (basic blocks, terminators), values are
+operand/rvalue pairs, and calls, ranges, and range iteration are distinct
+rvalue forms. The optimization passes (see
+`docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`) rewrite the graph in
+place and the backend lowers it into a portable instruction representation
+before emission. Nothing in MIR pre-commits to a particular backend; the
 explicit CFG and canonical types are the intended seam.
 
 ## 10. Known Limitations
@@ -277,8 +275,9 @@ explicit CFG and canonical types are the intended seam.
   carries no symbol table (the front end guarantees existence), and when
   module-scope initialization runs is a backend concern.
 - Optimization is implemented (session 10, `OPTIMIZATION_IMPLEMENTATION.md`)
-  but conservative: only boolean folds, copy propagation, and CFG cleanup
-  run, and no code generation exists yet.
+  and is conservative: boolean folds, copy propagation, CFG cleanup, and
+  dead-code elimination run. Code generation consumes the optimized graph
+  (session 11, `NATIVE_BACKEND_IMPLEMENTATION.md`).
 
 ## 11. Tests
 
@@ -320,4 +319,5 @@ total):
 Full suite after session 09: **537 tests** (58 CLI + 50 lexer + 88 parser +
 62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR +
 34 MIR + 14 lib unit tests), all passing. After session 10 (optimization)
-the suite is **585 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).
+the suite is **585 tests**, and after session 11 (native backend) it is
+**622 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).

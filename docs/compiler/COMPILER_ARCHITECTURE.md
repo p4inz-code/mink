@@ -13,7 +13,7 @@ The compiler must support correctness, performance, incremental compilation, cro
 
 Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis → HIR → MIR → Optimization → Backend / Code Generation → Object / Executable / Library
 
-The stages through optimization are implemented (`src/hir/`, `src/mir/`, `docs/implementation/HIR_IMPLEMENTATION.md`, `docs/implementation/MIR_IMPLEMENTATION.md`, `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`): HIR is the typed, symbol-resolved, owned IR produced from the AST plus the semantic and type results, MIR is the control-flow-oriented IR (basic blocks, statements, and terminators) lowered from HIR and structurally validated, and a deterministic, behavior-preserving optimization pipeline (boolean constant folding, copy propagation, CFG simplification, unreachable-block elimination, dead-code elimination) runs on the validated MIR with structural validation before the first pass and after every pass. `mink check` validates, lowers, and optimizes through MIR. The backend is a later milestone.
+The stages through code generation are implemented (`src/hir/`, `src/mir/`, `src/backend/`, `docs/implementation/HIR_IMPLEMENTATION.md`, `docs/implementation/MIR_IMPLEMENTATION.md`, `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`, `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`): HIR is the typed, symbol-resolved, owned IR produced from the AST plus the semantic and type results, MIR is the control-flow-oriented IR (basic blocks, statements, and terminators) lowered from HIR and structurally validated, a deterministic, behavior-preserving optimization pipeline (boolean constant folding, copy propagation, CFG simplification, unreachable-block elimination, dead-code elimination) runs on the validated MIR with structural validation before the first pass and after every pass, and the native backend (`src/backend/`) lowers the optimized MIR into a portable backend instruction representation, verifies its structural integrity, and emits a machine image for a selected target. `mink check` validates, lowers, and optimizes through MIR; `mink build` continues through the backend and writes an executable.
 
 Compiler stages must have clearly separated responsibilities.
 
@@ -55,11 +55,13 @@ Standard profiles should include development, debug, release, size-optimized, an
 
 ## 7. Backend
 
-The compiler must use a backend abstraction capable of supporting multiple architectures.
+The backend (`src/backend/`) is implemented as a target-independent core plus a target-specific emission layer, so additional architectures can be added without touching lowering or verification:
 
-Initial priorities should include mainstream desktop and server targets such as x86-64 and ARM64.
+- **Lowering** (`src/backend/lower.rs`) walks the optimized MIR once and produces a portable instruction representation (`src/backend/ir.rs`) — functions, typed locals, instructions, terminators, and statics — preserving deterministic source order and exact source spans. Everything outside the supported native subset (floating point, strings, characters, `null`, member/index places, function values, module bindings needing runtime initialization) is rejected with a structured `E-B01+` diagnostic instead of being miscompiled; lowering reports every independent problem in deterministic order.
+- **Verification** (`src/backend/verify.rs`) defensively checks the lowered program's structural integrity (local and block references, operand types, terminator shape), so malformed or mutated instructions fail cleanly (`E-B07`) instead of panicking.
+- **Emission** (`src/backend/emit/`) turns verified instructions into a machine image for a selected `Target`. The first milestone implements `x86_64-windows-pe`: a self-contained x86-64 code generator (`src/backend/emit/x86_64.rs`) plus a PE container builder (`src/backend/emit/pe.rs`) that assemble a complete Windows executable with no external toolchain. The `x86_64-linux-elf` and `aarch64-linux-elf` targets are recognized but not yet implemented and are rejected with `E-B11`.
 
-The backend may use established compiler infrastructure where this improves correctness, portability, optimization quality, development speed, and maintainability.
+`mink build` validates the entry function (`fn main()` with no parameters; its integer/boolean result becomes the process exit code), lowers, verifies, and emits. Diagnostics carry stable codes `E-B01`…`E-B12`; see `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` for the design and the supported subset.
 
 ## 8. Incremental Compilation
 
