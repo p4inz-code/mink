@@ -885,6 +885,7 @@ mod tests {
                 span: span_at(0),
             }],
             types: table,
+            intrinsic_symbols: Vec::new(),
         }
     }
 

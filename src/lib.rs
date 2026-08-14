@@ -15,8 +15,11 @@
 //! `docs/implementation/HIR_IMPLEMENTATION.md`,
 //! `docs/implementation/MIR_IMPLEMENTATION.md`,
 //! `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`, and
-//! `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`); the
-//! `diagnostics` module is a structural placeholder at this stage; see
+//! `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`); the runtime
+//! foundation (memory model, deterministic allocator specification,
+//! runtime ABI, and intrinsic primitives) is documented in
+//! `docs/implementation/RUNTIME_IMPLEMENTATION.md`; the `diagnostics`
+//! module is a structural placeholder at this stage; see
 //! `docs/implementation/ENGINEERING_FOUNDATION.md` for the layout rationale.
 
 #![forbid(unsafe_code)]
@@ -31,6 +34,7 @@ pub mod hir;
 pub mod lexer;
 pub mod mir;
 pub mod parser;
+pub mod runtime;
 pub mod semantics;
 pub mod source;
 pub mod typecheck;

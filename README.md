@@ -16,9 +16,11 @@ Source code is licensed under Apache License 2.0 (see [`LICENSE`](LICENSE)).
 
 MINK is in the **implementation phase**. The compiler engineering foundation,
 lexer and token system, parser and AST, semantic analysis, type inference,
-HIR, MIR, an optimization pipeline, and a first **native backend** are
-established in a Rust-based compiler workspace with source infrastructure, a
-working CLI entry point, and a test suite (622 tests).
+HIR, MIR, an optimization pipeline, a first **native backend**, and a
+**native runtime foundation** (deterministic heap, `rt_*` memory/print
+intrinsics, structured runtime diagnostics) are established in a Rust-based
+compiler workspace with source infrastructure, a working CLI entry point,
+and a test suite (654 tests).
 
 The compiler currently processes source through the following pipeline:
 
@@ -30,14 +32,18 @@ Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
 `mink check` validates, lowers, and optimizes programs through MIR, and
 `mink build` compiles the optimized MIR into a native executable for the
 first target: `x86_64-windows-pe` (a self-contained x86-64 code generator
-that assembles a complete PE image with no external toolchain). The first
-native subset covers integers, booleans, comparisons, logical and bitwise
-operators, `if`/`while`/`for`/`loop` control flow, direct function calls,
-module bindings, and integer results becoming process exit codes. Everything
-outside the subset (floating point, strings, …) is rejected with structured
-`E-B01+` diagnostics instead of being miscompiled. The language and
-architecture specifications live in [`docs/`](docs/); the frozen core grammar
-is in [`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md).
+that assembles a complete PE image with no external toolchain). The native
+subset covers integers, booleans, comparisons, logical and bitwise operators,
+`if`/`while`/`for`/`loop` control flow, direct function calls, module
+bindings, integer results becoming process exit codes, and the `rt_*`
+runtime intrinsics — `rt_alloc`, `rt_free`, `rt_mem_load`, `rt_mem_store`
+(validated against a bounded liveness table), `rt_exit`, and `rt_print_int`
+— backed by an embedded deterministic runtime that reports structured
+`E-R01+` diagnostics on invalid memory operations. Everything outside the
+subset (floating point, strings, …) is rejected with structured `E-B01+`
+diagnostics instead of being miscompiled. The language and architecture
+specifications live in [`docs/`](docs/); the frozen core grammar is in
+[`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md).
 
 ## Repository Layout
 
@@ -74,7 +80,9 @@ Requirements: Rust 1.85 or newer (developed against 1.97).
 - `mink version` / `mink help` — version and usage.
 
 See [`docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`](docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md)
-for the native backend design and the supported subset.
+for the native backend design and the supported subset, and
+[`docs/implementation/RUNTIME_IMPLEMENTATION.md`](docs/implementation/RUNTIME_IMPLEMENTATION.md)
+for the native runtime foundation and the memory model.
 
 See [`docs/implementation/ENGINEERING_FOUNDATION.md`](docs/implementation/ENGINEERING_FOUNDATION.md)
 for engineering decisions and the compiler subsystem layout, and

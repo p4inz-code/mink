@@ -58,6 +58,12 @@ pub struct HirProgram {
     /// types can be canonicalized, compared, and rendered without the
     /// original [`TypeResult`](crate::typecheck::TypeResult).
     pub types: TypeTable,
+    /// The predeclared runtime intrinsics referenced by this program: each
+    /// intrinsic's symbol and its stable id in the runtime intrinsic
+    /// table. Intrinsics are not items; the MIR layer uses this list to
+    /// lower intrinsic references to module-item-style operands, and the
+    /// backend uses it to lower calls to runtime services.
+    pub intrinsic_symbols: Vec<(crate::semantics::SymbolId, crate::runtime::IntrinsicId)>,
 }
 
 /// A top-level declaration: a function, a `let` binding, or a `const`

@@ -22,6 +22,10 @@
 //! - callee-saved registers are exactly `rbp`/`rsp`; everything else is
 //!   scratch.
 //!
+//! The embedded MINK runtime services (see [`runtime`](super::runtime))
+//! use this same convention, so intrinsic calls lower to ordinary stack
+//! calls.
+//!
 //! ## Value model
 //!
 //! - `Int` and `Bool` are 64-bit words (`Bool` is `0`/`1`);
@@ -32,18 +36,46 @@
 //!   normalized at construction, wrapping on overflow);
 //! - unit functions return `0`.
 //!
+//! ## Image layout
+//!
+//! `.text` starts with the entry-point stub, then the user functions in
+//! source order, then the embedded runtime services and their message
+//! data. The loader maps `.data` (module bindings), `.bss` (the runtime
+//! state: heap arena and liveness table), `.idata` (the `kernel32`
+//! imports used by the runtime's output/error paths), and `.reloc`.
+//!
 //! ## Addressing
 //!
-//! All references are relative: module bindings are reached RIP-relative
-//! and control transfers use `rel32`, so the image needs no base-relocation
-//! fixups.
+//! All references are relative: module bindings, runtime state, and the
+//! import table are reached RIP-relative and control transfers use
+//! `rel32`, so the image needs no base-relocation fixups.
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::mir::BlockId;
 
-use super::super::ir::{BInstKind, BOperand, BProgram, BTerminator, BType};
+use super::super::ir::{BInstKind, BOperand, BProgram, BTerminator, BType, RuntimeService};
 use super::EmittedImage;
 use super::pe;
+use super::runtime;
+
+/// A general-purpose register for the runtime emitter. Values follow the
+/// x86-64 encoding (0–7 are `rax`…`rdi`, 8–15 are `r8`–`r15`), so the REX
+/// and ModRM bits are derived arithmetically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reg {
+    Rax = 0,
+    Rcx = 1,
+    Rdx = 2,
+    Rsp = 4,
+    Rbp = 5,
+    Rdi = 7,
+    R8 = 8,
+    R9 = 9,
+    R10 = 10,
+    R11 = 11,
+    R12 = 12,
+    R13 = 13,
+}
 
 /// A per-local pair of slot offsets from `rbp` (negative). Word 0 is the
 /// value's first word (for `Range`: the normalized exclusive end); word 1
@@ -82,14 +114,15 @@ fn frame_size(slots: &Slots) -> i32 {
 }
 
 /// A patch: a `disp32` field that must be filled once layout is known.
-struct Patch {
+pub(crate) struct Patch {
     /// Byte offset of the `disp32` field within the code section.
-    offset: usize,
+    pub(crate) offset: usize,
     /// What the field must point at.
-    kind: PatchKind,
+    pub(crate) kind: PatchKind,
 }
 
-enum PatchKind {
+/// The target of a `disp32` patch.
+pub(crate) enum PatchKind {
     /// A block within a function (relative within `.text`). Resolved at
     /// patch time, when every block's offset is known.
     Block {
@@ -98,41 +131,63 @@ enum PatchKind {
         /// The target block's id.
         block: u32,
     },
-    /// A function (relative within `.text`).
+    /// A user function (relative within `.text`).
     Function(usize),
     /// A module binding (RIP-relative from the patch site).
     Static(usize),
+    /// An embedded runtime service (relative within `.text`).
+    RuntimeService(RuntimeService),
+    /// Runtime state in `.bss` (RIP-relative from the patch site), by
+    /// offset within the `.bss` section.
+    Bss(u32),
+    /// An entry of the import address table (RIP-relative from the patch
+    /// site), by index.
+    Iat(u32),
+    /// A runtime label: an absolute offset within `.text`, bound before
+    /// patching.
+    Label(u32),
 }
 
 /// The code emitter: a byte buffer plus the patches to resolve after
-/// layout.
-struct Code {
-    buf: Vec<u8>,
-    patches: Vec<Patch>,
+/// layout, and the runtime labels bound during emission. The fields are
+/// `pub(crate)` so the emitter's own modules can borrow them disjointly
+/// during patch resolution.
+pub(crate) struct Code {
+    pub(crate) buf: Vec<u8>,
+    pub(crate) patches: Vec<Patch>,
+    /// Runtime labels: id → absolute offset within `.text`. Bound by the
+    /// runtime emitter before patching.
+    pub(crate) labels: Vec<Option<usize>>,
 }
 
 impl Code {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             buf: Vec::new(),
             patches: Vec::new(),
+            labels: Vec::new(),
         }
     }
 
-    fn u8(&mut self, byte: u8) {
+    /// The current length of the code buffer (an absolute `.text` offset).
+    pub(crate) fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub(crate) fn u8(&mut self, byte: u8) {
         self.buf.push(byte);
     }
 
-    fn bytes(&mut self, bytes: &[u8]) {
+    pub(crate) fn bytes(&mut self, bytes: &[u8]) {
         self.buf.extend_from_slice(bytes);
     }
 
-    fn i32_le(&mut self, value: i32) {
+    pub(crate) fn i32_le(&mut self, value: i32) {
         self.buf.extend_from_slice(&value.to_le_bytes());
     }
 
     /// Records a patch at the current position and reserves the `disp32`.
-    fn patch(&mut self, kind: PatchKind) {
+    pub(crate) fn patch(&mut self, kind: PatchKind) {
         self.patches.push(Patch {
             offset: self.buf.len(),
             kind,
@@ -140,62 +195,352 @@ impl Code {
         self.buf.extend_from_slice(&0u32.to_le_bytes());
     }
 
+    /// Creates a new runtime label, to be bound with [`Code::bind_label`].
+    pub(crate) fn label(&mut self) -> u32 {
+        let id = self.labels.len() as u32;
+        self.labels.push(None);
+        id
+    }
+
+    /// Binds `label` to the current position (an absolute `.text` offset).
+    pub(crate) fn bind_label(&mut self, label: u32) {
+        self.labels[label as usize] = Some(self.buf.len());
+    }
+
     // ------------------------------------------------------------------
-    // Encodings
+    // Generic register encodings (REX.W 64-bit unless noted)
+    // ------------------------------------------------------------------
+
+    /// `mov r64, r64`. Opcode `89` moves the `reg` field (the source) into
+    /// the `r/m` field (the destination).
+    pub(crate) fn mov_rr(&mut self, dst: Reg, src: Reg) {
+        self.rex_w(src, dst);
+        self.u8(0x89);
+        self.modrm_rm_reg(dst, src);
+    }
+
+    /// `mov r64, [base + disp]`.
+    pub(crate) fn mov_r_mem(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.rex_w(dst, base);
+        self.u8(0x8B);
+        self.mem_modrm(dst, base, disp);
+    }
+
+    /// `mov r32, [base + disp]` (zero-extends).
+    pub(crate) fn mov_r32_mem(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.rex(dst, base);
+        self.u8(0x8B);
+        self.mem_modrm(dst, base, disp);
+    }
+
+    /// `mov [base + disp], r64`.
+    pub(crate) fn mov_mem_r(&mut self, base: Reg, disp: i32, src: Reg) {
+        self.rex_w(src, base);
+        self.u8(0x89);
+        self.mem_modrm(src, base, disp);
+    }
+
+    /// `mov byte [base + disp], r8` (the low byte of `src`).
+    pub(crate) fn mov_mem_r8(&mut self, base: Reg, disp: i32, src: Reg) {
+        self.rex(src, base);
+        self.u8(0x88);
+        self.mem_modrm(src, base, disp);
+    }
+
+    /// `mov qword [base + disp], imm32`.
+    pub(crate) fn mov_mem_imm32(&mut self, base: Reg, disp: i32, imm: i32) {
+        self.rex_w(Reg::Rax, base);
+        self.u8(0xC7);
+        self.mem_modrm(Reg::Rax, base, disp); // /0
+        self.i32_le(imm);
+    }
+
+    /// `mov byte [base + disp], imm8`.
+    pub(crate) fn mov_mem_imm8(&mut self, base: Reg, disp: i32, imm: u8) {
+        self.rex(Reg::Rax, base);
+        self.u8(0xC6);
+        self.mem_modrm(Reg::Rax, base, disp); // /0
+        self.u8(imm);
+    }
+
+    /// `mov r64, imm32` (zero-extends; writes the 32-bit register).
+    pub(crate) fn mov_r32_imm32(&mut self, dst: Reg, imm: u32) {
+        self.rex(dst, Reg::Rax);
+        self.u8(0xB8 | (dst as u8 & 7));
+        self.i32_le(imm as i32);
+    }
+
+    /// `movabs r64, imm64`.
+    pub(crate) fn movabs(&mut self, dst: Reg, imm: u64) {
+        self.rex_w(dst, Reg::Rax);
+        self.u8(0xB8 | (dst as u8 & 7));
+        self.buf.extend_from_slice(&imm.to_le_bytes());
+    }
+
+    /// `lea r64, [base + disp]`.
+    pub(crate) fn lea_r_mem(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.rex_w(dst, base);
+        self.u8(0x8D);
+        self.mem_modrm(dst, base, disp);
+    }
+
+    /// `cmp a, b` (`flags = a - b`). Opcode `39` computes `r/m - reg`.
+    pub(crate) fn cmp_rr(&mut self, a: Reg, b: Reg) {
+        self.rex_w(b, a);
+        self.u8(0x39);
+        self.modrm_rm_reg(a, b);
+    }
+
+    /// `cmp r64, [base + disp]`.
+    pub(crate) fn cmp_r_mem(&mut self, a: Reg, base: Reg, disp: i32) {
+        self.rex_w(a, base);
+        self.u8(0x3B);
+        self.mem_modrm(a, base, disp);
+    }
+
+    /// `cmp qword [base + disp], imm8`.
+    pub(crate) fn cmp_mem_imm8(&mut self, base: Reg, disp: i32, imm: u8) {
+        self.rex_w(Reg::Rdi, base);
+        self.u8(0x83);
+        self.mem_modrm(Reg::Rdi, base, disp); // /7
+        self.u8(imm);
+    }
+
+    /// `cmp r64, imm8`.
+    pub(crate) fn cmp_r_imm8(&mut self, a: Reg, imm: u8) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0x83);
+        self.u8(0xF8 | (a as u8 & 7)); // /7
+        self.u8(imm);
+    }
+
+    /// `cmp r64, imm32`.
+    pub(crate) fn cmp_r_imm32(&mut self, a: Reg, imm: u32) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0x81);
+        self.u8(0xF8 | (a as u8 & 7)); // /7
+        self.i32_le(imm as i32);
+    }
+
+    /// `test r64, r64`.
+    pub(crate) fn test_rr(&mut self, a: Reg, b: Reg) {
+        self.rex_w(a, b);
+        self.u8(0x85);
+        self.modrm_reg(a, b);
+    }
+
+    /// `test r64, imm32`.
+    pub(crate) fn test_r_imm32(&mut self, a: Reg, imm: u32) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xF7);
+        self.u8(0xC0 | (a as u8 & 7)); // /0
+        self.i32_le(imm as i32);
+    }
+
+    /// `add a, b` (`a += b`). Opcode `01` adds `reg` into `r/m`.
+    pub(crate) fn add_rr(&mut self, a: Reg, b: Reg) {
+        self.rex_w(b, a);
+        self.u8(0x01);
+        self.modrm_rm_reg(a, b);
+    }
+
+    /// `add r64, imm8`.
+    pub(crate) fn add_r_imm8(&mut self, a: Reg, imm: u8) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0x83);
+        self.u8(0xC0 | (a as u8 & 7)); // /0
+        self.u8(imm);
+    }
+
+    /// `sub a, b` (`a -= b`). Opcode `29` subtracts `reg` from `r/m`.
+    pub(crate) fn sub_rr(&mut self, a: Reg, b: Reg) {
+        self.rex_w(b, a);
+        self.u8(0x29);
+        self.modrm_rm_reg(a, b);
+    }
+
+    /// `and r64, imm8` (sign-extended).
+    pub(crate) fn and_r_imm8(&mut self, a: Reg, imm: u8) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0x83);
+        self.u8(0xE0 | (a as u8 & 7)); // /4
+        self.u8(imm);
+    }
+
+    /// `xor r32, r32` (zero-extends).
+    pub(crate) fn xor_rr32(&mut self, a: Reg, b: Reg) {
+        self.rex(a, b);
+        self.u8(0x31);
+        self.modrm_reg(a, b);
+    }
+
+    /// `shl r64, imm8`.
+    pub(crate) fn shl_r_imm8(&mut self, a: Reg, imm: u8) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xC1);
+        self.u8(0xE0 | (a as u8 & 7)); // /4
+        self.u8(imm);
+    }
+
+    /// `neg r64`.
+    pub(crate) fn neg_r(&mut self, a: Reg) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xF7);
+        self.u8(0xD8 | (a as u8 & 7)); // /3
+    }
+
+    /// `dec r64`.
+    pub(crate) fn dec_r(&mut self, a: Reg) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xFF);
+        self.u8(0xC8 | (a as u8 & 7)); // /1
+    }
+
+    /// `div r64` (unsigned `rdx:rax / a`, quotient in `rax`, remainder in
+    /// `rdx`).
+    pub(crate) fn div_r(&mut self, a: Reg) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xF7);
+        self.u8(0xF0 | (a as u8 & 7)); // /6
+    }
+
+    // ------------------------------------------------------------------
+    // RIP-relative encodings (patched)
+    // ------------------------------------------------------------------
+
+    /// `mov r64, [rip + disp32]`.
+    pub(crate) fn mov_r_rip(&mut self, dst: Reg, kind: PatchKind) {
+        self.rex_w(dst, Reg::Rax);
+        self.u8(0x8B);
+        self.u8(0x05 | ((dst as u8 & 7) << 3));
+        self.patch(kind);
+    }
+
+    /// `mov [rip + disp32], r64`.
+    pub(crate) fn mov_rip_r(&mut self, src: Reg, kind: PatchKind) {
+        self.rex_w(src, Reg::Rax);
+        self.u8(0x89);
+        self.u8(0x05 | ((src as u8 & 7) << 3));
+        self.patch(kind);
+    }
+
+    /// `mov qword [rip + disp32], imm32`.
+    pub(crate) fn mov_rip_imm32(&mut self, kind: PatchKind, imm: i32) {
+        self.bytes(&[0x48, 0xC7, 0x05]);
+        self.patch(kind);
+        self.i32_le(imm);
+    }
+
+    /// `lea r64, [rip + disp32]`.
+    pub(crate) fn lea_r_rip(&mut self, dst: Reg, kind: PatchKind) {
+        self.rex_w(dst, Reg::Rax);
+        self.u8(0x8D);
+        self.u8(0x05 | ((dst as u8 & 7) << 3));
+        self.patch(kind);
+    }
+
+    /// `call [rip + disp32]` (through the import address table).
+    pub(crate) fn call_rip(&mut self, kind: PatchKind) {
+        self.bytes(&[0xFF, 0x15]);
+        self.patch(kind);
+    }
+
+    /// `call rel32`.
+    pub(crate) fn call_patch(&mut self, kind: PatchKind) {
+        self.u8(0xE8);
+        self.patch(kind);
+    }
+
+    // ------------------------------------------------------------------
+    // REX/ModRM primitives
+    // ------------------------------------------------------------------
+
+    /// The REX prefix: `0x48` (W) plus the R and B extension bits for
+    /// `reg`/`rm` registers 8–15.
+    fn rex_w(&mut self, reg: Reg, rm: Reg) {
+        self.u8(0x48 | rex_rb(reg, rm));
+    }
+
+    /// The REX prefix without W (32/8-bit operand size).
+    fn rex(&mut self, reg: Reg, rm: Reg) {
+        self.u8(0x40 | rex_rb(reg, rm));
+    }
+
+    /// The ModRM byte for a register-to-register operation with `reg` in
+    /// the ModRM reg field and `rm` in the r/m field.
+    fn modrm_reg(&mut self, reg: Reg, rm: Reg) {
+        self.u8(0xC0 | ((reg as u8 & 7) << 3) | (rm as u8 & 7));
+    }
+
+    /// The ModRM byte for a register-to-register operation whose first
+    /// operand is the r/m field and whose second operand is the reg field
+    /// (the `89`/`01`/`29`/`39` direction).
+    fn modrm_rm_reg(&mut self, first: Reg, second: Reg) {
+        self.u8(0xC0 | ((second as u8 & 7) << 3) | (first as u8 & 7));
+    }
+
+    /// The ModRM byte (plus SIB and displacement) for `[rm + disp]`,
+    /// with `reg` in the ModRM reg field. `rsp`/`r12` bases need a SIB
+    /// byte; `rbp`/`r13` bases with a zero displacement need an explicit
+    /// `disp8` (ModRM `mod=0, rm=5` is RIP-relative).
+    fn mem_modrm(&mut self, reg: Reg, base: Reg, disp: i32) {
+        let sib_base = base == Reg::Rsp || base == Reg::R12;
+        let mod_ = if disp == 0 && base != Reg::Rbp && base != Reg::R13 {
+            0
+        } else if (-128..=127).contains(&disp) {
+            1
+        } else {
+            2
+        };
+        let rm = if sib_base { 4 } else { base as u8 & 7 };
+        self.u8((mod_ << 6) | ((reg as u8 & 7) << 3) | rm);
+        if sib_base {
+            self.u8(0x24); // no index, base rsp
+        }
+        match mod_ {
+            1 => self.u8(disp as u8),
+            2 => self.i32_le(disp),
+            _ => {}
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Encodings shared with the existing instruction set
     // ------------------------------------------------------------------
 
     /// `mov rax, imm64`.
     fn movabs_rax(&mut self, value: i64) {
-        self.bytes(&[0x48, 0xB8]);
-        self.buf.extend_from_slice(&value.to_le_bytes());
+        self.movabs(Reg::Rax, value as u64);
     }
 
     /// `mov rcx, imm64`.
     fn movabs_rcx(&mut self, value: i64) {
-        self.bytes(&[0x48, 0xB9]);
-        self.buf.extend_from_slice(&value.to_le_bytes());
+        self.movabs(Reg::Rcx, value as u64);
     }
 
     /// `mov rax, [rbp + disp]` (disp8 when it fits, else disp32).
     fn mov_rax_rbp(&mut self, disp: i32) {
-        self.bytes(&[0x48, 0x8B]);
-        self.rbp_disp(disp, 0);
+        self.mov_r_mem(Reg::Rax, Reg::Rbp, disp);
     }
 
     /// `mov [rbp + disp], rax`.
     fn mov_rbp_rax(&mut self, disp: i32) {
-        self.bytes(&[0x48, 0x89]);
-        self.rbp_disp(disp, 0);
+        self.mov_mem_r(Reg::Rbp, disp, Reg::Rax);
     }
 
     /// `mov rcx, [rbp + disp]`.
     fn mov_rcx_rbp(&mut self, disp: i32) {
-        self.bytes(&[0x48, 0x8B]);
-        self.rbp_disp(disp, 1);
+        self.mov_r_mem(Reg::Rcx, Reg::Rbp, disp);
     }
 
     /// `mov rax, [rip + disp32]` (patched later).
     fn mov_rax_rip(&mut self, static_index: usize) {
-        self.bytes(&[0x48, 0x8B, 0x05]);
-        self.patch(PatchKind::Static(static_index));
+        self.mov_r_rip(Reg::Rax, PatchKind::Static(static_index));
     }
 
     /// `mov [rip + disp32], rax` (patched later).
     fn mov_rip_rax(&mut self, static_index: usize) {
-        self.bytes(&[0x48, 0x89, 0x05]);
-        self.patch(PatchKind::Static(static_index));
-    }
-
-    /// The ModRM displacement for `[rbp + disp]`: disp8 when it fits,
-    /// disp32 otherwise.
-    fn rbp_disp(&mut self, disp: i32, reg: u8) {
-        if (-128..=127).contains(&disp) {
-            self.u8(0x40 | (reg << 3) | 0x05);
-            self.u8(disp as u8);
-        } else {
-            self.u8(0x80 | (reg << 3) | 0x05);
-            self.i32_le(disp);
-        }
+        self.mov_rip_r(Reg::Rax, PatchKind::Static(static_index));
     }
 
     /// `push rax`.
@@ -205,23 +550,22 @@ impl Code {
 
     /// `xor eax, eax`.
     fn xor_eax(&mut self) {
-        self.bytes(&[0x31, 0xC0]);
+        self.xor_rr32(Reg::Rax, Reg::Rax);
     }
 
     /// `test rax, rax`.
     fn test_rax(&mut self) {
-        self.bytes(&[0x48, 0x85, 0xC0]);
+        self.test_rr(Reg::Rax, Reg::Rax);
     }
 
     /// `cmp rax, rcx`.
     fn cmp_rax_rcx(&mut self) {
-        self.bytes(&[0x48, 0x39, 0xC8]);
+        self.cmp_rr(Reg::Rax, Reg::Rcx);
     }
 
     /// `cmp rax, [rbp + disp]`.
     fn cmp_rax_rbp(&mut self, disp: i32) {
-        self.bytes(&[0x48, 0x3B]);
-        self.rbp_disp(disp, 0);
+        self.cmp_r_mem(Reg::Rax, Reg::Rbp, disp);
     }
 
     /// `op rax, rcx` for a binary ALU operation.
@@ -246,7 +590,7 @@ impl Code {
 
     /// `mov rax, rdx`.
     fn mov_rax_rdx(&mut self) {
-        self.bytes(&[0x48, 0x89, 0xD0]);
+        self.mov_rr(Reg::Rax, Reg::Rdx);
     }
 
     /// `shl/shr/sar rax, cl`.
@@ -256,7 +600,7 @@ impl Code {
 
     /// `neg rax`.
     fn neg_rax(&mut self) {
-        self.bytes(&[0x48, 0xF7, 0xD8]);
+        self.neg_r(Reg::Rax);
     }
 
     /// `not rax`.
@@ -278,64 +622,99 @@ impl Code {
     /// `add qword [rbp + disp], 1`.
     fn add_rbp_one(&mut self, disp: i32) {
         self.bytes(&[0x48, 0x83]);
-        self.rbp_disp(disp, 0);
+        self.mem_modrm(Reg::Rax, Reg::Rbp, disp);
         self.u8(0x01);
     }
 
     /// `sub rsp, imm` (imm8 when it fits, else imm32).
-    fn sub_rsp(&mut self, imm: i32) {
+    pub(crate) fn sub_rsp(&mut self, imm: i32) {
         self.bytes(&[0x48, 0x81, 0xEC]);
         self.i32_le(imm);
     }
 
     /// `add rsp, imm` (imm8 when it fits, else imm32).
-    fn add_rsp(&mut self, imm: i32) {
+    pub(crate) fn add_rsp(&mut self, imm: i32) {
         self.bytes(&[0x48, 0x81, 0xC4]);
         self.i32_le(imm);
     }
 
-    /// `call rel32` (patched later).
+    /// `call rel32` to a user function (patched later).
     fn call(&mut self, function_index: usize) {
         self.u8(0xE8);
         self.patch(PatchKind::Function(function_index));
     }
 
+    /// `jmp rel32` to a runtime label (patched later).
+    pub(crate) fn jmp_label(&mut self, label: u32) {
+        self.jmp(PatchKind::Label(label));
+    }
+
+    /// `jcc rel32` to a runtime label (patched later).
+    pub(crate) fn jcc_label(&mut self, opcode: u8, label: u32) {
+        self.jcc(opcode, PatchKind::Label(label));
+    }
+
     /// `jmp rel32` (patched later).
-    fn jmp(&mut self, kind: PatchKind) {
+    pub(crate) fn jmp(&mut self, kind: PatchKind) {
         self.u8(0xE9);
         self.patch(kind);
     }
 
     /// `jcc rel32` (patched later).
-    fn jcc(&mut self, opcode: u8, kind: PatchKind) {
+    pub(crate) fn jcc(&mut self, opcode: u8, kind: PatchKind) {
         self.bytes(&[0x0F, opcode]);
         self.patch(kind);
     }
 
     /// `leave; ret`.
-    fn leave_ret(&mut self) {
+    pub(crate) fn leave_ret(&mut self) {
         self.bytes(&[0xC9, 0xC3]);
     }
 }
 
+/// The R and B extension bits for a ModRM `reg`/`rm` pair.
+fn rex_rb(reg: Reg, rm: Reg) -> u8 {
+    ((reg as u8 >> 3) & 1) << 2 | ((rm as u8 >> 3) & 1)
+}
+
 /// Emits the x86-64 machine code for `program` and wraps it in a PE image.
 ///
-/// `entry` is the index of the `main` function (validated by the caller);
-/// the image's entry point calls it and returns its result as the exit
-/// code.
+/// `entry` is the index of the `main` function (validated by the caller).
+/// The image layout is:
+///
+/// - the entry-point stub: capture the process-entry stack pointer, run
+///   runtime initialization, call `main`, then call the leak-checked exit
+///   service with `main`'s result;
+/// - the user functions, in source order;
+/// - the embedded runtime services and their message data;
+/// - `.data` (module bindings), `.bss` (runtime state), `.idata`
+///   (`kernel32` imports), and `.reloc` sections.
 pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     let mut code = Code::new();
 
     // ------------------------------------------------------------------
-    // Entry-point stub: align the stack, call `main`, restore, return.
-    // `ret` from the entry point terminates the process with eax as the
-    // exit code.
+    // Entry-point stub. `ret` from the exit service terminates the
+    // process with the result as the exit code.
     // ------------------------------------------------------------------
     let entry_offset = 0usize;
-    code.sub_rsp(8);
+    code.mov_rip_r(
+        Reg::Rsp,
+        PatchKind::Bss(crate::runtime::abi::BSS.entry_rsp as u32),
+    );
+    code.sub_rsp(8); // align: entry rsp ≡ 8 (mod 16), now ≡ 0
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Init));
     code.call(entry);
-    code.add_rsp(8);
-    code.u8(0xC3); // ret
+    // The exit service takes `main`'s result as a stack argument (the
+    // MINK calling convention). One argument word is odd, so the
+    // alignment padding is pushed before the argument — the exit service
+    // reads the code at `[rbp + 16]`.
+    code.sub_rsp(8);
+    code.push_rax();
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Exit));
+    // Unreachable defensive tail (the exit service restores the entry
+    // stack pointer and never returns).
+    code.add_rsp(16);
+    code.u8(0xC3);
 
     // ------------------------------------------------------------------
     // Functions, in source order.
@@ -349,6 +728,12 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     }
 
     // ------------------------------------------------------------------
+    // Embedded runtime: services, then the message data.
+    // ------------------------------------------------------------------
+    let runtime_offsets = runtime::emit_services(&mut code);
+    runtime::emit_data(&mut code, &runtime_offsets);
+
+    // ------------------------------------------------------------------
     // Module bindings: one 8-byte word each, in source order.
     // ------------------------------------------------------------------
     let mut data = Vec::with_capacity(program.statics.len() * 8);
@@ -359,9 +744,15 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     // ------------------------------------------------------------------
     // Layout and patch resolution.
     // ------------------------------------------------------------------
-    let text_size = code.buf.len() as u32;
-    let text_rva = pe::TEXT_RVA;
-    let data_rva = (text_rva + text_size).div_ceil(0x1000) * 0x1000;
+    let text_size = code.len() as u32;
+    let layout = pe::layout(
+        text_size,
+        data.len() as u32,
+        crate::runtime::abi::BSS.size as u32,
+        pe::IDATA_SIZE,
+        12, // the relocation block is always one 12-byte page entry
+    );
+    let text_rva = layout.text_rva;
     let reloc = pe::relocation_block(text_rva);
     for patch in &code.patches {
         let disp = match &patch.kind {
@@ -376,13 +767,39 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
             PatchKind::Static(index) => {
                 // RIP-relative: target VA minus the address after the
                 // instruction. The image base cancels out.
-                (data_rva as i64 + 8 * *index as i64) - (text_rva as i64 + patch.offset as i64 + 4)
+                (layout.data_rva as i64 + 8 * *index as i64)
+                    - (text_rva as i64 + patch.offset as i64 + 4)
+            }
+            PatchKind::RuntimeService(service) => {
+                runtime_offsets.of(*service) as i64 - (patch.offset as i64 + 4)
+            }
+            PatchKind::Bss(offset) => {
+                (layout.bss_rva as i64 + *offset as i64)
+                    - (text_rva as i64 + patch.offset as i64 + 4)
+            }
+            PatchKind::Iat(index) => {
+                (layout.idata_rva as i64 + pe::IAT_OFFSET as i64 + 8 * *index as i64)
+                    - (text_rva as i64 + patch.offset as i64 + 4)
+            }
+            PatchKind::Label(id) => {
+                let target = code.labels[*id as usize]
+                    .expect("runtime labels are bound before patch resolution")
+                    as i64;
+                target - (patch.offset as i64 + 4)
             }
         };
         code.buf[patch.offset..patch.offset + 4].copy_from_slice(&(disp as i32).to_le_bytes());
     }
 
-    let bytes = pe::build(&code.buf, &data, &reloc, entry_offset as u32);
+    let idata = pe::build_idata(layout.idata_rva);
+    let bytes = pe::build(
+        &code.buf,
+        &data,
+        layout,
+        &idata,
+        &reloc,
+        entry_offset as u32,
+    );
     EmittedImage {
         bytes,
         functions: program.functions.len(),
@@ -398,7 +815,7 @@ fn emit_function(
     f: &super::super::ir::BFunction,
     function_index: usize,
 ) -> (usize, Vec<u32>) {
-    let start = code.buf.len();
+    let start = code.len();
     let slots = slots(f);
     let frame = frame_size(&slots);
 
@@ -429,7 +846,7 @@ fn emit_function(
     // up front.
     let mut block_starts = vec![0u32; f.blocks.len()];
     for block in &f.blocks {
-        block_starts[block.id.raw() as usize] = (code.buf.len() - start) as u32;
+        block_starts[block.id.raw() as usize] = (code.len() - start) as u32;
         emit_block(code, f, &slots, block, function_index);
     }
     (start, block_starts)
@@ -536,6 +953,48 @@ fn push_operand(
             }
         }
     }
+}
+
+/// The number of stack words an operand occupies (mirrors `push_operand`).
+fn operand_words(f: &super::super::ir::BFunction, operand: BOperand) -> usize {
+    match operand {
+        BOperand::Const(_) => 1,
+        BOperand::Local(id) => {
+            let ty = f.local(id).map(|local| local.ty).unwrap_or(BType::Int);
+            if ty == BType::Range { 2 } else { 1 }
+        }
+    }
+}
+
+/// Emits the call sequence for a runtime service: push the alignment
+/// padding first (when the argument count is odd), then the arguments
+/// rightmost-first (the runtime uses the same convention as user
+/// functions — argument 1 must be on top of the stack at the call so the
+/// callee reads it at `[rbp + 16]`), call, and store the result.
+fn emit_runtime_call(
+    code: &mut Code,
+    f: &super::super::ir::BFunction,
+    slots: &Slots,
+    target: crate::mir::LocalId,
+    service: RuntimeService,
+    args: &[BOperand],
+) {
+    let mut words = 0usize;
+    for arg in args {
+        words += operand_words(f, *arg);
+    }
+    let pad = words % 2;
+    if pad == 1 {
+        code.sub_rsp(8);
+    }
+    for arg in args.iter().rev() {
+        push_operand(code, f, slots, *arg);
+    }
+    code.call_patch(PatchKind::RuntimeService(service));
+    if words + pad > 0 {
+        code.add_rsp((8 * (words + pad)) as i32);
+    }
+    code.mov_rbp_rax(slots[target.raw() as usize].0);
 }
 
 fn emit_inst(
@@ -646,13 +1105,19 @@ fn emit_inst(
             callee,
             args,
         } => {
+            // The alignment padding is pushed before the arguments (odd
+            // argument counts), so argument 1 is on top of the stack at
+            // the call and the callee reads it at `[rbp + 16]`.
             let mut words = 0usize;
-            for arg in args.iter().rev() {
-                words += push_operand(code, f, slots, *arg);
+            for arg in args {
+                words += operand_words(f, *arg);
             }
             let pad = words % 2;
             if pad == 1 {
                 code.sub_rsp(8);
+            }
+            for arg in args.iter().rev() {
+                push_operand(code, f, slots, *arg);
             }
             code.call(*callee);
             if words + pad > 0 {
@@ -660,6 +1125,11 @@ fn emit_inst(
             }
             code.mov_rbp_rax(slots[target.raw() as usize].0);
         }
+        BInstKind::RuntimeCall {
+            target,
+            service,
+            args,
+        } => emit_runtime_call(code, f, slots, *target, *service, args),
         BInstKind::RangeInit {
             target,
             start,

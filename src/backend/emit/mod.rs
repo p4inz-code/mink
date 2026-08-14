@@ -9,6 +9,7 @@
 //! with a structured error instead of emitting the wrong output.
 
 pub(crate) mod pe;
+pub(crate) mod runtime;
 pub(crate) mod x86_64;
 
 use crate::source::{SourceId, Span};

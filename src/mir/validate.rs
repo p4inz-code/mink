@@ -344,6 +344,7 @@ mod tests {
                 span: span_at(3),
             }],
             types: table,
+            intrinsic_symbols: Vec::new(),
         }
     }
 
@@ -491,6 +492,7 @@ mod tests {
                 span: span_at(8),
             }],
             types: table,
+            intrinsic_symbols: Vec::new(),
         };
         assert!(validate(&program).is_ok());
     }

@@ -87,6 +87,11 @@ pub enum SymbolKind {
     Const,
     /// A `for` loop variable.
     ForVar,
+    /// A predeclared runtime intrinsic (`rt_alloc`, `rt_free`, …). The
+    /// intrinsic names are reserved: declaring a module item with the same
+    /// name is a duplicate definition. Intrinsics have no source
+    /// declaration; their span is synthetic.
+    Intrinsic,
 }
 
 impl SymbolKind {

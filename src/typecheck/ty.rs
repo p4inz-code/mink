@@ -68,6 +68,13 @@ pub enum TypeKind {
     /// The `null` literal. Null is a distinct concrete type — it is not a
     /// bottom type, and it unifies with nothing except itself.
     Null,
+    /// The unit type: a value that produces nothing. Only intrinsic
+    /// results use it today (`rt_free`, `rt_exit`, …); a function that
+    /// falls off the end keeps an unresolved inference result, which the
+    /// backend classifies as unit. Unit unifies only with itself, so an
+    /// expression that produces no value cannot be used where a value is
+    /// required.
+    Unit,
     /// A range `start..end` / `start..=end` over values of `element`.
     Range(TypeId),
     /// A function taking `params` and producing `result`.
@@ -263,6 +270,7 @@ impl TypeTable {
             Some(TypeKind::Char) => "Char".to_string(),
             Some(TypeKind::Str) => "Str".to_string(),
             Some(TypeKind::Null) => "Null".to_string(),
+            Some(TypeKind::Unit) => "Unit".to_string(),
             Some(TypeKind::Range(elem)) => format!("Range<{}>", self.display(*elem)),
             Some(TypeKind::Fn { params, result }) => {
                 let params = params

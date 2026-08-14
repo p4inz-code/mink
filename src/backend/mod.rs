@@ -46,6 +46,7 @@ pub use emit::EmittedImage;
 pub use error::{BackendError, BackendErrorKind};
 pub use ir::{
     BBlock, BFunction, BInst, BInstKind, BLocal, BOperand, BProgram, BStatic, BTerminator, BType,
+    RuntimeService,
 };
 pub use target::{TARGET_NAMES, Target};
 

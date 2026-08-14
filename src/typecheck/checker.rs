@@ -152,11 +152,34 @@ impl<'a> Checker<'a> {
                     let result = self.types.push(TypeKind::Infer(None));
                     self.types.push(TypeKind::Fn { params, result })
                 }
+                SymbolKind::Intrinsic => self.intrinsic_type(symbol),
                 _ => self.types.push(TypeKind::Infer(None)),
             };
             self.symbol_types[symbol.id.raw() as usize] = ty;
             self.decls.insert(symbol.span.start(), symbol.id);
         }
+    }
+
+    /// The concrete function type of a runtime intrinsic, from its
+    /// declared signature. Intrinsics are typed concretely — not through
+    /// inference variables — so calling `rt_free` produces `Unit` (which
+    /// cannot be used as a value) and calling `rt_alloc` produces `Int`.
+    fn intrinsic_type(&mut self, symbol: &crate::semantics::Symbol) -> TypeId {
+        let intrinsic = crate::runtime::intrinsics::by_name(&symbol.name)
+            .expect("intrinsic symbols always have a registered signature");
+        let params = intrinsic
+            .params
+            .iter()
+            .map(|param| match param {
+                crate::runtime::intrinsics::IntrinsicType::Int => self.types.push(TypeKind::Int),
+                crate::runtime::intrinsics::IntrinsicType::Unit => self.types.push(TypeKind::Unit),
+            })
+            .collect::<Vec<_>>();
+        let result = match intrinsic.result {
+            crate::runtime::intrinsics::IntrinsicType::Int => self.types.push(TypeKind::Int),
+            crate::runtime::intrinsics::IntrinsicType::Unit => self.types.push(TypeKind::Unit),
+        };
+        self.types.push(TypeKind::Fn { params, result })
     }
 
     // ------------------------------------------------------------------

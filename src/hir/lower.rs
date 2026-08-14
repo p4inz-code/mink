@@ -51,10 +51,22 @@ pub fn lower(
 ) -> Result<HirProgram, Vec<HirError>> {
     let mut lowerer = Lowerer::new(ast, semantic, types);
     lowerer.run();
+    // Record every predeclared runtime intrinsic symbol, so later stages
+    // can recognize intrinsic references without re-running name
+    // resolution. The mapping is stable: symbol id → intrinsic table id.
+    let intrinsic_symbols = semantic
+        .symbols()
+        .iter()
+        .filter(|symbol| symbol.kind == crate::semantics::SymbolKind::Intrinsic)
+        .filter_map(|symbol| {
+            crate::runtime::intrinsics::id_of(&symbol.name).map(|id| (symbol.id, id))
+        })
+        .collect();
     if lowerer.errors.is_empty() {
         Ok(HirProgram {
             items: lowerer.items,
             types: lowerer.table,
+            intrinsic_symbols,
         })
     } else {
         Err(lowerer.errors)

@@ -35,9 +35,10 @@ use super::error::BackendError;
 /// This is the closed classification of the MINK types the first native
 /// subset supports: 64-bit integers, booleans (stored as `0`/`1`), and
 /// integer ranges (stored as a two-word value). `Unit` is the type of a
-/// function that produces no value (a bare `return;` or falling off the
-/// end). Every other MINK type (`Float`, `Str`, `Char`, `Null`, unresolved
-/// inference types) is rejected at lowering.
+/// function that produces no value (a bare `return;`, falling off the
+/// end, or a runtime intrinsic that produces nothing). Every other MINK
+/// type (`Float`, `Str`, `Char`, `Null`, unresolved inference types) is
+/// rejected at lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BType {
     /// A 64-bit two's-complement integer.
@@ -265,6 +266,19 @@ pub enum BInstKind {
         /// The arguments, in source order.
         args: Vec<BOperand>,
     },
+    /// Call an embedded runtime service (the `rt_*` intrinsics) with
+    /// `args` and store the result in `target`. The service uses the same
+    /// calling convention as [`BInstKind::Call`]; the emitter resolves the
+    /// service to the machine code of the embedded runtime.
+    RuntimeCall {
+        /// The destination slot for the call's result (`Unit`-typed for
+        /// services that produce no value).
+        target: crate::mir::LocalId,
+        /// The runtime service to invoke.
+        service: RuntimeService,
+        /// The arguments, in source order.
+        args: Vec<BOperand>,
+    },
     /// Construct a range value into `target`: a two-word value holding the
     /// normalized exclusive end (`end + 1` for inclusive ranges) and the
     /// iteration cursor (`start`).
@@ -297,6 +311,64 @@ pub enum BInstKind {
         /// The range value being iterated (a two-word `Range` slot).
         range: crate::mir::LocalId,
     },
+}
+
+/// A machine-level runtime service of the embedded MINK runtime.
+///
+/// Services are called with the MINK calling convention (stack arguments,
+/// result in `rax`) and are emitted into every image after the user
+/// functions. The intrinsic calls produced by lowering use the *callable*
+/// subset ([`RuntimeService::is_callable`]); the remaining services are
+/// invoked by the entry stub or internally by other services. The machine
+/// implementations live in `src/backend/emit/runtime.rs` and the ABI in
+/// `src/runtime/abi.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeService {
+    /// Runtime initialization: sets the bump cursor to the arena base and
+    /// resets the free list. Called by the entry stub before `main`.
+    Init,
+    /// `rt_alloc(size) -> Int`: allocate a 16-byte-aligned block.
+    Alloc,
+    /// `rt_free(ptr)`: deallocate a live block.
+    Free,
+    /// `rt_mem_load(addr) -> Int`: load a validated 8-byte word.
+    MemLoad,
+    /// `rt_mem_store(addr, value)`: store a validated 8-byte word.
+    MemStore,
+    /// `rt_exit(code)`: terminate with `code` after the leak check. Also
+    /// the exit path the entry stub invokes with `main`'s result.
+    Exit,
+    /// `rt_print_int(value)`: write the decimal value plus a newline to
+    /// stdout.
+    PrintInt,
+    /// Internal: report a runtime error (`rcx` = error number) to stderr
+    /// and terminate with exit code `100 + number`. Never returns.
+    Fail,
+    /// Internal: write `rcx`-pointed bytes of `rdx` length to stdout.
+    WriteStdout,
+    /// Internal: write `rcx`-pointed bytes of `rdx` length to stderr.
+    WriteStderr,
+}
+
+impl RuntimeService {
+    /// The number of stack arguments this service consumes. The type
+    /// checker guarantees call-site arity; the verifier re-checks it.
+    pub fn arity(self) -> usize {
+        match self {
+            Self::Init | Self::Fail | Self::WriteStdout | Self::WriteStderr => 0,
+            Self::Alloc | Self::Free | Self::MemLoad | Self::Exit | Self::PrintInt => 1,
+            Self::MemStore => 2,
+        }
+    }
+
+    /// Whether generated code may call this service directly (the `rt_*`
+    /// intrinsics). The remaining services are entry-stub or internal.
+    pub fn is_callable(self) -> bool {
+        matches!(
+            self,
+            Self::Alloc | Self::Free | Self::MemLoad | Self::MemStore | Self::Exit | Self::PrintInt
+        )
+    }
 }
 
 /// How a basic block ends.

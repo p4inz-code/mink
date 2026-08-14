@@ -649,8 +649,8 @@ fn image_is_a_pe_executable() {
     assert_eq!(image.bytes[0..2], *b"MZ");
     let e_lfanew = u32::from_le_bytes(image.bytes[0x3C..0x40].try_into().unwrap()) as usize;
     assert_eq!(&image.bytes[e_lfanew..e_lfanew + 4], b"PE\0\0");
-    // Machine: x64; 2 sections (.text, .reloc) for a program with no
-    // bindings.
+    // Machine: x64; the embedded runtime adds .bss, .idata, and .reloc
+    // sections around .text (and .data when the program has bindings).
     assert_eq!(
         u16::from_le_bytes(image.bytes[e_lfanew + 4..e_lfanew + 6].try_into().unwrap()),
         0x8664
@@ -669,7 +669,7 @@ fn image_with_bindings_has_data_section() {
     let image = emit_image("const base = 1; fn main() { return base; }");
     let e_lfanew = u32::from_le_bytes(image.bytes[0x3C..0x40].try_into().unwrap()) as usize;
     let nsects = u16::from_le_bytes(image.bytes[e_lfanew + 6..e_lfanew + 8].try_into().unwrap());
-    assert_eq!(nsects, 3, ".text + .data + .reloc");
+    assert_eq!(nsects, 5, ".text + .data + .bss + .idata + .reloc");
     assert_eq!(image.statics, 1);
 }
 

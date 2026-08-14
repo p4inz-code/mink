@@ -59,6 +59,7 @@ pub(crate) fn lower(hir: &HirProgram) -> Result<MirProgram, Vec<MirError>> {
         Ok(MirProgram {
             items: lowerer.items,
             types: lowerer.table,
+            intrinsic_symbols: hir.intrinsic_symbols.clone(),
         })
     } else {
         Err(lowerer.errors)
@@ -89,6 +90,9 @@ impl<'a> Lowerer<'a> {
                 HirItemKind::Let(binding) => binding.name.symbol,
                 HirItemKind::Const(binding) => binding.name.symbol,
             })
+            // The predeclared runtime intrinsics resolve like module items:
+            // a reference is a `Static` operand the backend recognizes.
+            .chain(hir.intrinsic_symbols.iter().map(|(symbol, _)| *symbol))
             .collect();
         Self {
             hir,

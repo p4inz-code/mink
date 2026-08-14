@@ -45,8 +45,17 @@ use crate::typecheck::{TypeId, TypeKind};
 use super::error::BackendError;
 use super::ir::{
     BBlock, BFunction, BInst, BInstKind, BLocal, BOperand, BProgram, BStatic, BTerminator, BType,
-    LowerResult,
+    LowerResult, RuntimeService,
 };
+
+/// The resolved target of a call: a user function or an embedded runtime
+/// service.
+enum Callee {
+    /// A user function, by index into [`BProgram::functions`].
+    Function(usize),
+    /// A runtime service (`rt_*` intrinsic).
+    Runtime(RuntimeService),
+}
 
 /// Lowers an optimized [`MirProgram`] into a [`BProgram`].
 ///
@@ -164,8 +173,9 @@ impl<'a> Lowerer<'a> {
                 _ => None,
             },
             // `kind` follows resolved inference chains; an unresolved
-            // variable is the only `Infer` that remains.
-            Some(TypeKind::Infer(_)) => Some(BType::Unit),
+            // variable is the only `Infer` that remains. Unit is the type
+            // of intrinsics that produce no value.
+            Some(TypeKind::Infer(_)) | Some(TypeKind::Unit) => Some(BType::Unit),
             Some(
                 TypeKind::Error
                 | TypeKind::Float
@@ -523,15 +533,21 @@ impl<'a> Lowerer<'a> {
                 rhs: self.eval_operand(rhs)?,
             },
             MirRvalueKind::Call { callee, args } => {
-                let callee_index = self.resolve_callee(callee, rvalue.span)?;
                 let mut lowered_args = Vec::with_capacity(args.len());
                 for arg in args {
                     lowered_args.push(self.eval_operand(arg)?);
                 }
-                BInstKind::Call {
-                    target,
-                    callee: callee_index,
-                    args: lowered_args,
+                match self.resolve_callee(callee, rvalue.span)? {
+                    Callee::Function(callee_index) => BInstKind::Call {
+                        target,
+                        callee: callee_index,
+                        args: lowered_args,
+                    },
+                    Callee::Runtime(service) => BInstKind::RuntimeCall {
+                        target,
+                        service,
+                        args: lowered_args,
+                    },
                 }
             }
             MirRvalueKind::Range {
@@ -617,12 +633,32 @@ impl<'a> Lowerer<'a> {
         ))
     }
 
-    /// Resolves a call's callee operand to a function index.
-    fn resolve_callee(&mut self, callee: &MirOperand, span: Span) -> Result<usize, BackendError> {
+    /// Resolves a call's callee operand to a user function index or an
+    /// embedded runtime service.
+    fn resolve_callee(&mut self, callee: &MirOperand, span: Span) -> Result<Callee, BackendError> {
         match &callee.kind {
             MirOperandKind::Static(symbol) => {
                 if let Some(&index) = self.fn_index.get(symbol) {
-                    return Ok(index);
+                    return Ok(Callee::Function(index));
+                }
+                // A predeclared runtime intrinsic: the program carries the
+                // symbol → intrinsic mapping; map the intrinsic to its
+                // machine service.
+                if let Some((_, intrinsic)) = self
+                    .program
+                    .intrinsic_symbols
+                    .iter()
+                    .find(|(symbol_id, _)| symbol_id == symbol)
+                {
+                    let name = intrinsic.get().name;
+                    return Self::runtime_service(name)
+                        .map(Callee::Runtime)
+                        .ok_or_else(|| {
+                            BackendError::invalid_backend_ir(
+                                span,
+                                format!("the intrinsic `{name}` has no runtime service mapping"),
+                            )
+                        });
                 }
                 if self.static_slots.contains_key(symbol) {
                     return Err(BackendError::unsupported_callee(
@@ -640,6 +676,22 @@ impl<'a> Lowerer<'a> {
                 "the native subset supports only direct calls to module-level functions",
             )),
         }
+    }
+
+    /// The runtime service an intrinsic name maps to, if any. Only the
+    /// callable subset of services is exposed to generated code.
+    fn runtime_service(name: &str) -> Option<RuntimeService> {
+        let service = match name {
+            "rt_alloc" => RuntimeService::Alloc,
+            "rt_free" => RuntimeService::Free,
+            "rt_mem_load" => RuntimeService::MemLoad,
+            "rt_mem_store" => RuntimeService::MemStore,
+            "rt_exit" => RuntimeService::Exit,
+            "rt_print_int" => RuntimeService::PrintInt,
+            _ => return None,
+        };
+        debug_assert!(service.is_callable());
+        Some(service)
     }
 
     /// The slot of a range being iterated: range iteration reads a local

@@ -114,6 +114,10 @@ pub struct MirProgram {
     /// clone of the HIR's table, possibly extended with the `Bool` type
     /// loop lowering needs, so the MIR is self-contained.
     pub types: TypeTable,
+    /// The predeclared runtime intrinsics: symbol → stable intrinsic id.
+    /// Intrinsics are referenced as module-item-style `Static` operands;
+    /// the backend maps their calls to embedded runtime services.
+    pub intrinsic_symbols: Vec<(crate::semantics::SymbolId, crate::runtime::IntrinsicId)>,
 }
 
 /// A top-level declaration lowered to MIR: a function, a `let` binding, or

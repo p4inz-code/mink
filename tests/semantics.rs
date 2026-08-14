@@ -244,7 +244,8 @@ fn temp_source(name: &str, content: &str) -> PathBuf {
 fn empty_program_analyzes() {
     let (_sources, _ast, result) = analyze("");
     assert!(!result.has_errors());
-    assert!(result.symbols().is_empty());
+    // Only the predeclared runtime intrinsics are present.
+    assert_eq!(result.symbols().len(), 6);
     assert!(result.resolutions().is_empty());
 }
 
@@ -252,14 +253,15 @@ fn empty_program_analyzes() {
 fn module_declarations_analyze() {
     let (_sources, _ast, result) = analyze("let x = 1; const y = 2; fn f() {}");
     assert!(!result.has_errors());
-    assert_eq!(result.symbols().len(), 3);
-    // The module scope holds all three declarations.
+    // The three declarations plus the six predeclared intrinsics.
+    assert_eq!(result.symbols().len(), 9);
+    // The module scope holds all three declarations (after the intrinsics).
     let module = result
         .scopes()
         .iter()
         .find(|s| s.kind == ScopeKind::Module)
         .unwrap();
-    assert_eq!(module.symbols().len(), 3);
+    assert_eq!(module.symbols().len(), 9);
 }
 
 #[test]
@@ -372,8 +374,8 @@ fn multiple_independent_scopes() {
     let src = "fn f() { if true { let a = 1; } else { let a = 2; } let b = 3; }";
     let (_sources, _ast, result) = analyze(src);
     assert!(!result.has_errors());
-    // f, the two sibling `a` bindings, and `b`.
-    assert_eq!(result.symbols().len(), 4);
+    // f, the two sibling `a` bindings, and `b`, plus the six intrinsics.
+    assert_eq!(result.symbols().len(), 10);
 }
 
 #[test]
@@ -400,7 +402,7 @@ fn module_binding_visible_in_its_own_initializer() {
     let src = "let x = x;";
     let (_sources, _ast, result) = analyze(src);
     assert!(!result.has_errors());
-    assert_eq!(result.symbols().len(), 1);
+    assert_eq!(result.symbols().len(), 7); // x plus the six intrinsics
     // The initializer reference resolves to the binding itself.
     assert_eq!(result.resolutions().len(), 1);
     let x = symbol(&result, "x");
@@ -858,8 +860,8 @@ fn errors_do_not_stop_module_analysis() {
         error_spans(&result, SemanticErrorKind::UnresolvedName).len(),
         2
     );
-    // All three module declarations are still collected.
-    assert_eq!(result.symbols().len(), 4); // a, f, b, c
+    // All three module declarations are still collected (plus intrinsics).
+    assert_eq!(result.symbols().len(), 10); // a, f, b, c + 6 intrinsics
 }
 
 // ---------------------------------------------------------------------------
@@ -885,6 +887,9 @@ fn symbol_declaration_spans_match_ast() {
     let src = "let x = 1; fn f(p) { let y = 2; }";
     let (_sources, ast, result) = analyze(src);
     for sym in result.symbols().iter() {
+        if sym.kind == SymbolKind::Intrinsic {
+            continue; // predeclared runtime intrinsics have no source span
+        }
         assert_eq!(
             sym.span,
             decl_span(&ast, &sym.name),
@@ -944,7 +949,15 @@ fn scope_declarations_are_listed_per_scope() {
     let f = symbol(&result, "f");
     let p = symbol(&result, "p");
     let x = symbol(&result, "x");
-    assert_eq!(module.symbols(), &[m.id, f.id]);
+    // The module scope lists the six predeclared intrinsics before the
+    // source declarations.
+    let declared: Vec<SymbolId> = module
+        .symbols()
+        .iter()
+        .copied()
+        .filter(|id| result.symbols().get(*id).map(|s| s.kind) != Some(SymbolKind::Intrinsic))
+        .collect();
+    assert_eq!(declared, vec![m.id, f.id]);
     assert_eq!(function.symbols(), &[p.id, x.id]);
     // Direct lookup within a scope finds only its own declarations.
     assert_eq!(module.lookup("m"), Some(m.id));
@@ -1013,7 +1026,7 @@ fn driver_check_exposes_semantic_result_for_valid_source() {
     assert!(report.errors.is_empty());
     let semantic = report.semantic.expect("semantics ran for valid source");
     assert!(!semantic.has_errors());
-    assert_eq!(semantic.symbols().len(), 3); // base, f, x
+    assert_eq!(semantic.symbols().len(), 9); // base, f, x + 6 intrinsics
     // The reference to `base` inside `f` resolves.
     assert!(!semantic.resolutions().is_empty());
 }
@@ -1099,8 +1112,8 @@ fn many_declarations_and_references_scale() {
     }
     let (_sources, _ast, result) = analyze(&src);
     assert!(!result.has_errors());
-    // const + 200 functions + 200 locals.
-    assert_eq!(result.symbols().len(), 401);
+    // const + 200 functions + 200 locals + 6 intrinsics.
+    assert_eq!(result.symbols().len(), 407);
     // 200 uses of `base` + 200 uses of each `v`.
     assert_eq!(result.resolutions().len(), 400);
 }

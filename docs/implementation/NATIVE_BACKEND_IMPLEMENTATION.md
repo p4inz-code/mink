@@ -53,7 +53,20 @@ Like every other stage, the backend is:
         emit/
             mod.rs    Emitter dispatch and EmittedImage
             x86_64.rs x86-64 code generator (the first native target)
+            runtime.rs Machine-code runtime: init, heap, intrinsic services
             pe.rs     PE container builder
+
+    src/runtime/
+        mod.rs     Runtime crate root and diagnostics overview
+        abi.rs     Fixed calling convention and heap/table ABI between
+                   generated code and the machine-code runtime
+        error.rs   Structured runtime errors (E-R01 … E-R06)
+        layout.rs  Explicit memory-layout model for future data types
+        allocator.rs Reference heap allocator (bump + free list) used as the
+                   authoritative spec for the machine-code runtime and by
+                   `tests/runtime.rs`
+        verify.rs  Reference invariant checker (allocation, lifetime, ABI)
+        intrinsics.rs  Intrinsic symbol table shared with the front end
 
 The public entry point is `backend::compile(program, sources, target)`,
 which finds and validates the entry function, lowers, verifies, and emits:
@@ -202,14 +215,44 @@ exact source span of the rejected construct. The codes continue the
 established stable ranges (`E-L*` lexical, `E-P*` syntax, `E-S*` semantic,
 `E-T*` type, `E-H*` HIR, `E-M*` MIR).
 
-## 11. Known Limitations
+## 11. Runtime ABI
+
+The backend links every generated image against a small machine-code
+runtime (`src/backend/emit/runtime.rs`) whose behavior is specified by the
+safe-Rust reference implementation (`src/runtime/`) and documented in
+docs/implementation/RUNTIME_IMPLEMENTATION.md. The ABI is fixed and
+documented in `src/runtime/abi.rs`:
+
+- **Entry stub** — the PE entry point saves the loader stack, calls
+  `rt_init`, calls `main`, pushes `main`'s result, calls `rt_exit`, and
+  returns to the loader; the loader-visible exit code is `main`'s result.
+- **Calling convention** — stack-based: arguments are pushed right-to-left
+  with 16-byte alignment (padding first when the argument count is odd, so
+  argument 1 always sits at `[rbp+16]`), the callee saves `rbp`/`rsp`, and
+  the return value is left in `rax`. Results of `unit`-typed calls are
+  ignored.
+- **Heap services** — `rt_alloc(size) → ptr` returns a zero-initialized
+  block from the bump arena (or the free list) and traps with `E-R02` on
+  exhaustion; `rt_free(ptr)` returns the block to the free list and traps
+  with `E-R03`/`E-R04` on invalid pointers; `rt_load`/`rt_store` trap with
+  `E-R05` when accessing a freed or never-allocated block. All memory is
+  zero-initialized, so behavior is deterministic and leak-safe for every
+  supported program.
+- **Services** — `rt_print_int` writes an integer plus newline to stdout;
+  `rt_exit(code)` traps with `E-R06` when a live block is leaked.
+- **Runtime table** — a `.bss` region holds the entry stack slot, heap
+  cursor/free-list head, arena base, and print buffer, addressed by
+  RIP-relative loads/stores resolved at emission time.
+
+## 12. Known Limitations
 
 - Only the first native target (`x86_64-windows-pe`) is implemented;
   `x86_64-linux-elf` and `aarch64-linux-elf` are recognized but rejected
   (`E-B11`).
 - No floating point, strings, characters, `null`, member/index places,
-  function values, or module bindings needing runtime initialization —
-  all rejected with structured errors.
+  function values, or structs — all rejected with structured errors. The
+  memory-layout model (`src/runtime/layout.rs`) is the groundwork for
+  future aggregates but nothing consumes it yet.
 - No debug info, no symbol tables beyond what the PE format requires, and
   no optimizations in the backend itself (the MIR pipeline already
   optimized the input).
@@ -218,7 +261,7 @@ established stable ranges (`E-L*` lexical, `E-P*` syntax, `E-S*` semantic,
 - The image targets Windows only; `Target::native()` is the first target on
   every host until more targets land.
 
-## 12. Quality Gates
+## 13. Quality Gates
 
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
@@ -226,13 +269,16 @@ established stable ranges (`E-L*` lexical, `E-P*` syntax, `E-S*` semantic,
     cargo build
     git diff --check
 
-Full suite after session 11: **622 tests** (61 CLI + 50 lexer + 88 parser +
+Full suite after session 12: **654 tests** (61 CLI + 50 lexer + 88 parser +
 62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR +
-34 MIR + 38 optimization + 21 lib unit + 37 backend), all passing. The
-backend tests (`tests/backend.rs`) cover program structure and
-determinism, functions/locals/instructions, constant decoding, arithmetic,
-comparisons and logical operators, calls, module bindings, range iteration,
-every rejected construct with its code and span, multi-error reporting,
-verifier checks on malformed instructions, PE image structure, emission
-determinism, and the CLI end-to-end build (build + run the generated
-binary).
+34 MIR + 38 optimization + 39 lib unit + 37 backend + 14 runtime
+end-to-end), all passing. The backend tests (`tests/backend.rs`) cover
+program structure and determinism, functions/locals/instructions, constant
+decoding, arithmetic, comparisons and logical operators, calls, module
+bindings, range iteration, every rejected construct with its code and
+span, multi-error reporting, verifier checks on malformed instructions, PE
+image structure, emission determinism, and the CLI end-to-end build (build
++ run the generated binary). The runtime tests (`tests/runtime.rs`) build
+and run native binaries that allocate, store, load, and free heap blocks,
+print integers, trap with the documented `E-R01+` exit codes on invalid
+memory operations, and leak-check on exit.

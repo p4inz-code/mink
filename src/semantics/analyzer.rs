@@ -86,8 +86,23 @@ impl Analyzer {
     /// it. Module scope is order-independent: all names are collected before
     /// any item body is analyzed, so a top-level declaration is visible
     /// throughout its module regardless of position.
+    ///
+    /// The runtime intrinsics (`rt_alloc`, …) are predeclared **before** the
+    /// source items: they are part of the module scope, their names are
+    /// reserved (a source declaration with the same name is a duplicate
+    /// definition reported at the source declaration), and their symbols are
+    /// collected first so the type checker's declaration-span index is never
+    /// shadowed by a synthetic span.
     fn collect_module_scope(&mut self, ast: &Ast) -> ScopeId {
         let module = self.scopes.push(ScopeKind::Module, None);
+        for intrinsic in crate::runtime::intrinsics::ALL {
+            // A synthetic identifier: intrinsics have no source location.
+            let ident = Ident {
+                name: intrinsic.name.to_string(),
+                span: crate::source::Span::new(crate::source::SourceId::new(0), 0..0),
+            };
+            self.bind(&ident, SymbolKind::Intrinsic, module);
+        }
         for item in &ast.items {
             match &item.kind {
                 ItemKind::Fn(f) => self.bind(&f.name, SymbolKind::Fn, module),

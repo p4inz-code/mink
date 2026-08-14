@@ -178,6 +178,38 @@ fn verify_inst(
                 verify_operand(function, arg, inst.span, errors);
             }
         }
+        BInstKind::RuntimeCall {
+            target,
+            service,
+            args,
+        } => {
+            verify_target(function, *target, inst.span, errors);
+            // Only the callable subset of services is reachable from
+            // generated code; the rest are entry-stub or internal.
+            if !service.is_callable() {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: runtime service `{service:?}` is not callable from generated code",
+                        function.name
+                    ),
+                ));
+            }
+            if args.len() != service.arity() {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: runtime service `{service:?}` expects {} argument(s), found {}",
+                        function.name,
+                        service.arity(),
+                        args.len()
+                    ),
+                ));
+            }
+            for arg in args {
+                verify_operand(function, arg, inst.span, errors);
+            }
+        }
         BInstKind::RangeInit {
             target, start, end, ..
         } => {
