@@ -16,20 +16,22 @@ Source code is licensed under Apache License 2.0 (see [`LICENSE`](LICENSE)).
 
 MINK is in the **implementation phase**. The compiler engineering foundation,
 lexer and token system, parser and AST, semantic analysis, type inference,
-HIR, and MIR are established in a Rust-based compiler workspace with source
-infrastructure, a working CLI entry point, and a test suite (537 tests).
+HIR, MIR, and a first optimization pipeline are established in a Rust-based
+compiler workspace with source infrastructure, a working CLI entry point,
+and a test suite (585 tests).
 
-The compiler currently validates source through the following pipeline:
+The compiler currently validates and optimizes source through the
+following pipeline:
 
 ```
 Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
-    → HIR → MIR
+    → HIR → MIR → Optimization
 ```
 
 There is **no code generation, runtime, or executable output yet**:
-`mink check` validates and lowers programs through MIR, and `mink build` is
-not yet implemented. The language and architecture specifications live in
-[`docs/`](docs/); the frozen core grammar is in
+`mink check` validates, lowers, and optimizes programs through MIR, and
+`mink build` is not yet implemented. The language and architecture
+specifications live in [`docs/`](docs/); the frozen core grammar is in
 [`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md).
 
 ## Repository Layout
@@ -53,8 +55,9 @@ Requirements: Rust 1.85 or newer (developed against 1.97).
 ### CLI usage
 
 - `mink check <path>` — loads a MINK source file and runs lexical, syntactic,
-  semantic, type, HIR, and MIR analysis. Exit 0 when the program validates
-  through MIR, exit 1 with diagnostics otherwise.
+  semantic, type, HIR, MIR, and MIR-optimization analysis. Exit 0 when the
+  program validates and optimizes through MIR, exit 1 with diagnostics
+  otherwise.
 - `mink build <path>` — loads a MINK source file and reports that the build
   pipeline is not yet implemented (exit 2).
 - `mink run`, `mink test`, `mink fmt` — recognized but not yet implemented

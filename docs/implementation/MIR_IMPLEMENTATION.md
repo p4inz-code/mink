@@ -7,11 +7,10 @@
 ## 1. Purpose
 
 MIR (Mid-level Intermediate Representation) is the second compiler IR
-layer, sitting between the typed HIR and the future optimization/backend
-stages:
+layer, sitting between the typed HIR and the optimization/backend stages:
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
-        → HIR → MIR → (future optimization) → (future backend) → executable
+        → HIR → MIR → Optimization → (future backend) → executable
 
 Where HIR mirrors the source's structural shape (nested blocks, one node
 per source construct, no flattening), MIR is **linear and
@@ -258,10 +257,11 @@ succeeded:
 
 MIR is the *lowest* IR implemented so far: control flow is explicit (basic
 blocks, terminators), values are operand/rvalue pairs, and calls, ranges,
-and range iteration are distinct rvalue forms. The future optimization
-passes and backend will consume this graph. Nothing in MIR pre-commits to
-a particular backend; the explicit CFG and canonical types are the
-intended seam.
+and range iteration are distinct rvalue forms. The optimization passes
+(see `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`) consume this
+graph and rewrite it in place, and a future backend will consume the
+optimized graph. Nothing in MIR pre-commits to a particular backend; the
+explicit CFG and canonical types are the intended seam.
 
 ## 10. Known Limitations
 
@@ -276,13 +276,15 @@ intended seam.
 - Module-scope `Static` targets reference declarations by `SymbolId`; MIR
   carries no symbol table (the front end guarantees existence), and when
   module-scope initialization runs is a backend concern.
-- No optimization passes exist yet; MIR is produced but not transformed.
+- Optimization is implemented (session 10, `OPTIMIZATION_IMPLEMENTATION.md`)
+  but conservative: only boolean folds, copy propagation, and CFG cleanup
+  run, and no code generation exists yet.
 
 ## 11. Tests
 
 Coverage lives in `tests/mir.rs` (34 tests) plus the internal-failure unit
 tests in `src/mir/lower.rs` (5), the validation unit tests in
-`src/mir/validate.rs` (7), and the CLI tests in `tests/cli.rs` (3 new, 58
+`src/mir/validate.rs` (7), and the CLI tests in `tests/cli.rs` (3 new, 61
 total):
 
 - **Functions/locals**: parameter locals come first; bindings, temporaries,
@@ -317,4 +319,5 @@ total):
 
 Full suite after session 09: **537 tests** (58 CLI + 50 lexer + 88 parser +
 62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR +
-34 MIR + 14 lib unit tests), all passing.
+34 MIR + 14 lib unit tests), all passing. After session 10 (optimization)
+the suite is **585 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).

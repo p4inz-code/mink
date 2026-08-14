@@ -129,7 +129,7 @@ fn check_with_valid_source_passes() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(
-            "passed parsing, semantic analysis, type checking, HIR lowering, and MIR lowering (6 tokens)"
+            "passed parsing, semantic analysis, type checking, HIR lowering, MIR lowering, and MIR optimization (6 tokens)"
         ),
         "stdout was: {stdout}"
     );
@@ -397,7 +397,7 @@ fn check_with_valid_semantic_program_passes() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(
-            "passed parsing, semantic analysis, type checking, HIR lowering, and MIR lowering"
+            "passed parsing, semantic analysis, type checking, HIR lowering, MIR lowering, and MIR optimization"
         ),
         "stdout was: {stdout}"
     );
@@ -837,11 +837,11 @@ fn check_with_control_flow_program_reaches_hir() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(
-            "passed parsing, semantic analysis, type checking, HIR lowering, and MIR lowering"
+            "passed parsing, semantic analysis, type checking, HIR lowering, MIR lowering, and MIR optimization"
         ),
         "stdout was: {stdout}"
     );
-    assert!(stdout.contains("MIR lowering"), "stdout was: {stdout}");
+    assert!(stdout.contains("MIR optimization"), "stdout was: {stdout}");
 }
 
 #[test]
@@ -968,4 +968,71 @@ fn check_reports_semantic_and_type_errors_together() {
     // Exactly one of each: no cascade from the unresolved name.
     assert_eq!(stderr.matches("E-S01").count(), 1, "stderr was: {stderr}");
     assert_eq!(stderr.matches("E-T01").count(), 1, "stderr was: {stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// MIR optimization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_with_constant_condition_reaches_optimized_mir() {
+    // A constant condition folds and its dead branch is eliminated; the
+    // success message reports the optimization stage and exit stays 0.
+    let path = temp_source(
+        "opt_const.mink",
+        concat!(
+            "fn f(n) {\n",
+            "    if true { return n; }\n",
+            "    return n + 1;\n",
+            "}\n",
+            "fn main() { f(1); }\n",
+        ),
+    );
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("MIR optimization"), "stdout was: {stdout}");
+}
+
+#[test]
+fn check_with_optimizable_program_keeps_exit_behavior() {
+    // Optimizing a foldable program must not change exit behavior: valid
+    // input exits 0, `build` remains 2 (no backend yet).
+    let path = temp_source(
+        "opt_exit.mink",
+        concat!(
+            "fn main() {\n",
+            "    let flag = true && true;\n",
+            "    if flag { return; }\n",
+            "    return;\n",
+            "}\n",
+        ),
+    );
+    let check = mink().arg("check").arg(&path).output().unwrap();
+    assert_eq!(check.status.code(), Some(0));
+    let build = mink().arg("build").arg(&path).output().unwrap();
+    assert_eq!(
+        build.status.code(),
+        Some(2),
+        "backend code generation is not implemented"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn check_with_early_stage_error_does_not_claim_optimization() {
+    // A parse error stops the pipeline before MIR; the success message must
+    // not claim optimization ran.
+    let path = temp_source("opt_no_opt.mink", "fn f( { }\n");
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("MIR optimization"),
+        "stdout must not claim MIR optimization, was: {stdout}"
+    );
 }

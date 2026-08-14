@@ -28,7 +28,7 @@
 //! The pipeline continues from HIR:
 //!
 //! ```text
-//! HIR → MIR lowering → MIR validation → future optimization → future backend
+//! HIR → MIR lowering → MIR validation → MIR optimization → future backend
 //! ```
 //!
 //! MIR is not executable: no code generation, runtime, or backend exists
@@ -36,6 +36,7 @@
 
 mod error;
 mod lower;
+mod optimize;
 mod validate;
 
 use crate::ast::{BinaryOp, UnaryOp};
@@ -45,6 +46,7 @@ use crate::source::Span;
 use crate::typecheck::{TypeId, TypeTable};
 
 pub use error::{MirError, MirErrorKind};
+pub use optimize::{CfgSimplify, ConstFold, CopyProp, DeadCodeElim, MirPass, UnreachableElim};
 
 /// Stable identity of a local value within one [`MirFn`].
 ///
@@ -540,4 +542,17 @@ pub fn lower(program: &HirProgram) -> Result<MirProgram, Vec<MirError>> {
 /// pipeline and tooling against malformed hand-built or mutated programs.
 pub fn validate(program: &MirProgram) -> Result<(), Vec<MirError>> {
     validate::validate(program)
+}
+
+/// Optimizes a [`MirProgram`] through the standard pass pipeline.
+///
+/// Runs the session-10 passes — constant folding, copy propagation, trivial
+/// CFG simplification, unreachable-block elimination, and dead-code
+/// elimination — to a fixpoint, validating the program before the first
+/// pass and after every pass. Malformed input (or a pass that breaks a
+/// structural invariant) is reported as [`MirError`]s (`E-M07`…`E-M11`)
+/// instead of panicking; the returned program is structurally valid and
+/// behavior-preserving (see `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`).
+pub fn optimize(program: &MirProgram) -> Result<MirProgram, Vec<MirError>> {
+    optimize::optimize(program)
 }

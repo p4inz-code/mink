@@ -13,7 +13,7 @@ The compiler must support correctness, performance, incremental compilation, cro
 
 Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis → HIR → MIR → Optimization → Backend / Code Generation → Object / Executable / Library
 
-The stages through MIR are implemented (`src/hir/`, `src/mir/`, `docs/implementation/HIR_IMPLEMENTATION.md`, `docs/implementation/MIR_IMPLEMENTATION.md`): HIR is the typed, symbol-resolved, owned IR produced from the AST plus the semantic and type results, MIR is the control-flow-oriented IR (basic blocks, statements, and terminators) lowered from HIR and structurally validated, and `mink check` validates through MIR. Optimization and the backend are later milestones.
+The stages through optimization are implemented (`src/hir/`, `src/mir/`, `docs/implementation/HIR_IMPLEMENTATION.md`, `docs/implementation/MIR_IMPLEMENTATION.md`, `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`): HIR is the typed, symbol-resolved, owned IR produced from the AST plus the semantic and type results, MIR is the control-flow-oriented IR (basic blocks, statements, and terminators) lowered from HIR and structurally validated, and a deterministic, behavior-preserving optimization pipeline (boolean constant folding, copy propagation, CFG simplification, unreachable-block elimination, dead-code elimination) runs on the validated MIR with structural validation before the first pass and after every pass. `mink check` validates, lowers, and optimizes through MIR. The backend is a later milestone.
 
 Compiler stages must have clearly separated responsibilities.
 
@@ -45,7 +45,9 @@ MIR makes control flow, values, calls, memory operations, and resource operation
 
 ## 6. Optimization
 
-Potential optimizations include constant folding, constant propagation, dead-code elimination, common-subexpression elimination, inlining, devirtualization, escape analysis, allocation elimination, copy elimination, loop optimization, vectorization, and link-time optimization.
+An optimization stage is implemented (`src/mir/optimize.rs`, `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`): a composable pipeline of passes — boolean constant folding, copy propagation (redundant move elimination), CFG simplification, unreachable-block elimination, and dead-code elimination — runs to a fixpoint over validated MIR, with structural validation before the first pass and after every pass. Folding is deliberately limited to the boolean algebra because MIR constants carry no decoded literal values (`Bool(bool)` is the only value-carrying constant); see the optimization doc §2.
+
+Potential future optimizations include constant propagation, common-subexpression elimination, inlining, devirtualization, escape analysis, allocation elimination, loop optimization, vectorization, and link-time optimization.
 
 Optimizations must preserve observable language semantics.
 

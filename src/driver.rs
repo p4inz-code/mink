@@ -1,16 +1,16 @@
 //! Compiler pipeline orchestration.
 //!
 //! Owns the sequence Source → Lexer → Parser → AST → Semantic Analysis →
-//! Type Analysis → HIR → MIR → Backend (see
+//! Type Analysis → HIR → MIR → Optimization → Backend (see
 //! `docs/compiler/COMPILER_ARCHITECTURE.md` §2). The driver runs source
 //! loading plus lexical, syntactic, semantic, type, and HIR analysis, and
 //! lowers to MIR when the front end is clean: the parser consumes the token
 //! stream and produces the AST, and when the source is lexically and
 //! syntactically valid, the semantic analyzer validates it and the type
 //! checker types it. When semantic and type analysis report no errors, HIR
-//! lowering runs, and when HIR lowering succeeds, MIR lowering and
-//! validation run. Errors are reported together across stages. The backend
-//! is not yet implemented.
+//! lowering runs, and when HIR lowering succeeds, MIR lowering, MIR
+//! validation, and MIR optimization run. Errors are reported together
+//! across stages. The backend is not yet implemented.
 
 use std::fmt;
 use std::io;
@@ -155,21 +155,21 @@ pub struct CheckReport {
     /// analysis) reported no errors and lowering succeeded. `None`
     /// otherwise.
     pub hir: Option<HirProgram>,
-    /// The lowered and structurally validated MIR, present when HIR
-    /// lowering succeeded and MIR lowering plus validation reported no
-    /// errors. `None` otherwise.
+    /// The lowered, structurally validated, and optimized MIR, present when
+    /// HIR lowering succeeded and MIR lowering, validation, and
+    /// optimization reported no errors. `None` otherwise.
     pub mir: Option<MirProgram>,
 }
 
-/// Loads `path` and runs lexical, syntactic, semantic, type, HIR, and MIR
-/// analysis over it.
+/// Loads `path` and runs lexical, syntactic, semantic, type, HIR, MIR, and
+/// MIR-optimization analysis over it.
 ///
 /// On success returns a [`CheckReport`] describing the token stream, any
 /// errors across all stages, and — when the source is lexically and
 /// syntactically valid — the [`SemanticResult`], [`TypeResult`], lowered
-/// [`HirProgram`], and (for a clean pipeline) lowered and validated
-/// [`MirProgram`] of analyzing the parsed AST. The caller decides how to
-/// surface them. An I/O failure to read the file is reported as
+/// [`HirProgram`], and (for a clean pipeline) lowered, validated, and
+/// optimized [`MirProgram`] of analyzing the parsed AST. The caller decides
+/// how to surface them. An I/O failure to read the file is reported as
 /// [`BuildError::Io`].
 ///
 /// Semantic analysis runs only when parsing produced a usable AST (no
@@ -182,9 +182,10 @@ pub struct CheckReport {
 /// an inconsistent front end would only add misleading diagnostics; a
 /// lowering failure on a clean front end is an internal compiler error and
 /// is reported as such (`E-H01`…`E-H03`). MIR lowering runs only when HIR
-/// lowering succeeded, and the lowered MIR is structurally validated before
-/// it is reported; a failure on clean HIR is an internal compiler error and
-/// is reported as such (`E-M01`…`E-M11`).
+/// lowering succeeded; the lowered MIR is structurally validated and then
+/// optimized (with validation before the first pass and after every pass)
+/// before it is reported; a failure on clean HIR is an internal compiler
+/// error and is reported as such (`E-M01`…`E-M11`).
 pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildError> {
     let source_id = sources.load(path).map_err(|source| BuildError::Io {
         path: path.to_path_buf(),
@@ -213,10 +214,13 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
             match hir::lower(parsed.ast(), &semantic, &types) {
                 Ok(program) => {
                     let mir = match mir::lower(&program) {
-                        Ok(mir_program) => match mir::validate(&mir_program) {
-                            Ok(()) => Some(mir_program),
-                            Err(validation_errors) => {
-                                errors.extend(validation_errors.into_iter().map(CheckError::Mir));
+                        Ok(mir_program) => match mir::optimize(&mir_program) {
+                            // `optimize` validates before the first pass and
+                            // after every pass, so malformed or corrupted
+                            // MIR surfaces here as structured errors.
+                            Ok(optimized) => Some(optimized),
+                            Err(optimization_errors) => {
+                                errors.extend(optimization_errors.into_iter().map(CheckError::Mir));
                                 None
                             }
                         },
@@ -257,9 +261,9 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
 ///
 /// Returns the id of the source file registered in `sources`. Current status:
 /// the driver registers the file and then reports
-/// [`BuildError::NotImplemented`] because semantic analysis, type checking,
-/// and code generation are not implemented yet. Use [`check`] to run the
-/// front end (lexing + parsing) that is implemented.
+/// [`BuildError::NotImplemented`] because code generation is not implemented
+/// yet. Use [`check`] to run the front end through optimization that is
+/// implemented.
 pub fn build(sources: &mut SourceMap, path: &Path) -> Result<SourceId, BuildError> {
     let _id = sources.load(path).map_err(|source| BuildError::Io {
         path: path.to_path_buf(),

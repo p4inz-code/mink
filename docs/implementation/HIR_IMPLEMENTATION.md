@@ -10,7 +10,7 @@ HIR (High-level Intermediate Representation) is the first real compiler IR
 layer, sitting between the typed front end and the MIR:
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
-        → HIR → MIR → (future optimization) → (future backend) → executable
+        → HIR → MIR → Optimization → (future backend) → executable
 
 The AST answers *"what was written"*, semantic analysis answers *"which
 declaration does each name refer to"*, type analysis answers *"what type
@@ -225,4 +225,5 @@ total):
 
 Full suite after session 09: **537 tests** (58 CLI + 50 lexer + 88 parser +
 62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR +
-34 MIR + 14 lib unit tests), all passing.
+34 MIR + 14 lib unit tests), all passing. After session 10 (optimization)
+the suite is **585 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).
