@@ -429,7 +429,8 @@ type noise. `CheckReport` now carries `semantic: Option<SemanticResult>`
 and `types: Option<TypeResult>`; `CheckError` gained a `Type(TypeError)`
 variant rendered uniformly by the CLI. Exit codes: valid → `0`; lexical,
 syntax, semantic, or type error → `1`; unreadable file → `1`; `mink build`
-remains `NotImplemented` (exit `2`). The CLI success message is now
+compiles the optimized MIR through the native backend (since session 11).
+The CLI success message is now
 `passed parsing, semantic analysis, and type checking (N tokens)`.
 
 ## 21. Performance

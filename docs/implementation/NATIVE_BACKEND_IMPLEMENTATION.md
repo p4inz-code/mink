@@ -234,7 +234,7 @@ documented in `src/runtime/abi.rs`:
 - **Heap services** — `rt_alloc(size) → ptr` returns a zero-initialized
   block from the bump arena (or the free list) and traps with `E-R02` on
   exhaustion; `rt_free(ptr)` returns the block to the free list and traps
-  with `E-R03`/`E-R04` on invalid pointers; `rt_load`/`rt_store` trap with
+  with `E-R03`/`E-R04` on invalid pointers; `rt_mem_load`/`rt_mem_store` trap with
   `E-R05` when accessing a freed or never-allocated block. All memory is
   zero-initialized, so behavior is deterministic and leak-safe for every
   supported program.

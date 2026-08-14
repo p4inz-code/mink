@@ -6,18 +6,19 @@
 
 ## 1. Purpose
 
-Optimization is the stage between MIR lowering and the future backend. It
+Optimization is the stage between MIR lowering and the native backend. It
 rewrites the structurally validated MIR produced by session 09 into an
 equivalent, smaller program while never changing observable program
 behavior:
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
-        → HIR → MIR → Optimization → (future backend) → executable
+        → HIR → MIR → Optimization → Backend → Runtime → executable
 
 The optimization stage is a **stable boundary**: it consumes the exact MIR
 that `mink check` validates and produces MIR with the same node kinds,
-types, spans, and structure, so a future backend consumes an
-already-optimized graph and needs no knowledge of the passes that ran.
+types, spans, and structure, so the backend (session 11,
+`NATIVE_BACKEND_IMPLEMENTATION.md`) consumes an already-optimized graph and
+needs no knowledge of the passes that ran.
 
 Like every other stage, optimization is:
 
@@ -186,8 +187,8 @@ total):
   dangling local references are rejected — never a panic.
 - **CLI**: a foldable program passes through `mink check` with exit 0 and
   the success message reporting the optimization stage; an early-stage
-  error never claims optimization ran; `mink build` still exits 2 (no
-  backend).
+  error never claims optimization ran; `mink build` compiles the optimized
+  MIR through the native backend (session 11, `NATIVE_BACKEND_IMPLEMENTATION.md`).
 
 ## 7. Quality Gates
 

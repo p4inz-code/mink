@@ -3,6 +3,14 @@
 **Status:** Planning / Specification
 **Version:** 0.1.0
 
+> **Current position:** Implementation is underway. The compiler foundation,
+> language prototype, and memory/runtime foundation phases (Phases 2–4) are
+> substantially built, and optimization work has begun (Phase 10); see
+> [`README.md`](../../README.md) and `docs/implementation/` for what exists
+> today. The phases below remain the plan for everything not yet
+> implemented; nothing in this document should be read as a claim that a
+> phase is complete.
+
 ## 1. Objective
 
 This document converts the MINK planning foundation into an implementation sequence.

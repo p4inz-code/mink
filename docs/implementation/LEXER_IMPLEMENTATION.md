@@ -17,8 +17,10 @@ At the end of this session the following works end to end:
 
     MINK source → SourceFile → Lexer → Token stream → spans + lexical diagnostics
 
-The parser (sessions 03/04) builds directly on this lexer; semantic analysis
-and the type system remain future milestones.
+The parser (sessions 03/04) builds directly on this lexer, and the later
+stages (semantic analysis, type checking, HIR, MIR, optimization, backend,
+runtime) consume the token stream through the pipeline documented in
+`docs/compiler/COMPILER_ARCHITECTURE.md`.
 
 ## 2. Token Architecture
 
@@ -230,8 +232,10 @@ analysis (the parser, since session 03):
 
 Diagnostics are currently rendered with a minimal ad-hoc formatter in
 `src/cli.rs`; the structured diagnostic engine (per
-`docs/language/ERROR_SYSTEM.md`) will replace it. `mink build` remains
-`NotImplemented` — compilation is not part of these sessions.
+`docs/language/ERROR_SYSTEM.md`) will replace it. `mink build` compiles the
+optimized MIR through the native backend into an executable (sessions
+11/12) — see `NATIVE_BACKEND_IMPLEMENTATION.md` and
+`RUNTIME_IMPLEMENTATION.md`.
 
 ## 8. Deferred / Not Implemented
 

@@ -15,9 +15,10 @@ At the end of this session the following works end to end:
     MINK source → SourceFile → Lexer → Parser → AST → Semantic Analysis → diagnostics
 
 `mink check <path>` now performs lexical, syntactic, **and** semantic
-analysis. Name resolution and the semantic result are durable structures for
-the future type-system milestone; no type checking, inference, ownership,
-borrowing, HIR, or backend work was introduced.
+analysis. Name resolution and the semantic result are durable structures
+consumed by the type checker (session 06) and HIR lowering (session 08);
+sessions 09–12 added MIR, optimization, the native backend, and the runtime
+foundation on top.
 
 ## 2. Architecture
 
@@ -239,8 +240,8 @@ assignment target).
 - `CheckReport` now carries `semantic: Option<SemanticResult>`, present when
   analysis ran — consumable by tooling and tests without re-parsing.
 - Exit codes: valid → `0`; lexical, syntax, or semantic error → `1`;
-  unreadable file → `1`. `mink build` remains `NotImplemented` (exit `2`).
-  The CLI success message is now
+  unreadable file → `1`. `mink build` compiles the optimized MIR through
+  the native backend (since session 11). The CLI success message is now
   `passed parsing and semantic analysis (N tokens)`.
 
 ## 11. Performance

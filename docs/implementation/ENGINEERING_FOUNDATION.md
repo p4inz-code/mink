@@ -62,12 +62,17 @@ interfaces stabilize.
 | Module          | Role                                                              |
 | --------------- | ----------------------------------------------------------------- |
 | `cli`           | Argument parsing and command dispatch (build/check/run/test/fmt)  |
-| `driver`        | Compiler pipeline orchestration (load; lexical + syntax check)    |
+| `driver`        | Compiler pipeline orchestration (load through MIR for `check`; through the backend and PE emission for `build`) |
 | `source`        | Source files, ids, spans, line/column mapping (implemented)       |
 | `lexer`         | Tokenization with accurate spans + lexical diagnostics (implemented — see LEXER_IMPLEMENTATION.md) |
 | `parser`        | Syntax tree with error recovery (implemented — see PARSER_IMPLEMENTATION.md) |
 | `ast`           | Typed syntax representation (implemented — see PARSER_IMPLEMENTATION.md) |
-| `semantics`     | Name resolution + semantic validation (implemented — see SEMANTIC_ANALYSIS_IMPLEMENTATION.md); type checking remains a future milestone |
+| `semantics`     | Name resolution + semantic validation (implemented — see SEMANTIC_ANALYSIS_IMPLEMENTATION.md) |
+| `typecheck`     | Type checking + inference (implemented — see TYPE_SYSTEM_IMPLEMENTATION.md, TYPE_INFERENCE_IMPLEMENTATION.md) |
+| `hir`           | Typed, symbol-resolved, owned tree (implemented — see HIR_IMPLEMENTATION.md) |
+| `mir`           | Control-flow IR: basic blocks, statements, terminators (implemented — see MIR_IMPLEMENTATION.md) |
+| `backend`       | Native code generation: portable IR, verifier, x86-64/PE emitter (implemented — see NATIVE_BACKEND_IMPLEMENTATION.md) |
+| `runtime`       | Native runtime foundation: deterministic heap, `rt_*` intrinsics, E-R01+ diagnostics (implemented — see RUNTIME_IMPLEMENTATION.md) |
 | `diagnostics`   | Placeholder — structured diagnostic engine (§10 of the compiler spec) |
 
 ## 5. Source Infrastructure Design
@@ -103,7 +108,6 @@ yet implemented.
 
 - Toolchain pinning via `rust-toolchain.toml`
 - CI configuration
-- `LICENSE` file text (metadata declares Apache-2.0; `publish = false`)
 - Character-based columns
 - Workspace/crate split once subsystem interfaces stabilize
 - Placement and format of AI-readable diagnostics once the diagnostic

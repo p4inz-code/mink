@@ -10,7 +10,7 @@ HIR (High-level Intermediate Representation) is the first real compiler IR
 layer, sitting between the typed front end and the MIR:
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
-        → HIR → MIR → Optimization → (future backend) → executable
+        → HIR → MIR → Optimization → Backend → Runtime → executable
 
 The AST answers *"what was written"*, semantic analysis answers *"which
 declaration does each name refer to"*, type analysis answers *"what type
@@ -156,8 +156,10 @@ reported no errors:
   through MIR): valid programs report `passed parsing, semantic analysis,
   type checking, HIR lowering, and MIR lowering (N tokens)` and exit 0;
   every error class exits 1;
-- `mink build` remains `NotImplemented` (exit 2) — HIR and MIR generation
-  are not compilation, and no claim of compilation is made.
+- `mink build` compiles the optimized MIR through the native backend
+  (session 11) and links the generated image against the embedded runtime
+  (session 12) — see `NATIVE_BACKEND_IMPLEMENTATION.md` and
+  `RUNTIME_IMPLEMENTATION.md`.
 
 ## 8. MIR Boundary
 

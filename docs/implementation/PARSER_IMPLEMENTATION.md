@@ -16,8 +16,11 @@ At the end of this session the following works end to end:
 
     MINK source → SourceFile → Lexer → Parser → AST → diagnostics
 
-`mink check <path>` now performs lexical **and** syntax analysis. Semantic
-analysis, type checking, and code generation remain future milestones.
+`mink check <path>` now performs lexical **and** syntax analysis; later
+sessions added semantic analysis, type checking, HIR and MIR lowering, and
+optimization to the same command, and `mink build` compiles the optimized
+MIR through the native backend (see `docs/compiler/COMPILER_ARCHITECTURE.md`
+for the full pipeline).
 
 ## 2. Grammar
 
@@ -142,11 +145,13 @@ and syntax errors into a single source-ordered `Vec<CheckError>` report
 - unreadable file → I/O error, exit 1;
 - never panics.
 
-`mink build` remains `NotImplemented` (exit 2): compilation, type checking,
-and code generation are explicitly out of scope. The rendering in `cli.rs`
-is still the minimal ad-hoc formatter; the structured diagnostic engine
-remains a later milestone (`docs/language/ERROR_SYSTEM.md`), and the parser's
-error kinds are designed to feed it rather than be replaced.
+The rendering in `cli.rs` is still the minimal ad-hoc formatter; the
+structured diagnostic engine remains a later milestone
+(`docs/language/ERROR_SYSTEM.md`), and the parser's error kinds are designed
+to feed it rather than be replaced. Compilation itself is implemented since
+session 11: `mink build` lowers the optimized MIR through the native backend
+into an x86-64 Windows PE executable (see
+`NATIVE_BACKEND_IMPLEMENTATION.md`).
 
 ## 7. Design Decisions
 

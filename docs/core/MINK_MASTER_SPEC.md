@@ -141,10 +141,18 @@ If a conflict exists, this document takes precedence and the conflicting documen
 
 ## 16. Current Status
 
-MINK is currently in the architecture and specification phase.
+MINK is in the **implementation phase**. The architecture and specification
+foundation in this document and the planning documents under `docs/` was
+reviewed and cross-checked, and implementation proceeds incrementally from
+foundations toward dependent systems per `docs/roadmap/IMPLEMENTATION_ROADMAP.md`.
 
-Implementation must not begin until language semantics are sufficiently specified, core architecture is reviewed, major technical risks are identified, documentation is cross-checked, and architecture is frozen.
+As of session 12 the compiler implements the pipeline
 
-Once those conditions are satisfied, the project status becomes:
+    Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
+        → HIR → MIR → Optimization → Backend → Runtime → executable
 
-> **IMPLEMENTATION NEXT**
+for the `x86_64-windows-pe` target (see `README.md` and
+`docs/implementation/` for the current status and the supported subset).
+The planning documents remain the authoritative long-term specification;
+the implementation documents record what is actually built, and where the
+two differ, the implementation documents reflect current reality.
