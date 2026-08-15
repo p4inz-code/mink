@@ -308,10 +308,10 @@ documented in `src/runtime/abi.rs`:
     cargo build
     git diff --check
 
-Full suite after session 14: **762 tests** (61 CLI + 50 lexer + 88 parser +
+Full suite after session 15: **803 tests** (61 CLI + 50 lexer + 88 parser +
 62 parser hardening + 72 semantics + 12 source + 143 typecheck + 25 HIR +
 34 MIR + 38 optimization + 49 lib unit + 42 backend + 24 runtime
-end-to-end + 59 aggregate), all passing. The backend tests
+end-to-end + 59 aggregate + 41 ownership), all passing. The backend tests
 (`tests/backend.rs`) cover program structure and determinism,
 functions/locals/instructions, constant decoding, string decoding
 (escapes, UTF-8, hex), `LoadStr` lowering with exact spans, pointer locals

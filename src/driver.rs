@@ -206,9 +206,13 @@ pub struct CheckReport {
     /// The type-analysis result, present whenever semantic analysis ran.
     /// `None` when lexical or syntax errors suppressed analysis.
     pub types: Option<TypeResult>,
-    /// The lowered HIR, present when the front end (semantic and type
-    /// analysis) reported no errors and lowering succeeded. `None`
-    /// otherwise.
+    /// The ownership-analysis result, present when semantic and type
+    /// analysis were clean (ownership needs valid types). `None` when
+    /// earlier stages reported errors.
+    pub ownership: Option<crate::ownership::OwnershipResult>,
+    /// The lowered HIR, present when the front end (semantic, type, and
+    /// ownership analysis) reported no errors and lowering succeeded.
+    /// `None` otherwise.
     pub hir: Option<HirProgram>,
     /// The lowered, structurally validated, and optimized MIR, present when
     /// HIR lowering succeeded and MIR lowering, validation, and
@@ -260,11 +264,21 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
     // Semantic and type analysis only when the source is lexically and
     // syntactically valid; a broken token stream or tree makes further
     // analysis unsafe or meaningless, and skipping it avoids cascades.
-    let (semantic, types, hir, mir) = if parsed.is_valid() {
+    let (semantic, types, ownership, hir, mir) = if parsed.is_valid() {
         let semantic = semantics::analyze(parsed.ast());
         let types = typecheck::check(parsed.ast(), &semantic, sources);
         errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
         errors.extend(types.errors().iter().cloned().map(CheckError::Type));
+        // Ownership analysis runs only on a clean semantic/type front end
+        // (it needs valid types); its errors gate HIR lowering, so invalid
+        // ownership programs fail before code generation.
+        let ownership = if errors.is_empty() {
+            let result = crate::ownership::check(parsed.ast(), &semantic, &types);
+            errors.extend(result.errors().iter().cloned().map(CheckError::Semantic));
+            Some(result)
+        } else {
+            None
+        };
         let (hir, mir) = if errors.is_empty() {
             match hir::lower(parsed.ast(), &semantic, &types) {
                 Ok(program) => {
@@ -294,9 +308,9 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
         } else {
             (None, None)
         };
-        (Some(semantic), Some(types), hir, mir)
+        (Some(semantic), Some(types), ownership, hir, mir)
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
     // Report problems in source order regardless of which stage produced
     // them (a stable sort keeps equal-position errors in stage order).
@@ -307,6 +321,7 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
         errors,
         semantic,
         types,
+        ownership,
         hir,
         mir,
     })

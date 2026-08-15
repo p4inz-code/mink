@@ -51,6 +51,12 @@ pub enum SemanticErrorKind {
     DuplicateStruct,
     /// A struct declares the same field name twice.
     DuplicateField,
+    /// A use of a value after its ownership was moved away (ownership
+    /// analysis, session 15).
+    UseOfMovedValue,
+    /// An attempt to mutate an immutable (literal) string via
+    /// `rt_str_set_byte` (ownership analysis, session 15).
+    MutatingImmutableString,
 }
 
 impl SemanticErrorKind {
@@ -69,6 +75,8 @@ impl SemanticErrorKind {
             Self::ReturnOutsideFunction => "E-S07",
             Self::DuplicateStruct => "E-S08",
             Self::DuplicateField => "E-S09",
+            Self::UseOfMovedValue => "E-S10",
+            Self::MutatingImmutableString => "E-S11",
         }
     }
 }
@@ -85,6 +93,10 @@ pub struct SemanticError {
     name: String,
     /// The span of the original declaration a duplicate collides with.
     original: Option<Span>,
+    /// A category-specific detail line rendered instead of the default
+    /// message when present (ownership diagnostics use it to carry the
+    /// full explanation, e.g. which field of a struct was moved).
+    detail: Option<String>,
 }
 
 impl SemanticError {
@@ -95,6 +107,7 @@ impl SemanticError {
             span,
             name: name.into(),
             original: None,
+            detail: None,
         }
     }
 
@@ -106,6 +119,7 @@ impl SemanticError {
             span,
             name: name.into(),
             original: Some(original),
+            detail: None,
         }
     }
 
@@ -116,6 +130,7 @@ impl SemanticError {
             span,
             name: name.into(),
             original: None,
+            detail: None,
         }
     }
 
@@ -126,6 +141,7 @@ impl SemanticError {
             span,
             name: name.into(),
             original: None,
+            detail: None,
         }
     }
 
@@ -136,6 +152,7 @@ impl SemanticError {
             span,
             name: String::new(),
             original: None,
+            detail: None,
         }
     }
 
@@ -146,6 +163,7 @@ impl SemanticError {
             span,
             name: String::new(),
             original: None,
+            detail: None,
         }
     }
 
@@ -156,6 +174,7 @@ impl SemanticError {
             span,
             name: String::new(),
             original: None,
+            detail: None,
         }
     }
 
@@ -167,6 +186,7 @@ impl SemanticError {
             span,
             name: name.into(),
             original: Some(original),
+            detail: None,
         }
     }
 
@@ -178,6 +198,55 @@ impl SemanticError {
             span,
             name: name.into(),
             original: Some(original),
+            detail: None,
+        }
+    }
+
+    /// Creates a use-of-moved-value error for `name` at `span` (E-S10).
+    pub fn use_of_moved(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind: SemanticErrorKind::UseOfMovedValue,
+            span,
+            name: name.into(),
+            original: None,
+            detail: None,
+        }
+    }
+
+    /// Creates a use-of-moved-value error for `name` at `span` (E-S10)
+    /// whose message is `detail` instead of the default.
+    pub fn use_of_moved_detail(name: impl Into<String>, span: Span, detail: String) -> Self {
+        Self {
+            kind: SemanticErrorKind::UseOfMovedValue,
+            span,
+            name: name.into(),
+            original: None,
+            detail: Some(detail),
+        }
+    }
+
+    /// Creates a mutating-immutable-string error for `name` at `span`
+    /// (E-S11).
+    pub fn mutating_immutable_string(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind: SemanticErrorKind::MutatingImmutableString,
+            span,
+            name: name.into(),
+            original: None,
+            detail: None,
+        }
+    }
+
+    /// Creates a mutating-immutable-string error at `span` (E-S11) whose
+    /// message is `detail` instead of the default (used when the target is
+    /// not a plain identifier).
+    pub fn mutating_immutable_string_detail(span: Span, detail: String) -> Self {
+        Self {
+            kind: SemanticErrorKind::MutatingImmutableString,
+            span,
+            name: String::new(),
+            original: None,
+            detail: Some(detail),
         }
     }
 
@@ -235,6 +304,15 @@ impl fmt::Display for SemanticError {
             }
             SemanticErrorKind::DuplicateField => {
                 format!("duplicate field `{}` in struct declaration", self.name)
+            }
+            SemanticErrorKind::UseOfMovedValue => self
+                .detail
+                .clone()
+                .unwrap_or_else(|| format!("use of moved value `{}`", self.name)),
+            SemanticErrorKind::MutatingImmutableString => {
+                self.detail.clone().unwrap_or_else(|| {
+                    format!("cannot mutate `{}`: it is an immutable string", self.name)
+                })
             }
         };
         f.write_str(&message)

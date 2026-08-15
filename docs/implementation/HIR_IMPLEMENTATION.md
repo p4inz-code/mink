@@ -232,5 +232,7 @@ the suite is **585 tests**, after session 11 (native backend) it is
 **622 tests**, after session 12 (native runtime foundation) it is
 **654 tests**, after session 13 (string + memory types) it is
 **700 tests**, and after session 14 (structs + arrays, with `HirStruct`
-items and struct/array literal expressions) it is **762 tests** (see
+items and struct/array literal expressions) it is **762 tests**, and
+after session 15 (ownership analysis, a compile-time gate before HIR
+lowering) it is **803 tests** (see
 `OPTIMIZATION_IMPLEMENTATION.md` §7).

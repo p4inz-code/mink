@@ -5,10 +5,12 @@
 
 This document describes the first real MINK runtime and memory-model
 foundation: a small, deterministic, embedded native runtime that every
-generated executable carries. It deliberately does **not** implement full
-ownership/borrow checking, a garbage collector, or threading — the memory
-model is established carefully now so later safety features have a stable
-foundation.
+generated executable carries. It deliberately does **not** implement a
+garbage collector or threading; ownership/move semantics are enforced at
+compile time by the ownership stage (session 15) before code generation,
+not by the runtime (see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`)
+— the memory model is established carefully now so later safety features
+have a stable foundation.
 
 ## 1. Design boundaries
 
@@ -156,13 +158,15 @@ loader never scans past them into string data.
   trips, LIFO reuse, every `E-R0N` path, `rt_print_int` output, and
   determinism of both the image bytes and the runtime behavior.
 
-Full suite after session 14: **762 tests**, all passing (see
+Full suite after session 15: **803 tests**, all passing (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
 
 ## 9. Known limitations
 
-- The runtime supports a single-threaded, single-heap model; no GC, no
-  ownership/borrow checking (deliberate — see §1).
+- The runtime supports a single-threaded, single-heap model; no GC. Move
+  semantics are a compile-time fiction enforced by the ownership stage
+  (session 15) before code generation — the runtime itself performs no
+  ownership checks (see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`).
 - Strings are byte sequences without runtime UTF-8 validation; literals are
   immutable (no built-in concatenation). Strings and raw `rt_mem_*`
   pointers are distinct types and never mix.

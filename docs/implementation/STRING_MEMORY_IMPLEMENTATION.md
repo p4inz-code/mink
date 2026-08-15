@@ -7,8 +7,11 @@ This document describes the first real memory-backed aggregate foundation
 of the MINK language: the `Str` type, string literals as immutable byte
 data, typed pointers (`Ptr<Int>` in the current language), and the
 intrinsic operations that read and write them. It deliberately does **not**
-introduce ownership/borrow checking, arbitrary raw-pointer syntax, or
-structs/arrays/generics/closures — those are future sessions.
+introduce arbitrary raw-pointer syntax or generics/closures — those are
+future sessions. (Structs/arrays arrived in session 14 and compile-time
+move semantics for heap-owning values in session 15 — see
+`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md` and
+`docs/implementation/OWNERSHIP_IMPLEMENTATION.md`.)
 
 ## 1. Design boundaries
 
@@ -21,8 +24,11 @@ structs/arrays/generics/closures — those are future sessions.
   checker forbids `Str` from flowing into the raw memory intrinsics and
   forbids pointers from flowing into the string intrinsics. No implicit
   conversions exist — the only coercion is the null-pointer constant.
-- **No ownership/borrow checking.** Explicit allocation and deallocation
-  (`rt_alloc`/`rt_free`, `rt_str_alloc`/`rt_str_free`) is the whole model.
+- **Move semantics (session 15).** Explicit allocation and deallocation
+  (`rt_alloc`/`rt_free`, `rt_str_alloc`/`rt_str_free`) is the whole
+  runtime model; at compile time an Owned `Str` moves on transfer
+  (use-after-move is `E-S10`), literals copy freely, and mutating an
+  Immutable string is `E-S11` (see `OWNERSHIP_IMPLEMENTATION.md`).
 - **No unsafe Rust.** Everything is safe Rust plus emitted machine code.
 - **Deterministic.** Identical sources produce byte-identical images and
   identical runtime behavior; every runtime error has a stable code and
@@ -149,7 +155,11 @@ string-data region. A bad index is the new `E-R09`:
 
 ## 8. What is deliberately absent
 
-- No ownership/borrow checking; no GC.
+- No explicit borrow syntax, lifetimes, or GC. Since session 15,
+  compile-time move semantics apply to heap-owning values: an Owned `Str`
+  moves on transfer (use-after-move is `E-S10`), literals copy freely,
+  and mutating an Immutable string is `E-S11` — see
+  `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`.
 - No arbitrary raw-pointer syntax (`&`, casts, address-of).
 - No generics or closures. (Structs and arrays arrived in session 14 — see
   `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`.)
@@ -187,7 +197,7 @@ string-data region. A bad index is the new `E-R09`:
   printing (including escapes and UTF-8), `rt_str_alloc` round trips,
   zero-fill, and every string error path.
 
-Full suite after session 14: **762 tests**, all passing (see
+Full suite after session 15: **803 tests**, all passing (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
 
 ## 10. Known limitations

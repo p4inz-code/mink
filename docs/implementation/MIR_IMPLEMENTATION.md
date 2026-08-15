@@ -323,5 +323,6 @@ the suite is **585 tests**, after session 11 (native backend) it is
 **622 tests**, after session 12 (native runtime foundation) it is
 **654 tests**, after session 13 (string + memory types) it is
 **700 tests**, and after session 14 (structs + arrays, with member/index
-rvalues and the multi-step place representation) it is **762 tests** (see
-`OPTIMIZATION_IMPLEMENTATION.md` §7).
+rvalues and the multi-step place representation) it is **762 tests**, and
+after session 15 (ownership analysis, a compile-time gate before MIR
+lowering) it is **803 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).

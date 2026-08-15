@@ -207,5 +207,6 @@ updated in place; see `RUNTIME_IMPLEMENTATION.md` §12). After session 13
 (string + memory types) the suite is **700 tests** (49 lib unit + 42
 backend + 24 runtime end-to-end + 143 typecheck; see
 `RUNTIME_IMPLEMENTATION.md` §8). After session 14 (structs + arrays) the
-suite is **762 tests** (+59 aggregate; see
+suite is **762 tests** (+59 aggregate), and after session 15 (ownership
+analysis) it is **803 tests** (+41 ownership; see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13).

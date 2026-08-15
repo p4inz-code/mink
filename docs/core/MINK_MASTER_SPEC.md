@@ -146,17 +146,24 @@ foundation in this document and the planning documents under `docs/` was
 reviewed and cross-checked, and implementation proceeds incrementally from
 foundations toward dependent systems per `docs/roadmap/IMPLEMENTATION_ROADMAP.md`.
 
-As of session 14 the compiler implements the pipeline
+As of session 15 the compiler implements the pipeline
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
-        → HIR → MIR → Optimization → Backend → Runtime → executable
+        → Ownership Analysis → HIR → MIR → Optimization → Backend
+        → Runtime → executable
 
 for the `x86_64-windows-pe` target, including strings (`Str`) and typed
-pointers (`Ptr<Int>`) as the first memory-backed types (session 13) and
+pointers (`Ptr<Int>`) as the first memory-backed types (session 13),
 user-declared structs and fixed-size arrays with deterministic layout,
 member/index access, and place mutation (session 14, see
-`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`, `README.md`, and
-`docs/implementation/` for the current status and the supported subset).
-The planning documents remain the authoritative long-term specification;
-the implementation documents record what is actually built, and where the
-two differ, the implementation documents reflect current reality.
+`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`), and a
+compile-time ownership/move foundation (session 15): owned strings and
+owned-containing aggregates move on transfer (use-after-move is `E-S10`),
+immutable string literals copy freely, and mutation of an immutable
+string is `E-S11`; invalid ownership programs fail before code generation
+(see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`). See `README.md`
+and `docs/implementation/` for the current status and the supported
+subset. The planning documents remain the authoritative long-term
+specification; the implementation documents record what is actually
+built, and where the two differ, the implementation documents reflect
+current reality.

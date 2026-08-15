@@ -598,7 +598,7 @@ As before:
     cargo build
     git diff --check
 
-Total suite after session 14: **762 tests** (see
+Total suite after session 15: **803 tests** (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown), all passing.
 
 ## 26. Later Milestones

@@ -27,7 +27,7 @@ The analyzer lives in `src/semantics/`:
 | File        | Role                                                        |
 | ----------- | ----------------------------------------------------------- |
 | `mod.rs`    | `analyze(&Ast) -> SemanticResult`; public result API        |
-| `error.rs`  | `SemanticErrorKind` (`E-S01`…`E-S07`) + `SemanticError`     |
+| `error.rs`  | `SemanticErrorKind` (`E-S01`…`E-S07`, `E-S10`, `E-S11`) + `SemanticError` |
 | `symbol.rs` | `Symbol`, `SymbolKind`, `SymbolTable`, `Scope`, `ScopeTable`|
 | `analyzer.rs` | One-pass traversal: scopes, symbols, resolution, validation |
 
@@ -203,11 +203,18 @@ human-readable message, exact span) and reserve the `E-S*` range:
 | E-S05| `BreakOutsideLoop`      | `` `break` outside of a loop ``                     |
 | E-S06| `ContinueOutsideLoop`   | `` `continue` outside of a loop ``                  |
 | E-S07| `ReturnOutsideFunction` | `` `return` outside of a function ``                |
+| E-S10| `UseOfMovedValue`        | `cannot use \`s\`: value was moved`                  |
+| E-S11| `MutatingImmutableString`| `cannot mutate \`s\`: it is immutable`               |
 
 `SemanticError` carries the offending name (for name-related kinds) and, for
 duplicates, the original declaration span, which the CLI renders as a note
 (`note: previous declaration is here`). Existing codes `E-L01`…`E-L08` and
 `E-P01`…`E-P16` are untouched.
+
+Ownership diagnostics (`E-S10`/`E-S11`) come from the dedicated ownership
+stage (`src/ownership/`, session 15 — see
+`docs/implementation/OWNERSHIP_IMPLEMENTATION.md`), which runs between type
+analysis and HIR lowering and gates code generation on a clean result.
 
 ### 9.1 Recovery
 

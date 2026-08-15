@@ -33,6 +33,7 @@ pub mod driver;
 pub mod hir;
 pub mod lexer;
 pub mod mir;
+pub mod ownership;
 pub mod parser;
 pub mod runtime;
 pub mod semantics;

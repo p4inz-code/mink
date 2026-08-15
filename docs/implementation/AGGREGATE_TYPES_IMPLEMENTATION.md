@@ -8,8 +8,12 @@ MINK language: user-declared **structs** and fixed-size **arrays** with
 deterministic byte layout, struct/array literals, member/index access, and
 native x86-64 execution. It builds directly on the typed pointer/string
 memory model of Session 13 (`docs/implementation/STRING_MEMORY_IMPLEMENTATION.md`)
-and deliberately does **not** introduce ownership/borrow checking, GC,
-arbitrary raw-pointer syntax, generics, or a dynamic object model.
+and deliberately does **not** introduce explicit borrow syntax, GC,
+arbitrary raw-pointer syntax, generics, or a dynamic object model. Since
+Session 15, compile-time **move semantics** apply to aggregates
+containing heap-owning values (an Owned-containing struct moves as a
+whole; an all-immutable struct copies) — see
+`docs/implementation/OWNERSHIP_IMPLEMENTATION.md`.
 
 ## 1. Design boundaries
 
@@ -28,9 +32,11 @@ arbitrary raw-pointer syntax, generics, or a dynamic object model.
   (`base.field = v`, `base[i] = v`, and chains like `g.rows[1].y = 40`)
   resolves the full path and stores through it, so nested mutation reaches
   the root object.
-- **No ownership/borrow checking; no GC; no arbitrary raw-pointer syntax;
-  no generics.** Unsupported aggregate behavior fails deterministically at
-  compile time (`E-B03`, see §6).
+- **No explicit borrow syntax; no GC; no arbitrary raw-pointer syntax;
+  no generics.** Since session 15, aggregates containing an Owned value
+  move as a whole on transfer (use-after-move is `E-S10`); aggregates
+  holding only Immutable values copy freely. Unsupported aggregate
+  behavior fails deterministically at compile time (`E-B03`, see §6).
 - **No unsafe Rust.** Everything is safe Rust plus emitted machine code.
 - **Deterministic.** Identical sources produce byte-identical images and
   identical runtime behavior; every runtime error has a stable code and
@@ -235,7 +241,8 @@ All errors carry exact source spans and structured messages.
 
 ## 7. What is deliberately absent
 
-- No ownership/borrow checking; no GC.
+- No explicit borrow syntax or GC; move semantics for Owned-containing
+  aggregates are enforced at compile time (session 15, `E-S10`).
 - No arbitrary raw-pointer syntax (`&`, casts, address-of).
 - No generics; no reflection or dynamic object model.
 - No aggregate returns or aggregate module statics (rejected with `E-B03`).
@@ -253,10 +260,10 @@ All errors carry exact source spans and structured messages.
   and negative indices), bool fields, struct copy semantics, structs
   containing strings, struct arguments, and byte-identical image
   determinism.
-- Existing suite: full `cargo test` passes **762 tests** (703 before
-  Session 14 + 59 new aggregate tests). See
-  `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
-  per-file breakdown.
+- Existing suite: full `cargo test` passes **803 tests** (703 before
+  Session 14 + 59 new aggregate tests + 41 ownership tests from Session
+  15). See `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for
+  the per-file breakdown.
 
 ## 9. Known limitations
 

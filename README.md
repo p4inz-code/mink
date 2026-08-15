@@ -113,6 +113,13 @@ corruption, no segfault guessing games.
   bounds checks), comparisons, logical and bitwise operators,
   `if`/`while`/`for`/`loop` control flow, direct function calls, module
   bindings, and integer results becoming process exit codes.
+- **Ownership checking** — compile-time move semantics for
+  heap-owning values (`Str`, structs/arrays containing them): owned
+  values move on transfer (use-after-move is `E-S10`), string literals
+  copy freely, immutable strings reject mutation (`E-S11`), and
+  invalid ownership programs fail before code generation — with no
+  runtime cost (moves are a compile-time fiction; see
+  [`OWNERSHIP_IMPLEMENTATION.md`](docs/implementation/OWNERSHIP_IMPLEMENTATION.md)).
 - **Runtime intrinsics** — `rt_alloc`, `rt_free`, `rt_mem_load`,
   `rt_mem_store` (validated against a bounded liveness table), and the
   string intrinsics `rt_str_alloc`/`rt_str_free`/`rt_str_len`/
@@ -179,8 +186,9 @@ Honest status, because durable engineering starts with accurate claims:
   tuples, or generics.
 - **Strings are byte sequences** — literals are immutable, there is no
   concatenation, and UTF-8 well-formedness is not validated at runtime.
-- **No ownership/borrow checking** — deliberately deferred; the memory model
-  is established so safety features have a stable foundation.
+- **No borrow syntax** — compile-time *move* semantics are implemented
+  (session 15); explicit borrow/reference syntax and lifetimes are
+  deliberately deferred to a later session.
 - **No garbage collector** — allocation is explicit and leak-checked on exit.
 - **Limited native subset** — no floating point, characters, `null`, or
   function values in the native backend yet.
@@ -224,7 +232,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (762, all passing)
+├── tests/      Compiler tests (803, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

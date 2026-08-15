@@ -409,8 +409,14 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   `Bool`. Strings and pointers are distinct: neither satisfies the other's
   intrinsic parameters (`E-T01`). The integer literal `0` is the null
   pointer constant in pointer-typed argument positions only — a computed
-  `Int` is never a pointer. No ownership/borrow checking, no raw pointer
-  syntax, and no string concatenation yet.
+  `Int` is never a pointer. Since session 15, move semantics are checked
+  at compile time for heap-owning values: an owned `Str` (and any struct
+  or array containing one) moves on transfer (use-after-move is `E-S10`),
+  string literals are immutable and copy freely, and mutating an
+  immutable string is `E-S11`; invalid ownership programs fail before
+  code generation (see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`).
+  No explicit borrow syntax, raw pointer syntax, or string concatenation
+  yet.
 - **Iteration.** Only ranges are iterable at this stage; a `for` variable
   has the range's element type, and iterating a non-range is a type error.
 - **Member/index typing (session 14).** Member access requires a struct
