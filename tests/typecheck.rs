@@ -642,13 +642,20 @@ fn assignment_chain_types_propagate() {
 }
 
 #[test]
-fn member_and_index_assignment_is_deferred() {
-    // Member/index writability and element typing depend on user-defined
-    // types, which do not exist yet; the operation is deferred and must
-    // not produce type errors.
-    let src = "fn f() { let o = 1; let arr = 1; o.f = 2; arr[0] = 3; o.f = \"s\"; }";
+fn member_and_index_assignment_is_typed() {
+    // Member/index assignment is fully typed: the assigned value must
+    // unify with the field/element type (E-T01 on conflict).
+    let src = "struct P { f: Int } fn f() { let mut o = P { f: 1 }; let mut arr = [1, 2]; o.f = 2; arr[0] = 3; }";
     let (_sources, _ast, _semantic, types) = check_src(src);
     assert!(!types.has_errors());
+
+    let src = "struct P { f: Int } fn f() { let mut o = P { f: 1 }; o.f = \"s\"; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert_eq!(type_errors(&types, TypeErrorKind::TypeMismatch).len(), 1);
+
+    let src = "fn f() { let mut arr = [1, 2]; arr[0] = \"s\"; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert_eq!(type_errors(&types, TypeErrorKind::TypeMismatch).len(), 1);
 }
 
 // ---------------------------------------------------------------------------

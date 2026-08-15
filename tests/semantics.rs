@@ -74,6 +74,9 @@ fn collect_idents(ast: &Ast) -> Vec<(&str, Span, bool)> {
                 out.push((binding.name.name.as_str(), binding.name.span, true));
                 expr_idents(&binding.init, &mut out);
             }
+            // Struct names live in the type namespace, not the value
+            // namespace: they are not collected as identifiers.
+            ItemKind::Struct(_) => {}
         }
     }
     out
@@ -158,6 +161,17 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
         ExprKind::Index { base, index } => {
             expr_idents(base, out);
             expr_idents(index, out);
+        }
+        ExprKind::StructLit { name, fields } => {
+            for field in fields {
+                expr_idents(&field.value, out);
+            }
+            let _ = name;
+        }
+        ExprKind::ArrayLit(elems) => {
+            for elem in elems {
+                expr_idents(elem, out);
+            }
         }
         ExprKind::Group(inner) => expr_idents(inner, out),
     }
@@ -449,12 +463,19 @@ fn for_iterable_sees_outer_scope() {
 }
 
 #[test]
-fn member_and_index_assignment_is_deferred() {
-    // Member/index writability depends on the base's type, which belongs to
-    // the type-system milestone; only base resolution is checked today.
-    let src = "fn f() { let o = 1; let arr = 1; o.f = 2; arr[0] = 3; }";
+fn member_and_index_assignment_checks_base_writability() {
+    // Writing a field/element through a binding requires the binding to be
+    // mutable (E-S03), exactly like writing the binding directly; the root
+    // base of the chain is what must be writable.
+    let src = "struct P { f: Int } fn f() { let mut o = P { f: 1 }; let mut arr = [1, 2]; o.f = 2; arr[0] = 3; }";
     let (_sources, _ast, result) = analyze(src);
     assert!(!result.has_errors());
+
+    let src =
+        "struct P { f: Int } fn f() { let o = P { f: 1 }; let arr = [1, 2]; o.f = 2; arr[0] = 3; }";
+    let (_sources, _ast, result) = analyze(src);
+    let spans = error_spans(&result, SemanticErrorKind::AssignmentToImmutable);
+    assert_eq!(spans.len(), 2);
 }
 
 #[test]

@@ -42,8 +42,9 @@ use crate::typecheck::{TypeId, TypeKind, TypeTable};
 use super::error::MirError;
 use super::{
     BlockId, LocalId, MirBlock, MirConstant, MirConstantKind, MirFn, MirIdent, MirItem,
-    MirItemKind, MirLocal, MirName, MirOperand, MirOperandKind, MirProgram, MirRvalue,
-    MirRvalueKind, MirStatic, MirStmt, MirStmtKind, MirTarget, MirTargetKind, MirTerminator,
+    MirItemKind, MirLocal, MirName, MirOperand, MirOperandKind, MirPlaceStep, MirPlaceStepKind,
+    MirProgram, MirRvalue, MirRvalueKind, MirStatic, MirStmt, MirStmtKind, MirTarget,
+    MirTargetKind, MirTerminator,
 };
 
 /// Lowers `hir` into MIR.
@@ -85,10 +86,13 @@ impl<'a> Lowerer<'a> {
         let module_symbols = hir
             .items
             .iter()
-            .map(|item| match &item.kind {
-                HirItemKind::Fn(f) => f.name.symbol,
-                HirItemKind::Let(binding) => binding.name.symbol,
-                HirItemKind::Const(binding) => binding.name.symbol,
+            .filter_map(|item| match &item.kind {
+                HirItemKind::Fn(f) => Some(f.name.symbol),
+                HirItemKind::Let(binding) => Some(binding.name.symbol),
+                HirItemKind::Const(binding) => Some(binding.name.symbol),
+                // Struct declarations are types, not values: they produce
+                // no code and have no symbol.
+                HirItemKind::Struct(_) => None,
             })
             // The predeclared runtime intrinsics resolve like module items:
             // a reference is a `Static` operand the backend recognizes.
@@ -105,6 +109,11 @@ impl<'a> Lowerer<'a> {
 
     fn run(&mut self) {
         for item in &self.hir.items {
+            // Struct declarations are types, not values: they lower to no
+            // MIR at all (their layout lives in the type table).
+            if let HirItemKind::Struct(_) = &item.kind {
+                continue;
+            }
             let kind = match &item.kind {
                 HirItemKind::Fn(f) => {
                     let builder = FnBuilder::new(&mut self.table, &self.module_symbols);
@@ -126,6 +135,7 @@ impl<'a> Lowerer<'a> {
                     binding.span,
                     binding.ty,
                 )),
+                HirItemKind::Struct(_) => unreachable!("struct items are skipped above"),
             };
             self.items.push(MirItem {
                 kind,
@@ -321,6 +331,26 @@ impl<'a> StmtEval<'a> {
                 let index = self.eval_operand(index);
                 self.temp_rvalue(expr, MirRvalueKind::Index { base, index })
             }
+            HirExprKind::StructLit { name, fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|(field_name, value)| {
+                        (
+                            MirName {
+                                name: field_name.name.clone(),
+                                span: field_name.span,
+                            },
+                            self.eval_operand(value),
+                        )
+                    })
+                    .collect();
+                let _ = name;
+                self.temp_rvalue(expr, MirRvalueKind::StructLit { fields })
+            }
+            HirExprKind::ArrayLit(elems) => {
+                let elems = elems.iter().map(|elem| self.eval_operand(elem)).collect();
+                self.temp_rvalue(expr, MirRvalueKind::ArrayLit { elems })
+            }
             HirExprKind::Assign { .. } => self.eval_assign(expr),
         }
     }
@@ -476,10 +506,13 @@ impl<'a> StmtEval<'a> {
 
     /// The storage target of an assignment expression.
     ///
-    /// Variable targets resolve to a local or to module-level storage; a
-    /// member/index target evaluates its base (and index) to operands and
-    /// keeps the place structurally. Any other shape is an internal error
-    /// (the parser and semantic analysis reject non-place targets).
+    /// Variable targets resolve to a local or to module-level storage. A
+    /// member/index target whose base is a plain local keeps the
+    /// single-step place structurally; a member/index chain of two or more
+    /// steps becomes a [`MirTargetKind::Place`] rooted at the chain's
+    /// local, so assignments reach the root value instead of a temporary
+    /// copy. Any other shape is an internal error (the parser and semantic
+    /// analysis reject non-place targets).
     fn place_for_target(&mut self, expr: &HirExpr) -> Result<MirTarget, MirError> {
         match &expr.kind {
             HirExprKind::Var(ident) => {
@@ -500,22 +533,49 @@ impl<'a> StmtEval<'a> {
                 }
             }
             HirExprKind::Member { base, member } => {
+                let member_name = MirName {
+                    name: member.name.clone(),
+                    span: member.span,
+                };
+                if let Some((root, mut steps)) = self.place_path(base) {
+                    if !steps.is_empty() {
+                        steps.push(MirPlaceStep {
+                            kind: MirPlaceStepKind::Field(member_name),
+                            span: expr.span,
+                        });
+                        return Ok(MirTarget {
+                            kind: MirTargetKind::Place { root, steps },
+                            span: expr.span,
+                            ty: expr.ty,
+                        });
+                    }
+                }
                 let base = self.eval_operand(base);
                 Ok(MirTarget {
                     kind: MirTargetKind::Member {
                         base,
-                        member: MirName {
-                            name: member.name.clone(),
-                            span: member.span,
-                        },
+                        member: member_name,
                     },
                     span: expr.span,
                     ty: expr.ty,
                 })
             }
             HirExprKind::Index { base, index } => {
-                let base = self.eval_operand(base);
                 let index = self.eval_operand(index);
+                if let Some((root, mut steps)) = self.place_path(base) {
+                    if !steps.is_empty() {
+                        steps.push(MirPlaceStep {
+                            kind: MirPlaceStepKind::Index(index),
+                            span: expr.span,
+                        });
+                        return Ok(MirTarget {
+                            kind: MirTargetKind::Place { root, steps },
+                            span: expr.span,
+                            ty: expr.ty,
+                        });
+                    }
+                }
+                let base = self.eval_operand(base);
                 Ok(MirTarget {
                     kind: MirTargetKind::Index { base, index },
                     span: expr.span,
@@ -523,6 +583,40 @@ impl<'a> StmtEval<'a> {
                 })
             }
             _ => Err(MirError::invalid_assignment_target(expr.span)),
+        }
+    }
+
+    /// The place path of `expr` when it is a local-rooted member/index
+    /// chain: `(root local, steps from the root)`. A plain local variable
+    /// yields an empty step list; a chain rooted at module-level storage
+    /// (a `Static` binding) or any non-place expression yields `None`.
+    fn place_path(&mut self, expr: &HirExpr) -> Option<(LocalId, Vec<MirPlaceStep>)> {
+        match &expr.kind {
+            HirExprKind::Var(ident) => self
+                .symbols
+                .get(&ident.symbol)
+                .copied()
+                .map(|root| (root, Vec::new())),
+            HirExprKind::Member { base, member } => {
+                let (root, mut steps) = self.place_path(base)?;
+                steps.push(MirPlaceStep {
+                    kind: MirPlaceStepKind::Field(MirName {
+                        name: member.name.clone(),
+                        span: member.span,
+                    }),
+                    span: expr.span,
+                });
+                Some((root, steps))
+            }
+            HirExprKind::Index { base, index } => {
+                let (root, mut steps) = self.place_path(base)?;
+                steps.push(MirPlaceStep {
+                    kind: MirPlaceStepKind::Index(self.eval_operand(index)),
+                    span: expr.span,
+                });
+                Some((root, steps))
+            }
+            _ => None,
         }
     }
 
@@ -555,32 +649,96 @@ impl<'a> StmtEval<'a> {
                 };
                 self.loaded_operand(target, kind)
             }
+            MirTargetKind::Place { root, steps } => {
+                // Read the place's current value by re-walking the chain
+                // bottom-up through member/index rvalues into fresh
+                // temporaries (reads through a copy are exact), each step
+                // typed by the value it produces.
+                let mut current = MirOperand {
+                    kind: MirOperandKind::Local(*root),
+                    span: target.span,
+                    ty: self.local_ty(*root),
+                };
+                for step in steps {
+                    let kind = match &step.kind {
+                        MirPlaceStepKind::Field(member) => MirRvalueKind::Member {
+                            base: current.clone(),
+                            member: member.clone(),
+                        },
+                        MirPlaceStepKind::Index(index) => MirRvalueKind::Index {
+                            base: current.clone(),
+                            index: index.clone(),
+                        },
+                    };
+                    let step_ty = self.step_result_ty(current.ty, step);
+                    current = self.loaded_operand_from(step.span, kind, step_ty);
+                }
+                current
+            }
+        }
+    }
+
+    /// The type id of a local, for re-walking place chains. An unknown
+    /// local yields a fresh error-typed slot (defensive; validation
+    /// rejects dangling references).
+    fn local_ty(&mut self, id: LocalId) -> TypeId {
+        self.locals
+            .get(id.raw() as usize)
+            .map(|local| local.ty)
+            .unwrap_or_else(|| self.table.push(TypeKind::Error))
+    }
+
+    /// The type a place step produces when applied to a value of
+    /// `current_ty`: the selected field's type, or the array's element
+    /// type. Unresolvable steps yield the error type (defensive; a clean
+    /// pipeline resolves every chain).
+    fn step_result_ty(&mut self, current_ty: TypeId, step: &MirPlaceStep) -> TypeId {
+        match &step.kind {
+            MirPlaceStepKind::Field(member) => match self.table.kind(current_ty).cloned() {
+                Some(TypeKind::Struct(id)) => self
+                    .table
+                    .struct_info(id)
+                    .and_then(|info| {
+                        info.fields
+                            .iter()
+                            .find(|field| field.name == member.name)
+                            .map(|field| field.ty)
+                    })
+                    .unwrap_or_else(|| self.table.push(TypeKind::Error)),
+                _ => self.table.push(TypeKind::Error),
+            },
+            MirPlaceStepKind::Index(_) => match self.table.kind(current_ty).cloned() {
+                Some(TypeKind::Array { elem, .. }) => elem,
+                _ => self.table.push(TypeKind::Error),
+            },
         }
     }
 
     /// Computes a member/index load into a temporary and returns its load.
     fn loaded_operand(&mut self, target: &MirTarget, kind: MirRvalueKind) -> MirOperand {
-        let temp = self.temp(target.ty, target.span);
+        self.loaded_operand_from(target.span, kind, target.ty)
+    }
+
+    /// Computes `kind` (a member/index load) into a fresh temporary of
+    /// `ty` at `span` and returns the temporary's load.
+    fn loaded_operand_from(&mut self, span: Span, kind: MirRvalueKind, ty: TypeId) -> MirOperand {
+        let temp = self.temp(ty, span);
         let target_for_temp = MirTarget {
             kind: MirTargetKind::Local(temp),
-            span: target.span,
-            ty: target.ty,
+            span,
+            ty,
         };
         self.emit(MirStmt {
             kind: MirStmtKind::Assign {
                 target: target_for_temp,
-                rvalue: MirRvalue {
-                    kind,
-                    span: target.span,
-                    ty: target.ty,
-                },
+                rvalue: MirRvalue { kind, span, ty },
             },
-            span: target.span,
+            span,
         });
         MirOperand {
             kind: MirOperandKind::Local(temp),
-            span: target.span,
-            ty: target.ty,
+            span,
+            ty,
         }
     }
 }

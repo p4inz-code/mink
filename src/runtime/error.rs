@@ -44,6 +44,9 @@ pub enum RuntimeErrorKind {
     /// A string index out of range: `rt_str_byte` / `rt_str_set_byte`
     /// called with an index not below the string's byte length.
     StringIndexOutOfRange,
+    /// An array index out of range: a generated `base[index]` access with
+    /// an index not below the array's length (or a negative index).
+    ArrayIndexOutOfRange,
 }
 
 impl RuntimeErrorKind {
@@ -60,6 +63,7 @@ impl RuntimeErrorKind {
             Self::Misaligned => 7,
             Self::InvalidSize => 8,
             Self::StringIndexOutOfRange => 9,
+            Self::ArrayIndexOutOfRange => 10,
         }
     }
 
@@ -75,6 +79,7 @@ impl RuntimeErrorKind {
             Self::Misaligned => "E-R07",
             Self::InvalidSize => "E-R08",
             Self::StringIndexOutOfRange => "E-R09",
+            Self::ArrayIndexOutOfRange => "E-R10",
         }
     }
 
@@ -92,6 +97,9 @@ impl RuntimeErrorKind {
             Self::InvalidSize => "invalid allocation size: the size must be positive",
             Self::StringIndexOutOfRange => {
                 "string index out of range: the index must be below the string's byte length"
+            }
+            Self::ArrayIndexOutOfRange => {
+                "array index out of range: the index must be below the array's length"
             }
         }
     }

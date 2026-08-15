@@ -20,8 +20,11 @@
 //! The semantic rules are documented in `docs/language/CORE_LANGUAGE.md` §24
 //! and `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
 
+use std::collections::HashMap;
+
 use crate::ast::{
     Ast, Block, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind, Stmt, StmtKind,
+    StructItem,
 };
 use crate::source::Span;
 
@@ -58,6 +61,17 @@ struct Ctx {
     in_function: bool,
 }
 
+/// A registered struct declaration: its name's span, used to detect
+/// duplicate struct declarations (the first declaration of a name wins).
+/// Struct names live in the type namespace, separate from the value
+/// namespace of [`SymbolTable`]; the type checker resolves struct *types*
+/// (field types, member access) from the AST directly.
+#[derive(Debug, Clone)]
+struct StructDecl {
+    /// Span of the struct's name.
+    span: Span,
+}
+
 /// The semantic analyzer: one pass over the AST producing symbols, scopes,
 /// name resolutions, and semantic errors.
 struct Analyzer {
@@ -70,6 +84,8 @@ struct Analyzer {
     resolutions: Vec<(Span, SymbolId)>,
     /// Semantic errors, in the order they were found.
     errors: Vec<SemanticError>,
+    /// The registered struct declarations (type namespace): name → decl.
+    structs: HashMap<String, StructDecl>,
 }
 
 impl Analyzer {
@@ -79,6 +95,7 @@ impl Analyzer {
             scopes: ScopeTable::new(),
             resolutions: Vec::new(),
             errors: Vec::new(),
+            structs: HashMap::new(),
         }
     }
 
@@ -106,6 +123,7 @@ impl Analyzer {
         for item in &ast.items {
             match &item.kind {
                 ItemKind::Fn(f) => self.bind(&f.name, SymbolKind::Fn, module),
+                ItemKind::Struct(s) => self.register_struct(s),
                 ItemKind::Let(binding) => self.bind(
                     &binding.name,
                     SymbolKind::Let {
@@ -119,12 +137,53 @@ impl Analyzer {
         module
     }
 
+    /// Registers a struct declaration in the type namespace, reporting a
+    /// duplicate struct name (`E-S08`) and duplicate fields (`E-S09`). The
+    /// first declaration of a name wins; struct names are never value
+    /// symbols, so they do not collide with functions, bindings, or other
+    /// value declarations.
+    fn register_struct(&mut self, s: &StructItem) {
+        match self.structs.get(&s.name.name) {
+            Some(first) => self.errors.push(SemanticError::duplicate_struct(
+                s.name.name.clone(),
+                s.name.span,
+                first.span,
+            )),
+            None => {
+                // Duplicate fields within one declaration are reported
+                // here; the type checker resolves the declared field types
+                // (the first declaration of each field name wins for
+                // layout, mirroring this duplicate policy).
+                let mut seen: Vec<(String, Span)> = Vec::with_capacity(s.fields.len());
+                for field in &s.fields {
+                    if let Some((_, original)) =
+                        seen.iter().find(|(name, _)| name == &field.name.name)
+                    {
+                        self.errors.push(SemanticError::duplicate_field(
+                            field.name.name.clone(),
+                            field.name.span,
+                            *original,
+                        ));
+                    } else {
+                        seen.push((field.name.name.clone(), field.name.span));
+                    }
+                }
+                self.structs
+                    .insert(s.name.name.clone(), StructDecl { span: s.name.span });
+            }
+        }
+    }
+
     /// Analyzes one top-level item. Module-scope declarations are already
     /// bound by [`Analyzer::collect_module_scope`]; this only analyzes their
     /// bodies and initializers.
     fn analyze_item(&mut self, item: &Item, module: ScopeId) {
         match &item.kind {
             ItemKind::Fn(f) => self.analyze_fn(f, module),
+            // Struct declarations were registered during module-scope
+            // collection; their field *types* are resolved by the type
+            // checker.
+            ItemKind::Struct(_) => {}
             ItemKind::Let(binding) => {
                 self.analyze_expr(&binding.init, Ctx::module(module));
             }
@@ -342,12 +401,26 @@ impl Analyzer {
             }
             ExprKind::Member { base, .. } => {
                 // The member name is a field selector, not a scope name; it
-                // belongs to the future type system.
+                // belongs to the type system.
                 self.analyze_expr(base, ctx);
             }
             ExprKind::Index { base, index } => {
                 self.analyze_expr(base, ctx);
                 self.analyze_expr(index, ctx);
+            }
+            ExprKind::StructLit { name: _, fields } => {
+                // The struct name is a type name, not a value name: it is
+                // never resolved as a scope name (unknown struct types are
+                // reported by the type checker). Only the field *values*
+                // are ordinary expressions.
+                for field in fields {
+                    self.analyze_expr(&field.value, ctx);
+                }
+            }
+            ExprKind::ArrayLit(elems) => {
+                for elem in elems {
+                    self.analyze_expr(elem, ctx);
+                }
             }
             ExprKind::Group(inner) => self.analyze_expr(inner, ctx),
         }
@@ -383,15 +456,49 @@ impl Analyzer {
     /// and a writable symbol must be reassignable.
     ///
     /// - Identifier targets: resolved, then checked for writability.
-    /// - Member/index targets: the base expression is resolved; whether the
-    ///   target itself is writable depends on the base's type and is deferred
-    ///   to the type-system milestone.
+    /// - Member/index targets: the base expression is analyzed, and the
+    ///   root base (when it is an identifier) must be writable — writing a
+    ///   field or element through an immutable binding is an immutable/
+    ///   constant assignment (`E-S03`/`E-S04`), like assigning the binding
+    ///   directly.
     /// - Any other target shape (unreachable from parser-produced ASTs, where
     ///   the parser enforces place targets) is analyzed as a plain expression.
     fn analyze_assignment_target(&mut self, target: &Expr, ctx: Ctx) {
         match &target.kind {
             ExprKind::Ident(ident) => self.check_writability(ident, ctx),
+            ExprKind::Member { .. } | ExprKind::Index { .. } => {
+                self.analyze_expr(target, ctx);
+                // The chain's root base must be a mutable binding. The base
+                // analysis above already resolved it (and reported an
+                // unresolved name); this only adds the writability check, so
+                // no resolution is recorded twice and no error is doubled.
+                if let Some(root) = root_base_ident(target) {
+                    self.check_base_writability(root, ctx);
+                }
+            }
             _ => self.analyze_expr(target, ctx),
+        }
+    }
+
+    /// Checks that the root identifier of a member/index assignment target
+    /// is a writable binding. Unlike [`Analyzer::check_writability`], this
+    /// does not push a resolution (the target's base analysis already did)
+    /// and does not re-report an unresolved name.
+    fn check_base_writability(&mut self, ident: &Ident, ctx: Ctx) {
+        match self.lookup(&ident.name, ctx.scope) {
+            Some(id) => match self.symbols.get(id).map(|symbol| symbol.kind) {
+                Some(SymbolKind::Const) => self.errors.push(SemanticError::const_assignment(
+                    ident.name.clone(),
+                    ident.span,
+                )),
+                Some(kind) if !kind.is_mutable() => self.errors.push(
+                    SemanticError::immutable_assignment(ident.name.clone(), ident.span),
+                ),
+                _ => {}
+            },
+            None => {
+                // The base analysis already reported the unresolved name.
+            }
         }
     }
 
@@ -441,5 +548,17 @@ impl Ctx {
             in_loop: false,
             in_function: false,
         }
+    }
+}
+
+/// The root identifier of a member/index chain, if the chain bottoms out in
+/// an identifier (`p.x.y` → `p`, `arr[i].x` → `arr`). Call results, groups,
+/// and literals have no root identifier.
+fn root_base_ident(expr: &Expr) -> Option<&Ident> {
+    match &expr.kind {
+        ExprKind::Ident(ident) => Some(ident),
+        ExprKind::Member { base, .. } => root_base_ident(base),
+        ExprKind::Index { base, .. } => root_base_ident(base),
+        _ => None,
     }
 }

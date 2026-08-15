@@ -264,6 +264,137 @@ fn verify_inst(
                 ));
             }
         }
+        BInstKind::FieldLoad {
+            target,
+            base,
+            field_ty,
+            byte_offset,
+            size,
+        } => {
+            verify_target(function, *target, inst.span, errors);
+            verify_aggregate_base(function, *base, BType::Struct, inst.span, errors);
+            if function.local(*target).map(|local| local.ty) != Some(*field_ty) {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: a field load result must match the field type",
+                        function.name
+                    ),
+                ));
+            }
+            let _ = (byte_offset, size);
+        }
+        BInstKind::FieldStore {
+            base,
+            field_ty,
+            src,
+            ..
+        } => {
+            verify_aggregate_base(function, *base, BType::Struct, inst.span, errors);
+            verify_operand(function, src, inst.span, errors);
+            if let BOperand::Local(id) = src {
+                if function.local(*id).map(|local| local.ty) != Some(*field_ty) {
+                    errors.push(error(
+                        inst.span,
+                        format!(
+                            "function `{}`: a field store source must match the field type",
+                            function.name
+                        ),
+                    ));
+                }
+            }
+        }
+        BInstKind::IndexLoad {
+            target,
+            base,
+            elem_ty,
+            len,
+            index,
+            ..
+        } => {
+            verify_target(function, *target, inst.span, errors);
+            verify_aggregate_base(function, *base, BType::Array, inst.span, errors);
+            verify_operand(function, index, inst.span, errors);
+            if function.local(*target).map(|local| local.ty) != Some(*elem_ty) {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: an index load result must match the element type",
+                        function.name
+                    ),
+                ));
+            }
+            let _ = len;
+        }
+        BInstKind::IndexStore {
+            base,
+            elem_ty,
+            len,
+            index,
+            src,
+            ..
+        } => {
+            verify_aggregate_base(function, *base, BType::Array, inst.span, errors);
+            verify_operand(function, index, inst.span, errors);
+            verify_operand(function, src, inst.span, errors);
+            if let BOperand::Local(id) = src {
+                if function.local(*id).map(|local| local.ty) != Some(*elem_ty) {
+                    errors.push(error(
+                        inst.span,
+                        format!(
+                            "function `{}`: an index store source must match the element type",
+                            function.name
+                        ),
+                    ));
+                }
+            }
+            let _ = len;
+        }
+        BInstKind::PlaceStore {
+            base, steps, src, ..
+        } => {
+            // The root of a place chain may be a struct or an array
+            // (e.g. `arr[0].f = x`), so accept either aggregate kind.
+            match function.local(*base).map(|local| local.ty) {
+                Some(BType::Struct) | Some(BType::Array) => {}
+                _ => errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: a place store must root at a struct or array",
+                        function.name
+                    ),
+                )),
+            }
+            verify_operand(function, src, inst.span, errors);
+            // Every index step's operand must be well-typed.
+            for step in steps {
+                if let crate::backend::ir::PlaceAddrStep::Index { index, .. } = step {
+                    verify_operand(function, index, inst.span, errors);
+                }
+            }
+        }
+    }
+}
+
+/// The base slot of a field/index access must be an aggregate local of the
+/// expected kind (`Struct` for field accesses, `Array` for index accesses).
+fn verify_aggregate_base(
+    function: &super::ir::BFunction,
+    base: LocalId,
+    expected: BType,
+    span: Span,
+    errors: &mut Vec<BackendError>,
+) {
+    match function.local(base).map(|local| local.ty) {
+        Some(actual) if actual == expected => {}
+        _ => errors.push(error(
+            span,
+            format!(
+                "function `{}`: aggregate access reads a local that is not a {}",
+                function.name,
+                expected.name()
+            ),
+        )),
     }
 }
 

@@ -32,14 +32,15 @@ Constructs the specifications describe but that belong to later milestones
 are **not** part of this grammar and are rejected with parser diagnostics.
 Notable exclusions:
 
-- Type declarations (`type`, `struct`, `enum`, `trait`, `impl`) — type-system
-  milestone
+- Type declarations (`type`, `enum`, `trait`, `impl`) — type-system
+  milestone (`struct` declarations and the field `Type` syntax arrived in
+  session 14, §11)
 - Module system (`mod`, `use`, `pub`) — module-system milestone
 - Pattern matching (`match`) — pattern-matching milestone
 - Async/await and unsafe — concurrency/unsafe milestones
 - Type annotations on parameters, bindings, and return types — type-system
-  milestone (the `:` and `->` tokens exist lexically but are not yet part of
-  any production)
+  milestone (the `:` token is used by struct field declarations since
+  session 14, §11; `->` is still not part of any production)
 - Blocks as expressions, `if` as an expression, lambdas/closures
 - `?` (optional handling), open-ended ranges (`a..`, `..b`), and bare `..`
   operators
@@ -192,8 +193,9 @@ milestones justify them.
 ## 9. What Is Not the Grammar
 
 The following are **not** part of the frozen grammar and produce parser
-errors if used, until their milestones land: type annotations and return
-types, `struct`/`enum`/`type`/`trait`/`impl` declarations, `mod`/`use`/`pub`,
+errors if used, until their milestones land: return-type annotations,
+`enum`/`type`/`trait`/`impl` declarations (struct declarations and field
+type annotations arrived in session 14 — see §11), `mod`/`use`/`pub`,
 `match` arms, `async fn`/`await`, `unsafe` blocks, closures, block
 expressions, `if` expressions, and the `?` operator.
 
@@ -214,7 +216,59 @@ lexed but unused by this grammar; the parser rejects them with diagnostics
 (verified by regression tests in `tests/parser_hardening.rs`), as documented
 in `docs/implementation/LEXER_IMPLEMENTATION.md`.
 
-## 11. Status
+## 11. Session-14 Additions: Structs and Arrays
+
+**Session:** 14 — Aggregate types (structs + arrays)
+
+This section extends the frozen grammar additively. The base grammar above
+remains authoritative; the new productions are:
+
+```
+Item       := Fn | LetBinding | ConstBinding | StructDecl
+StructDecl := 'struct' Ident '{' FieldList? '}'
+FieldList  := Field (',' Field)* ','?
+Field      := Ident ':' Type
+
+Type       := Ident | '[' Type ';' IntLit ']'
+```
+
+- **Struct declarations** (`struct P { x: Int, y: Int }`) are top-level
+  items. The field list may be empty syntactically (an empty struct is
+  rejected by layout checking, `E-T18`). The `:` after the field name is
+  the type-annotation token, used here for the first time.
+- **Type syntax** has exactly two forms today: a struct name (`P`) and a
+  fixed-size array type (`[Int; 3]`). The array length must be an integer
+  literal `>= 1` (`E-T16` otherwise). `Type` appears only in struct field
+  declarations; parameters and bindings still have no annotations.
+
+Expressions gain two primary forms:
+
+```
+Primary     := ... | StructLit | ArrayLit
+StructLit   := Ident '{' FieldInitList '}'
+FieldInit   := Ident ':' Expr
+ArrayLit    := '[' ExprList ']'
+```
+
+- **Struct literals** (`P { x: 1, y: 2 }`) are primary expressions that
+  resolve `Ident` as a struct type name and require every declared field
+  exactly once. Because `Ident '{'` also opens a block, a struct literal
+  in a condition/iterable position (`if P { ... }`, `while P { ... }`,
+  `for x in P { ... }`) must be parenthesized — `(P { ... })` — to parse
+  as a literal.
+- **Array literals** (`[1, 2, 3]`, trailing comma allowed) are primary
+  expressions; their length is the element count. `[...]` in postfix
+  position remains indexing, so `a[0]` is unchanged.
+- Member access (`.field`) and indexing (`[i]`) remain postfix operators;
+  assignment targets may now be struct members and index expressions (a
+  place), matching the base grammar's `E-P04` rule.
+
+The session-13 lexer already produced `:` and `,` tokens; no lexical
+changes were required. Exclusions from §2 and §9 that remain (enums,
+tuples, `type` aliases, generics, parameter/return annotations) are
+unchanged.
+
+## 12. Status
 
 This grammar is frozen for the constructs it covers. Statements and
 declarations outside it are rejected by the parser with stable diagnostics

@@ -121,28 +121,41 @@ first milestone implements one target).
 resolution, type checking, or MIR analysis — it only consumes the answers
 MIR already carries (classified types, locals, operands, control flow).
 
-**Supported subset.** Types `Int`, `Bool`, `Range<Int>`, `Ptr<Int>`, and
-`Str`; integer and boolean literals **decoded from the source text** (the
-backend is the first stage to decode literal values: decimal, `0x` hex, and
-`_` separators, plus `true`/`false`); string literals decoded into byte
-blobs (escape, UTF-8, and `\xNN` hex escapes resolved from the source
-text, with the exact literal span preserved on `BString`); local loads and
-stores; module-binding loads and stores; byte-addressed pointer arithmetic
-(`p + n`, `n + p`, `p - n`); arithmetic (`+ - * / %`), shifts (`<< >>`),
-bitwise (`& ^ | ~`), comparisons and equality (`< <= > >= == !=`),
-logical (`&& || !`), negation (`-`), range construction and iteration
-(`for` loops via `RangeInit`/`RangeNext`/`RangeFinished`), direct function
-calls, and `if`/`else`, `while`, `for`, `loop`, `break`, `continue`,
-`return`.
+**Supported subset.** Types `Int`, `Bool`, `Range<Int>`, `Ptr<Int>`, `Str`,
+user-declared `Struct`s, and `Array`s; integer and boolean literals
+**decoded from the source text** (the backend is the first stage to decode
+literal values: decimal, `0x` hex, and `_` separators, plus `true`/`false`);
+string literals decoded into byte blobs (escape, UTF-8, and `\xNN` hex
+escapes resolved from the source text, with the exact literal span
+preserved on `BString`); local loads and stores; module-binding loads and
+stores; byte-addressed pointer arithmetic (`p + n`, `n + p`, `p - n`);
+arithmetic (`+ - * / %`), shifts (`<< >>`), bitwise (`& ^ | ~`),
+comparisons and equality (`< <= > >= == !=`), logical (`&& || !`),
+negation (`-`), range construction and iteration (`for` loops via
+`RangeInit`/`RangeNext`/`RangeFinished`), direct function calls, and
+`if`/`else`, `while`, `for`, `loop`, `break`, `continue`, `return`;
+struct/array literals (field/element stores into a materialized temp),
+member/index reads and writes (`FieldLoad`/`FieldStore`,
+`IndexLoad`/`IndexStore`), and deep place stores (`PlaceStore`) with
+runtime bounds checks (`E-R10`) on every index step.
+
+Aggregate layout is resolved during lowering through the same
+`struct_layout`/`array_layout` engine the type checker used, so backend
+and typechecker cannot disagree about offsets. Aggregate values in stack
+slots follow the downward value-image convention (byte `b` of a value
+lives at `slot_word0 - b`); copies and argument marshalling are word-wise
+with byte-wise unaligned tails. Aggregate **returns** and aggregate
+**module statics** are rejected (`E-B03`); aggregate **arguments** are
+supported.
 
 **Rejected constructs** (structured errors, never miscompilation):
 
 | Construct | Code |
 |---|---|
-| Member loads, index loads, function values | `E-B01` |
+| Function values | `E-B01` |
 | Float / char / `null` literals | `E-B02` |
-| `Float`, `Char`, `Null`, unresolved inference, `Range` in a single-word position (function result, static, operand) | `E-B03` |
-| Member / index assignment targets | `E-B04` |
+| `Float`, `Char`, `Null`, unresolved inference, `Range` in a single-word position (function result, static, operand), aggregate returns / aggregate statics | `E-B03` |
+| Unsupported assignment targets | `E-B04` |
 | Module bindings initialized by non-constant expressions | `E-B05` |
 | Calls whose callee is not a module-level function | `E-B06` |
 
@@ -272,13 +285,13 @@ documented in `src/runtime/abi.rs`:
 - Only the first native target (`x86_64-windows-pe`) is implemented;
   `x86_64-linux-elf` and `aarch64-linux-elf` are recognized but rejected
   (`E-B11`).
-- No floating point, characters, `null`, member/index places, function
-  values, or structs — all rejected with structured errors. Strings are
-  byte sequences (no runtime UTF-8 validation, no concatenation, literals
-  immutable); `TypeKind::Ptr<T>` exists in the type system but only
-  `Ptr<Int>` is instantiable today. The memory-layout model
-  (`src/runtime/layout.rs`) is the groundwork for future aggregates but
-  nothing consumes it yet.
+- No floating point, characters, `null`, or function values — all
+  rejected with structured errors. Strings are byte sequences (no runtime
+  UTF-8 validation, no concatenation, literals immutable);
+  `TypeKind::Ptr<T>` exists in the type system but only `Ptr<Int>` is
+  instantiable today. Structs and arrays are supported as values (member/
+  index access, place mutation, arguments), but aggregate returns and
+  aggregate module statics are rejected (`E-B03`).
 - No debug info, no symbol tables beyond what the PE format requires, and
   no optimizations in the backend itself (the MIR pipeline already
   optimized the input).
@@ -295,18 +308,21 @@ documented in `src/runtime/abi.rs`:
     cargo build
     git diff --check
 
-Full suite after session 13: **700 tests** (61 CLI + 50 lexer + 88 parser +
+Full suite after session 14: **762 tests** (61 CLI + 50 lexer + 88 parser +
 62 parser hardening + 72 semantics + 12 source + 143 typecheck + 25 HIR +
 34 MIR + 38 optimization + 49 lib unit + 42 backend + 24 runtime
-end-to-end), all passing. The backend tests (`tests/backend.rs`) cover
-program structure and determinism, functions/locals/instructions, constant
-decoding, string decoding (escapes, UTF-8, hex), `LoadStr` lowering with
-exact spans, pointer locals and arithmetic, arithmetic, comparisons and
-logical operators, calls, module bindings, range iteration, every rejected
-construct with its code and span, multi-error reporting, verifier checks
-on malformed instructions, PE image structure, emission determinism, and
-the CLI end-to-end build (build + run the generated binary). The runtime
-tests (`tests/runtime.rs`) build and run native binaries that allocate,
-store, load, and free heap blocks and string blobs, print integers and
-strings, trap with the documented `E-R01+` exit codes on invalid memory
-operations, and leak-check on exit.
+end-to-end + 59 aggregate), all passing. The backend tests
+(`tests/backend.rs`) cover program structure and determinism,
+functions/locals/instructions, constant decoding, string decoding
+(escapes, UTF-8, hex), `LoadStr` lowering with exact spans, pointer locals
+and arithmetic, arithmetic, comparisons and logical operators, calls,
+module bindings, range iteration, every rejected construct with its code
+and span, multi-error reporting, verifier checks on malformed
+instructions, PE image structure, emission determinism, and the CLI
+end-to-end build (build + run the generated binary). The runtime tests
+(`tests/runtime.rs`) build and run native binaries that allocate, store,
+load, and free heap blocks and string blobs, print integers and strings,
+trap with the documented `E-R01+` exit codes on invalid memory operations,
+and leak-check on exit. The aggregate tests (`tests/aggregate.rs`) cover
+struct/array parsing, typing, layout determinism, and native execution
+(see `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md` §8).

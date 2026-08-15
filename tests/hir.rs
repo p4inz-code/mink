@@ -192,6 +192,7 @@ fn module_items_lower_in_source_order() {
             HirItemKind::Fn(f) => format!("fn:{}", f.name.name),
             HirItemKind::Let(b) => format!("let:{}", b.name.name),
             HirItemKind::Const(b) => format!("const:{}", b.name.name),
+            HirItemKind::Struct(s) => format!("struct:{}", s.name.name),
         })
         .collect::<Vec<_>>();
     assert_eq!(kinds, ["fn:f", "let:a", "const:c", "fn:g"]);
@@ -581,7 +582,7 @@ fn hir_program_owns_a_usable_type_table() {
 
 #[test]
 fn member_and_index_nodes_lower() {
-    let src = "fn f() { let o = 1; let a = 1; o.f; a[0]; }";
+    let src = "struct P { f: Int } fn f() { let o = P { f: 1 }; let a = [1, 2]; o.f; a[0]; }";
     let (_sources, _ast, _semantic, _types, program) = lower_src(src);
     let f = hir_fn(&program, "f");
     let HirStmtKind::Expr(member) = &f.body.stmts[2].kind else {

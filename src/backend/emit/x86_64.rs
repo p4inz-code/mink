@@ -53,7 +53,9 @@
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::mir::BlockId;
 
-use super::super::ir::{BInstKind, BOperand, BProgram, BTerminator, BType, RuntimeService};
+use super::super::ir::{
+    BInstKind, BOperand, BProgram, BTerminator, BType, PlaceAddrStep, RuntimeService,
+};
 use super::EmittedImage;
 use super::pe;
 use super::runtime;
@@ -78,17 +80,21 @@ pub(crate) enum Reg {
 }
 
 /// A per-local pair of slot offsets from `rbp` (negative). Word 0 is the
-/// value's first word (for `Range`: the normalized exclusive end); word 1
-/// is its second (the iteration cursor); both are `0` for single-word
-/// types.
+/// value's first word (for `Range`: the normalized exclusive end; for an
+/// aggregate: byte 0 of the value); word 1 is the second word for the
+/// two-word types (`Range`, a 16-byte struct), and `0` otherwise.
+/// Aggregate values occupy `local.words` consecutive words *below* word 0
+/// (byte `k` of the value lives at `word0 - k`), so the value's byte
+/// layout is preserved in the slot.
 type Slots = Vec<(i32, i32)>;
 
-/// Computes each local's stack-slot offsets from `rbp`.
-fn slots(f: &super::super::ir::BFunction) -> Slots {
+/// Computes each local's stack-slot offsets from `rbp`, plus the total
+/// number of words the frame needs.
+fn slots(f: &super::super::ir::BFunction) -> (Slots, usize) {
     let mut result = Vec::with_capacity(f.locals.len());
     let mut words = 0usize;
     for local in &f.locals {
-        let width = local.ty.words();
+        let width = local.words as usize;
         let word0 = -(8 * (words + 1) as i32);
         let word1 = if width == 2 {
             -(8 * (words + 2) as i32)
@@ -98,16 +104,12 @@ fn slots(f: &super::super::ir::BFunction) -> Slots {
         result.push((word0, word1));
         words += width;
     }
-    result
+    (result, words)
 }
 
 /// The frame size in bytes, rounded up to 16 (stack alignment).
-fn frame_size(slots: &Slots) -> i32 {
-    let bytes = if slots.is_empty() {
-        0
-    } else {
-        8 * (slots.len() + slots.iter().filter(|(_, second)| *second != 0).count())
-    };
+fn frame_size(total_words: usize) -> i32 {
+    let bytes = 8 * total_words;
     // Round up to a multiple of 16 so the stack stays aligned after the
     // `push rbp` prologue.
     (bytes.div_ceil(16) * 16) as i32
@@ -368,6 +370,14 @@ impl Code {
         self.modrm_rm_reg(a, b);
     }
 
+    /// `sub r64, imm32`.
+    pub(crate) fn sub_r_imm32(&mut self, a: Reg, imm: u32) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0x81);
+        self.u8(0xE8 | (a as u8 & 7)); // /5
+        self.i32_le(imm as i32);
+    }
+
     /// `and r64, imm8` (sign-extended).
     pub(crate) fn and_r_imm8(&mut self, a: Reg, imm: u8) {
         self.rex_w(Reg::Rax, a);
@@ -585,6 +595,12 @@ impl Code {
     /// `imul rax, rcx`.
     fn imul_rax_rcx(&mut self) {
         self.bytes(&[0x48, 0x0F, 0xAF, 0xC1]);
+    }
+
+    /// `imul rax, rax, imm32` (sign-extended immediate).
+    pub(crate) fn imul_rax_imm32(&mut self, imm: u32) {
+        self.bytes(&[0x48, 0x69, 0xC0]);
+        self.i32_le(imm as i32);
     }
 
     /// `cqo` (sign-extend rax into rdx:rax).
@@ -850,8 +866,8 @@ fn emit_function(
     string_labels: &[u32],
 ) -> (usize, Vec<u32>) {
     let start = code.len();
-    let slots = slots(f);
-    let frame = frame_size(&slots);
+    let (slots, total_words) = slots(f);
+    let frame = frame_size(total_words);
 
     // Prologue.
     code.u8(0x55); // push rbp
@@ -860,20 +876,29 @@ fn emit_function(
         code.sub_rsp(frame);
     }
 
-    // Copy parameters into their slots.
+    // Copy parameters into their slots. Each parameter occupies
+    // `words` stack words, pushed rightmost-first by the caller so word 0
+    // is on top; the callee reads word `k` at `arg_base + 8k` and stores
+    // it at `word0 - 8k` (the value's `k`-th word).
     let mut arg_words = 0usize;
     for &param in &f.params {
-        let ty = f.local(param).map(|local| local.ty).unwrap_or(BType::Int);
+        let words = f
+            .local(param)
+            .map(|local| local.words as usize)
+            .unwrap_or(1);
         let arg_base = 16 + 8 * arg_words;
-        let (word0, word1) = slots[param.raw() as usize];
-        code.mov_rax_rbp(arg_base as i32);
-        code.mov_rbp_rax(word0);
-        if ty == BType::Range {
-            code.mov_rax_rbp(arg_base as i32 + 8);
-            code.mov_rbp_rax(word1);
+        let word0 = slots[param.raw() as usize].0;
+        for k in 0..words {
+            code.mov_rax_rbp(arg_base as i32 + 8 * k as i32);
+            code.mov_rbp_rax(word0 - 8 * k as i32);
         }
-        arg_words += ty.words();
+        arg_words += words;
     }
+
+    // The function's shared `E-R10` failure block: bound after the last
+    // block, referenced by every generated array bounds check in the
+    // function. `rt_fail` never returns, so the block needs no terminator.
+    let fail_label = code.label();
 
     // Blocks, in order. Starts are filled in as blocks are emitted; forward
     // jumps patch by block id after layout, so the full table is allocated
@@ -881,8 +906,18 @@ fn emit_function(
     let mut block_starts = vec![0u32; f.blocks.len()];
     for block in &f.blocks {
         block_starts[block.id.raw() as usize] = (code.len() - start) as u32;
-        emit_block(code, f, &slots, block, function_index, string_labels);
+        emit_block(
+            code,
+            f,
+            &slots,
+            block,
+            function_index,
+            string_labels,
+            fail_label,
+        );
     }
+    code.bind_label(fail_label);
+    runtime::fail(code, 10); // E-R10
     (start, block_starts)
 }
 
@@ -901,9 +936,10 @@ fn emit_block(
     block: &super::super::ir::BBlock,
     function_index: usize,
     string_labels: &[u32],
+    fail_label: u32,
 ) {
     for inst in &block.insts {
-        emit_inst(code, f, slots, inst, string_labels);
+        emit_inst(code, f, slots, inst, string_labels, fail_label);
     }
     match &block.terminator {
         BTerminator::Return { value, .. } => {
@@ -957,9 +993,9 @@ fn eval_rcx(code: &mut Code, slots: &Slots, operand: BOperand) {
 }
 
 /// Pushes an argument onto the stack (rightmost argument pushed first, so
-/// the leftmost ends on top). `Range` arguments push their second word
-/// first, so the callee reads word 0 at `[rbp + 16]`. Returns the number
-/// of words pushed.
+/// the leftmost ends on top). Multi-word values (`Range`, aggregates) push
+/// their words last-word-first, so the callee reads word `k` at
+/// `[rbp + 16 + 8k]` (word 0 on top). Returns the number of words pushed.
 fn push_operand(
     code: &mut Code,
     f: &super::super::ir::BFunction,
@@ -973,19 +1009,13 @@ fn push_operand(
             1
         }
         BOperand::Local(id) => {
-            let ty = f.local(id).map(|local| local.ty).unwrap_or(BType::Int);
-            let (word0, word1) = slots[id.raw() as usize];
-            if ty == BType::Range {
-                code.mov_rax_rbp(word1);
+            let words = f.local(id).map(|local| local.words as usize).unwrap_or(1);
+            let word0 = slots[id.raw() as usize].0;
+            for k in (0..words).rev() {
+                code.mov_rax_rbp(word0 - 8 * k as i32);
                 code.push_rax();
-                code.mov_rax_rbp(word0);
-                code.push_rax();
-                2
-            } else {
-                code.mov_rax_rbp(word0);
-                code.push_rax();
-                1
             }
+            words
         }
     }
 }
@@ -994,10 +1024,7 @@ fn push_operand(
 fn operand_words(f: &super::super::ir::BFunction, operand: BOperand) -> usize {
     match operand {
         BOperand::Const(_) => 1,
-        BOperand::Local(id) => {
-            let ty = f.local(id).map(|local| local.ty).unwrap_or(BType::Int);
-            if ty == BType::Range { 2 } else { 1 }
-        }
+        BOperand::Local(id) => f.local(id).map(|local| local.words as usize).unwrap_or(1),
     }
 }
 
@@ -1038,17 +1065,18 @@ fn emit_inst(
     slots: &Slots,
     inst: &super::super::ir::BInst,
     string_labels: &[u32],
+    fail_label: u32,
 ) {
     match &inst.kind {
         BInstKind::LoadLocal { target, src } => {
-            let ty = f.local(*src).map(|local| local.ty).unwrap_or(BType::Int);
-            let (dst0, dst1) = slots[target.raw() as usize];
-            let (src0, src1) = slots[src.raw() as usize];
-            code.mov_rax_rbp(src0);
-            code.mov_rbp_rax(dst0);
-            if ty == BType::Range {
-                code.mov_rax_rbp(src1);
-                code.mov_rbp_rax(dst1);
+            // The copy spans the local's full width: one word for scalars,
+            // two for ranges, `words` for aggregate values.
+            let words = f.local(*src).map(|local| local.words as usize).unwrap_or(1);
+            let (dst0, _) = slots[target.raw() as usize];
+            let (src0, _) = slots[src.raw() as usize];
+            for k in 0..words {
+                code.mov_rax_rbp(src0 - 8 * k as i32);
+                code.mov_rbp_rax(dst0 - 8 * k as i32);
             }
         }
         BInstKind::LoadConst { target, value } => {
@@ -1206,6 +1234,155 @@ fn emit_inst(
             code.cmp_rax_rbp(range_end);
             code.setcc_rax(0x9D); // setge
             code.mov_rbp_rax(slots[target.raw() as usize].0);
+        }
+        BInstKind::FieldLoad {
+            target,
+            base,
+            field_ty,
+            byte_offset,
+            size,
+        } => {
+            let base_word0 = slots[base.raw() as usize].0;
+            // The field starts `byte_offset` bytes below the value's first
+            // word (the value image grows downward in the slot).
+            code.lea_r_mem(Reg::Rcx, Reg::Rbp, base_word0 - *byte_offset as i32);
+            copy_into_slot(code, slots, *target, Reg::Rcx, *size);
+            let _ = field_ty;
+        }
+        BInstKind::FieldStore {
+            base,
+            field_ty,
+            byte_offset,
+            size,
+            src,
+        } => {
+            let base_word0 = slots[base.raw() as usize].0;
+            code.lea_r_mem(Reg::Rcx, Reg::Rbp, base_word0 - *byte_offset as i32);
+            store_into(code, slots, *src, Reg::Rcx, *size);
+            let _ = field_ty;
+        }
+        BInstKind::IndexLoad {
+            target,
+            base,
+            elem_ty,
+            stride,
+            len,
+            index,
+        } => {
+            // Bounds check: the unsigned compare treats a negative index
+            // as huge, so one `jae` covers both out-of-range directions
+            // (`E-R10`). The fail path is the function's shared
+            // `E-R10` block (bound after the last block), so a valid
+            // access never falls into it.
+            eval_rax(code, slots, *index);
+            code.cmp_r_imm32(Reg::Rax, *len as u32);
+            code.jcc(0x83, PatchKind::Label(fail_label)); // jae
+            // rax = index * stride; element address = base - rax.
+            code.imul_rax_imm32(*stride);
+            code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
+            code.sub_rr(Reg::Rcx, Reg::Rax);
+            copy_into_slot(code, slots, *target, Reg::Rcx, *stride);
+            let _ = elem_ty;
+        }
+        BInstKind::IndexStore {
+            base,
+            elem_ty,
+            stride,
+            len,
+            index,
+            src,
+        } => {
+            eval_rax(code, slots, *index);
+            code.cmp_r_imm32(Reg::Rax, *len as u32);
+            code.jcc(0x83, PatchKind::Label(fail_label)); // jae
+            code.imul_rax_imm32(*stride);
+            code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
+            code.sub_rr(Reg::Rcx, Reg::Rax);
+            store_into(code, slots, *src, Reg::Rcx, *stride);
+            let _ = elem_ty;
+        }
+        BInstKind::PlaceStore {
+            base,
+            steps,
+            size,
+            src,
+        } => {
+            // Walk the place chain from the root's first word. Field
+            // steps subtract their static byte offset; index steps are
+            // bounds-checked (`E-R10`) and subtract `index * stride`.
+            // The fail path is the function's shared `E-R10` block, so
+            // valid chains never fall into it.
+            code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
+            for step in steps {
+                match step {
+                    PlaceAddrStep::Field { byte_offset } => {
+                        code.sub_r_imm32(Reg::Rcx, *byte_offset);
+                    }
+                    PlaceAddrStep::Index { index, stride, len } => {
+                        eval_rax(code, slots, *index);
+                        code.cmp_r_imm32(Reg::Rax, *len as u32);
+                        code.jcc(0x83, PatchKind::Label(fail_label)); // jae
+                        code.imul_rax_imm32(*stride);
+                        code.sub_rr(Reg::Rcx, Reg::Rax);
+                    }
+                }
+            }
+            store_into(code, slots, *src, Reg::Rcx, *size);
+        }
+    }
+}
+
+/// Copies `size` bytes from the memory at `src` (a register holding the
+/// source address) into the destination local's slot image, preserving
+/// the byte layout: aggregate value bytes run *downward* from the region's
+/// first byte (byte `b` at `start - b`, matching the slot convention where
+/// byte `b` of a value lives at `word0 - b`). Word-sized runs move full
+/// 8-byte words; the remainder is moved byte by byte so fields that are
+/// not word-aligned (booleans, nested all-bool structs) are copied exactly.
+fn copy_into_slot(code: &mut Code, slots: &Slots, dst: crate::mir::LocalId, src: Reg, size: u32) {
+    let word0 = slots[dst.raw() as usize].0;
+    let words = size / 8;
+    for k in 0..words {
+        let k = (8 * k) as i32;
+        code.mov_r_mem(Reg::Rax, src, -k);
+        code.mov_mem_r(Reg::Rbp, word0 - k, Reg::Rax);
+    }
+    for k in 0..(size % 8) {
+        let byte = (words * 8 + k) as i32;
+        code.movzx_byte(Reg::Rax, src, -byte);
+        code.mov_mem_r8(Reg::Rbp, word0 - byte, Reg::Rax);
+    }
+}
+
+/// Stores `src` into the memory at `dst` (a register holding the
+/// destination address — the first byte of a field or element region,
+/// whose bytes also run downward): `size` bytes copied from the source
+/// local's slot image, or a single byte/word for a scalar constant.
+fn store_into(code: &mut Code, slots: &Slots, src: BOperand, dst: Reg, size: u32) {
+    match src {
+        BOperand::Const(value) => {
+            // Scalar constants are only ever stored into single-byte
+            // (boolean) or single-word (integer-class) fields/elements.
+            code.movabs_rax(value);
+            if size == 1 {
+                code.mov_mem_r8(dst, 0, Reg::Rax);
+            } else {
+                code.mov_mem_r(dst, 0, Reg::Rax);
+            }
+        }
+        BOperand::Local(id) => {
+            let word0 = slots[id.raw() as usize].0;
+            let words = size / 8;
+            for k in 0..words {
+                let k = (8 * k) as i32;
+                code.mov_r_mem(Reg::Rax, Reg::Rbp, word0 - k);
+                code.mov_mem_r(dst, -k, Reg::Rax);
+            }
+            for k in 0..(size % 8) {
+                let byte = (words * 8 + k) as i32;
+                code.movzx_byte(Reg::Rax, Reg::Rbp, word0 - byte);
+                code.mov_mem_r8(dst, -byte, Reg::Rax);
+            }
         }
     }
 }

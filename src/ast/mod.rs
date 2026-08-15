@@ -50,8 +50,8 @@ impl Ast {
     }
 }
 
-/// A top-level declaration: a function, a `let` binding, or a `const`
-/// binding.
+/// A top-level declaration: a function, a `struct` declaration, a `let`
+/// binding, or a `const` binding.
 ///
 /// The grammar currently allows only declarations at module scope; executable
 /// statements live inside function bodies (see
@@ -70,10 +70,71 @@ pub struct Item {
 pub enum ItemKind {
     /// A `fn` function declaration.
     Fn(FnItem),
+    /// A `struct` declaration: a named record of typed fields (session 14).
+    Struct(StructItem),
     /// A `let` binding.
     Let(LetItem),
     /// A `const` binding.
     Const(ConstItem),
+}
+
+/// A `struct` declaration: `struct Name { field: Type, ... }` (session 14).
+///
+/// Structs are the first user-defined types: a named record whose fields
+/// have explicit types. They are top-level declarations only; their layout
+/// (field offsets, alignment, size) is deterministic and documented in
+/// `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`. A struct must
+/// declare at least one field (enforced by type analysis).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructItem {
+    /// The struct's name (a type name, resolved in the type namespace).
+    pub name: Ident,
+    /// The declared fields, in source order.
+    pub fields: Vec<StructField>,
+    /// Span covering the whole item from `struct` through the closing brace.
+    pub span: Span,
+}
+
+/// One declared field of a [`StructItem`]: `name: Type`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructField {
+    /// The field's name.
+    pub name: Ident,
+    /// The field's declared type.
+    pub ty: Ty,
+    /// Span covering the whole field (name, colon, and type).
+    pub span: Span,
+}
+
+/// A type as written in source. Types appear in struct field declarations
+/// (`name: Type`); the current milestone supports named primitive and struct
+/// types, pointer types (`Ptr<T>`), and fixed-length array types
+/// (`[T; N]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ty {
+    /// The kind of type.
+    pub kind: TyKind,
+    /// Span covering the whole type.
+    pub span: Span,
+}
+
+/// The kind of a [`Ty`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TyKind {
+    /// A named type: a primitive (`Int`, `Float`, `Bool`, `Char`, `Str`) or
+    /// a user-declared struct name.
+    Named(Ident),
+    /// A pointer type: `Ptr<T>`.
+    Ptr(Box<Ty>),
+    /// A fixed-length array type: `[T; N]` where `N` is a non-negative
+    /// integer literal (validated by type analysis).
+    Array {
+        /// The element type.
+        elem: Box<Ty>,
+        /// The length literal (an integer-literal expression; its value is
+        /// decoded from the source text by later stages).
+        len: Expr,
+    },
 }
 
 /// A `fn` function declaration: `fn name(params) { body }`.
@@ -294,9 +355,31 @@ pub enum ExprKind {
         /// The index expression.
         index: Box<Expr>,
     },
+    /// A struct literal: `Name { field: value, ... }` (session 14). The
+    /// struct name resolves in the type namespace.
+    StructLit {
+        /// The struct type name.
+        name: Ident,
+        /// The field initializers, in source order.
+        fields: Vec<StructFieldInit>,
+    },
+    /// An array literal: `[elem, ...]` (session 14). The element type is
+    /// inferred from the elements; the array's length is the element count.
+    ArrayLit(Vec<Expr>),
     /// A parenthesized expression: `(inner)`. Kept as a node so tooling can
     /// distinguish explicit grouping from parser-imposed association.
     Group(Box<Expr>),
+}
+
+/// One field initializer of a struct literal: `name: value`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructFieldInit {
+    /// The initialized field's name.
+    pub name: Ident,
+    /// The value expression.
+    pub value: Expr,
+    /// Span covering the whole initializer.
+    pub span: Span,
 }
 
 /// A prefix unary operator.

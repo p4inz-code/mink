@@ -59,6 +59,17 @@ pub enum ParseErrorKind {
     UnclosedBracket,
     /// End of input where more source was required.
     UnexpectedEof,
+    /// `}` was required to close a struct declaration or literal.
+    ExpectedRBrace,
+    /// `:` was required between a field name and its type or initializer.
+    ExpectedColon,
+    /// An integer literal was required (the length of an array type).
+    ExpectedIntegerLiteral,
+    /// A type was required (a struct field's declared type).
+    ExpectedType,
+    /// `>` was required to close `Ptr<T>` (or a non-`Ptr` name was used
+    /// with the generic form, which only `Ptr` supports).
+    ExpectedGT,
 }
 
 impl ParseErrorKind {
@@ -84,6 +95,11 @@ impl ParseErrorKind {
             Self::UnclosedBrace => "E-P14",
             Self::UnclosedBracket => "E-P15",
             Self::UnexpectedEof => "E-P16",
+            Self::ExpectedRBrace => "E-P17",
+            Self::ExpectedColon => "E-P18",
+            Self::ExpectedIntegerLiteral => "E-P19",
+            Self::ExpectedType => "E-P20",
+            Self::ExpectedGT => "E-P21",
         }
     }
 }
@@ -109,6 +125,11 @@ impl fmt::Display for ParseErrorKind {
             Self::UnclosedBrace => "unclosed '{' — expected '}' before end of input",
             Self::UnclosedBracket => "unclosed '[' — expected ']' before end of input",
             Self::UnexpectedEof => "unexpected end of input",
+            Self::ExpectedRBrace => "expected '}'",
+            Self::ExpectedColon => "expected ':'",
+            Self::ExpectedIntegerLiteral => "expected an integer literal",
+            Self::ExpectedType => "expected a type",
+            Self::ExpectedGT => "expected '>'",
         };
         f.write_str(message)
     }

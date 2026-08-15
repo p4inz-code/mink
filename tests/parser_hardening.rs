@@ -11,7 +11,7 @@
 
 use mink::ast::{
     AssignOp, BinaryOp, Block, ElseBranch, Expr, ExprKind, Ident, IfStmt, Item, ItemKind, Stmt,
-    StmtKind, UnaryOp,
+    StmtKind, Ty, TyKind, UnaryOp,
 };
 use mink::parser::{ParseErrorKind, ParseOutput, parse};
 use mink::source::{SourceMap, Span};
@@ -278,8 +278,9 @@ fn stray_closer_inside_a_statement_is_a_statement_error() {
 
 #[test]
 fn unexpected_opener_in_expr_position_is_rejected() {
+    // A block `{` is not an expression in the frozen grammar.
     assert_eq!(
-        error_kinds("fn f() { let x = [1]; }"),
+        error_kinds("fn f() { let x = { 1 }; }"),
         vec![ParseErrorKind::ExpectedExpression]
     );
 }
@@ -865,7 +866,9 @@ fn bad_statement_inside_else_branch_then_valid() {
 
 #[test]
 fn bad_item_then_valid_items() {
-    let output = parse_src("struct P {} fn main() {} let x = 1;");
+    // `enum` is an excluded top-level declaration; recovery must skip it
+    // and keep parsing the valid items after it.
+    let output = parse_src("enum Color { Red } fn main() {} let x = 1;");
     assert_eq!(output.parse_errors().len(), 1);
     assert_eq!(output.ast().items().len(), 2);
     let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
@@ -1186,6 +1189,25 @@ fn walk_item(item: &Item, text_len: u32, src: &str) {
             walk_ident(&binding.name, text_len, src);
             walk_expr(&binding.init, text_len, src);
         }
+        ItemKind::Struct(s) => {
+            walk_ident(&s.name, text_len, src);
+            for field in &s.fields {
+                walk_ident(&field.name, text_len, src);
+                walk_ty(&field.ty, text_len);
+            }
+        }
+    }
+}
+
+fn walk_ty(ty: &Ty, text_len: u32) {
+    assert_span_ok(ty.span, text_len, "type");
+    match &ty.kind {
+        TyKind::Named(ident) => walk_ident(ident, text_len, "type"),
+        TyKind::Ptr(inner) => walk_ty(inner, text_len),
+        TyKind::Array { elem, len } => {
+            walk_ty(elem, text_len);
+            walk_expr(len, text_len, "type");
+        }
     }
 }
 
@@ -1284,6 +1306,18 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
             walk_expr(base, text_len, src);
             walk_expr(index, text_len, src);
         }
+        ExprKind::StructLit { name, fields } => {
+            walk_ident(name, text_len, src);
+            for field in fields {
+                walk_ident(&field.name, text_len, src);
+                walk_expr(&field.value, text_len, src);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for elem in elems {
+                walk_expr(elem, text_len, src);
+            }
+        }
         ExprKind::Group(inner) => walk_expr(inner, text_len, src),
     }
 }
@@ -1304,7 +1338,6 @@ fn assert_span_ok(span: Span, text_len: u32, src: &str) {
 #[test]
 fn excluded_declarations_at_top_level_are_rejected() {
     let excluded = [
-        "struct Point {}",
         "enum Color { Red }",
         "type X = int;",
         "trait T {}",
@@ -1398,8 +1431,7 @@ fn excluded_tokens_and_operators_are_rejected() {
 #[test]
 fn excluded_keywords_are_never_silently_accepted() {
     let excluded = [
-        "struct", "enum", "type", "trait", "impl", "mod", "use", "pub", "match", "async", "await",
-        "unsafe",
+        "enum", "type", "trait", "impl", "mod", "use", "pub", "match", "async", "await", "unsafe",
     ];
     for kw in excluded {
         let at_statement = format!("fn f() {{ {kw} x; }}");
@@ -1417,11 +1449,10 @@ fn excluded_keywords_are_never_silently_accepted() {
 
 #[test]
 fn combined_excluded_program_reports_every_offender() {
-    let src = "struct P {} fn main() { let x: int = 1; let g = |a| a; }";
+    let src = "fn main() { let x: int = 1; let g = |a| a; }";
     assert_eq!(
         error_kinds(src),
         vec![
-            ParseErrorKind::ExpectedItem,
             ParseErrorKind::ExpectedEqual,
             ParseErrorKind::ExpectedExpression,
         ]

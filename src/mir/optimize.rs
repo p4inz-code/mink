@@ -37,8 +37,8 @@ use super::error::MirError;
 use super::validate;
 use super::{
     BlockId, LocalId, MirBlock, MirConstant, MirConstantKind, MirFn, MirItemKind, MirOperand,
-    MirOperandKind, MirProgram, MirRvalue, MirRvalueKind, MirStatic, MirStmt, MirStmtKind,
-    MirTargetKind, MirTerminator,
+    MirOperandKind, MirPlaceStepKind, MirProgram, MirRvalue, MirRvalueKind, MirStatic, MirStmt,
+    MirStmtKind, MirTargetKind, MirTerminator,
 };
 
 /// The maximum number of fixpoint rounds the pipeline runs. Every pass is
@@ -281,7 +281,10 @@ fn propagate_stmt(stmt: &mut MirStmt, known: &mut Vec<Option<MirOperand>>) -> bo
         MirTargetKind::Local(id) => Some(*id),
         // An opaque write: the target's place semantics are not defined, so
         // no recorded copy can be trusted afterwards.
-        MirTargetKind::Static(_) | MirTargetKind::Member { .. } | MirTargetKind::Index { .. } => {
+        MirTargetKind::Static(_)
+        | MirTargetKind::Member { .. }
+        | MirTargetKind::Index { .. }
+        | MirTargetKind::Place { .. } => {
             known.iter_mut().for_each(|slot| *slot = None);
             None
         }
@@ -293,12 +296,19 @@ fn propagate_stmt(stmt: &mut MirStmt, known: &mut Vec<Option<MirOperand>>) -> bo
     }
     // Rewrite reads in the rvalue.
     changed |= rewrite_rvalue(rvalue, known);
-    // Rewrite reads in member/index target bases and indices.
+    // Rewrite reads in member/index target bases and indices, and in the
+    // steps of a multi-step place (each index step is an operand read).
     if let MirTargetKind::Member { base, .. } = &mut target.kind {
         changed |= rewrite_operand(base, known);
     } else if let MirTargetKind::Index { base, index } = &mut target.kind {
         changed |= rewrite_operand(base, known);
         changed |= rewrite_operand(index, known);
+    } else if let MirTargetKind::Place { steps, .. } = &mut target.kind {
+        for step in steps {
+            if let MirPlaceStepKind::Index(index) = &mut step.kind {
+                changed |= rewrite_operand(index, known);
+            }
+        }
     }
     // Record the new copy when this statement is one.
     if let Some(id) = target_local {
@@ -374,6 +384,16 @@ fn rewrite_rvalue(rvalue: &mut MirRvalue, known: &[Option<MirOperand>]) -> bool 
         MirRvalueKind::Index { base, index } => {
             changed |= rewrite_operand(base, known);
             changed |= rewrite_operand(index, known);
+        }
+        MirRvalueKind::StructLit { fields } => {
+            for (_, value) in fields {
+                changed |= rewrite_operand(value, known);
+            }
+        }
+        MirRvalueKind::ArrayLit { elems } => {
+            for elem in elems {
+                changed |= rewrite_operand(elem, known);
+            }
         }
     }
     changed
@@ -730,6 +750,10 @@ fn is_dead_store(stmt: &MirStmt, read: &[bool], param_count: usize) -> bool {
 }
 
 /// Whether evaluating `rvalue` can have no observable effect.
+///
+/// Struct and array literals are pure: they only write the target local
+/// (whose removal is gated on the local never being read), so a dead
+/// materialization is removable.
 fn rvalue_is_pure(rvalue: &MirRvalue) -> bool {
     matches!(
         rvalue.kind,
@@ -737,6 +761,8 @@ fn rvalue_is_pure(rvalue: &MirRvalue) -> bool {
             | MirRvalueKind::Unary { .. }
             | MirRvalueKind::Binary { .. }
             | MirRvalueKind::Range { .. }
+            | MirRvalueKind::StructLit { .. }
+            | MirRvalueKind::ArrayLit { .. }
     )
 }
 
@@ -749,6 +775,15 @@ fn mark_stmt_reads(stmt: &MirStmt, read: &mut [bool]) {
         MirTargetKind::Index { base, index } => {
             mark_operand_read(base, read);
             mark_operand_read(index, read);
+        }
+        // The root local of a place is written (not read); the index steps
+        // are read.
+        MirTargetKind::Place { steps, .. } => {
+            for step in steps {
+                if let MirPlaceStepKind::Index(index) = &step.kind {
+                    mark_operand_read(index, read);
+                }
+            }
         }
         MirTargetKind::Local(_) | MirTargetKind::Static(_) => {}
     }
@@ -779,6 +814,16 @@ fn mark_rvalue_reads(rvalue: &MirRvalue, read: &mut [bool]) {
         MirRvalueKind::Index { base, index } => {
             mark_operand_read(base, read);
             mark_operand_read(index, read);
+        }
+        MirRvalueKind::StructLit { fields } => {
+            for (_, value) in fields {
+                mark_operand_read(value, read);
+            }
+        }
+        MirRvalueKind::ArrayLit { elems } => {
+            for elem in elems {
+                mark_operand_read(elem, read);
+            }
         }
     }
 }

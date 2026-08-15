@@ -97,9 +97,12 @@ is a distinct mutable slot.
 
 The core type catalog is exactly what the current milestone requires
 (`docs/language/CORE_LANGUAGE.md` §26). No speculative types were added:
-`Option`/`Result`, tuples, structs, enums, generics, traits, union types,
-ownership types, and every other advanced form in `docs/language/TYPE_SYSTEM.md`
-remain future milestones.
+`Option`/`Result`, tuples, enums, generics, traits, union types,
+ownership types, and every other advanced form in
+`docs/language/TYPE_SYSTEM.md` remain future milestones. Session 14 added
+user-declared **structs** (nominal types, one per declaration) and
+**arrays** (`Array<T, N>`, structural/canonical) — see
+`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`.
 
 Type identity is the interned [`TypeId`]; equality is canonical identity
 through [`TypeTable::canonical`] and [`TypeTable::unify`]. Compatibility is
@@ -401,15 +404,29 @@ Call checking is real but bounded by what the current type model supports:
 Function types carry parameter and result types; there is no closure,
 generic, or higher-order function typing at this stage.
 
-## 18. Member / Index Boundary
+## 18. Member / Index Typing (session 14)
 
-Member access and indexing depend on user-defined types, which do not
-exist yet. Both are **deferred honestly**: the base (and index) expressions
-are typed, and the member/index expression itself gets a fresh
-unconstrained inference variable — never silently accepted as a specific
-type, never a fabricated error. The existing session-05 deferral of
-member/index assignment writability therefore remains in force, and
-`o.f = 2; arr[0] = 3;` type-checks without inventing collection semantics.
+Member access and indexing are implemented for structs and arrays
+(`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`):
+
+- `base.field` requires `base` to be a struct (`E-T07`) and `field` to be
+a declared member (`E-T08`); the expression types as the field type.
+- `base[i]` requires `base` to be an array (`E-T09`) and `i` to be `Int`
+  (`E-T10`); the expression types as the element type. A **constant**
+  index that is out of range (`< 0` or `>= len`) is rejected (`E-T11`); a
+  variable index is bounds-checked at runtime (`E-R10`).
+- Struct literals must name every declared field exactly once (`E-T12`
+  unknown, `E-T13` missing, `E-T14` duplicate); array literals must be
+  non-empty (`E-T17`) with one common element type.
+- Member/index **assignment** types the stored value against the
+  field/element type and requires the base binding to be `mut` (a
+  semantic `AssignmentToImmutable` error, never doubled by the type
+  checker).
+- Struct types are nominal and never inference variables, so member/index
+  resolution is a table lookup. When the base is an *unresolved*
+  inference variable (a parameter pinned only at call sites), the checker
+  records the expression and re-resolves it in a second pass once the
+  base type is known.
 
 ## 19. Diagnostics
 
@@ -425,6 +442,18 @@ range: `E-T01` … `E-T06`.
 | E-T04| `NotCallable`      | `cannot call a value of type \`Int\``                    |
 | E-T05| `WrongArgumentCount` | `expected \`1\` arguments, found \`2\``                |
 | E-T06| `NotIterable`      | `cannot iterate over a value of type \`Int\``            |
+| E-T07| `MemberAccessOnNonStruct` | `cannot access member \`x\` of a value of type \`Int\`` |
+| E-T08| `UnknownMember`    | `struct \`P\` has no field named \`z\``                |
+| E-T09| `IndexOnNonArray`  | `cannot index a value of type \`Int\``                 |
+| E-T10| `InvalidIndexType` | `an array index must be an \`Int\`, found \`Str\``     |
+| E-T11| `IndexOutOfRange`  | `array index \`5\` is out of bounds for an array of length 2` |
+| E-T12| `UnknownStructField` | `struct \`P\` has no field named \`z\``              |
+| E-T13| `MissingStructField` | `struct literal for \`P\` is missing the field \`y\``  |
+| E-T14| `DuplicateFieldInit` | `field \`x\` is initialized more than once`             |
+| E-T15| `UnknownType`      | `cannot find type \`Missing\` in this scope`            |
+| E-T16| `InvalidArrayLength` | `invalid array length: …`                             |
+| E-T17| `EmptyArrayLiteral`  | `cannot infer the element type of an empty array literal` |
+| E-T18| `InvalidAggregateLayout` | `the struct \`Node\` is recursive and has no finite size` |
 
 Every error carries the exact offending span; `E-T01` on assignment also
 carries the target span as a related location, which the CLI renders as
@@ -487,7 +516,6 @@ Compiler input is untrusted. The checker:
 
 - No implicit numeric conversions: mixed integer/float operations are
   rejected until a conversion design lands (documented decision, §13.1).
-- Member/index typing is deferred until user-defined types exist (§18).
 - Function signatures are inferred from usage; there is no explicit
   signature syntax, no generic function typing, no closures.
 - A function with no typed `return` keeps an unresolved result type; calls
@@ -525,7 +553,13 @@ and every rejection path) documented in
   mixed-numeric rejection and no-truthiness rule.
 - **Assignment**: valid, incompatible (`E-T01` with expected/actual/related
   spans), immutable/const single-error behavior, compound assignment,
-  chains, member/index deferral.
+  chains, member/index assignment typing.
+- **Aggregates (session 14)**: struct/array literal typing (`E-T12`–`E-T17`),
+  member/index typing (`E-T07`–`E-T10`), constant-index range checks
+  (`E-T11`), recursive/empty/oversized layout rejection (`E-T18`),
+  deferred member resolution through call-site-pinned parameters —
+  documented in `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`
+  and covered in `tests/aggregate.rs`.
 - **Calls**: valid calls, arity (`E-T05`), non-callable values (`E-T04`),
   argument conflicts (`E-T01`), result propagation, recursion, deferred
   unknown callees, unresolved callee silence.
@@ -564,9 +598,8 @@ As before:
     cargo build
     git diff --check
 
-Total suite after session 07: **458 tests** (52 CLI + 50 lexer + 88 parser
-+ 62 parser hardening + 72 semantics + 12 source + 122 typecheck), all
-passing.
+Total suite after session 14: **762 tests** (see
+`NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown), all passing.
 
 ## 26. Later Milestones
 
@@ -574,7 +607,8 @@ The type-system foundation (sessions 06–07) deliberately stops before
 advanced features. Cleanly deferred to later milestones:
 
 - implicit conversions and numeric promotion rules;
-- user-defined types (structs, enums, tuples) and member/index typing;
+- enums and tuples; generic user-defined types; advanced member/index
+  forms (e.g. indexing `Str` and other built-ins);
 - generics, traits/interfaces, type aliases, optional/result types;
 - a general bidirectional inference engine beyond the pinned
   expected-type directions of session 07 (see

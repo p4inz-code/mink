@@ -151,10 +151,27 @@ string-data region. A bad index is the new `E-R09`:
 
 - No ownership/borrow checking; no GC.
 - No arbitrary raw-pointer syntax (`&`, casts, address-of).
-- No structs, arrays, generics, or closures.
+- No generics or closures. (Structs and arrays arrived in session 14 — see
+  `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`.)
 - No string concatenation, slicing, or mutation of literals.
 - No pointer subtraction (`p - p`), pointer/pointer arithmetic, or
   pointer/`Int` equality.
+
+### 8.1 Pointer/aggregate interaction (session 14)
+
+- Struct and array values are stored entirely in stack slots and argument
+  copies; they never flow through the `rt_mem_*` intrinsics, which
+  operate on raw 8-byte words at typed `Ptr<Int>` addresses. A struct or
+  array value is never a `Ptr<Int>` and vice versa (`E-T01`).
+- A struct **field** may be of type `Str` or `Ptr<Int>`: the field holds
+  the single-word value exactly as a local would, and reading the field
+  yields a value that can be passed to the string/pointer intrinsics or
+  compared/arithmetic'd exactly like a local of the same type. Strings and
+  pointers therefore compose with aggregates by value, with no special
+  rules.
+- Aggregate values are bounded by `MAX_AGGREGATE_BYTES` (1 MiB), so they
+  always fit the arena's addressing model even though they never touch
+  the heap.
 
 ## 9. Validation
 
@@ -170,7 +187,7 @@ string-data region. A bad index is the new `E-R09`:
   printing (including escapes and UTF-8), `rt_str_alloc` round trips,
   zero-fill, and every string error path.
 
-Full suite after session 13: **700 tests**, all passing (see
+Full suite after session 14: **762 tests**, all passing (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
 
 ## 10. Known limitations

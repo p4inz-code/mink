@@ -40,6 +40,33 @@ pub enum TypeErrorKind {
     WrongArgumentCount,
     /// A `for` loop iterates over a value that is not a range.
     NotIterable,
+    /// A member is accessed on a value whose type is not a struct.
+    MemberAccessOnNonStruct,
+    /// A struct has no field with the accessed name.
+    UnknownMember,
+    /// A value whose type is not an array is indexed.
+    IndexOnNonArray,
+    /// An array is indexed by a value that is not an `Int`.
+    InvalidIndexType,
+    /// An array is indexed by a constant that is out of bounds.
+    IndexOutOfRange,
+    /// A struct literal initializes a field the struct does not declare.
+    UnknownStructField,
+    /// A struct literal omits a declared field.
+    MissingStructField,
+    /// A struct literal initializes the same field twice.
+    DuplicateFieldInit,
+    /// A type name does not denote a known type.
+    UnknownType,
+    /// An array type's length is invalid (not a positive literal, or its
+    /// size overflows the runtime model).
+    InvalidArrayLength,
+    /// An array literal has no elements, so its element type cannot be
+    /// inferred.
+    EmptyArrayLiteral,
+    /// An aggregate's layout is invalid: a recursive struct, an empty
+    /// struct, or a value larger than the runtime memory model.
+    InvalidAggregateLayout,
 }
 
 impl TypeErrorKind {
@@ -56,6 +83,18 @@ impl TypeErrorKind {
             Self::NotCallable => "E-T04",
             Self::WrongArgumentCount => "E-T05",
             Self::NotIterable => "E-T06",
+            Self::MemberAccessOnNonStruct => "E-T07",
+            Self::UnknownMember => "E-T08",
+            Self::IndexOnNonArray => "E-T09",
+            Self::InvalidIndexType => "E-T10",
+            Self::IndexOutOfRange => "E-T11",
+            Self::UnknownStructField => "E-T12",
+            Self::MissingStructField => "E-T13",
+            Self::DuplicateFieldInit => "E-T14",
+            Self::UnknownType => "E-T15",
+            Self::InvalidArrayLength => "E-T16",
+            Self::EmptyArrayLiteral => "E-T17",
+            Self::InvalidAggregateLayout => "E-T18",
         }
     }
 }
@@ -168,6 +207,155 @@ impl TypeError {
         }
     }
 
+    /// Creates a custom-kind error at `span` with a rendered `detail` and
+    /// an optional related span. Used by the aggregate rules (`E-T07`…
+    /// `E-T18`), whose messages carry the offending names, types, and
+    /// counts directly.
+    fn custom(
+        kind: TypeErrorKind,
+        span: Span,
+        detail: impl Into<String>,
+        related: Option<Span>,
+    ) -> Self {
+        Self {
+            kind,
+            span,
+            expected: None,
+            actual: Some(detail.into()),
+            operator: None,
+            related,
+        }
+    }
+
+    /// Creates a member-access-on-non-struct error at `span` (`E-T07`).
+    pub fn member_access_on_non_struct(
+        span: Span,
+        member: &str,
+        actual: impl Into<String>,
+    ) -> Self {
+        Self::custom(
+            TypeErrorKind::MemberAccessOnNonStruct,
+            span,
+            format!(
+                "cannot access member `{member}` of a value of type `{}`",
+                actual.into()
+            ),
+            None,
+        )
+    }
+
+    /// Creates an unknown-member error at `span` (`E-T08`).
+    pub fn unknown_member(span: Span, struct_name: &str, member: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::UnknownMember,
+            span,
+            format!("struct `{struct_name}` has no field named `{member}`"),
+            None,
+        )
+    }
+
+    /// Creates an index-on-non-array error at `span` (`E-T09`).
+    pub fn index_on_non_array(span: Span, actual: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::IndexOnNonArray,
+            span,
+            format!("cannot index a value of type `{}`", actual.into()),
+            None,
+        )
+    }
+
+    /// Creates an invalid-index-type error at `span` (`E-T10`).
+    pub fn invalid_index_type(span: Span, actual: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::InvalidIndexType,
+            span,
+            format!("an array index must be an `Int`, found `{}`", actual.into()),
+            None,
+        )
+    }
+
+    /// Creates an out-of-range constant index error at `span` (`E-T11`).
+    pub fn index_out_of_range(span: Span, index: i64, len: u64) -> Self {
+        Self::custom(
+            TypeErrorKind::IndexOutOfRange,
+            span,
+            format!("array index `{index}` is out of bounds for an array of length {len}"),
+            None,
+        )
+    }
+
+    /// Creates an unknown-struct-field error at `span` (`E-T12`).
+    pub fn unknown_struct_field(span: Span, struct_name: &str, field: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::UnknownStructField,
+            span,
+            format!("struct `{struct_name}` has no field named `{field}`"),
+            None,
+        )
+    }
+
+    /// Creates a missing-struct-field error at `span` (`E-T13`).
+    pub fn missing_struct_field(span: Span, struct_name: &str, field: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::MissingStructField,
+            span,
+            format!("struct literal for `{struct_name}` is missing the field `{field}`"),
+            None,
+        )
+    }
+
+    /// Creates a duplicate-field-initializer error at `span` (`E-T14`),
+    /// pointing at the first initializer of the same field as the related
+    /// location.
+    pub fn duplicate_field_init(span: Span, field: &str, first: Span) -> Self {
+        Self::custom(
+            TypeErrorKind::DuplicateFieldInit,
+            span,
+            format!("field `{field}` is initialized more than once"),
+            Some(first),
+        )
+    }
+
+    /// Creates an unknown-type error at `span` (`E-T15`).
+    pub fn unknown_type(span: Span, name: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::UnknownType,
+            span,
+            format!("cannot find type `{name}` in this scope"),
+            None,
+        )
+    }
+
+    /// Creates an invalid-array-length error at `span` (`E-T16`).
+    pub fn invalid_array_length(span: Span, detail: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::InvalidArrayLength,
+            span,
+            format!("invalid array length: {}", detail.into()),
+            None,
+        )
+    }
+
+    /// Creates an empty-array-literal error at `span` (`E-T17`).
+    pub fn empty_array_literal(span: Span) -> Self {
+        Self::custom(
+            TypeErrorKind::EmptyArrayLiteral,
+            span,
+            "cannot infer the element type of an empty array literal".to_string(),
+            None,
+        )
+    }
+
+    /// Creates an invalid-aggregate-layout error at `span` (`E-T18`).
+    pub fn invalid_aggregate_layout(span: Span, detail: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::InvalidAggregateLayout,
+            span,
+            detail.into(),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -222,6 +410,19 @@ impl fmt::Display for TypeError {
                 format!("expected `{expected}` arguments, found `{actual}`")
             }
             TypeErrorKind::NotIterable => format!("cannot iterate over a value of type `{actual}`"),
+            // Aggregate diagnostics carry their full message in `actual`.
+            TypeErrorKind::MemberAccessOnNonStruct
+            | TypeErrorKind::UnknownMember
+            | TypeErrorKind::IndexOnNonArray
+            | TypeErrorKind::InvalidIndexType
+            | TypeErrorKind::IndexOutOfRange
+            | TypeErrorKind::UnknownStructField
+            | TypeErrorKind::MissingStructField
+            | TypeErrorKind::DuplicateFieldInit
+            | TypeErrorKind::UnknownType
+            | TypeErrorKind::InvalidArrayLength
+            | TypeErrorKind::EmptyArrayLiteral
+            | TypeErrorKind::InvalidAggregateLayout => actual.to_string(),
         };
         f.write_str(&message)
     }

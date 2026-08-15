@@ -28,9 +28,9 @@ use crate::typecheck::TypeId;
 
 use super::error::MirError;
 use super::{
-    BlockId, LocalId, MirBlock, MirFn, MirItemKind, MirOperand, MirOperandKind, MirProgram,
-    MirRvalue, MirRvalueKind, MirStatic, MirStmt, MirStmtKind, MirTarget, MirTargetKind,
-    MirTerminator,
+    BlockId, LocalId, MirBlock, MirFn, MirItemKind, MirOperand, MirOperandKind, MirPlaceStepKind,
+    MirProgram, MirRvalue, MirRvalueKind, MirStatic, MirStmt, MirStmtKind, MirTarget,
+    MirTargetKind, MirTerminator,
 };
 
 /// Validates `program`, returning every structural problem found
@@ -149,6 +149,14 @@ fn check_target(
             check_operand(base, local_count, errors, type_count);
             check_operand(index, local_count, errors, type_count);
         }
+        MirTargetKind::Place { root, steps } => {
+            check_local(root, target.span, local_count, errors);
+            for step in steps {
+                if let MirPlaceStepKind::Index(index) = &step.kind {
+                    check_operand(index, local_count, errors, type_count);
+                }
+            }
+        }
     }
 }
 
@@ -185,6 +193,16 @@ fn check_rvalue(
         MirRvalueKind::Index { base, index } => {
             check_operand(base, local_count, errors, type_count);
             check_operand(index, local_count, errors, type_count);
+        }
+        MirRvalueKind::StructLit { fields } => {
+            for (_, value) in fields {
+                check_operand(value, local_count, errors, type_count);
+            }
+        }
+        MirRvalueKind::ArrayLit { elems } => {
+            for elem in elems {
+                check_operand(elem, local_count, errors, type_count);
+            }
         }
     }
 }

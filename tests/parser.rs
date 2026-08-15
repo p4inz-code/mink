@@ -6,7 +6,7 @@
 
 use mink::ast::{
     AssignOp, BinaryOp, Block, ElseBranch, Expr, ExprKind, Ident, IfStmt, Item, ItemKind, Stmt,
-    StmtKind, UnaryOp,
+    StmtKind, Ty, TyKind, UnaryOp,
 };
 use mink::parser::{ParseErrorKind, ParseOutput, parse};
 use mink::source::{SourceMap, Span};
@@ -1245,6 +1245,25 @@ fn walk_item(item: &Item, text_len: u32, src: &str) {
             walk_ident(&binding.name, text_len, src);
             walk_expr(&binding.init, text_len, src);
         }
+        ItemKind::Struct(s) => {
+            walk_ident(&s.name, text_len, src);
+            for field in &s.fields {
+                walk_ident(&field.name, text_len, src);
+                walk_ty(&field.ty, text_len);
+            }
+        }
+    }
+}
+
+fn walk_ty(ty: &Ty, text_len: u32) {
+    assert_span_ok(ty.span, text_len, "type");
+    match &ty.kind {
+        TyKind::Named(ident) => walk_ident(ident, text_len, "type"),
+        TyKind::Ptr(inner) => walk_ty(inner, text_len),
+        TyKind::Array { elem, len } => {
+            walk_ty(elem, text_len);
+            walk_expr(len, text_len, "type");
+        }
     }
 }
 
@@ -1339,6 +1358,18 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
         ExprKind::Index { base, index } => {
             walk_expr(base, text_len, src);
             walk_expr(index, text_len, src);
+        }
+        ExprKind::StructLit { name, fields } => {
+            walk_ident(name, text_len, src);
+            for field in fields {
+                walk_ident(&field.name, text_len, src);
+                walk_expr(&field.value, text_len, src);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for elem in elems {
+                walk_expr(elem, text_len, src);
+            }
         }
         ExprKind::Group(inner) => walk_expr(inner, text_len, src),
     }

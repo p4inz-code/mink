@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use crate::ast::{
     Ast, Block, ConstItem, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind,
-    LetItem, Param, Stmt, StmtKind,
+    LetItem, Param, Stmt, StmtKind, StructItem,
 };
 use crate::semantics::{SemanticResult, SymbolId};
 use crate::source::Span;
@@ -34,7 +34,7 @@ use crate::typecheck::{TypeId, TypeKind, TypeResult, TypeTable};
 use super::error::HirError;
 use super::{
     HirBlock, HirConst, HirElseBranch, HirExpr, HirExprKind, HirFn, HirIdent, HirIf, HirItem,
-    HirItemKind, HirLet, HirName, HirParam, HirProgram, HirStmt, HirStmtKind,
+    HirItemKind, HirLet, HirName, HirParam, HirProgram, HirStmt, HirStmtKind, HirStruct,
 };
 
 /// Lowers `ast` with its semantic and type results into HIR.
@@ -127,12 +127,25 @@ impl<'a> Lowerer<'a> {
     fn lower_item(&mut self, item: &Item) -> HirItem {
         let kind = match &item.kind {
             ItemKind::Fn(f) => HirItemKind::Fn(self.lower_fn(f, item.span)),
+            ItemKind::Struct(s) => HirItemKind::Struct(self.lower_struct(s)),
             ItemKind::Let(binding) => HirItemKind::Let(self.lower_let(binding, item.span)),
             ItemKind::Const(binding) => HirItemKind::Const(self.lower_const(binding, item.span)),
         };
         HirItem {
             kind,
             span: item.span,
+        }
+    }
+
+    /// A struct declaration lowers to a plain name: struct names are type
+    /// names, not symbols, and their fields live in the type table.
+    fn lower_struct(&mut self, s: &StructItem) -> HirStruct {
+        HirStruct {
+            name: HirName {
+                name: s.name.name.clone(),
+                span: s.name.span,
+            },
+            span: s.span,
         }
     }
 
@@ -295,6 +308,27 @@ impl<'a> Lowerer<'a> {
                 base: Box::new(self.lower_expr(base)),
                 index: Box::new(self.lower_expr(index)),
             },
+            ExprKind::StructLit { name, fields } => HirExprKind::StructLit {
+                name: HirName {
+                    name: name.name.clone(),
+                    span: name.span,
+                },
+                fields: fields
+                    .iter()
+                    .map(|field| {
+                        (
+                            HirName {
+                                name: field.name.name.clone(),
+                                span: field.name.span,
+                            },
+                            self.lower_expr(&field.value),
+                        )
+                    })
+                    .collect(),
+            },
+            ExprKind::ArrayLit(elems) => {
+                HirExprKind::ArrayLit(elems.iter().map(|elem| self.lower_expr(elem)).collect())
+            }
             ExprKind::Group(inner) => {
                 // Syntax-only grouping: lower the inner expression and keep
                 // the parentheses' span, so the node covers the source text

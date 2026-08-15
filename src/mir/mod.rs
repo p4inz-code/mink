@@ -316,20 +316,54 @@ pub enum MirTargetKind {
     /// Module-level storage (a module-scope `let`, which is assignable when
     /// declared `mut`). Referenced by its declaration's [`SymbolId`].
     Static(SymbolId),
-    /// A member place: `base.member`.
+    /// A member place: `base.member` whose base is a plain local (a
+    /// single-step place). The base is the evaluated local operand.
     Member {
         /// The evaluated base value.
         base: MirOperand,
         /// The member name.
         member: MirName,
     },
-    /// An index place: `base[index]`.
+    /// An index place: `base[index]` whose base is a plain local (a
+    /// single-step place).
     Index {
         /// The evaluated base value.
         base: MirOperand,
         /// The evaluated index value.
         index: MirOperand,
     },
+    /// A multi-step storage place: `root` (a local holding the outermost
+    /// value) plus a path of field/index steps to the addressed element.
+    /// Chains are kept structurally so an assignment reaches the root
+    /// value instead of a temporary copy of an intermediate member/index
+    /// result (the backend resolves each step's byte offset/stride from
+    /// the deterministic layout).
+    Place {
+        /// The local holding the outermost value of the chain.
+        root: LocalId,
+        /// The steps from the root to the addressed element, in source
+        /// order (outermost first).
+        steps: Vec<MirPlaceStep>,
+    },
+}
+
+/// One step of a multi-step storage place ([`MirTargetKind::Place`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirPlaceStep {
+    /// The kind of step.
+    pub kind: MirPlaceStepKind,
+    /// Span of the member/index expression this step was lowered from.
+    pub span: Span,
+}
+
+/// The kind of a [`MirPlaceStep`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MirPlaceStepKind {
+    /// A field selection: `value.field`.
+    Field(MirName),
+    /// An index selection: `value[index]`, with the index evaluated to an
+    /// operand.
+    Index(MirOperand),
 }
 
 /// A value computed by a statement: an operand read, a unary/binary
@@ -411,6 +445,22 @@ pub enum MirRvalueKind {
         base: MirOperand,
         /// The evaluated index value.
         index: MirOperand,
+    },
+    /// A struct literal: `Name { field: value, ... }`. Every field value is
+    /// already evaluated to an operand; the materialized struct value is
+    /// stored into the rvalue's target local, one field at a time (the
+    /// backend resolves field offsets from the struct's deterministic
+    /// layout).
+    StructLit {
+        /// The field initializers, in source order: (name, value).
+        fields: Vec<(MirName, MirOperand)>,
+    },
+    /// An array literal: `[elem, ...]`. Every element is already evaluated
+    /// to an operand; the materialized array value is stored into the
+    /// rvalue's target local element by element.
+    ArrayLit {
+        /// The elements, in source order.
+        elems: Vec<MirOperand>,
     },
 }
 

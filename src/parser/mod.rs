@@ -28,7 +28,8 @@ mod error;
 
 use crate::ast::{
     AssignOp, Ast, BinaryOp, Block, ConstItem, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt,
-    Item, ItemKind, LetItem, Param, Stmt, StmtKind, UnaryOp,
+    Item, ItemKind, LetItem, Param, Stmt, StmtKind, StructField, StructFieldInit, StructItem, Ty,
+    TyKind, UnaryOp,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::source::{SourceFile, Span};
@@ -108,6 +109,13 @@ struct Parser<'a> {
     /// that outer, still-open delimiters do not cascade into further errors
     /// for the same root cause.
     eof_unclosed_reported: bool,
+    /// Whether the expression being parsed sits directly before a `{ ... }`
+    /// block in the grammar (`if`/`while` conditions, `for` iterables). In
+    /// that position an `Ident {` is the block, not a struct literal, so
+    /// struct literals are disabled at the top level of such expressions
+    /// (parenthesized groups re-enable them). See
+    /// `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`.
+    in_block_context: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -122,6 +130,7 @@ impl<'a> Parser<'a> {
             errors: Vec::new(),
             open_delims: Vec::new(),
             eof_unclosed_reported: false,
+            in_block_context: false,
         }
     }
 
@@ -261,7 +270,7 @@ impl<'a> Parser<'a> {
     fn recover_item(&mut self) {
         while !matches!(
             self.current_kind(),
-            TokenKind::Fn | TokenKind::Let | TokenKind::Const | TokenKind::Eof
+            TokenKind::Fn | TokenKind::Struct | TokenKind::Let | TokenKind::Const | TokenKind::Eof
         ) {
             if self.current_kind() == TokenKind::LBrace {
                 self.skip_balanced_brace_group();
@@ -307,10 +316,12 @@ impl<'a> Parser<'a> {
                     // Empty statement at module scope: consume silently.
                     let _ = self.bump();
                 }
-                TokenKind::Fn | TokenKind::Let | TokenKind::Const => match self.parse_item() {
-                    Ok(item) => items.push(item),
-                    Err(()) => self.recover_item(),
-                },
+                TokenKind::Fn | TokenKind::Struct | TokenKind::Let | TokenKind::Const => {
+                    match self.parse_item() {
+                        Ok(item) => items.push(item),
+                        Err(()) => self.recover_item(),
+                    }
+                }
                 _ => {
                     let token = self.current();
                     self.record_error(ParseErrorKind::ExpectedItem, token.span());
@@ -330,6 +341,13 @@ impl<'a> Parser<'a> {
                     span,
                 })
             }
+            TokenKind::Struct => {
+                let (struct_item, span) = self.parse_struct()?;
+                Ok(Item {
+                    kind: ItemKind::Struct(struct_item),
+                    span,
+                })
+            }
             TokenKind::Let => {
                 let (binding, span) = self.parse_let()?;
                 Ok(Item {
@@ -345,6 +363,182 @@ impl<'a> Parser<'a> {
                 })
             }
             _ => Err(()),
+        }
+    }
+
+    /// Parses a `struct Name { field: Type, ... }` declaration.
+    fn parse_struct(&mut self) -> Result<(StructItem, Span), ()> {
+        let start = self.bump().span(); // 'struct'
+        let name = self.expect_ident()?;
+        if self.current_kind() != TokenKind::LBrace {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedBlock, token.span());
+            return Err(());
+        }
+        let open = self.bump().span();
+        self.open_delims.push((TokenKind::LBrace, open));
+        let mut fields = Vec::new();
+        loop {
+            match self.current_kind() {
+                TokenKind::RBrace => {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    let span = self.join(start, close);
+                    return Ok((StructItem { name, fields, span }, span));
+                }
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                    return Err(());
+                }
+                _ => {
+                    match self.parse_struct_field() {
+                        Ok(field) => fields.push(field),
+                        Err(()) => self.skip_to_field_boundary(),
+                    }
+                    match self.current_kind() {
+                        TokenKind::Comma => {
+                            let _ = self.bump();
+                            if self.current_kind() == TokenKind::RBrace {
+                                break;
+                            }
+                        }
+                        TokenKind::RBrace => break,
+                        TokenKind::Eof => {
+                            self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                            return Err(());
+                        }
+                        _ => {
+                            let token = self.current();
+                            self.record_error(ParseErrorKind::ExpectedComma, token.span());
+                            self.skip_to_field_boundary();
+                            if self.current_kind() == TokenKind::Comma {
+                                let _ = self.bump();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let close = self.bump().span();
+        self.open_delims.pop();
+        let span = self.join(start, close);
+        Ok((StructItem { name, fields, span }, span))
+    }
+
+    /// Parses one `name: Type` struct field declaration.
+    fn parse_struct_field(&mut self) -> Result<StructField, ()> {
+        let name = self.expect_ident()?;
+        if self.current_kind() != TokenKind::Colon {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedColon, token.span());
+            return Err(());
+        }
+        let _ = self.bump(); // ':'
+        let ty = self.parse_type()?;
+        let span = self.join(name.span, ty.span);
+        Ok(StructField { name, ty, span })
+    }
+
+    /// Parses a type: a named type (`Int`, a struct name), `Ptr<T>`, or a
+    /// fixed-length array type `[T; N]`.
+    fn parse_type(&mut self) -> Result<Ty, ()> {
+        let token = self.current();
+        match token.kind() {
+            TokenKind::Ident => {
+                let _ = self.bump();
+                let name = self.text(token.span());
+                let ident = Ident {
+                    name,
+                    span: token.span(),
+                };
+                if self.current_kind() == TokenKind::Lt {
+                    if ident.name != "Ptr" {
+                        // Only `Ptr<T>` has the generic form; anything else
+                        // is rejected rather than silently misparsed.
+                        let lt = self.current();
+                        self.record_error(ParseErrorKind::ExpectedGT, lt.span());
+                        while !matches!(
+                            self.current_kind(),
+                            TokenKind::Gt | TokenKind::Comma | TokenKind::RBrace | TokenKind::Eof
+                        ) {
+                            let _ = self.bump();
+                        }
+                        if self.current_kind() == TokenKind::Gt {
+                            let _ = self.bump();
+                        }
+                        return Err(());
+                    }
+                    let _ = self.bump(); // '<'
+                    let inner = self.parse_type()?;
+                    if self.current_kind() != TokenKind::Gt {
+                        let bad = self.current();
+                        self.record_error(ParseErrorKind::ExpectedGT, bad.span());
+                        return Err(());
+                    }
+                    let gt = self.bump().span();
+                    let span = self.join(token.span(), gt);
+                    Ok(Ty {
+                        kind: TyKind::Ptr(Box::new(inner)),
+                        span,
+                    })
+                } else {
+                    Ok(Ty {
+                        kind: TyKind::Named(ident),
+                        span: token.span(),
+                    })
+                }
+            }
+            TokenKind::LBracket => {
+                let open = self.bump().span();
+                self.open_delims.push((TokenKind::LBracket, open));
+                let elem = self.parse_type()?;
+                if self.current_kind() != TokenKind::Semi {
+                    let bad = self.current();
+                    self.record_error(ParseErrorKind::ExpectedSemicolon, bad.span());
+                    return Err(());
+                }
+                let _ = self.bump(); // ';'
+                let len = self.parse_array_len()?;
+                let close = self.expect_bracket_close()?;
+                let span = self.join(open, close);
+                Ok(Ty {
+                    kind: TyKind::Array {
+                        elem: Box::new(elem),
+                        len,
+                    },
+                    span,
+                })
+            }
+            _ => {
+                self.record_error(ParseErrorKind::ExpectedType, token.span());
+                Err(())
+            }
+        }
+    }
+
+    /// Parses the length of an array type: a plain integer literal.
+    fn parse_array_len(&mut self) -> Result<Expr, ()> {
+        let token = self.current();
+        if token.kind() == TokenKind::Int {
+            let _ = self.bump();
+            Ok(Expr {
+                kind: ExprKind::Int,
+                span: token.span(),
+            })
+        } else {
+            self.record_error(ParseErrorKind::ExpectedIntegerLiteral, token.span());
+            Err(())
+        }
+    }
+
+    /// Skips tokens up to (but not consuming) the next field boundary: `,`,
+    /// `}`, or `Eof`. Used to recover from a malformed struct field.
+    fn skip_to_field_boundary(&mut self) {
+        while !matches!(
+            self.current_kind(),
+            TokenKind::Comma | TokenKind::RBrace | TokenKind::Eof
+        ) {
+            let _ = self.bump();
         }
     }
 
@@ -558,7 +752,12 @@ impl<'a> Parser<'a> {
 
     fn parse_if_stmt(&mut self) -> Result<IfStmt, ()> {
         let start = self.bump().span(); // 'if'
+        // The condition is followed by a `{ ... }` block in the grammar, so
+        // an `Ident {` in it is the block, never a struct literal.
+        let saved = self.in_block_context;
+        self.in_block_context = true;
         let cond = self.parse_expression()?;
+        self.in_block_context = saved;
         let then_block = self.parse_body_or_recover();
         let else_branch = if self.current_kind() == TokenKind::Else {
             let _ = self.bump();
@@ -600,7 +799,10 @@ impl<'a> Parser<'a> {
 
     fn parse_while(&mut self) -> Result<Stmt, ()> {
         let start = self.bump().span(); // 'while'
+        let saved = self.in_block_context;
+        self.in_block_context = true;
         let cond = self.parse_expression()?;
+        self.in_block_context = saved;
         let body = self.parse_body_or_recover();
         let span = self.join(start, body.span);
         Ok(Stmt {
@@ -618,7 +820,10 @@ impl<'a> Parser<'a> {
             return Err(());
         }
         let _ = self.bump(); // 'in'
+        let saved = self.in_block_context;
+        self.in_block_context = true;
         let iterable = self.parse_expression()?;
+        self.in_block_context = saved;
         let body = self.parse_body_or_recover();
         let span = self.join(start, body.span);
         Ok(Stmt {
@@ -1100,15 +1305,31 @@ impl<'a> Parser<'a> {
             TokenKind::Ident => {
                 let _ = self.bump();
                 let name = self.text(span);
-                Ok(Expr {
-                    kind: ExprKind::Ident(Ident { name, span }),
-                    span,
-                })
+                let ident = Ident { name, span };
+                // `Name { ... }` is a struct literal unless the expression
+                // sits directly before a block in the grammar (`if`/
+                // `while` conditions, `for` iterables), where the `{` opens
+                // the block instead.
+                if !self.in_block_context && self.current_kind() == TokenKind::LBrace {
+                    self.parse_struct_literal(ident)
+                } else {
+                    Ok(Expr {
+                        kind: ExprKind::Ident(ident),
+                        span,
+                    })
+                }
             }
+            TokenKind::LBracket => self.parse_array_literal(),
             TokenKind::LParen => {
                 let open = self.bump().span();
                 self.open_delims.push((TokenKind::LParen, open));
+                // A parenthesized group is a self-contained expression:
+                // struct literals inside it are enabled even in a block
+                // context (`if (Point { x: 1 }) { }`).
+                let saved = self.in_block_context;
+                self.in_block_context = false;
                 let inner = self.parse_expression()?;
+                self.in_block_context = saved;
                 let close = self.expect_paren_close()?;
                 let span = self.join(open, close);
                 Ok(Expr {
@@ -1125,6 +1346,131 @@ impl<'a> Parser<'a> {
                 Err(())
             }
         }
+    }
+
+    /// Parses a struct literal `Name { field: value, ... }` after the name
+    /// token, including a trailing comma.
+    fn parse_struct_literal(&mut self, name: Ident) -> Result<Expr, ()> {
+        let open = self.bump().span(); // '{'
+        self.open_delims.push((TokenKind::LBrace, open));
+        let mut fields = Vec::new();
+        if self.current_kind() == TokenKind::RBrace {
+            let close = self.bump().span();
+            self.open_delims.pop();
+            let span = self.join(name.span, close);
+            return Ok(Expr {
+                kind: ExprKind::StructLit { name, fields },
+                span,
+            });
+        }
+        loop {
+            if self.current_kind() == TokenKind::Eof {
+                self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                return Err(());
+            }
+            match self.parse_struct_field_init() {
+                Ok(field) => fields.push(field),
+                Err(()) => self.skip_to_field_boundary(),
+            }
+            match self.current_kind() {
+                TokenKind::Comma => {
+                    let _ = self.bump();
+                    if self.current_kind() == TokenKind::RBrace {
+                        break;
+                    }
+                }
+                TokenKind::RBrace => break,
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                    return Err(());
+                }
+                _ => {
+                    let token = self.current();
+                    self.record_error(ParseErrorKind::ExpectedComma, token.span());
+                    self.skip_to_field_boundary();
+                    if self.current_kind() == TokenKind::Comma {
+                        let _ = self.bump();
+                    }
+                }
+            }
+        }
+        let close = self.bump().span();
+        self.open_delims.pop();
+        let span = self.join(name.span, close);
+        Ok(Expr {
+            kind: ExprKind::StructLit { name, fields },
+            span,
+        })
+    }
+
+    /// Parses one `name: value` struct-literal initializer.
+    fn parse_struct_field_init(&mut self) -> Result<StructFieldInit, ()> {
+        let name = self.expect_ident()?;
+        if self.current_kind() != TokenKind::Colon {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedColon, token.span());
+            return Err(());
+        }
+        let _ = self.bump(); // ':'
+        let value = self.parse_expression()?;
+        let span = self.join(name.span, value.span);
+        Ok(StructFieldInit { name, value, span })
+    }
+
+    /// Parses an array literal `[elem, ...]`, including a trailing comma.
+    fn parse_array_literal(&mut self) -> Result<Expr, ()> {
+        let open = self.bump().span(); // '['
+        self.open_delims.push((TokenKind::LBracket, open));
+        let mut elems = Vec::new();
+        if self.current_kind() == TokenKind::RBracket {
+            let close = self.bump().span();
+            self.open_delims.pop();
+            let span = self.join(open, close);
+            return Ok(Expr {
+                kind: ExprKind::ArrayLit(elems),
+                span,
+            });
+        }
+        loop {
+            if self.current_kind() == TokenKind::Eof {
+                self.report_unclosed(TokenKind::LBracket, ParseErrorKind::UnclosedBracket);
+                return Err(());
+            }
+            elems.push(self.parse_expression()?);
+            match self.current_kind() {
+                TokenKind::Comma => {
+                    let _ = self.bump();
+                    if self.current_kind() == TokenKind::RBracket {
+                        break;
+                    }
+                }
+                TokenKind::RBracket => break,
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBracket, ParseErrorKind::UnclosedBracket);
+                    return Err(());
+                }
+                _ => {
+                    let token = self.current();
+                    self.record_error(ParseErrorKind::ExpectedComma, token.span());
+                    while !matches!(
+                        self.current_kind(),
+                        TokenKind::Comma | TokenKind::RBracket | TokenKind::Eof
+                    ) {
+                        let _ = self.bump();
+                    }
+                    if self.current_kind() == TokenKind::Comma {
+                        let _ = self.bump();
+                    }
+                }
+            }
+        }
+        let close = self.bump().span();
+        self.open_delims.pop();
+        let span = self.join(open, close);
+        Ok(Expr {
+            kind: ExprKind::ArrayLit(elems),
+            span,
+        })
     }
 
     /// Consumes an identifier, recording [`ParseErrorKind::ExpectedIdentifier`]

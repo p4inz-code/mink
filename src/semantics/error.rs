@@ -47,6 +47,10 @@ pub enum SemanticErrorKind {
     ContinueOutsideLoop,
     /// `return;` appearing outside a function body.
     ReturnOutsideFunction,
+    /// Two `struct` declarations of the same name at module scope.
+    DuplicateStruct,
+    /// A struct declares the same field name twice.
+    DuplicateField,
 }
 
 impl SemanticErrorKind {
@@ -63,6 +67,8 @@ impl SemanticErrorKind {
             Self::BreakOutsideLoop => "E-S05",
             Self::ContinueOutsideLoop => "E-S06",
             Self::ReturnOutsideFunction => "E-S07",
+            Self::DuplicateStruct => "E-S08",
+            Self::DuplicateField => "E-S09",
         }
     }
 }
@@ -153,6 +159,28 @@ impl SemanticError {
         }
     }
 
+    /// Creates a duplicate-struct error for `name` at `span`, whose original
+    /// declaration is at `original`.
+    pub fn duplicate_struct(name: impl Into<String>, span: Span, original: Span) -> Self {
+        Self {
+            kind: SemanticErrorKind::DuplicateStruct,
+            span,
+            name: name.into(),
+            original: Some(original),
+        }
+    }
+
+    /// Creates a duplicate-field error for `name` at `span`, whose original
+    /// declaration is at `original`.
+    pub fn duplicate_field(name: impl Into<String>, span: Span, original: Span) -> Self {
+        Self {
+            kind: SemanticErrorKind::DuplicateField,
+            span,
+            name: name.into(),
+            original: Some(original),
+        }
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> SemanticErrorKind {
         self.kind
@@ -201,6 +229,12 @@ impl fmt::Display for SemanticError {
             SemanticErrorKind::ContinueOutsideLoop => "`continue` outside of a loop".to_string(),
             SemanticErrorKind::ReturnOutsideFunction => {
                 "`return` outside of a function".to_string()
+            }
+            SemanticErrorKind::DuplicateStruct => {
+                format!("duplicate definition of struct `{}`", self.name)
+            }
+            SemanticErrorKind::DuplicateField => {
+                format!("duplicate field `{}` in struct declaration", self.name)
             }
         };
         f.write_str(&message)

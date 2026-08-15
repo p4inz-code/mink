@@ -282,9 +282,13 @@ session 06 can consume it without re-running name resolution.
   scope and nested functions.
 - Calling a resolved non-function name is not diagnosed (deferred to type
   checking).
-- Member/index assignment writability is not checked (deferred to type
-  checking).
-- No type/value namespace separation (no types exist yet).
+- Member/index assignment writability is enforced: assigning through a
+  member/index target whose base binding is immutable is
+  `AssignmentToImmutable`, exactly like a plain assignment (session 14).
+- Struct names live in a separate type namespace (session 14): duplicate
+  struct names are `E-S08`, duplicate fields `E-S09`, and a struct name
+  never resolves as a value. Other advanced types (enums, tuples,
+  generics) still do not exist.
 - Duplicate triplets (`let x; let x; let x;`) report each redeclaration after
   the first as a duplicate of the original — deliberate, not a cascade of the
   same root cause.
@@ -296,8 +300,10 @@ tests in `tests/cli.rs` (11 new). Categories:
 
 - **Valid**: declarations, resolution, nested/outer lookup, function calls,
   parameters, for-loop variables, mutable assignment, control-flow context,
-  nested shadowing, order-independent module scope, deferred member/index
-  assignment.
+  nested shadowing, order-independent module scope, member/index assignment
+  through mutable and immutable bases, duplicate struct names (`E-S08`),
+  duplicate fields (`E-S09`), and struct literals never resolving their
+  name as a value.
 - **Invalid**: unresolved names, duplicate definitions (module, function,
   block, parameters, parameter/local collision), immutable/const/param/loop-
   variable/function-name assignment, `break`/`continue` outside loops,

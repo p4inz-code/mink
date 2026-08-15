@@ -22,6 +22,49 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(u32);
 
+/// Stable identity of a user-declared struct within a [`TypeTable`].
+///
+/// Struct ids are assigned sequentially as struct declarations are
+/// registered (in source order) and index the table's [`StructInfo`]
+/// list, so a struct type is identified nominally: two declarations with
+/// the same name are two distinct types (duplicate declarations are
+/// rejected by semantic analysis; the first declaration wins).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StructId(u32);
+
+impl StructId {
+    /// The raw numeric value of this id.
+    pub fn raw(self) -> u32 {
+        self.0
+    }
+
+    /// Creates an id from its raw numeric value.
+    pub(crate) fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+/// The declared fields of a struct: each field's name and the [`TypeId`]
+/// of its declared type, in declaration order. Field offsets and sizes are
+/// computed by the layout engine (`crate::runtime::layout`), never stored
+/// here.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructInfo {
+    /// The struct's declared name.
+    pub name: String,
+    /// The fields, in declaration order.
+    pub fields: Vec<StructFieldInfo>,
+}
+
+/// One field of a [`StructInfo`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructFieldInfo {
+    /// The field's name.
+    pub name: String,
+    /// The field's declared type.
+    pub ty: TypeId,
+}
+
 impl TypeId {
     /// The raw numeric value of this id.
     pub fn raw(self) -> u32 {
@@ -88,6 +131,24 @@ pub enum TypeKind {
     /// blob address but is not a pointer type, so strings cannot be
     /// dereferenced through the raw memory intrinsics.
     Ptr(TypeId),
+    /// A user-declared struct: a named record of typed fields (session 14).
+    /// The struct's fields live in the table's [`StructInfo`] list, indexed
+    /// by the [`StructId`]; types are nominal, so two declarations are two
+    /// distinct types. The deterministic byte layout (field offsets,
+    /// alignment, size) is computed by `crate::runtime::layout`.
+    Struct(StructId),
+    /// A fixed-length array: `len` consecutive values of type `elem`
+    /// (session 14). Arrays are value types with deterministic layout;
+    /// the element count is part of the type identity, so `Array<Int, 2>`
+    /// and `Array<Int, 3>` are distinct types. `len` is always positive
+    /// and its layout must fit the runtime memory model (validated by type
+    /// analysis and the layout engine).
+    Array {
+        /// The element type.
+        elem: TypeId,
+        /// The number of elements.
+        len: u64,
+    },
     /// A function taking `params` and producing `result`.
     Fn {
         /// The parameter types, in declaration order.
@@ -111,6 +172,10 @@ pub enum TypeKind {
 pub struct TypeTable {
     kinds: Vec<TypeKind>,
     interned: HashMap<TypeKind, TypeId>,
+    /// The user-declared structs, in registration order. A struct type's
+    /// [`StructId`] indexes this list; the fields are filled in after all
+    /// struct declarations are registered (module-scope order independence).
+    structs: Vec<StructInfo>,
 }
 
 impl TypeTable {
@@ -243,6 +308,18 @@ impl TypeTable {
                 self.unify(*ia, *ib)?;
                 Ok(a)
             }
+            (TypeKind::Array { elem: ea, len: la }, TypeKind::Array { elem: eb, len: lb }) => {
+                if la != lb {
+                    return Err((a, b));
+                }
+                self.unify(*ea, *eb)?;
+                Ok(a)
+            }
+            // Struct types are nominal: only the identical struct unifies
+            // with itself (caught by the `a == b` check above); a struct
+            // never unifies with any other type, including a differently
+            // registered struct.
+            (TypeKind::Struct(_), _) | (_, TypeKind::Struct(_)) => Err((a, b)),
             (
                 TypeKind::Fn {
                     params: pa,
@@ -288,6 +365,13 @@ impl TypeTable {
             Some(TypeKind::Unit) => "Unit".to_string(),
             Some(TypeKind::Range(elem)) => format!("Range<{}>", self.display(*elem)),
             Some(TypeKind::Ptr(elem)) => format!("Ptr<{}>", self.display(*elem)),
+            Some(TypeKind::Struct(id)) => self
+                .struct_info(*id)
+                .map(|info| info.name.clone())
+                .unwrap_or_else(|| format!("Struct#{}", id.raw())),
+            Some(TypeKind::Array { elem, len }) => {
+                format!("Array<{}, {len}>", self.display(*elem))
+            }
             Some(TypeKind::Fn { params, result }) => {
                 let params = params
                     .iter()
@@ -308,6 +392,47 @@ impl TypeTable {
     /// Whether the table contains no types.
     pub fn is_empty(&self) -> bool {
         self.kinds.is_empty()
+    }
+
+    /// Registers a new user-declared struct and returns its type id. The
+    /// struct is registered with no fields yet (fields are resolved and
+    /// recorded through [`TypeTable::set_struct_fields`] once every struct
+    /// declaration is visible), so struct types can reference each other
+    /// regardless of declaration order. Each declaration registers a
+    /// distinct id; the type is never interned (struct types are nominal).
+    pub(crate) fn push_struct(&mut self, name: String) -> TypeId {
+        let id = StructId::new(self.structs.len() as u32);
+        self.structs.push(StructInfo {
+            name,
+            fields: Vec::new(),
+        });
+        self.push(TypeKind::Struct(id))
+    }
+
+    /// Records the resolved fields of the struct registered under `id`.
+    /// Called once, after every struct declaration is registered.
+    pub(crate) fn set_struct_fields(&mut self, id: StructId, fields: Vec<StructFieldInfo>) {
+        if let Some(info) = self.structs.get_mut(id.raw() as usize) {
+            info.fields = fields;
+        }
+    }
+
+    /// The struct registered under `id`, if any.
+    pub fn struct_info(&self, id: StructId) -> Option<&StructInfo> {
+        self.structs.get(id.raw() as usize)
+    }
+
+    /// All registered structs, in registration order.
+    pub fn structs(&self) -> &[StructInfo] {
+        &self.structs
+    }
+
+    /// The struct id of the struct type `ty`, if `ty` denotes a struct.
+    pub fn struct_id(&self, ty: TypeId) -> Option<StructId> {
+        match self.kind(ty) {
+            Some(TypeKind::Struct(id)) => Some(*id),
+            _ => None,
+        }
     }
 }
 
@@ -353,6 +478,77 @@ mod tests {
         let unified = table.unify(var, a).unwrap();
         assert_eq!(table.canonical(var), a);
         assert_eq!(unified, a);
+    }
+
+    #[test]
+    fn array_types_are_interned_by_element_and_length() {
+        let mut table = TypeTable::new();
+        let int = table.push(TypeKind::Int);
+        let a = table.push(TypeKind::Array { elem: int, len: 2 });
+        let b = table.push(TypeKind::Array { elem: int, len: 2 });
+        let c = table.push(TypeKind::Array { elem: int, len: 3 });
+        let float = table.push(TypeKind::Float);
+        let d = table.push(TypeKind::Array {
+            elem: float,
+            len: 2,
+        });
+        assert_eq!(a, b, "identical array types share one id");
+        assert_ne!(a, c, "length is part of the type identity");
+        assert_ne!(a, d, "element type is part of the type identity");
+        assert_eq!(table.display(a), "Array<Int, 2>");
+        assert_eq!(table.display(d), "Array<Float, 2>");
+    }
+
+    #[test]
+    fn array_unification_is_structural() {
+        let mut table = TypeTable::new();
+        let int = table.push(TypeKind::Int);
+        let a = table.push(TypeKind::Array { elem: int, len: 2 });
+        let var = table.push(TypeKind::Infer(None));
+        let elem_var = table.push(TypeKind::Infer(None));
+        let other = table.push(TypeKind::Array {
+            elem: elem_var,
+            len: 2,
+        });
+        assert!(table.unify(var, a).is_ok());
+        assert_eq!(table.canonical(var), a);
+        // The element variable adopts the element type.
+        assert!(table.unify(other, a).is_ok());
+        assert_eq!(table.canonical(elem_var), int);
+        // Different lengths never unify.
+        let len3 = table.push(TypeKind::Array { elem: int, len: 3 });
+        assert!(table.unify(a, len3).is_err());
+    }
+
+    #[test]
+    fn struct_types_are_nominal_and_hold_fields() {
+        let mut table = TypeTable::new();
+        let int = table.push(TypeKind::Int);
+        let point = table.push_struct("Point".to_string());
+        let other = table.push_struct("Point".to_string());
+        // Two declarations are two distinct types (semantic analysis
+        // rejects duplicates; the first declaration wins).
+        assert_ne!(point, other);
+        let id = table.struct_id(point).unwrap();
+        table.set_struct_fields(
+            id,
+            vec![StructFieldInfo {
+                name: "x".to_string(),
+                ty: int,
+            }],
+        );
+        let info = table.struct_info(id).unwrap();
+        assert_eq!(info.name, "Point");
+        assert_eq!(info.fields.len(), 1);
+        assert_eq!(info.fields[0].name, "x");
+        assert_eq!(table.display(point), "Point");
+        // A struct unifies only with itself.
+        assert!(table.unify(point, point).is_ok());
+        assert!(table.unify(point, other).is_err());
+        assert!(table.unify(point, int).is_err());
+        let var = table.push(TypeKind::Infer(None));
+        assert!(table.unify(var, point).is_ok());
+        assert_eq!(table.canonical(var), point);
     }
 
     #[test]

@@ -30,7 +30,12 @@ use crate::semantics::{SemanticResult, SymbolId};
 use crate::source::{SourceMap, Span};
 
 pub use error::{TypeError, TypeErrorKind};
-pub use ty::{TypeId, TypeKind, TypeTable};
+pub use ty::{StructFieldInfo, StructId, StructInfo, TypeId, TypeKind, TypeTable};
+
+/// The human-readable reason a layout could not be computed (shared with
+/// the backend lowering, which validates aggregate layouts against the
+/// same deterministic engine).
+pub(crate) use checker::layout_error_message;
 
 /// Runs type analysis over `ast`, consuming the session-05 semantic result
 /// and reading literal source text through `sources` (used for the

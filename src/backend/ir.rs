@@ -35,14 +35,19 @@ use super::error::BackendError;
 /// This is the closed classification of the MINK types the first native
 /// subset supports: 64-bit integers, booleans (stored as `0`/`1`), integer
 /// ranges (stored as a two-word value), typed pointers and strings (each a
-/// single word holding an address), and `Unit` (the type of a function that
-/// produces no value). Every other MINK type (`Float`, `Char`, `Null`,
-/// unresolved inference types) is rejected at lowering.
+/// single word holding an address), structs and arrays (session 14: values
+/// occupying a fixed number of words in a slot, with the byte layout
+/// resolved by the lowering stage from the deterministic layout engine),
+/// and `Unit` (the type of a function that produces no value). Every other
+/// MINK type (`Float`, `Char`, `Null`, unresolved inference types) is
+/// rejected at lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BType {
     /// A 64-bit two's-complement integer.
     Int,
-    /// A boolean: `0` (false) or `1` (true).
+    /// A boolean: `0` (false) or `1` (true). Within an aggregate value a
+    /// boolean occupies one byte; as a standalone value it occupies one
+    /// word.
     Bool,
     /// A range of integers: a two-word value carrying the (normalized)
     /// exclusive end and the iteration cursor.
@@ -56,6 +61,15 @@ pub enum BType {
     /// UTF-8 byte blob (immutable image data for literals, a heap block
     /// for `rt_str_alloc` results).
     Str,
+    /// A struct value: a fixed number of words in a slot (see
+    /// [`BLocal::words`]); the field byte offsets and types are carried by
+    /// the field-access instructions. Aggregate values are never returned
+    /// from or stored in module bindings (rejected at lowering).
+    Struct,
+    /// An array value: a fixed number of words in a slot (see
+    /// [`BLocal::words`]); the element size, length, and stride are
+    /// carried by the index-access instructions.
+    Array,
     /// No value (a function that does not produce one).
     Unit,
 }
@@ -66,12 +80,16 @@ impl BType {
         matches!(self, Self::Int | Self::Bool)
     }
 
-    /// The number of 64-bit words a value of this type occupies in a stack
-    /// slot or argument list.
+    /// The number of 64-bit words a scalar value of this type occupies in
+    /// a stack slot or argument list. Struct and array values have a
+    /// per-local word count ([`BLocal::words`]); this returns `1` as a
+    /// scalar fallback and callers that handle aggregates read the local's
+    /// count instead.
     pub fn words(self) -> usize {
         match self {
             Self::Int | Self::Bool | Self::Ptr | Self::Str | Self::Unit => 1,
             Self::Range => 2,
+            Self::Struct | Self::Array => 1,
         }
     }
 
@@ -83,6 +101,8 @@ impl BType {
             Self::Range => "Range<Int>",
             Self::Ptr => "Ptr<Int>",
             Self::Str => "Str",
+            Self::Struct => "struct",
+            Self::Array => "array",
             Self::Unit => "unit",
         }
     }
@@ -173,6 +193,10 @@ pub struct BLocal {
     pub symbol: Option<SymbolId>,
     /// The local's classified value type.
     pub ty: BType,
+    /// The number of 64-bit words the value occupies in its stack slot:
+    /// `ty.words()` for scalars, `ceil(size / 8)` for struct and array
+    /// values (computed from the deterministic layout).
+    pub words: u32,
     /// Whether the slot is written after initialization (parameters and
     /// bindings are immutable in the source; `for` loop variables are
     /// written by the loop machinery).
@@ -346,6 +370,114 @@ pub enum BInstKind {
         target: crate::mir::LocalId,
         /// The range value being iterated (a two-word `Range` slot).
         range: crate::mir::LocalId,
+    },
+    /// Load a struct field of the value in `base` into `target`.
+    /// `field_ty` is the field's classified type, `byte_offset` its byte
+    /// offset within the value, and `size` its byte size (the emitter
+    /// copies exactly `size` bytes, so fields that are not word-aligned —
+    /// booleans, nested all-bool structs — are copied exactly). The
+    /// offsets and sizes are resolved at lowering from the deterministic
+    /// layout, so the emitter never re-computes layout.
+    FieldLoad {
+        /// The destination slot.
+        target: crate::mir::LocalId,
+        /// The struct value's slot.
+        base: crate::mir::LocalId,
+        /// The field's classified type.
+        field_ty: BType,
+        /// The field's byte offset within the value.
+        byte_offset: u32,
+        /// The field's byte size.
+        size: u32,
+    },
+    /// Store `src` into the field of the value in `base` (see
+    /// [`BInstKind::FieldLoad`] for the field description).
+    FieldStore {
+        /// The struct value's slot.
+        base: crate::mir::LocalId,
+        /// The field's classified type.
+        field_ty: BType,
+        /// The field's byte offset within the value.
+        byte_offset: u32,
+        /// The field's byte size.
+        size: u32,
+        /// The value being stored.
+        src: BOperand,
+    },
+    /// Load the element at `index` of the array value in `base` into
+    /// `target`. `elem_ty` is the element's classified type, `stride` its
+    /// byte size (the array's stride), and `len` the array's length. The
+    /// index is bounds checked at execution (`E-R10`): a negative index or
+    /// an index at or above `len` terminates with a structured runtime
+    /// error.
+    IndexLoad {
+        /// The destination slot.
+        target: crate::mir::LocalId,
+        /// The array value's slot.
+        base: crate::mir::LocalId,
+        /// The element's classified type.
+        elem_ty: BType,
+        /// The element byte size (array stride).
+        stride: u32,
+        /// The array's length.
+        len: u64,
+        /// The index.
+        index: BOperand,
+    },
+    /// Store `src` into the element at `index` of the array value in
+    /// `base` (see [`BInstKind::IndexLoad`] for the description). The
+    /// index is bounds checked at execution (`E-R10`).
+    IndexStore {
+        /// The array value's slot.
+        base: crate::mir::LocalId,
+        /// The element's classified type.
+        elem_ty: BType,
+        /// The element byte size (array stride).
+        stride: u32,
+        /// The array's length.
+        len: u64,
+        /// The index.
+        index: BOperand,
+        /// The value being stored.
+        src: BOperand,
+    },
+    /// Store `src` into a multi-step storage place: the value rooted at
+    /// `base`'s slot, addressed by walking `steps` from the root's first
+    /// word (each field step subtracts its byte offset; each index step
+    /// subtracts `index * stride` with an `E-R10` bounds check). `size` is
+    /// the target's byte size, so the emitter copies exactly the target's
+    /// bytes. The steps are resolved at lowering from the deterministic
+    /// layout.
+    PlaceStore {
+        /// The local holding the outermost value of the chain.
+        base: crate::mir::LocalId,
+        /// The address steps from the root to the target, outermost first.
+        steps: Vec<PlaceAddrStep>,
+        /// The target's byte size.
+        size: u32,
+        /// The value being stored.
+        src: BOperand,
+    },
+}
+
+/// One resolved address step of a [`BInstKind::PlaceStore`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaceAddrStep {
+    /// A field selection: the value's bytes at `byte_offset` (a static
+    /// displacement from the current address).
+    Field {
+        /// The field's byte offset within the value.
+        byte_offset: u32,
+    },
+    /// An index selection: `index * stride` bytes from the current
+    /// address, bounds-checked against `len` (`E-R10`).
+    Index {
+        /// The index operand.
+        index: BOperand,
+        /// The element byte size (array stride).
+        stride: u32,
+        /// The array's length.
+        len: u64,
     },
 }
 

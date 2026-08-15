@@ -81,10 +81,27 @@ pub struct HirItem {
 pub enum HirItemKind {
     /// A `fn` function declaration.
     Fn(HirFn),
+    /// A `struct` declaration: a type, not a value. The struct's name and
+    /// its fields live in the program's type table (the struct's type
+    /// carries its [`StructId`](crate::typecheck::StructId)); the item
+    /// records the declaration so the HIR faithfully represents the
+    /// program. It produces no code.
+    Struct(HirStruct),
     /// A `let` binding.
     Let(HirLet),
     /// A `const` binding.
     Const(HirConst),
+}
+
+/// A lowered `struct` declaration: the declared name and span. The
+/// struct's fields are resolved into the program's type table by type
+/// analysis; the MIR layer skips struct items (they produce no code).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirStruct {
+    /// The struct's name (a type name, not a symbol).
+    pub name: HirName,
+    /// Span covering the whole `struct` item.
+    pub span: Span,
 }
 
 /// A lowered function declaration, resolved to its symbol and typed with
@@ -332,4 +349,14 @@ pub enum HirExprKind {
         /// The index expression.
         index: Box<HirExpr>,
     },
+    /// A struct literal: `Name { field: value, ... }`. The struct's type is
+    /// the literal's type; the field values are paired with their names.
+    StructLit {
+        /// The struct type name (a type name, not a symbol).
+        name: HirName,
+        /// The field initializers, in source order.
+        fields: Vec<(HirName, HirExpr)>,
+    },
+    /// An array literal: `[elem, ...]`.
+    ArrayLit(Vec<HirExpr>),
 }

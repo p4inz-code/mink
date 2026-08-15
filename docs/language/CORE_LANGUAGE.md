@@ -332,16 +332,18 @@ full design record is `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
   bindings are mutable. Parameters, `for` variables, `const` bindings, and
   function names are immutable. Assignment (including compound assignment)
   to an immutable or constant name is a semantic error. Assignment through
-  member/index targets resolves the base expression but defers target
-  writability to the type-system milestone.
+  member/index targets additionally requires the base binding to be
+  mutable: writing `p.x = 2` or `a[i] = 2` through a `let` (non-`mut`)
+  binding is a semantic error.
 - **Control-flow context.** `break` and `continue` are valid only inside a
   loop body (`while`, `for`, `loop`); `return` is valid only inside a
   function body. Out-of-context uses are semantic errors (module-level
   `return` is additionally rejected by the grammar, which allows only
   declarations at module scope).
 - **Namespaces.** Functions, bindings, constants, parameters, and loop
-  variables share one name namespace per scope at this stage; a type/value
-  namespace split arrives with the type-system milestone.
+  variables share one value namespace per scope; user-declared **struct
+  names** live in a separate type namespace (session 14), so a struct and
+  a binding may share a name without collision.
 
 ## 25. Specification Status
 
@@ -364,9 +366,13 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   pointer type `Ptr<T>`, and function types. `Int` and `Float` are single
   types; exact widths are a runtime/ABI decision. Only `Ptr<Int>` is
   instantiable today (the raw memory intrinsics' word pointer); `Unit`
-  types the value-less intrinsic results. No other types exist yet (no
-  tuples, structs, enums, generics, optional/result types, …) — they
-  arrive with later milestones per `docs/language/TYPE_SYSTEM.md`.
+  types the value-less intrinsic results. Session 14 added user-declared
+  **structs** (nominal types, one per declaration) and fixed-size
+  **arrays** (`[T; N]`, structural) with deterministic C-style layout;
+  member access (`p.x`), indexing (`a[i]`), struct/array literals, and
+  place mutation are implemented. Still absent: tuples, enums, generics,
+  optional/result types, … — they arrive with later milestones per
+  `docs/language/TYPE_SYSTEM.md`.
 - **Literals.** Integer, floating-point, string, character, boolean, and
   `null` literals have the corresponding types above.
 - **No implicit conversions.** MINK defines no implicit numeric
@@ -407,14 +413,22 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   syntax, and no string concatenation yet.
 - **Iteration.** Only ranges are iterable at this stage; a `for` variable
   has the range's element type, and iterating a non-range is a type error.
-- **Member/index deferral.** Member access, indexing, and their
-  writability depend on user-defined types, which do not exist yet; they
-  are deferred (never silently accepted as a specific type, never a
-  fabricated error).
-- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T06`
+- **Member/index typing (session 14).** Member access requires a struct
+  base and a declared member (`E-T07`/`E-T08`) and types as the field
+  type; indexing requires an array base and an `Int` index
+  (`E-T09`/`E-T10`) and types as the element type. A constant index out of
+  range is rejected at compile time (`E-T11`); a variable index is
+  bounds-checked at runtime (`E-R10`). Struct literals must name every
+  declared field exactly once (`E-T12`–`E-T14`); array literals must be
+  non-empty with one common element type (`E-T17`); array types require a
+  positive integer literal length (`E-T16`). Recursive/empty/oversized
+  aggregate layout is rejected (`E-T18`). Member/index assignment requires
+  a mutable base and a value matching the field/element type.
+- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T18`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
-  count, not iterable). They carry the exact offending span, rendered
-  expected/actual types where useful, and a related span for assignments.
+  count, not iterable, and the session-14 aggregate rules above). They
+  carry the exact offending span, rendered expected/actual types where
+  useful, and a related span for assignments.
 - **Cascade control.** An unknown/error type absorbs failed sub-expressions
   so one root error (an unresolved name, an invalid operator) never
   cascades into misleading secondary diagnostics; independent errors are

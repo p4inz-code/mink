@@ -158,6 +158,7 @@ pub(crate) fn emit_data(code: &mut Code, offsets: &RuntimeOffsets) {
         RuntimeErrorKind::Misaligned,
         RuntimeErrorKind::InvalidSize,
         RuntimeErrorKind::StringIndexOutOfRange,
+        RuntimeErrorKind::ArrayIndexOutOfRange,
     ];
     kinds.sort_by_key(|kind| kind.number());
     let messages = kinds
@@ -196,8 +197,9 @@ fn prologue(code: &mut Code) {
 }
 
 /// `mov rcx, error_number; call rt_fail` — a fatal error path. `rt_fail`
-/// never returns.
-fn fail(code: &mut Code, number: u32) {
+/// never returns. Shared with the user-function emitter for generated
+/// bounds checks (array indexing, `E-R10`).
+pub(crate) fn fail(code: &mut Code, number: u32) {
     code.mov_r32_imm32(Reg::Rcx, number);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Fail));
 }

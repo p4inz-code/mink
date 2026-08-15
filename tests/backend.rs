@@ -529,20 +529,45 @@ fn float_parameter_is_rejected() {
 
 #[test]
 fn member_access_is_rejected() {
-    let kinds = error_kinds("fn main() { let o = 1; o.f; return; }");
-    assert_eq!(kinds, [BackendErrorKind::UnsupportedRvalue]);
+    // Struct member access is supported for representable structs; a
+    // struct whose field type the native subset cannot represent (here
+    // `Float`) is rejected deterministically (every binding and temporary
+    // touching the type reports `E-B03`, never a silent miscompile).
+    let kinds =
+        error_kinds("struct S { f: Float } fn main() { let s = S { f: 1.5 }; s.f; return; }");
+    assert!(!kinds.is_empty());
+    assert!(
+        kinds
+            .iter()
+            .all(|kind| *kind == BackendErrorKind::UnsupportedType)
+    );
 }
 
 #[test]
 fn index_access_is_rejected() {
-    let kinds = error_kinds("fn main() { let a = 1; a[0]; return; }");
-    assert_eq!(kinds, [BackendErrorKind::UnsupportedRvalue]);
+    // Array indexing is supported for representable arrays; an array
+    // whose element type the native subset cannot represent (here
+    // `Float`) is rejected deterministically at the binding.
+    let kinds = error_kinds("fn main() { let a = [1.5, 2.5]; a[0]; return; }");
+    assert!(!kinds.is_empty());
+    assert!(
+        kinds
+            .iter()
+            .all(|kind| *kind == BackendErrorKind::UnsupportedType)
+    );
 }
 
 #[test]
 fn member_assignment_is_rejected() {
-    let kinds = error_kinds("fn main() { let mut o = 1; o.f = 2; return; }");
-    assert_eq!(kinds, [BackendErrorKind::UnsupportedPlace]);
+    let kinds = error_kinds(
+        "struct S { f: Float } fn main() { let mut s = S { f: 1.5 }; s.f = 2.5; return; }",
+    );
+    assert!(!kinds.is_empty());
+    assert!(
+        kinds
+            .iter()
+            .all(|kind| *kind == BackendErrorKind::UnsupportedType)
+    );
 }
 
 #[test]

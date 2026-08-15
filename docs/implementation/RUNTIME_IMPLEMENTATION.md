@@ -129,6 +129,12 @@ structured `mink: runtime error[E-R0N]: <message>` line to stderr:
 | E-R07| 7      | misaligned pointer                             |
 | E-R08| 8      | invalid allocation size                        |
 | E-R09| 9      | string index out of range                      |
+| E-R10| 10     | array index out of range                       |
+
+`E-R10` is emitted by the generated code around every array index step
+(`IndexLoad`, `IndexStore`, and index steps of `PlaceStore`): the index is
+checked against the array's length and a negative index is rejected before
+any memory is touched. Like `E-R09`, it terminates with exit code 110.
 
 ## 7. Image layout
 
@@ -150,7 +156,7 @@ loader never scans past them into string data.
   trips, LIFO reuse, every `E-R0N` path, `rt_print_int` output, and
   determinism of both the image bytes and the runtime behavior.
 
-Full suite after session 13: **700 tests**, all passing (see
+Full suite after session 14: **762 tests**, all passing (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
 
 ## 9. Known limitations
@@ -160,6 +166,9 @@ Full suite after session 13: **700 tests**, all passing (see
 - Strings are byte sequences without runtime UTF-8 validation; literals are
   immutable (no built-in concatenation). Strings and raw `rt_mem_*`
   pointers are distinct types and never mix.
-- Struct/array types are not yet implemented; `rt_mem_*` operate on raw
-  8-byte words at typed `Ptr<Int>` addresses.
+- Struct and array values live entirely in stack slots and argument
+  copies; they never touch the heap or the `rt_mem_*` intrinsics (which
+  operate on raw 8-byte words at typed `Ptr<Int>` addresses). Aggregate
+  size is bounded by `MAX_AGGREGATE_BYTES` (1 MiB) so every value fits
+  the arena's addressing model.
 - The arena is a fixed 1 MiB; exhaustion is a structured error.

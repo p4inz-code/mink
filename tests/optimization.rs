@@ -430,9 +430,11 @@ fn static_assignment_is_never_eliminated() {
 
 #[test]
 fn member_and_index_loads_are_never_eliminated() {
-    // Member/index rvalues have no defined semantics yet: they are
-    // conservatively treated as effectful and must survive.
-    let (_hir, mir) = optimize_mir("fn f() { let o = 1; let i = 1; o.f; i[0]; return; }");
+    // Member/index rvalues read aggregate values; they are conservatively
+    // treated as effectful and must survive dead-code elimination.
+    let (_hir, mir) = optimize_mir(
+        "struct P { f: Int } fn f() { let o = P { f: 1 }; let a = [1, 2]; o.f; a[0]; return; }",
+    );
     let f = mir_fn(&mir, "f");
     let mut member = 0;
     let mut index = 0;

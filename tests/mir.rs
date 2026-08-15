@@ -452,21 +452,23 @@ fn ranges_lower_with_inclusive_flag() {
 
 #[test]
 fn member_and_index_expressions_lower() {
-    let src = "fn f() { let o = 1; let a = 1; o.f; a[0]; }";
+    // The struct and array literals materialize into temporaries first
+    // (statements 0–3), then the member/index expression statements.
+    let src = "struct P { f: Int } fn f() { let o = P { f: 1 }; let a = [1, 2]; o.f; a[0]; }";
     let (_hir, mir) = lower_mir(src);
     let f = mir_fn(&mir, "f");
     let stmts = entry_stmts(f);
-    let MirStmtKind::Assign { rvalue, .. } = &stmts[2].kind;
+    let MirStmtKind::Assign { rvalue, .. } = &stmts[4].kind;
     let MirRvalueKind::Member { base, member } = &rvalue.kind else {
         panic!("expected a member rvalue");
     };
     assert_eq!(base.kind, MirOperandKind::Local(LocalId::new(0)));
     assert_eq!(member.name, "f");
-    let MirStmtKind::Assign { rvalue, .. } = &stmts[3].kind;
+    let MirStmtKind::Assign { rvalue, .. } = &stmts[5].kind;
     let MirRvalueKind::Index { base, index } = &rvalue.kind else {
         panic!("expected an index rvalue");
     };
-    assert_eq!(base.kind, MirOperandKind::Local(LocalId::new(1)));
+    assert_eq!(base.kind, MirOperandKind::Local(LocalId::new(2)));
     assert!(matches!(index.kind, MirOperandKind::Constant(_)));
 }
 

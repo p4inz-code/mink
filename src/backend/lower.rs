@@ -38,9 +38,10 @@ use crate::mir::{
     MirConstantKind, MirFn, MirItemKind, MirOperand, MirOperandKind, MirProgram, MirRvalueKind,
     MirStatic, MirStmtKind, MirTargetKind, MirTerminator,
 };
+use crate::runtime::layout;
 use crate::semantics::SymbolId;
 use crate::source::{SourceMap, Span};
-use crate::typecheck::{TypeId, TypeKind};
+use crate::typecheck::{StructId, TypeId, TypeKind, layout_error_message};
 
 use super::error::BackendError;
 use super::ir::{
@@ -128,8 +129,15 @@ struct Lowerer<'a> {
     /// Parallel to `fn_locals`: the classification of each local; `None`
     /// means the local's type was already rejected.
     fn_classified: Vec<Option<BType>>,
+    /// Parallel to `fn_locals`: the MIR type id of each local, for
+    /// resolving aggregate structure (place steps) during instruction
+    /// lowering.
+    fn_local_types: Vec<TypeId>,
     /// The instruction buffer of the block currently being lowered.
     fn_insts: Vec<BInst>,
+    /// Why a struct/array type was rejected: type id → reason, recorded
+    /// when classification fails so diagnostics can explain the failure.
+    unsupported_aggregates: HashMap<TypeId, String>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -163,7 +171,9 @@ impl<'a> Lowerer<'a> {
             errors: Vec::new(),
             fn_locals: Vec::new(),
             fn_classified: Vec::new(),
+            fn_local_types: Vec::new(),
             fn_insts: Vec::new(),
+            unsupported_aggregates: HashMap::new(),
         }
     }
 
@@ -194,10 +204,14 @@ impl<'a> Lowerer<'a> {
     ///
     /// `Int`, `Bool`, `Range<Int>`, `Ptr<Int>`, and `Str` are
     /// representable; an unresolved inference type is unit (a value that is
-    /// never meaningfully read); everything else (`Float`, `Char`, `Null`,
-    /// the error type, `Ptr` over another element, `Range` over another
-    /// element, function types) is unsupported and classifies to `None`.
-    fn classify(&self, ty: TypeId) -> Option<BType> {
+    /// never meaningfully read); structs and arrays are representable when
+    /// their deterministic layout is finite and every field/element type is
+    /// itself representable (a failed aggregate records its reason in
+    /// [`Lowerer::unsupported_aggregates`] for the diagnostic); everything
+    /// else (`Float`, `Char`, `Null`, the error type, `Ptr` over another
+    /// element, `Range` over another element, function types) is
+    /// unsupported and classifies to `None`.
+    fn classify(&mut self, ty: TypeId) -> Option<BType> {
         match self.program.types.kind(ty) {
             Some(TypeKind::Int) => Some(BType::Int),
             Some(TypeKind::Bool) => Some(BType::Bool),
@@ -210,6 +224,8 @@ impl<'a> Lowerer<'a> {
                 Some(TypeKind::Int) => Some(BType::Range),
                 _ => None,
             },
+            Some(TypeKind::Struct(id)) => self.classify_struct(ty, *id),
+            Some(TypeKind::Array { .. }) => self.classify_array(ty),
             // `kind` follows resolved inference chains; an unresolved
             // variable is the only `Infer` that remains. Unit is the type
             // of intrinsics that produce no value.
@@ -223,6 +239,116 @@ impl<'a> Lowerer<'a> {
             )
             | None => None,
         }
+    }
+
+    /// Classifies a struct type: it must have a finite deterministic layout
+    /// (not recursive, not empty, not oversized) and every declared field
+    /// type must itself classify. On failure the reason is recorded for the
+    /// diagnostic and `None` is returned. Recursion is bounded by the
+    /// layout engine's cycle detection, which runs before the field walk.
+    fn classify_struct(&mut self, ty: TypeId, id: StructId) -> Option<BType> {
+        let reason = match layout::struct_layout(id, &self.program.types) {
+            Err(error) => Some(layout_error_message(&error)),
+            Ok(_) => {
+                let info = self
+                    .program
+                    .types
+                    .struct_info(id)
+                    .expect("struct ids always resolve");
+                let mut bad: Option<String> = None;
+                for field in &info.fields {
+                    if self.classify(field.ty).is_none() {
+                        bad = Some(format!(
+                            "its field `{}` has an unsupported type `{}`",
+                            field.name,
+                            self.display(field.ty)
+                        ));
+                        break;
+                    }
+                }
+                bad
+            }
+        };
+        match reason {
+            None => Some(BType::Struct),
+            Some(reason) => {
+                self.unsupported_aggregates.insert(ty, reason);
+                None
+            }
+        }
+    }
+
+    /// Classifies an array type: it must have a finite layout within the
+    /// runtime memory model and its element type must classify. On failure
+    /// the reason is recorded and `None` is returned.
+    fn classify_array(&mut self, ty: TypeId) -> Option<BType> {
+        let reason = match layout::array_layout(ty, &self.program.types) {
+            Err(error) => Some(layout_error_message(&error)),
+            Ok(_) => {
+                let elem = match self.program.types.kind(ty) {
+                    Some(TypeKind::Array { elem, .. }) => *elem,
+                    _ => return None,
+                };
+                if self.classify(elem).is_none() {
+                    Some(format!(
+                        "its element type `{}` is not supported",
+                        self.display(elem)
+                    ))
+                } else {
+                    None
+                }
+            }
+        };
+        match reason {
+            None => Some(BType::Array),
+            Some(reason) => {
+                self.unsupported_aggregates.insert(ty, reason);
+                None
+            }
+        }
+    }
+
+    /// The number of stack words a value of `ty` (classified as
+    /// `classified`) occupies: `ceil(size / 8)` for aggregates, the scalar
+    /// width otherwise.
+    fn words_of(&self, ty: TypeId, classified: BType) -> u32 {
+        match classified {
+            BType::Struct | BType::Array => self.aggregate_words(ty),
+            _ => classified.words() as u32,
+        }
+    }
+
+    /// The stack word count of an aggregate-typed value, from its layout.
+    /// A validated aggregate always has a layout; the fallback keeps a
+    /// defensive path from panicking on inconsistent input.
+    fn aggregate_words(&self, ty: TypeId) -> u32 {
+        let size = match self.program.types.kind(ty) {
+            Some(TypeKind::Struct(id)) => layout::struct_layout(*id, &self.program.types)
+                .map(|layout| layout.size)
+                .unwrap_or(0),
+            Some(TypeKind::Array { .. }) => layout::array_layout(ty, &self.program.types)
+                .map(|layout| layout.size)
+                .unwrap_or(0),
+            _ => 0,
+        };
+        (size.div_ceil(8)).max(1) as u32
+    }
+
+    /// An unsupported-type error for `ty`, appending the recorded aggregate
+    /// reason (recursive struct, oversized value, unsupported field) when
+    /// classification recorded one.
+    fn unsupported_type_error(&self, span: Span, ty: TypeId) -> BackendError {
+        let detail = match self.unsupported_aggregates.get(&ty) {
+            Some(reason) => format!(
+                "the type `{}` is not supported by the native subset ({reason})",
+                self.display(ty)
+            ),
+            None => format!(
+                "the type `{}` is not supported by the native subset",
+                self.display(ty)
+            ),
+        };
+        BackendError::unsupported_type(span, detail)
     }
 
     /// The display name of `ty`, for diagnostics.
@@ -267,7 +393,10 @@ impl<'a> Lowerer<'a> {
             }
         };
         match self.classify(result) {
-            Some(BType::Range) => {
+            // Range and aggregate values cannot be returned by the first
+            // native subset: the calling convention returns one word in
+            // `rax`, which cannot carry a multi-word value.
+            Some(BType::Range | BType::Struct | BType::Array) => {
                 self.errors.push(BackendError::unsupported_type(
                     f.span,
                     format!("cannot return a value of type `{}`", self.display(result)),
@@ -357,7 +486,9 @@ impl<'a> Lowerer<'a> {
         // reported twice.
         self.fn_locals.clear();
         self.fn_classified.clear();
+        self.fn_local_types.clear();
         for local in &f.locals {
+            self.fn_local_types.push(local.ty);
             match self.classify(local.ty) {
                 Some(ty) => {
                     self.fn_classified.push(Some(ty));
@@ -365,6 +496,7 @@ impl<'a> Lowerer<'a> {
                         name: local.name.clone(),
                         symbol: local.symbol,
                         ty,
+                        words: self.words_of(local.ty, ty),
                         mutable: local.mutable,
                         span: local.span,
                     });
@@ -382,6 +514,7 @@ impl<'a> Lowerer<'a> {
                         name: local.name.clone(),
                         symbol: local.symbol,
                         ty: BType::Int,
+                        words: 1,
                         mutable: local.mutable,
                         span: local.span,
                     });
@@ -402,16 +535,22 @@ impl<'a> Lowerer<'a> {
             span: f.span,
         });
         self.fn_classified.clear();
+        self.fn_local_types.clear();
     }
 
-    /// Allocates a lowering temporary of `ty` and returns its id.
-    fn alloc_temp(&mut self, ty: BType, span: Span) -> crate::mir::LocalId {
+    /// Allocates a lowering temporary of the MIR type `ty` (classified as
+    /// `classified`) and returns its id. Aggregate-typed temporaries get
+    /// their word count from the layout; scalars use their width.
+    fn alloc_temp(&mut self, ty: TypeId, classified: BType, span: Span) -> crate::mir::LocalId {
         let id = crate::mir::LocalId::new(self.fn_classified.len() as u32);
-        self.fn_classified.push(Some(ty));
+        let words = self.words_of(ty, classified);
+        self.fn_classified.push(Some(classified));
+        self.fn_local_types.push(ty);
         self.fn_locals.push(BLocal {
             name: String::new(),
             symbol: None,
-            ty,
+            ty: classified,
+            words,
             mutable: false,
             span,
         });
@@ -487,7 +626,16 @@ impl<'a> Lowerer<'a> {
             MirRvalueKind::Range { start, end, .. } => {
                 self.operand_is_unsupported(start) || self.operand_is_unsupported(end)
             }
-            MirRvalueKind::Member { .. } | MirRvalueKind::Index { .. } => false,
+            MirRvalueKind::Member { base, .. } => self.operand_is_unsupported(base),
+            MirRvalueKind::Index { base, index } => {
+                self.operand_is_unsupported(base) || self.operand_is_unsupported(index)
+            }
+            MirRvalueKind::StructLit { fields } => fields
+                .iter()
+                .any(|(_, operand)| self.operand_is_unsupported(operand)),
+            MirRvalueKind::ArrayLit { elems } => elems
+                .iter()
+                .any(|operand| self.operand_is_unsupported(operand)),
         }
     }
 
@@ -541,22 +689,171 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            MirTargetKind::Member { .. } | MirTargetKind::Index { .. } => {
-                self.errors.push(BackendError::unsupported_assign_target(
-                    target.span,
-                    "member and index assignment is not supported by the native subset",
-                ));
-                None
+            MirTargetKind::Member { base, member } => {
+                if self.rvalue_touches_unsupported(rvalue) || self.operand_is_unsupported(base) {
+                    return None;
+                }
+                let result = (|| {
+                    let base_id = self.operand_slot(base, target.span)?;
+                    let (field_ty, offset, size, _) =
+                        self.resolve_member(base.ty, member, target.span)?;
+                    let src = self.lower_rvalue_to_operand(rvalue)?;
+                    self.push(
+                        BInstKind::FieldStore {
+                            base: base_id,
+                            field_ty,
+                            byte_offset: offset,
+                            size,
+                            src,
+                        },
+                        stmt.span,
+                    );
+                    Ok::<(), BackendError>(())
+                })();
+                match result {
+                    Ok(()) => Some(()),
+                    Err(error) => {
+                        self.errors.push(error);
+                        None
+                    }
+                }
+            }
+            MirTargetKind::Index { base, index } => {
+                if self.rvalue_touches_unsupported(rvalue)
+                    || self.operand_is_unsupported(base)
+                    || self.operand_is_unsupported(index)
+                {
+                    return None;
+                }
+                let result = (|| {
+                    let base_id = self.operand_slot(base, target.span)?;
+                    let (elem_ty, stride, len) = self.resolve_array(base.ty, target.span)?;
+                    let index_op = self.eval_operand(index)?;
+                    let src = self.lower_rvalue_to_operand(rvalue)?;
+                    self.push(
+                        BInstKind::IndexStore {
+                            base: base_id,
+                            elem_ty,
+                            stride,
+                            len,
+                            index: index_op,
+                            src,
+                        },
+                        stmt.span,
+                    );
+                    Ok::<(), BackendError>(())
+                })();
+                match result {
+                    Ok(()) => Some(()),
+                    Err(error) => {
+                        self.errors.push(error);
+                        None
+                    }
+                }
+            }
+            MirTargetKind::Place { root, steps } => {
+                if self.rvalue_touches_unsupported(rvalue)
+                    || self.local_is_unsupported(*root)
+                    || steps.iter().any(|step| match &step.kind {
+                        crate::mir::MirPlaceStepKind::Index(index) => {
+                            self.operand_is_unsupported(index)
+                        }
+                        crate::mir::MirPlaceStepKind::Field(_) => false,
+                    })
+                {
+                    return None;
+                }
+                let result = (|| {
+                    let (addr_steps, size) = self.resolve_place(*root, steps, target.span)?;
+                    let src = self.lower_rvalue_to_operand(rvalue)?;
+                    self.push(
+                        BInstKind::PlaceStore {
+                            base: *root,
+                            steps: addr_steps,
+                            size,
+                            src,
+                        },
+                        stmt.span,
+                    );
+                    Ok::<(), BackendError>(())
+                })();
+                match result {
+                    Ok(()) => Some(()),
+                    Err(error) => {
+                        self.errors.push(error);
+                        None
+                    }
+                }
             }
         }
     }
 
-    /// Lowers an rvalue into `target`, pushing the instruction.
+    /// Lowers an rvalue into `target`, pushing the instruction(s).
+    ///
+    /// Struct and array literals are multi-instruction: they store their
+    /// fields/elements into the target slot one at a time (the backend
+    /// resolves the offsets from the deterministic layout).
     fn lower_rvalue_into(
         &mut self,
         target: crate::mir::LocalId,
         rvalue: &crate::mir::MirRvalue,
     ) -> Result<(), BackendError> {
+        match &rvalue.kind {
+            MirRvalueKind::StructLit { fields } => {
+                let (info, layout) = self.struct_layout_of(rvalue.ty, rvalue.span)?;
+                for (member, value) in fields {
+                    let index = info
+                        .fields
+                        .iter()
+                        .position(|field| field.name == member.name)
+                        .ok_or_else(|| {
+                            BackendError::invalid_backend_ir(
+                                member.span,
+                                format!(
+                                    "struct literal initializes undeclared field `{}`",
+                                    member.name
+                                ),
+                            )
+                        })?;
+                    let field = &info.fields[index];
+                    let field_ty = self
+                        .classify(field.ty)
+                        .ok_or_else(|| self.unsupported_type_error(member.span, field.ty))?;
+                    let field_layout = &layout.fields[index];
+                    let src = self.eval_operand(value)?;
+                    self.push(
+                        BInstKind::FieldStore {
+                            base: target,
+                            field_ty,
+                            byte_offset: field_layout.offset as u32,
+                            size: field_layout.size as u32,
+                            src,
+                        },
+                        value.span,
+                    );
+                }
+                return Ok(());
+            }
+            MirRvalueKind::ArrayLit { elems } => {
+                let (elem_ty, stride, len) = self.resolve_array(rvalue.ty, rvalue.span)?;
+                for (i, elem) in elems.iter().enumerate() {
+                    let src = self.eval_operand(elem)?;
+                    self.push(
+                        BInstKind::IndexStore {
+                            base: target,
+                            elem_ty,
+                            stride,
+                            len,
+                            index: BOperand::Const(i as i64),
+                            src,
+                        },
+                        elem.span,
+                    );
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
         let kind = match &rvalue.kind {
             MirRvalueKind::Use(operand) => match &operand.kind {
                 MirOperandKind::Local(src) => BInstKind::LoadLocal { target, src: *src },
@@ -619,18 +916,32 @@ impl<'a> Lowerer<'a> {
                 target,
                 range: self.range_slot(range, rvalue.span)?,
             },
-            MirRvalueKind::Member { .. } => {
-                return Err(BackendError::unsupported_rvalue(
-                    rvalue.span,
-                    "member access is not supported by the native subset",
-                ));
+            MirRvalueKind::Member { base, member } => {
+                let base_id = self.operand_slot(base, rvalue.span)?;
+                let (field_ty, offset, size, _) =
+                    self.resolve_member(base.ty, member, rvalue.span)?;
+                BInstKind::FieldLoad {
+                    target,
+                    base: base_id,
+                    field_ty,
+                    byte_offset: offset,
+                    size,
+                }
             }
-            MirRvalueKind::Index { .. } => {
-                return Err(BackendError::unsupported_rvalue(
-                    rvalue.span,
-                    "indexing is not supported by the native subset",
-                ));
+            MirRvalueKind::Index { base, index } => {
+                let base_id = self.operand_slot(base, rvalue.span)?;
+                let (elem_ty, stride, len) = self.resolve_array(base.ty, rvalue.span)?;
+                BInstKind::IndexLoad {
+                    target,
+                    base: base_id,
+                    elem_ty,
+                    stride,
+                    len,
+                    index: self.eval_operand(index)?,
+                }
             }
+            // Handled above (multi-instruction literal materialization).
+            MirRvalueKind::StructLit { .. } | MirRvalueKind::ArrayLit { .. } => unreachable!(),
         };
         self.push(kind, rvalue.span);
         Ok(())
@@ -661,7 +972,7 @@ impl<'a> Lowerer<'a> {
                 ));
             }
         };
-        let temp = self.alloc_temp(ty, rvalue.span);
+        let temp = self.alloc_temp(rvalue.ty, ty, rvalue.span);
         self.lower_rvalue_into(temp, rvalue)?;
         Ok(BOperand::Local(temp))
     }
@@ -767,6 +1078,192 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Materializes an operand into a local slot, returning the slot id.
+    ///
+    /// Member/index bases are aggregate *values*, which live in slots, so
+    /// a base that is not already a local is evaluated into a temporary.
+    /// In a clean pipeline bases are always locals (aggregates cannot be
+    /// constants or module bindings); the constant/static paths are
+    /// defensive.
+    fn operand_slot(
+        &mut self,
+        operand: &MirOperand,
+        span: Span,
+    ) -> Result<crate::mir::LocalId, BackendError> {
+        match &operand.kind {
+            MirOperandKind::Local(id) => Ok(*id),
+            MirOperandKind::Constant(constant) => {
+                let classified = self
+                    .classify(operand.ty)
+                    .ok_or_else(|| self.unsupported_type_error(span, operand.ty))?;
+                let temp = self.alloc_temp(operand.ty, classified, span);
+                match self.decode_constant(constant)? {
+                    DecodedConstant::Word(value) => {
+                        self.push(
+                            BInstKind::LoadConst {
+                                target: temp,
+                                value,
+                            },
+                            span,
+                        );
+                    }
+                    DecodedConstant::Str(_) => {
+                        return Err(BackendError::invalid_backend_ir(
+                            span,
+                            "a string constant cannot be a member/index base",
+                        ));
+                    }
+                }
+                Ok(temp)
+            }
+            MirOperandKind::Static(symbol) => {
+                let slot = self.resolve_static(*symbol, span)?;
+                let classified = self.static_types[slot]
+                    .expect("unsupported statics are skipped before operand evaluation");
+                let temp = self.alloc_temp(operand.ty, classified, span);
+                self.push(
+                    BInstKind::LoadStatic {
+                        target: temp,
+                        static_index: slot,
+                    },
+                    span,
+                );
+                Ok(temp)
+            }
+        }
+    }
+
+    /// The struct info and deterministic layout of the struct type `ty`.
+    fn struct_layout_of(
+        &self,
+        ty: TypeId,
+        span: Span,
+    ) -> Result<(crate::typecheck::StructInfo, layout::StructLayout), BackendError> {
+        let id = match self.program.types.kind(ty) {
+            Some(TypeKind::Struct(id)) => *id,
+            _ => {
+                return Err(BackendError::invalid_backend_ir(
+                    span,
+                    "a member access base is not a struct value",
+                ));
+            }
+        };
+        let info =
+            self.program.types.struct_info(id).ok_or_else(|| {
+                BackendError::invalid_backend_ir(span, "struct id does not resolve")
+            })?;
+        let layout = layout::struct_layout(id, &self.program.types).map_err(|error| {
+            BackendError::invalid_backend_ir(span, layout_error_message(&error))
+        })?;
+        Ok((info.clone(), layout))
+    }
+
+    /// Resolves `base.member` (with `base_ty` the base operand's type)
+    /// into the field's classified type, byte offset, byte size, and MIR
+    /// type id (for continuing a place walk), from the struct's
+    /// deterministic layout.
+    fn resolve_member(
+        &mut self,
+        base_ty: TypeId,
+        member: &crate::mir::MirName,
+        span: Span,
+    ) -> Result<(BType, u32, u32, TypeId), BackendError> {
+        let (info, layout) = self.struct_layout_of(base_ty, span)?;
+        let index = info
+            .fields
+            .iter()
+            .position(|field| field.name == member.name)
+            .ok_or_else(|| {
+                BackendError::invalid_backend_ir(
+                    member.span,
+                    format!("the struct `{}` has no field `{}`", info.name, member.name),
+                )
+            })?;
+        let field = &info.fields[index];
+        let field_ty = self
+            .classify(field.ty)
+            .ok_or_else(|| self.unsupported_type_error(member.span, field.ty))?;
+        let field_layout = layout.fields[index];
+        Ok((
+            field_ty,
+            field_layout.offset as u32,
+            field_layout.size as u32,
+            field.ty,
+        ))
+    }
+
+    /// Resolves a multi-step storage place into the address steps the
+    /// emitter walks (field byte offsets and bounds-checked index strides)
+    /// plus the target's byte size, walking the chain from the root
+    /// local's MIR type through the deterministic layout.
+    fn resolve_place(
+        &mut self,
+        root: crate::mir::LocalId,
+        steps: &[crate::mir::MirPlaceStep],
+        span: Span,
+    ) -> Result<(Vec<super::ir::PlaceAddrStep>, u32), BackendError> {
+        let mut current_ty = self
+            .fn_local_types
+            .get(root.raw() as usize)
+            .copied()
+            .ok_or_else(|| {
+                BackendError::invalid_backend_ir(span, "a place root references an unknown local")
+            })?;
+        let mut addr_steps = Vec::with_capacity(steps.len());
+        let mut size = 0u32;
+        for step in steps {
+            match &step.kind {
+                crate::mir::MirPlaceStepKind::Field(member) => {
+                    let (_, offset, field_size, field_ty) =
+                        self.resolve_member(current_ty, member, span)?;
+                    addr_steps.push(super::ir::PlaceAddrStep::Field {
+                        byte_offset: offset,
+                    });
+                    size = field_size;
+                    current_ty = field_ty;
+                }
+                crate::mir::MirPlaceStepKind::Index(index) => {
+                    let (_, stride, len) = self.resolve_array(current_ty, span)?;
+                    let index_op = self.eval_operand(index)?;
+                    addr_steps.push(super::ir::PlaceAddrStep::Index {
+                        index: index_op,
+                        stride,
+                        len,
+                    });
+                    current_ty = match self.program.types.kind(current_ty) {
+                        Some(TypeKind::Array { elem, .. }) => *elem,
+                        // Defensive: a clean pipeline always indexes arrays.
+                        _ => current_ty,
+                    };
+                    size = stride;
+                }
+            }
+        }
+        Ok((addr_steps, size))
+    }
+
+    /// Resolves the array type `ty` into the element's classified type,
+    /// the element byte size (the array's stride), and the array's
+    /// length.
+    fn resolve_array(&mut self, ty: TypeId, span: Span) -> Result<(BType, u32, u64), BackendError> {
+        let (elem, len) = match self.program.types.kind(ty) {
+            Some(TypeKind::Array { elem, len }) => (*elem, *len),
+            _ => {
+                return Err(BackendError::invalid_backend_ir(
+                    span,
+                    "an index access base is not an array value",
+                ));
+            }
+        };
+        let elem_ty = self
+            .classify(elem)
+            .ok_or_else(|| self.unsupported_type_error(span, elem))?;
+        let layout = layout::array_layout(ty, &self.program.types).map_err(|error| {
+            BackendError::invalid_backend_ir(span, layout_error_message(&error))
+        })?;
+        Ok((elem_ty, layout.elem_size as u32, len))
+    }
+
     /// Evaluates an operand into its backend form, decoding constants and
     /// materializing module-binding reads.
     ///
@@ -781,7 +1278,7 @@ impl<'a> Lowerer<'a> {
                 // is the blob's address, loaded through an explicit
                 // instruction into a temporary slot.
                 DecodedConstant::Str(string_index) => {
-                    let temp = self.alloc_temp(BType::Str, constant.span);
+                    let temp = self.alloc_temp(operand.ty, BType::Str, constant.span);
                     self.push(
                         BInstKind::LoadStr {
                             target: temp,
@@ -796,7 +1293,7 @@ impl<'a> Lowerer<'a> {
                 let slot = self.resolve_static(*symbol, operand.span)?;
                 let ty = self.static_types[slot]
                     .expect("unsupported statics are skipped before operand evaluation");
-                let temp = self.alloc_temp(ty, operand.span);
+                let temp = self.alloc_temp(operand.ty, ty, operand.span);
                 self.push(
                     BInstKind::LoadStatic {
                         target: temp,

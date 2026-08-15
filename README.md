@@ -96,7 +96,8 @@ fn main() {
 
 Access a freed or never-allocated block and the runtime traps with a
 structured `E-R05` diagnostic; index past a string's end and it traps with
-`E-R09` — no silent corruption, no segfault guessing games.
+`E-R09`; index past an array's end and it traps with `E-R10` — no silent
+corruption, no segfault guessing games.
 
 ## What works today
 
@@ -106,9 +107,12 @@ structured `E-R05` diagnostic; index past a string's end and it traps with
   elimination, dead-code elimination) → native code generation → embedded
   runtime.
 - **Language subset** — integers, booleans, **strings** (`Str`),
-  **typed pointers** (`Ptr<Int>`), comparisons, logical and bitwise
-  operators, `if`/`while`/`for`/`loop` control flow, direct function calls,
-  module bindings, and integer results becoming process exit codes.
+  **typed pointers** (`Ptr<Int>`), **structs** (`struct P { x: Int }` with
+  `P { x: 1 }` literals and `p.x` access), **fixed-size arrays**
+  (`[1, 2, 3]`, `a[i]`, with compile-time constant-index and runtime
+  bounds checks), comparisons, logical and bitwise operators,
+  `if`/`while`/`for`/`loop` control flow, direct function calls, module
+  bindings, and integer results becoming process exit codes.
 - **Runtime intrinsics** — `rt_alloc`, `rt_free`, `rt_mem_load`,
   `rt_mem_store` (validated against a bounded liveness table), and the
   string intrinsics `rt_str_alloc`/`rt_str_free`/`rt_str_len`/
@@ -169,16 +173,17 @@ Honest status, because durable engineering starts with accurate claims:
   (`E-B11`).
 - **Fixed 1 MiB heap** — exhaustion is a structured error (`E-R02`).
 - **Single-threaded runtime** — no concurrency primitives yet.
-- **No structs/arrays** — `rt_mem_*` operates on raw 8-byte words at typed
-  `Ptr<Int>` addresses; the memory-layout groundwork exists but no
-  composite types consume it yet.
+- **Aggregate limits** — structs and arrays are values with deterministic
+  C-style layout; they cannot be returned from functions or stored at
+  module scope yet (rejected with `E-B03`), and there are no enums,
+  tuples, or generics.
 - **Strings are byte sequences** — literals are immutable, there is no
   concatenation, and UTF-8 well-formedness is not validated at runtime.
 - **No ownership/borrow checking** — deliberately deferred; the memory model
   is established so safety features have a stable foundation.
 - **No garbage collector** — allocation is explicit and leak-checked on exit.
-- **Limited native subset** — no floating point, characters, `null`,
-  member/index places, or function values in the native backend yet.
+- **Limited native subset** — no floating point, characters, `null`, or
+  function values in the native backend yet.
 - **No stdlib or package manager yet** — and no IDE tooling beyond the CLI.
 
 ## Roadmap
@@ -195,9 +200,11 @@ that matters.
 
 - [`docs/implementation/`](docs/implementation/) — implementation records
   for every stage: lexer, parser, semantic analysis, type system and
-  inference, HIR, MIR, optimization, native backend, runtime, and the
-  string + memory type foundation
-  ([`STRING_MEMORY_IMPLEMENTATION.md`](docs/implementation/STRING_MEMORY_IMPLEMENTATION.md)).
+  inference, HIR, MIR, optimization, native backend, runtime, the string +
+  memory type foundation
+  ([`STRING_MEMORY_IMPLEMENTATION.md`](docs/implementation/STRING_MEMORY_IMPLEMENTATION.md)),
+  and the aggregate (struct/array) foundation
+  ([`AGGREGATE_TYPES_IMPLEMENTATION.md`](docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md)).
 - [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md)
   — compiler architecture and pipeline.
 - [`docs/language/`](docs/language/) — language specifications; the frozen
@@ -217,7 +224,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (700, all passing)
+├── tests/      Compiler tests (762, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```
