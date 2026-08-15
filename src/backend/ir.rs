@@ -76,6 +76,12 @@ pub enum BType {
     /// [`BLocal::words`]); the element size, length, and stride are
     /// carried by the index-access instructions.
     Array,
+    /// An enum value (session 17): a single word holding the discriminant
+    /// of the variant it was constructed from. Variant construction
+    /// lowers to a `LoadConst` of the discriminant; enum equality lowers
+    /// to a word comparison. The variant table lives in the front end's
+    /// type table; the backend only ever moves word values.
+    Enum,
     /// No value (a function that does not produce one).
     Unit,
 }
@@ -93,7 +99,13 @@ impl BType {
     /// count instead.
     pub fn words(self) -> usize {
         match self {
-            Self::Int | Self::Bool | Self::Ptr | Self::Ref | Self::Str | Self::Unit => 1,
+            Self::Int
+            | Self::Bool
+            | Self::Ptr
+            | Self::Ref
+            | Self::Str
+            | Self::Enum
+            | Self::Unit => 1,
             Self::Range => 2,
             Self::Struct | Self::Array => 1,
         }
@@ -110,6 +122,7 @@ impl BType {
             Self::Str => "Str",
             Self::Struct => "struct",
             Self::Array => "array",
+            Self::Enum => "enum",
             Self::Unit => "unit",
         }
     }

@@ -744,6 +744,51 @@ fn reference_types_chain_into_aggregates() {
 }
 
 #[test]
+fn enum_declaration_is_an_item() {
+    // `enum` declarations (session 17) are top-level items with variants
+    // in declaration order; trailing commas and empty variant lists parse.
+    let ast = parsed("enum Color { Red, Green, Blue, }");
+    let ItemKind::Enum(e) = &ast.items()[0].kind else {
+        panic!("expected an enum item")
+    };
+    assert_eq!(e.name.name, "Color");
+    assert_eq!(
+        e.variants
+            .iter()
+            .map(|v| v.name.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Red", "Green", "Blue"]
+    );
+
+    let ast = parsed("enum Empty {}");
+    let ItemKind::Enum(e) = &ast.items()[0].kind else {
+        panic!("expected an enum item")
+    };
+    assert!(e.variants.is_empty());
+}
+
+#[test]
+fn enum_variant_paths_parse_as_expressions() {
+    // `E::V` is the variant-construction expression; the enum and variant
+    // names are kept as separate identifiers.
+    let e = expr("Color::Red");
+    let ExprKind::EnumVariant { name, variant } = &e.kind else {
+        panic!("expected an enum-variant expression")
+    };
+    assert_eq!(name.name, "Color");
+    assert_eq!(variant.name, "Red");
+}
+
+#[test]
+fn enum_variant_path_requires_a_variant_name() {
+    // `E::` with no variant is a structured parse error (E-P22).
+    assert_eq!(
+        error_kinds("enum E { A } fn main() { let x = E::; }"),
+        vec![ParseErrorKind::ExpectedVariant]
+    );
+}
+
+#[test]
 fn dangling_reference_types_are_rejected_at_parse() {
     // `&` with no referent and `&&T` (a reference-to-reference type) do not
     // parse; type analysis would reject the latter anyway, so the parser
@@ -1398,6 +1443,12 @@ fn walk_item(item: &Item, text_len: u32, src: &str) {
                 walk_ty(&field.ty, text_len);
             }
         }
+        ItemKind::Enum(e) => {
+            walk_ident(&e.name, text_len, src);
+            for variant in &e.variants {
+                walk_ident(&variant.name, text_len, src);
+            }
+        }
     }
 }
 
@@ -1520,6 +1571,10 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
             for elem in elems {
                 walk_expr(elem, text_len, src);
             }
+        }
+        ExprKind::EnumVariant { name, variant } => {
+            walk_ident(name, text_len, src);
+            walk_ident(variant, text_len, src);
         }
         ExprKind::Group(inner) => walk_expr(inner, text_len, src),
     }

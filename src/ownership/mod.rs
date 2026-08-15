@@ -378,7 +378,9 @@ impl<'a> Analyzer<'a> {
     fn walk_module(&mut self) {
         for item in &self.ast.items {
             match &item.kind {
-                ItemKind::Struct(_) => {}
+                // Struct and enum declarations are types, not values: the
+                // ownership walk has nothing to analyze in them.
+                ItemKind::Struct(_) | ItemKind::Enum(_) => {}
                 ItemKind::Let(binding) => {
                     let value = self.eval_expr(&binding.init, Mode::Transfer);
                     self.bind(binding.name.span, &value);
@@ -998,6 +1000,10 @@ impl<'a> Analyzer<'a> {
                 }
                 EvalValue::struct_value(provenances, ref_borrows)
             }
+            // An enum variant reference (session 17) is a discriminant
+            // constant: enums are Copy (unit variants carry no heap
+            // storage), so every use is an independent immutable value.
+            ExprKind::EnumVariant { .. } => EvalValue::immutable(),
             ExprKind::ArrayLit(elems) => {
                 let mut owned = false;
                 for elem in elems {

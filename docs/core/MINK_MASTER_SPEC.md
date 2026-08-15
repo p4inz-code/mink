@@ -161,7 +161,10 @@ compile-time ownership/move foundation (session 15): owned strings and
 owned-containing aggregates move on transfer (use-after-move is `E-S10`),
 immutable string literals copy freely, and mutation of an immutable
 string is `E-S11`; invalid ownership programs fail before code generation
-(see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`). See `README.md`
+(see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`). Session 17 added
+data-free user enums (`enum D { A, B }`, `D::A` variant paths, nominal
+enum types, single-word discriminants) — see
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`. See `README.md`
 and `docs/implementation/` for the current status and the supported
 subset. The planning documents remain the authoritative long-term
 specification; the implementation documents record what is actually

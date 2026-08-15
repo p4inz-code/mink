@@ -23,8 +23,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    Ast, Block, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind, Stmt, StmtKind,
-    StructItem,
+    Ast, Block, ElseBranch, EnumItem, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind, Stmt,
+    StmtKind, StructItem,
 };
 use crate::source::Span;
 
@@ -61,15 +61,29 @@ struct Ctx {
     in_function: bool,
 }
 
-/// A registered struct declaration: its name's span, used to detect
-/// duplicate struct declarations (the first declaration of a name wins).
-/// Struct names live in the type namespace, separate from the value
-/// namespace of [`SymbolTable`]; the type checker resolves struct *types*
-/// (field types, member access) from the AST directly.
+/// A registered type declaration (a struct or an enum): its name's span,
+/// used to detect duplicate type declarations (the first declaration of a
+/// name wins). Struct and enum names share the type namespace, separate
+/// from the value namespace of [`SymbolTable`]; the type checker resolves
+/// type *structure* (struct fields, enum variants, member access) from the
+/// AST directly.
 #[derive(Debug, Clone)]
-struct StructDecl {
-    /// Span of the struct's name.
+struct TypeDecl {
+    /// Span of the declared name.
     span: Span,
+    /// Whether the declaration is a `struct` or an `enum`. A collision
+    /// between the two kinds is still a duplicate type name (they share
+    /// the namespace); the error kind follows the *later* declaration.
+    kind: TypeDeclKind,
+}
+
+/// The kind of a registered type declaration, for duplicate reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeDeclKind {
+    /// A `struct` declaration.
+    Struct,
+    /// An `enum` declaration.
+    Enum,
 }
 
 /// The semantic analyzer: one pass over the AST producing symbols, scopes,
@@ -84,8 +98,9 @@ struct Analyzer {
     resolutions: Vec<(Span, SymbolId)>,
     /// Semantic errors, in the order they were found.
     errors: Vec<SemanticError>,
-    /// The registered struct declarations (type namespace): name → decl.
-    structs: HashMap<String, StructDecl>,
+    /// The registered type declarations (type namespace): name → decl.
+    /// Holds both structs and enums; the first declaration of a name wins.
+    types: HashMap<String, TypeDecl>,
 }
 
 impl Analyzer {
@@ -95,7 +110,7 @@ impl Analyzer {
             scopes: ScopeTable::new(),
             resolutions: Vec::new(),
             errors: Vec::new(),
-            structs: HashMap::new(),
+            types: HashMap::new(),
         }
     }
 
@@ -124,6 +139,7 @@ impl Analyzer {
             match &item.kind {
                 ItemKind::Fn(f) => self.bind(&f.name, SymbolKind::Fn, module),
                 ItemKind::Struct(s) => self.register_struct(s),
+                ItemKind::Enum(e) => self.register_enum(e),
                 ItemKind::Let(binding) => self.bind(
                     &binding.name,
                     SymbolKind::Let {
@@ -138,38 +154,96 @@ impl Analyzer {
     }
 
     /// Registers a struct declaration in the type namespace, reporting a
-    /// duplicate struct name (`E-S08`) and duplicate fields (`E-S09`). The
-    /// first declaration of a name wins; struct names are never value
+    /// duplicate type name (E-S08) and duplicate fields (E-S09). The first
+    /// declaration of a name wins; struct names are never value symbols, so
+    /// they do not collide with functions, bindings, or other value
+    /// declarations.
+    fn register_struct(&mut self, s: &StructItem) {
+        self.register_type(
+            &s.name.name,
+            s.name.span,
+            TypeDeclKind::Struct,
+            |span, original| SemanticError::duplicate_struct(s.name.name.clone(), span, original),
+        );
+        let registered = matches!(
+            self.types.get(&s.name.name),
+            Some(TypeDecl {
+                span,
+                kind: TypeDeclKind::Struct,
+            }) if *span == s.name.span
+        );
+        if !registered {
+            return;
+        }
+        // Duplicate fields within one declaration are reported here; the
+        // type checker resolves the declared field types (the first
+        // declaration of each field name wins for layout, mirroring this
+        // duplicate policy).
+        let mut seen: Vec<(String, Span)> = Vec::with_capacity(s.fields.len());
+        for field in &s.fields {
+            if let Some((_, original)) = seen.iter().find(|(name, _)| name == &field.name.name) {
+                self.errors.push(SemanticError::duplicate_field(
+                    field.name.name.clone(),
+                    field.name.span,
+                    *original,
+                ));
+            } else {
+                seen.push((field.name.name.clone(), field.name.span));
+            }
+        }
+    }
+
+    /// Registers an enum declaration in the type namespace, reporting a
+    /// duplicate type name (E-S15) and duplicate variants (E-S16). The
+    /// first declaration of a name wins; enum names are never value
     /// symbols, so they do not collide with functions, bindings, or other
     /// value declarations.
-    fn register_struct(&mut self, s: &StructItem) {
-        match self.structs.get(&s.name.name) {
-            Some(first) => self.errors.push(SemanticError::duplicate_struct(
-                s.name.name.clone(),
-                s.name.span,
-                first.span,
-            )),
+    fn register_enum(&mut self, e: &EnumItem) {
+        self.register_type(
+            &e.name.name,
+            e.name.span,
+            TypeDeclKind::Enum,
+            |span, original| SemanticError::duplicate_enum(e.name.name.clone(), span, original),
+        );
+        let registered = matches!(
+            self.types.get(&e.name.name),
+            Some(TypeDecl {
+                span,
+                kind: TypeDeclKind::Enum,
+            }) if *span == e.name.span
+        );
+        if !registered {
+            return;
+        }
+        let mut seen: Vec<(String, Span)> = Vec::with_capacity(e.variants.len());
+        for variant in &e.variants {
+            if let Some((_, original)) = seen.iter().find(|(name, _)| name == &variant.name.name) {
+                self.errors.push(SemanticError::duplicate_variant(
+                    variant.name.name.clone(),
+                    variant.name.span,
+                    *original,
+                ));
+            } else {
+                seen.push((variant.name.name.clone(), variant.name.span));
+            }
+        }
+    }
+
+    /// The shared type-namespace registration: reports a duplicate when
+    /// `name` is already registered (the first declaration wins) and
+    /// otherwise records the declaration. The duplicate diagnostic is
+    /// built by `error` (its kind follows the later declaration).
+    fn register_type(
+        &mut self,
+        name: &str,
+        span: Span,
+        kind: TypeDeclKind,
+        error: impl FnOnce(Span, Span) -> SemanticError,
+    ) {
+        match self.types.get(name) {
+            Some(first) => self.errors.push(error(span, first.span)),
             None => {
-                // Duplicate fields within one declaration are reported
-                // here; the type checker resolves the declared field types
-                // (the first declaration of each field name wins for
-                // layout, mirroring this duplicate policy).
-                let mut seen: Vec<(String, Span)> = Vec::with_capacity(s.fields.len());
-                for field in &s.fields {
-                    if let Some((_, original)) =
-                        seen.iter().find(|(name, _)| name == &field.name.name)
-                    {
-                        self.errors.push(SemanticError::duplicate_field(
-                            field.name.name.clone(),
-                            field.name.span,
-                            *original,
-                        ));
-                    } else {
-                        seen.push((field.name.name.clone(), field.name.span));
-                    }
-                }
-                self.structs
-                    .insert(s.name.name.clone(), StructDecl { span: s.name.span });
+                self.types.insert(name.to_string(), TypeDecl { span, kind });
             }
         }
     }
@@ -180,10 +254,10 @@ impl Analyzer {
     fn analyze_item(&mut self, item: &Item, module: ScopeId) {
         match &item.kind {
             ItemKind::Fn(f) => self.analyze_fn(f, module),
-            // Struct declarations were registered during module-scope
-            // collection; their field *types* are resolved by the type
-            // checker.
-            ItemKind::Struct(_) => {}
+            // Struct and enum declarations were registered during
+            // module-scope collection; their field types and variants are
+            // resolved by the type checker.
+            ItemKind::Struct(_) | ItemKind::Enum(_) => {}
             ItemKind::Let(binding) => {
                 self.analyze_expr(&binding.init, Ctx::module(module));
             }
@@ -419,6 +493,12 @@ impl Analyzer {
                 for field in fields {
                     self.analyze_expr(&field.value, ctx);
                 }
+            }
+            ExprKind::EnumVariant { .. } => {
+                // The enum and variant names are type/variant names, never
+                // value names: they are not resolved as scope names
+                // (unknown enums and variants are reported by the type
+                // checker).
             }
             ExprKind::ArrayLit(elems) => {
                 for elem in elems {

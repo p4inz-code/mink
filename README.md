@@ -110,7 +110,9 @@ corruption, no segfault guessing games.
   **typed pointers** (`Ptr<Int>`), **structs** (`struct P { x: Int }` with
   `P { x: 1 }` literals and `p.x` access), **fixed-size arrays**
   (`[1, 2, 3]`, `a[i]`, with compile-time constant-index and runtime
-  bounds checks), comparisons, logical and bitwise operators,
+  bounds checks), **enums** (`enum D { A, B }` with `D::A` variant paths,
+  nominal enum typing, and single-word discriminant values),
+  comparisons, logical and bitwise operators,
   `if`/`while`/`for`/`loop` control flow, direct function calls, module
   bindings, and integer results becoming process exit codes.
 - **Ownership & borrow checking** — compile-time move semantics for
@@ -186,8 +188,9 @@ Honest status, because durable engineering starts with accurate claims:
 - **Single-threaded runtime** — no concurrency primitives yet.
 - **Aggregate limits** — structs and arrays are values with deterministic
   C-style layout; they cannot be returned from functions or stored at
-  module scope yet (rejected with `E-B03`), and there are no enums,
-  tuples, or generics.
+  module scope yet (rejected with `E-B03`). Enums are data-free (no
+  payloads, no pattern matching, no explicit discriminants), and there
+  are no tuples or generics.
 - **Strings are byte sequences** — literals are immutable, there is no
   concatenation, and UTF-8 well-formedness is not validated at runtime.
 - **Borrowing is lexical, not non-lexical** — explicit references
@@ -221,8 +224,10 @@ that matters.
   ([`STRING_MEMORY_IMPLEMENTATION.md`](docs/implementation/STRING_MEMORY_IMPLEMENTATION.md)),
   the aggregate (struct/array) foundation
   ([`AGGREGATE_TYPES_IMPLEMENTATION.md`](docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md)),
-  and the reference/borrowing foundation
-  ([`REFERENCES_BORROWING_IMPLEMENTATION.md`](docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md)).
+  the reference/borrowing foundation
+  ([`REFERENCES_BORROWING_IMPLEMENTATION.md`](docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md)),
+  and the enum foundation
+  ([`ENUM_TYPES_IMPLEMENTATION.md`](docs/implementation/ENUM_TYPES_IMPLEMENTATION.md)).
 - [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md)
   — compiler architecture and pipeline.
 - [`docs/language/`](docs/language/) — language specifications; the frozen

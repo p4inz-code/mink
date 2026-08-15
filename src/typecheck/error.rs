@@ -76,6 +76,11 @@ pub enum TypeErrorKind {
     /// An assignment is made through an immutable reference (`*r = v`
     /// where `r: &T`); only `&mut T` allows writes through it.
     AssignThroughImmutableRef,
+    /// A variant path's first segment names a type that is not an enum
+    /// (e.g. `Int::Foo` or a struct name), so it has no variants.
+    NotAnEnum,
+    /// An enum has no variant with the accessed name.
+    UnknownVariant,
 }
 
 impl TypeErrorKind {
@@ -107,6 +112,8 @@ impl TypeErrorKind {
             Self::InvalidBorrowTarget => "E-T19",
             Self::DerefNonReference => "E-T20",
             Self::AssignThroughImmutableRef => "E-T21",
+            Self::NotAnEnum => "E-T22",
+            Self::UnknownVariant => "E-T23",
         }
     }
 }
@@ -401,6 +408,30 @@ impl TypeError {
         )
     }
 
+    /// Creates a not-an-enum error at `span` (`E-T22`): the first path
+    /// segment names a type that is not an enum.
+    pub fn not_an_enum(span: Span, name: &str, actual: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::NotAnEnum,
+            span,
+            format!(
+                "`{name}` is not an enum type (it is a `{}`); cannot access a variant of it",
+                actual.into()
+            ),
+            None,
+        )
+    }
+
+    /// Creates an unknown-variant error at `span` (`E-T23`).
+    pub fn unknown_variant(span: Span, enum_name: &str, variant: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::UnknownVariant,
+            span,
+            format!("enum `{enum_name}` has no variant named `{variant}`"),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -470,7 +501,9 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::InvalidAggregateLayout
             | TypeErrorKind::InvalidBorrowTarget
             | TypeErrorKind::DerefNonReference
-            | TypeErrorKind::AssignThroughImmutableRef => actual.to_string(),
+            | TypeErrorKind::AssignThroughImmutableRef
+            | TypeErrorKind::NotAnEnum
+            | TypeErrorKind::UnknownVariant => actual.to_string(),
         };
         f.write_str(&message)
     }

@@ -87,6 +87,12 @@ pub enum HirItemKind {
     /// records the declaration so the HIR faithfully represents the
     /// program. It produces no code.
     Struct(HirStruct),
+    /// An `enum` declaration (session 17): a type, not a value. The enum's
+    /// name and its variants live in the program's type table (the enum's
+    /// type carries its [`EnumId`](crate::typecheck::EnumId)); the item
+    /// records the declaration so the HIR faithfully represents the
+    /// program. It produces no code.
+    Enum(HirEnum),
     /// A `let` binding.
     Let(HirLet),
     /// A `const` binding.
@@ -101,6 +107,17 @@ pub struct HirStruct {
     /// The struct's name (a type name, not a symbol).
     pub name: HirName,
     /// Span covering the whole `struct` item.
+    pub span: Span,
+}
+
+/// A lowered `enum` declaration (session 17): the declared name and span.
+/// The enum's variants are resolved into the program's type table by type
+/// analysis; the MIR layer skips enum items (they produce no code).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirEnum {
+    /// The enum's name (a type name, not a symbol).
+    pub name: HirName,
+    /// Span covering the whole `enum` item.
     pub span: Span,
 }
 
@@ -373,4 +390,15 @@ pub enum HirExprKind {
     },
     /// An array literal: `[elem, ...]`.
     ArrayLit(Vec<HirExpr>),
+    /// An enum variant reference (session 17): `EnumName::Variant`. The
+    /// expression's type is the enum type; the value is the variant's
+    /// discriminant, resolved by MIR lowering from the type table. The
+    /// names are boxed so the node stays as small as the existing
+    /// aggregate nodes (mirroring the AST).
+    EnumVariant {
+        /// The enum type name (a type name, not a symbol).
+        name: Box<HirName>,
+        /// The variant name.
+        variant: Box<HirName>,
+    },
 }

@@ -268,7 +268,41 @@ changes were required. Exclusions from §2 and §9 that remain (enums,
 tuples, `type` aliases, generics, parameter/return annotations) are
 unchanged.
 
-## 12. Status
+## 12. Session-17 Additions: Enums
+
+**Session:** 17 — Enum types
+
+This section extends the frozen grammar additively. The base grammar and
+session-14 additions above remain authoritative; the new productions are:
+
+```
+Item       := ... | EnumDecl
+EnumDecl   := 'enum' Ident '{' VariantList? '}'
+VariantList:= Variant (',' Variant)* ','?
+Variant    := Ident
+
+Primary    := ... | EnumVariantPath
+EnumVariantPath := Ident '::' Ident
+```
+
+- **Enum declarations** (`enum E { A, B }`) are top-level items. The
+  variant list may be empty syntactically (an empty enum has no
+  constructible values) and a trailing comma is allowed.
+- **Type syntax** now also accepts an enum name (`E`), exactly like a
+  struct name; enum names appear in struct field types and resolve to
+  the nominal enum type.
+- **Variant paths** (`E::A`) are primary expressions: `Ident '::' Ident`.
+  The `::` token already existed in the lexer. A path with no variant
+  name (`E::`) is `E-P22` (expected a variant name). Only enum types
+  have variants; `Struct::Field` is rejected by type analysis (`E-T22`),
+  and an undeclared variant is `E-T23`.
+
+The session-17 lexer needed no changes (`::` and `,` already existed).
+Exclusions from §2 and §9 that remain (tuples, `type` aliases, generics,
+parameter/return annotations, data-carrying variants, pattern matching)
+are unchanged.
+
+## 13. Status
 
 This grammar is frozen for the constructs it covers. Statements and
 declarations outside it are rejected by the parser with stable diagnostics

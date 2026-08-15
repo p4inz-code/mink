@@ -659,6 +659,78 @@ fn member_and_index_assignment_is_typed() {
 }
 
 // ---------------------------------------------------------------------------
+// Enums (session 17)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enum_variant_expression_has_the_enum_type() {
+    let src = "enum E { A, B } fn main() { let x = E::A; }";
+    let (_sources, _ast, semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(type_name(&types, symbol_ty(&types, &semantic, "x")), "E");
+}
+
+#[test]
+fn enum_variant_paths_are_nominally_distinct() {
+    // Two enums are distinct types even when they declare the same
+    // variants; comparing variants across enums is a type error (E-T02).
+    let src = "enum E { A } enum F { A } fn main() { let b = E::A == F::A; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T02");
+}
+
+#[test]
+fn unknown_variant_is_rejected() {
+    let src = "enum E { A } fn main() { let x = E::B; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::UnknownVariant);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T23");
+    assert_eq!(errors[0].span(), text_span(src, "B"));
+}
+
+#[test]
+fn variant_access_on_non_enum_is_rejected() {
+    let src = "struct S { x: Int } fn main() { let y = S::Q; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::NotAnEnum);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T22");
+}
+
+#[test]
+fn enum_assignment_must_match() {
+    let src = "enum E { A } enum F { A } fn main() { let mut e = E::A; e = F::A; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert_eq!(type_errors(&types, TypeErrorKind::TypeMismatch).len(), 1);
+}
+
+#[test]
+fn enum_equality_and_inequality_type_check() {
+    let src = "enum E { A, B } fn main() { let b1 = E::A == E::A; let b2 = E::A != E::B; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "b1")),
+        "Bool"
+    );
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "b2")),
+        "Bool"
+    );
+}
+
+#[test]
+fn enum_in_struct_field_is_typed() {
+    let src = "enum C { R } struct T { c: C } fn main() { let t = T { c: C::R }; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "t")), "T");
+}
+
+// ---------------------------------------------------------------------------
 // Calls
 // ---------------------------------------------------------------------------
 

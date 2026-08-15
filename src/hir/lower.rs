@@ -33,8 +33,8 @@ use crate::typecheck::{TypeId, TypeKind, TypeResult, TypeTable};
 
 use super::error::HirError;
 use super::{
-    HirBlock, HirConst, HirElseBranch, HirExpr, HirExprKind, HirFn, HirIdent, HirIf, HirItem,
-    HirItemKind, HirLet, HirName, HirParam, HirProgram, HirStmt, HirStmtKind, HirStruct,
+    HirBlock, HirConst, HirElseBranch, HirEnum, HirExpr, HirExprKind, HirFn, HirIdent, HirIf,
+    HirItem, HirItemKind, HirLet, HirName, HirParam, HirProgram, HirStmt, HirStmtKind, HirStruct,
 };
 
 /// Lowers `ast` with its semantic and type results into HIR.
@@ -128,6 +128,7 @@ impl<'a> Lowerer<'a> {
         let kind = match &item.kind {
             ItemKind::Fn(f) => HirItemKind::Fn(self.lower_fn(f, item.span)),
             ItemKind::Struct(s) => HirItemKind::Struct(self.lower_struct(s)),
+            ItemKind::Enum(e) => HirItemKind::Enum(self.lower_enum(e)),
             ItemKind::Let(binding) => HirItemKind::Let(self.lower_let(binding, item.span)),
             ItemKind::Const(binding) => HirItemKind::Const(self.lower_const(binding, item.span)),
         };
@@ -146,6 +147,18 @@ impl<'a> Lowerer<'a> {
                 span: s.name.span,
             },
             span: s.span,
+        }
+    }
+
+    /// An enum declaration lowers to a plain name: enum names are type
+    /// names, not symbols, and their variants live in the type table.
+    fn lower_enum(&mut self, e: &crate::ast::EnumItem) -> HirEnum {
+        HirEnum {
+            name: HirName {
+                name: e.name.name.clone(),
+                span: e.name.span,
+            },
+            span: e.span,
         }
     }
 
@@ -336,6 +349,16 @@ impl<'a> Lowerer<'a> {
             ExprKind::ArrayLit(elems) => {
                 HirExprKind::ArrayLit(elems.iter().map(|elem| self.lower_expr(elem)).collect())
             }
+            ExprKind::EnumVariant { name, variant } => HirExprKind::EnumVariant {
+                name: Box::new(HirName {
+                    name: name.name.clone(),
+                    span: name.span,
+                }),
+                variant: Box::new(HirName {
+                    name: variant.name.clone(),
+                    span: variant.span,
+                }),
+            },
             ExprKind::Group(inner) => {
                 // Syntax-only grouping: lower the inner expression and keep
                 // the parentheses' span, so the node covers the source text

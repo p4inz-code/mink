@@ -78,9 +78,20 @@ They should support:
 
 Enumerations should represent a closed set of named alternatives.
 
-Enums may optionally carry associated data through a sum-type mechanism.
+**Implemented (session 17):** an enum is a nominal type declared
+`enum E { A, B }` whose values are named, data-free alternatives
+constructed with variant paths (`E::A`). Variants are assigned
+compiler-computed discriminants in declaration order (0, 1, …); an enum
+value occupies a single word, copies freely, and never participates in
+ownership/move analysis. Enum equality (`==`/`!=`) requires the same enum
+type and produces `Bool`; there is no ordering, arithmetic, or `Int`
+conversion. Enum names share the type namespace with struct names.
+Diagnostics: duplicate enum `E-S15`, duplicate variant `E-S16`, variant
+path on a non-enum `E-T22`, undeclared variant `E-T23`. See
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`.
 
-Pattern matching should provide exhaustiveness diagnostics for closed enumerations.
+**Deferred:** data-carrying (sum-type) variants, explicit discriminants,
+pattern matching, and exhaustiveness diagnostics.
 
 ## 8. Sum Types
 

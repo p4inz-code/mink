@@ -234,6 +234,9 @@ impl<'a> Lowerer<'a> {
             },
             Some(TypeKind::Struct(id)) => self.classify_struct(ty, *id),
             Some(TypeKind::Array { .. }) => self.classify_array(ty),
+            // Enums (session 17) are single-word discriminant values: any
+            // enum type is representable, and equality compares the word.
+            Some(TypeKind::Enum(_)) => Some(BType::Enum),
             // `kind` follows resolved inference chains; an unresolved
             // variable is the only `Infer` that remains. Unit is the type
             // of intrinsics that produce no value.
@@ -1286,7 +1289,7 @@ impl<'a> Lowerer<'a> {
         })?;
         let size = match classified {
             BType::Struct | BType::Array => self.aggregate_bytes(elem),
-            BType::Int | BType::Ptr | BType::Ref | BType::Str => 8,
+            BType::Int | BType::Ptr | BType::Ref | BType::Str | BType::Enum => 8,
             BType::Bool => 1,
             BType::Range => 16,
             BType::Unit => 0,
@@ -1438,6 +1441,10 @@ impl<'a> Lowerer<'a> {
         match constant.kind {
             MirConstantKind::Bool(value) => Ok(DecodedConstant::Word(i64::from(value))),
             MirConstantKind::Int => Ok(DecodedConstant::Word(self.decode_int(constant.span)?)),
+            // An enum variant constant (session 17): the discriminant is
+            // already computed by the front end; the word value is the
+            // discriminant itself.
+            MirConstantKind::Enum { variant } => Ok(DecodedConstant::Word(i64::from(variant))),
             MirConstantKind::Str => {
                 let bytes = self.decode_str(constant.span)?;
                 let index = match self.string_index.get(&bytes) {

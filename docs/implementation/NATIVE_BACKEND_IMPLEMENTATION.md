@@ -101,7 +101,8 @@ first milestone implements one target).
 - `BType` — `Int` (64-bit), `Bool` (`0`/`1`), `Range` (a two-word value:
   the normalized exclusive end and the iteration cursor), `Ptr` (a typed
   pointer, one word), `Str` (a string, one word: the address of a
-  length-prefixed UTF-8 blob), and `Unit` (a function that produces no
+  length-prefixed UTF-8 blob), `Enum` (an enum value, one word holding the
+  variant's discriminant), and `Unit` (a function that produces no
   value);
 - `BInst` — instructions with exact source spans:
   `LoadConst`, `LoadLocal`, `StoreLocal`, `LoadStatic`, `StoreStatic`,
@@ -308,10 +309,11 @@ documented in `src/runtime/abi.rs`:
     cargo build
     git diff --check
 
-Full suite after session 16: **878 tests** (61 CLI + 50 lexer + 95 parser +
-62 parser hardening + 72 semantics + 12 source + 156 typecheck + 25 HIR +
-34 MIR + 38 optimization + 54 lib unit + 44 backend + 24 runtime
-end-to-end + 59 aggregate + 41 ownership + 51 references), all passing.
+Full suite after session 17: **919 tests** (61 CLI + 50 lexer + 98 parser +
+62 parser hardening + 75 semantics + 12 source + 163 typecheck + 25 HIR +
+34 MIR + 38 optimization + 55 lib unit + 46 backend + 24 runtime
+end-to-end + 59 aggregate + 41 ownership + 51 references + 25 enums),
+all passing.
 The backend tests
 (`tests/backend.rs`) cover program structure and determinism,
 functions/locals/instructions, constant decoding, string decoding

@@ -260,9 +260,11 @@ All errors carry exact source spans and structured messages.
   and negative indices), bool fields, struct copy semantics, structs
   containing strings, struct arguments, and byte-identical image
   determinism.
-- Existing suite: full `cargo test` passes **878 tests** (703 before
+- Existing suite: full `cargo test` passes **919 tests** (703 before
   Session 14 + 59 new aggregate tests + 41 ownership tests from Session
-  15 + 75 reference/borrowing tests from Session 16). See
+  15 + 75 reference/borrowing tests from Session 16 + 41 tests from
+  Session 17: 25 enums + 3 parser + 3 semantics + 7 typecheck + 2
+  backend + 1 lib unit). See
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
   per-file breakdown.
 
@@ -272,6 +274,8 @@ All errors carry exact source spans and structured messages.
   scope yet (`E-B03`).
 - Arrays are fixed-size values; no resizing, no slices, no iteration
   beyond manual index loops.
-- No enum/unions/tagged values; structs and arrays are the only
-  user-defined aggregate forms.
+- No data-carrying enums/unions/tagged values yet (data-free enums with
+  single-word discriminants arrived in session 17 — see
+  `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`); structs, arrays,
+  and data-free enums are the user-defined forms today.
 - The 1 MiB heap bound is also the maximum single aggregate value size.

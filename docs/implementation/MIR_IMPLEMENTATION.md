@@ -66,6 +66,7 @@ The boundary is strict and one-directional:
 | `MirTarget`/`MirTargetKind` | `Local`, `Static` (module storage), `Member`, `Index` |
 | `MirRvalue`/`MirRvalueKind` | `Use`, `Unary`, `Binary`, `Call`, `Range`, `RangeNext`, `RangeFinished`, `Member`, `Index` |
 | `MirOperand`/`MirOperandKind` | `Local` load, `Constant`, `Static` reference |
+| `MirConstantKind`   | `Int`, `Float`, `Str`, `Char`, `Bool`, `Null`, `Enum { variant }` |
 | `MirTerminator`      | `Return`, `Jump`, `Branch`                       |
 | `MirStatic`          | module-level `let`/`const`: locals, statements, final value |
 
@@ -86,7 +87,10 @@ Key points:
 - **Literals keep their raw text.** Like the AST and HIR, literal *values*
   are not decoded into the IR: the raw source text is recovered from the
   constant's span via the source map. Decoding belongs to a later
-  milestone.
+  milestone. The one exception is the session-17 enum-variant constant
+  (`MirConstantKind::Enum { variant }`): the discriminant is computed by
+  the compiler from the enum's variant table, so it is carried as a value
+  and decodes directly to a word.
 - **Member/index nodes are structural.** The memory-model milestone that
   defines their place semantics does not exist yet; base (and index) values
   are evaluated to operands and the place is preserved so valid programs
@@ -325,4 +329,6 @@ the suite is **585 tests**, after session 11 (native backend) it is
 **700 tests**, and after session 14 (structs + arrays, with member/index
 rvalues and the multi-step place representation) it is **762 tests**,and after session 15 (ownership analysis, a compile-time gate before MIR
 lowering) it is **803 tests**, and after session 16 (references and
-borrowing) it is **878 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).
+borrowing) it is **878 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7),
+and after session 17 (data-free enums, with the `Enum` variant constant)
+it is **919 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).

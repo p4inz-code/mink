@@ -63,13 +63,13 @@ explicit. Every expression carries `span` **and** `ty`:
 | HIR node                  | Notes                                             |
 | ------------------------- | ------------------------------------------------- |
 | `HirProgram`              | `items: Vec<HirItem>` + cloned `types: TypeTable` |
-| `HirItem` / `HirItemKind` | `Fn`, `Let`, `Const` (module scope)               |
+| `HirItem` / `HirItemKind` | `Fn`, `Let`, `Const`, `Enum` (module scope)        |
 | `HirFn`                   | name, params, body, whole-item span, `Fn` type    |
 | `HirParam`                | name (symbol), type                               |
 | `HirLet` / `HirConst`     | name (symbol), init, binding type, mutability     |
 | `HirBlock` / `HirStmt`    | statements in order; `HirStmtKind`                |
 | `HirIf` / `HirElseBranch` | cond, then block, else-if chain / else block      |
-| `HirExpr` / `HirExprKind` | literals, `Var`, unary, binary, assign, range, call, member, index |
+| `HirExpr` / `HirExprKind` | literals, `Var`, unary, binary, assign, range, call, member, index, enum variant |
 
 `HirExprKind` has **no `Group`** node: syntax-only parentheses are
 eliminated (see §4). It re-exports the operator enums (`UnaryOp`,
@@ -234,4 +234,7 @@ the suite is **585 tests**, after session 11 (native backend) it is
 **700 tests**, and after session 14 (structs + arrays, with `HirStruct`
 items and struct/array literal expressions) it is **762 tests**,and after session 15 (ownership analysis, a compile-time gate before HIR
 lowering) it is **803 tests**, and after session 16 (references and
-borrowing) it is **878 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).
+borrowing) it is **878 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7),
+and after session 17 (data-free enums, with `HirEnum` items and the
+`EnumVariant` expression form) it is **919 tests** (see
+`OPTIMIZATION_IMPLEMENTATION.md` §7).

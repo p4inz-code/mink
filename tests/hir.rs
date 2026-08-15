@@ -193,6 +193,7 @@ fn module_items_lower_in_source_order() {
             HirItemKind::Let(b) => format!("let:{}", b.name.name),
             HirItemKind::Const(b) => format!("const:{}", b.name.name),
             HirItemKind::Struct(s) => format!("struct:{}", s.name.name),
+            HirItemKind::Enum(e) => format!("enum:{}", e.name.name),
         })
         .collect::<Vec<_>>();
     assert_eq!(kinds, ["fn:f", "let:a", "const:c", "fn:g"]);

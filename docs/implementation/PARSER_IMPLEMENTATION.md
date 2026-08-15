@@ -107,9 +107,10 @@ pattern-matching is the expected consumption style), derive `Debug`, `Clone`,
 
 Syntax errors live in `src/parser/error.rs`, mirroring the lexer's model:
 
-- `ParseErrorKind` — 16 stable categories with codes `E-P01` … `E-P16`
+- `ParseErrorKind` — stable categories with codes `E-P01` … `E-P22`
   (e.g. `E-P03` expected an expression, `E-P06` expected `;`,
-  `E-P14` unclosed `{`), each with a human-readable message.
+  `E-P14` unclosed `{`, `E-P22` expected a variant name after `::`),
+  each with a human-readable message.
 - `ParseError { kind, span }` — `Copy`, with `kind()`, `span()`, and
   `Display`.
 
@@ -117,8 +118,11 @@ The parser never panics on malformed input. Recovery is panic-mode:
 
 - Statement-level errors skip tokens to the nearest `;`, `}`, or `Eof`
   (consuming a `;` if one is found), so the next statement still parses.
-- Item-level errors skip to the next `fn`/`let`/`const` or `Eof`, so later
-  declarations survive a broken one.
+- Item-level errors skip to the next `fn`/`struct`/`enum`/`let`/`const`
+  or `Eof`, so later declarations survive a broken one. A malformed enum
+  variant list recovers via `skip_to_variant_boundary` (skipping to the
+  next `,`, `}`, or `Eof`), so a bad variant cannot swallow the enum's
+  closing brace.
 - `{ ... }` groups encountered during a skip are consumed as units so a
   malformed statement cannot swallow a following block.
 - A stack of open delimiters reports the innermost unclosed `(`/`{`/`[` at

@@ -27,7 +27,7 @@ The analyzer lives in `src/semantics/`:
 | File        | Role                                                        |
 | ----------- | ----------------------------------------------------------- |
 | `mod.rs`    | `analyze(&Ast) -> SemanticResult`; public result API        |
-| `error.rs`  | `SemanticErrorKind` (`E-S01`…`E-S07`, `E-S10`, `E-S11`) + `SemanticError` |
+| `error.rs`  | `SemanticErrorKind` (`E-S01`…`E-S07`, `E-S08`, `E-S10`, `E-S11`, `E-S15`, `E-S16`) + `SemanticError` |
 | `symbol.rs` | `Symbol`, `SymbolKind`, `SymbolTable`, `Scope`, `ScopeTable`|
 | `analyzer.rs` | One-pass traversal: scopes, symbols, resolution, validation |
 
@@ -205,11 +205,13 @@ human-readable message, exact span) and reserve the `E-S*` range:
 | E-S07| `ReturnOutsideFunction` | `` `return` outside of a function ``                |
 | E-S10| `UseOfMovedValue`        | `cannot use \`s\`: value was moved`                  |
 | E-S11| `MutatingImmutableString`| `cannot mutate \`s\`: it is immutable`               |
+| E-S15| `DuplicateEnum`          | `duplicate definition of enum \`E\`` (+ original)    |
+| E-S16| `DuplicateVariant`       | `duplicate variant \`A\` in enum declaration` (+ original) |
 
 `SemanticError` carries the offending name (for name-related kinds) and, for
 duplicates, the original declaration span, which the CLI renders as a note
 (`note: previous declaration is here`). Existing codes `E-L01`…`E-L08` and
-`E-P01`…`E-P16` are untouched.
+`E-P01`…`E-P22` are untouched.
 
 Ownership diagnostics (`E-S10`/`E-S11`) come from the dedicated ownership
 stage (`src/ownership/`, session 15 — see
@@ -292,10 +294,11 @@ session 06 can consume it without re-running name resolution.
 - Member/index assignment writability is enforced: assigning through a
   member/index target whose base binding is immutable is
   `AssignmentToImmutable`, exactly like a plain assignment (session 14).
-- Struct names live in a separate type namespace (session 14): duplicate
-  struct names are `E-S08`, duplicate fields `E-S09`, and a struct name
-  never resolves as a value. Other advanced types (enums, tuples,
-  generics) still do not exist.
+- Struct and enum names live in the type namespace (sessions 14/17):
+  duplicate struct names are `E-S08`, duplicate fields `E-S09`, duplicate
+  enum names are `E-S15`, duplicate variants `E-S16`, and a type name
+  never resolves as a value. Other advanced types (tuples, data-carrying
+  enums, generics) still do not exist.
 - Duplicate triplets (`let x; let x; let x;`) report each redeclaration after
   the first as a duplicate of the original — deliberate, not a cascade of the
   same root cause.

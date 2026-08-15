@@ -32,6 +32,49 @@ pub struct TypeId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct StructId(u32);
 
+/// Stable identity of a user-declared enum within a [`TypeTable`].
+///
+/// Enum ids are assigned sequentially as enum declarations are registered
+/// (in source order) and index the table's [`EnumInfo`] list, so an enum
+/// type is identified nominally: two declarations with the same name are
+/// two distinct types (duplicate declarations are rejected by semantic
+/// analysis; the first declaration wins).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EnumId(u32);
+
+impl EnumId {
+    /// The raw numeric value of this id.
+    pub fn raw(self) -> u32 {
+        self.0
+    }
+
+    /// Creates an id from its raw numeric value.
+    pub(crate) fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+/// The declared variants of an enum: each variant's name and its
+/// discriminant, in declaration order. Discriminants are assigned
+/// deterministically (declaration order, starting at 0), so an enum value
+/// is a single word holding its variant's discriminant.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EnumInfo {
+    /// The enum's declared name.
+    pub name: String,
+    /// The variants, in declaration order.
+    pub variants: Vec<EnumVariantInfo>,
+}
+
+/// One variant of an [`EnumInfo`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EnumVariantInfo {
+    /// The variant's name.
+    pub name: String,
+    /// The variant's discriminant (its position in declaration order).
+    pub discriminant: u32,
+}
+
 impl StructId {
     /// The raw numeric value of this id.
     pub fn raw(self) -> u32 {
@@ -152,6 +195,13 @@ pub enum TypeKind {
     /// distinct types. The deterministic byte layout (field offsets,
     /// alignment, size) is computed by `crate::runtime::layout`.
     Struct(StructId),
+    /// A user-declared enum: a closed set of named alternatives (session
+    /// 17). The enum's variants live in the table's [`EnumInfo`] list,
+    /// indexed by the [`EnumId`]; types are nominal, so two declarations
+    /// are two distinct types. An enum value is a single machine word
+    /// holding the discriminant of the variant it was constructed from
+    /// (assigned in declaration order, starting at 0).
+    Enum(EnumId),
     /// A fixed-length array: `len` consecutive values of type `elem`
     /// (session 14). Arrays are value types with deterministic layout;
     /// the element count is part of the type identity, so `Array<Int, 2>`
@@ -191,12 +241,57 @@ pub struct TypeTable {
     /// [`StructId`] indexes this list; the fields are filled in after all
     /// struct declarations are registered (module-scope order independence).
     structs: Vec<StructInfo>,
+    /// The user-declared enums, in registration order. An enum type's
+    /// [`EnumId`] indexes this list; the variants are filled in after all
+    /// enum declarations are registered (module-scope order independence).
+    enums: Vec<EnumInfo>,
 }
 
 impl TypeTable {
     /// Creates an empty type table.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Registers a new user-declared enum and returns its type id. The
+    /// enum is registered with no variants yet (variants are recorded
+    /// through [`TypeTable::set_enum_variants`] once every enum
+    /// declaration is visible), so enum types can be referenced before
+    /// their declaration. Each declaration registers a distinct id; the
+    /// type is never interned (enum types are nominal).
+    pub(crate) fn push_enum(&mut self, name: String) -> TypeId {
+        let id = EnumId::new(self.enums.len() as u32);
+        self.enums.push(EnumInfo {
+            name,
+            variants: Vec::new(),
+        });
+        self.push(TypeKind::Enum(id))
+    }
+
+    /// Records the resolved variants of the enum registered under `id`.
+    /// Called once, after every enum declaration is registered.
+    pub(crate) fn set_enum_variants(&mut self, id: EnumId, variants: Vec<EnumVariantInfo>) {
+        if let Some(info) = self.enums.get_mut(id.raw() as usize) {
+            info.variants = variants;
+        }
+    }
+
+    /// The enum registered under `id`, if any.
+    pub fn enum_info(&self, id: EnumId) -> Option<&EnumInfo> {
+        self.enums.get(id.raw() as usize)
+    }
+
+    /// All registered enums, in registration order.
+    pub fn enums(&self) -> &[EnumInfo] {
+        &self.enums
+    }
+
+    /// The enum id of the enum type `ty`, if `ty` denotes an enum.
+    pub fn enum_id(&self, ty: TypeId) -> Option<EnumId> {
+        match self.kind(ty) {
+            Some(TypeKind::Enum(id)) => Some(*id),
+            _ => None,
+        }
     }
 
     /// Registers (or reuses) a type and returns its stable id.
@@ -348,11 +443,12 @@ impl TypeTable {
                 self.unify(*ea, *eb)?;
                 Ok(a)
             }
-            // Struct types are nominal: only the identical struct unifies
-            // with itself (caught by the `a == b` check above); a struct
-            // never unifies with any other type, including a differently
-            // registered struct.
+            // Struct and enum types are nominal: only the identical
+            // struct/enum unifies with itself (caught by the `a == b` check
+            // above); neither ever unifies with any other type, including a
+            // differently registered declaration.
             (TypeKind::Struct(_), _) | (_, TypeKind::Struct(_)) => Err((a, b)),
+            (TypeKind::Enum(_), _) | (_, TypeKind::Enum(_)) => Err((a, b)),
             (
                 TypeKind::Fn {
                     params: pa,
@@ -409,6 +505,10 @@ impl TypeTable {
                 .struct_info(*id)
                 .map(|info| info.name.clone())
                 .unwrap_or_else(|| format!("Struct#{}", id.raw())),
+            Some(TypeKind::Enum(id)) => self
+                .enum_info(*id)
+                .map(|info| info.name.clone())
+                .unwrap_or_else(|| format!("Enum#{}", id.raw())),
             Some(TypeKind::Array { elem, len }) => {
                 format!("Array<{}, {len}>", self.display(*elem))
             }
@@ -589,6 +689,44 @@ mod tests {
         let var = table.push(TypeKind::Infer(None));
         assert!(table.unify(var, point).is_ok());
         assert_eq!(table.canonical(var), point);
+    }
+
+    #[test]
+    fn enum_types_are_nominal_and_hold_variants() {
+        let mut table = TypeTable::new();
+        let direction = table.push_enum("Direction".to_string());
+        let other = table.push_enum("Direction".to_string());
+        // Two declarations are two distinct types (semantic analysis
+        // rejects duplicates; the first declaration wins).
+        assert_ne!(direction, other);
+        let id = table.enum_id(direction).unwrap();
+        table.set_enum_variants(
+            id,
+            vec![
+                EnumVariantInfo {
+                    name: "North".to_string(),
+                    discriminant: 0,
+                },
+                EnumVariantInfo {
+                    name: "South".to_string(),
+                    discriminant: 1,
+                },
+            ],
+        );
+        let info = table.enum_info(id).unwrap();
+        assert_eq!(info.name, "Direction");
+        assert_eq!(info.variants.len(), 2);
+        assert_eq!(info.variants[0].name, "North");
+        assert_eq!(info.variants[0].discriminant, 0);
+        assert_eq!(table.display(direction), "Direction");
+        // An enum unifies only with itself.
+        assert!(table.unify(direction, direction).is_ok());
+        assert!(table.unify(direction, other).is_err());
+        let int = table.push(TypeKind::Int);
+        assert!(table.unify(direction, int).is_err());
+        let var = table.push(TypeKind::Infer(None));
+        assert!(table.unify(var, direction).is_ok());
+        assert_eq!(table.canonical(var), direction);
     }
 
     /// Interns the type `&T` (shared).

@@ -159,7 +159,9 @@ loader never scans past them into string data.
   determinism of both the image bytes and the runtime behavior.
 
 Full suite after session 16: **878 tests**, all passing (see
-`NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
+`NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown). After session
+17 (data-free enums, a single-word scalar with no runtime support
+needed) the suite is **919 tests**.
 
 ## 9. Known limitations
 

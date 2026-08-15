@@ -342,8 +342,9 @@ full design record is `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
   declarations at module scope).
 - **Namespaces.** Functions, bindings, constants, parameters, and loop
   variables share one value namespace per scope; user-declared **struct
-  names** live in a separate type namespace (session 14), so a struct and
-  a binding may share a name without collision.
+  and enum names** live in a shared type namespace (sessions 14/17), so a
+  type name and a binding may share a name without collision, while two
+  type declarations (struct or enum) with the same name are duplicates.
 
 ## 25. Specification Status
 
@@ -370,7 +371,9 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   **structs** (nominal types, one per declaration) and fixed-size
   **arrays** (`[T; N]`, structural) with deterministic C-style layout;
   member access (`p.x`), indexing (`a[i]`), struct/array literals, and
-  place mutation are implemented. Still absent: tuples, enums, generics,
+  place mutation are implemented. Session 17 added user-declared
+  **enums** (nominal types with named, data-free variants; see the enum
+  rules below). Still absent: tuples, data-carrying variants, generics,
   optional/result types, … — they arrive with later milestones per
   `docs/language/TYPE_SYSTEM.md`.
 - **Literals.** Integer, floating-point, string, character, boolean, and
@@ -430,11 +433,23 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   positive integer literal length (`E-T16`). Recursive/empty/oversized
   aggregate layout is rejected (`E-T18`). Member/index assignment requires
   a mutable base and a value matching the field/element type.
-- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T18`
+- **Enum types (session 17).** An enum (`enum E { A, B }`) is a nominal
+  type whose values are named alternatives constructed with variant paths
+  (`E::A`). Variants carry no data and no explicit discriminants; the
+  discriminant is assigned in declaration order (0, 1, …) and an enum
+  value occupies one word, so enums copy freely and are never subject to
+  move/ownership rules. Enum equality (`==`/`!=`) requires the same enum
+  type (`E::A == F::A` is `E-T02`); there is no ordering or conversion to
+  `Int`. Variant paths on non-enum types are `E-T22`; undeclared variants
+  are `E-T23`. Enum names share the type namespace with struct names
+  (duplicates are `E-S08`/`E-S15`); duplicate variants within one enum
+  are `E-S16`. Enums compose with structs, arrays, parameters, returns,
+  and bindings.
+- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T23`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
-  count, not iterable, and the session-14 aggregate rules above). They
-  carry the exact offending span, rendered expected/actual types where
-  useful, and a related span for assignments.
+  count, not iterable, the session-14 aggregate rules, and the session-17
+  enum rules above). They carry the exact offending span, rendered
+  expected/actual types where useful, and a related span for assignments.
 - **Cascade control.** An unknown/error type absorbs failed sub-expressions
   so one root error (an unresolved name, an invalid operator) never
   cascades into misleading secondary diagnostics; independent errors are

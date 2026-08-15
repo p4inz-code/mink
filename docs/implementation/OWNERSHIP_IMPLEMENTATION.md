@@ -178,7 +178,9 @@ The following rules are authoritative for this session.
   ownership programs and verify the exact output and exit codes.
 - Full suite after session 16: **878 tests** (see
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
-  per-file breakdown).
+  per-file breakdown); after session 17 (data-free enums, which own
+  nothing and are therefore unaffected by move semantics) the suite is
+  **919 tests**.
 - **Aggregate copy rule (implemented):** a struct or array is Copy iff it
   contains no Owned value — `P { name: \"a\", age: 1 }` copies freely
   (`let q = p; let r = p;` both fine), while `P { name: rt_str_alloc(3) }`

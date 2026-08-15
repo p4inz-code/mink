@@ -68,6 +68,12 @@ pub enum SemanticErrorKind {
     /// aggregate containing one) to a function-local value, so it would
     /// outlive its source.
     DanglingReference,
+    /// Two `enum` declarations of the same name at module scope (or an
+    /// `enum` colliding with a `struct` of the same name — both live in
+    /// the type namespace).
+    DuplicateEnum,
+    /// An enum declares the same variant name twice.
+    DuplicateVariant,
 }
 
 impl SemanticErrorKind {
@@ -91,6 +97,8 @@ impl SemanticErrorKind {
             Self::BorrowConflict => "E-S12",
             Self::InvalidBorrow => "E-S13",
             Self::DanglingReference => "E-S14",
+            Self::DuplicateEnum => "E-S15",
+            Self::DuplicateVariant => "E-S16",
         }
     }
 }
@@ -312,6 +320,30 @@ impl SemanticError {
         }
     }
 
+    /// Creates a duplicate-enum error for `name` at `span`, whose original
+    /// declaration is at `original` (E-S15).
+    pub fn duplicate_enum(name: impl Into<String>, span: Span, original: Span) -> Self {
+        Self {
+            kind: SemanticErrorKind::DuplicateEnum,
+            span,
+            name: name.into(),
+            original: Some(original),
+            detail: None,
+        }
+    }
+
+    /// Creates a duplicate-variant error for `name` at `span`, whose
+    /// original declaration is at `original` (E-S16).
+    pub fn duplicate_variant(name: impl Into<String>, span: Span, original: Span) -> Self {
+        Self {
+            kind: SemanticErrorKind::DuplicateVariant,
+            span,
+            name: name.into(),
+            original: Some(original),
+            detail: None,
+        }
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> SemanticErrorKind {
         self.kind
@@ -388,6 +420,12 @@ impl fmt::Display for SemanticError {
                 .detail
                 .clone()
                 .unwrap_or_else(|| "dangling reference".to_string()),
+            SemanticErrorKind::DuplicateEnum => {
+                format!("duplicate definition of enum `{}`", self.name)
+            }
+            SemanticErrorKind::DuplicateVariant => {
+                format!("duplicate variant `{}` in enum declaration", self.name)
+            }
         };
         f.write_str(&message)
     }

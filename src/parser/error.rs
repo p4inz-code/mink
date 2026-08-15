@@ -70,6 +70,9 @@ pub enum ParseErrorKind {
     /// `>` was required to close `Ptr<T>` (or a non-`Ptr` name was used
     /// with the generic form, which only `Ptr` supports).
     ExpectedGT,
+    /// A variant name was required after `::` in an enum variant
+    /// reference (`Name::`).
+    ExpectedVariant,
 }
 
 impl ParseErrorKind {
@@ -100,6 +103,7 @@ impl ParseErrorKind {
             Self::ExpectedIntegerLiteral => "E-P19",
             Self::ExpectedType => "E-P20",
             Self::ExpectedGT => "E-P21",
+            Self::ExpectedVariant => "E-P22",
         }
     }
 }
@@ -130,6 +134,7 @@ impl fmt::Display for ParseErrorKind {
             Self::ExpectedIntegerLiteral => "expected an integer literal",
             Self::ExpectedType => "expected a type",
             Self::ExpectedGT => "expected '>'",
+            Self::ExpectedVariant => "expected a variant name after '::'",
         };
         f.write_str(message)
     }

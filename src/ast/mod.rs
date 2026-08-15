@@ -72,6 +72,9 @@ pub enum ItemKind {
     Fn(FnItem),
     /// A `struct` declaration: a named record of typed fields (session 14).
     Struct(StructItem),
+    /// An `enum` declaration: a closed set of named alternatives (session
+    /// 17).
+    Enum(EnumItem),
     /// A `let` binding.
     Let(LetItem),
     /// A `const` binding.
@@ -92,6 +95,34 @@ pub struct StructItem {
     /// The declared fields, in source order.
     pub fields: Vec<StructField>,
     /// Span covering the whole item from `struct` through the closing brace.
+    pub span: Span,
+}
+
+/// An `enum` declaration: `enum Name { Variant, ... }` (session 17).
+///
+/// Enums are the second user-defined type form: a closed set of named
+/// alternatives (unit variants). A variant reference `Name::Variant` is a
+/// value of the enum type; each variant carries a deterministic
+/// discriminant assigned in declaration order, so the value is a single
+/// machine word. Data-carrying (tagged-union) variants and `match`
+/// pattern matching are deferred to the pattern-matching milestone — see
+/// `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumItem {
+    /// The enum's name (a type name, resolved in the type namespace).
+    pub name: Ident,
+    /// The declared variants, in source order.
+    pub variants: Vec<EnumVariant>,
+    /// Span covering the whole item from `enum` through the closing brace.
+    pub span: Span,
+}
+
+/// One declared variant of an [`EnumItem`]: a bare name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariant {
+    /// The variant's name.
+    pub name: Ident,
+    /// Span covering the variant (its identifier).
     pub span: Span,
 }
 
@@ -389,6 +420,18 @@ pub enum ExprKind {
     /// An array literal: `[elem, ...]` (session 14). The element type is
     /// inferred from the elements; the array's length is the element count.
     ArrayLit(Vec<Expr>),
+    /// An enum variant reference (session 17): `EnumName::Variant`. The
+    /// enum name resolves in the type namespace; the variant names one of
+    /// its declared alternatives. The expression's type is the enum type.
+    /// The names are boxed so the node stays as small as the existing
+    /// aggregate nodes (a nested `Group` chain can be hundreds deep, and
+    /// every parser frame holds one `Expr` by value).
+    EnumVariant {
+        /// The enum type name.
+        name: Box<Ident>,
+        /// The variant name.
+        variant: Box<Ident>,
+    },
     /// A parenthesized expression: `(inner)`. Kept as a node so tooling can
     /// distinguish explicit grouping from parser-imposed association.
     Group(Box<Expr>),

@@ -259,9 +259,10 @@ fn check_without_path_reports_usage_error() {
 
 #[test]
 fn check_with_excluded_declaration_fails() {
-    // `enum` is a reserved keyword but deliberately excluded from the
+    // `trait` is a reserved keyword but deliberately excluded from the
     // frozen grammar; the parser must reject it, not silently accept it.
-    let path = temp_source("excluded_decl.mink", "enum Color { Red }\n");
+    // (`enum` declarations arrived with session 17 and are accepted.)
+    let path = temp_source("excluded_decl.mink", "trait Show { }\n");
     let output = mink().arg("check").arg(&path).output().unwrap();
     let _ = std::fs::remove_file(&path);
 

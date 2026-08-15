@@ -248,7 +248,9 @@ this (drop `y` by reassigning it, or use a scope).
   end-to-end programs with exact output and exit codes. Parser, typecheck,
   and backend suites add structural coverage of the new syntax, types, and
   instructions (`tests/parser.rs`, `tests/typecheck.rs`, `tests/backend.rs`).
-- Existing suite (878 tests) remains green.
+- Existing suite (878 tests) remains green; the full suite after session
+  17 (data-free enums) is **919 tests** (see
+  `NATIVE_BACKEND_IMPLEMENTATION.md` §13).
 
 ## 7. Status
 

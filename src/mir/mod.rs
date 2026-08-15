@@ -545,6 +545,15 @@ pub enum MirConstantKind {
     Bool(bool),
     /// The `null` literal.
     Null,
+    /// An enum variant constant (session 17): the variant's discriminant
+    /// (assigned in declaration order, starting at 0). Unlike the other
+    /// constants, the value is computed by the compiler (from the enum's
+    /// variant table), not decoded from source text; the constant's type
+    /// is the enum type.
+    Enum {
+        /// The variant's discriminant.
+        variant: u32,
+    },
 }
 
 /// A module-level `let` or `const` binding lowered to MIR.

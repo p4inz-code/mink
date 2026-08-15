@@ -74,9 +74,9 @@ fn collect_idents(ast: &Ast) -> Vec<(&str, Span, bool)> {
                 out.push((binding.name.name.as_str(), binding.name.span, true));
                 expr_idents(&binding.init, &mut out);
             }
-            // Struct names live in the type namespace, not the value
-            // namespace: they are not collected as identifiers.
-            ItemKind::Struct(_) => {}
+            // Struct and enum names live in the type namespace, not the
+            // value namespace: they are not collected as identifiers.
+            ItemKind::Struct(_) | ItemKind::Enum(_) => {}
         }
     }
     out
@@ -174,6 +174,9 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
                 expr_idents(elem, out);
             }
         }
+        // Enum variant references carry type/variant names, never value
+        // names: they are not collected as identifiers.
+        ExprKind::EnumVariant { .. } => {}
         ExprKind::Group(inner) => expr_idents(inner, out),
     }
 }
@@ -598,6 +601,66 @@ fn duplicate_functions_are_rejected() {
     let decls = decl_spans(&ast, "f");
     assert_eq!(spans[0], decls[1]);
     assert_eq!(result.errors()[0].original(), Some(decls[0]));
+}
+
+#[test]
+fn duplicate_enums_are_rejected() {
+    // Enums share one type namespace with each other (E-S15); the error
+    // points at the duplicate and records the original.
+    let src = "enum E { A } enum E { B }";
+    let (_sources, _ast, result) = analyze(src);
+    let spans = error_spans(&result, SemanticErrorKind::DuplicateEnum);
+    assert_eq!(spans.len(), 1);
+    assert_eq!(result.errors()[0].code(), "E-S15");
+    // The duplicate error points at the second declaration's *name*; the
+    // original is the first declaration's name. Enum names are
+    // type-namespace symbols, so recover the name positions from the
+    // source text.
+    let first_name_start = src.find("E { A }").unwrap() as u32;
+    let second_name_start = src.find("E { B }").unwrap() as u32;
+    assert_eq!(spans[0].start(), second_name_start);
+    assert_eq!(
+        result.errors()[0].original().unwrap().start(),
+        first_name_start
+    );
+}
+
+#[test]
+fn enum_and_struct_share_one_type_namespace() {
+    // Struct and enum names share one type namespace: declaring a struct
+    // after a same-named enum duplicates the type name (reported with the
+    // later declaration's kind — E-S08 for the struct), and vice versa
+    // (E-S15 for the enum).
+    let src = "enum E { A } struct E { x: Int }";
+    let (_sources, _ast, result) = analyze(src);
+    assert_eq!(
+        error_spans(&result, SemanticErrorKind::DuplicateStruct).len(),
+        1
+    );
+    assert_eq!(result.errors()[0].code(), "E-S08");
+
+    let src = "struct E { x: Int } enum E { A }";
+    let (_sources, _ast, result) = analyze(src);
+    assert_eq!(
+        error_spans(&result, SemanticErrorKind::DuplicateEnum).len(),
+        1
+    );
+    assert_eq!(result.errors()[0].code(), "E-S15");
+}
+
+#[test]
+fn duplicate_variants_are_rejected() {
+    // Variants are scoped to their enum (E-S16): duplicates within one
+    // enum are rejected, but the same variant name in another enum is fine.
+    let src = "enum E { A, A } enum F { A }";
+    let (_sources, _ast, result) = analyze(src);
+    let spans = error_spans(&result, SemanticErrorKind::DuplicateVariant);
+    assert_eq!(spans.len(), 1);
+    assert_eq!(result.errors()[0].code(), "E-S16");
+    // The duplicate points at the second `A`; the original is the first.
+    // `text_span` finds the first `A`, whose span matches the recorded
+    // original variant identifier span.
+    assert_eq!(result.errors()[0].original(), Some(text_span(src, "A")));
 }
 
 #[test]

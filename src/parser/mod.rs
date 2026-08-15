@@ -27,9 +27,9 @@
 mod error;
 
 use crate::ast::{
-    AssignOp, Ast, BinaryOp, Block, ConstItem, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt,
-    Item, ItemKind, LetItem, Param, Stmt, StmtKind, StructField, StructFieldInit, StructItem, Ty,
-    TyKind, UnaryOp,
+    AssignOp, Ast, BinaryOp, Block, ConstItem, ElseBranch, EnumItem, EnumVariant, Expr, ExprKind,
+    FnItem, Ident, IfStmt, Item, ItemKind, LetItem, Param, Stmt, StmtKind, StructField,
+    StructFieldInit, StructItem, Ty, TyKind, UnaryOp,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::source::{SourceFile, Span};
@@ -270,7 +270,12 @@ impl<'a> Parser<'a> {
     fn recover_item(&mut self) {
         while !matches!(
             self.current_kind(),
-            TokenKind::Fn | TokenKind::Struct | TokenKind::Let | TokenKind::Const | TokenKind::Eof
+            TokenKind::Fn
+                | TokenKind::Struct
+                | TokenKind::Enum
+                | TokenKind::Let
+                | TokenKind::Const
+                | TokenKind::Eof
         ) {
             if self.current_kind() == TokenKind::LBrace {
                 self.skip_balanced_brace_group();
@@ -316,12 +321,14 @@ impl<'a> Parser<'a> {
                     // Empty statement at module scope: consume silently.
                     let _ = self.bump();
                 }
-                TokenKind::Fn | TokenKind::Struct | TokenKind::Let | TokenKind::Const => {
-                    match self.parse_item() {
-                        Ok(item) => items.push(item),
-                        Err(()) => self.recover_item(),
-                    }
-                }
+                TokenKind::Fn
+                | TokenKind::Struct
+                | TokenKind::Enum
+                | TokenKind::Let
+                | TokenKind::Const => match self.parse_item() {
+                    Ok(item) => items.push(item),
+                    Err(()) => self.recover_item(),
+                },
                 _ => {
                     let token = self.current();
                     self.record_error(ParseErrorKind::ExpectedItem, token.span());
@@ -348,6 +355,13 @@ impl<'a> Parser<'a> {
                     span,
                 })
             }
+            TokenKind::Enum => {
+                let (enum_item, span) = self.parse_enum()?;
+                Ok(Item {
+                    kind: ItemKind::Enum(enum_item),
+                    span,
+                })
+            }
             TokenKind::Let => {
                 let (binding, span) = self.parse_let()?;
                 Ok(Item {
@@ -363,6 +377,104 @@ impl<'a> Parser<'a> {
                 })
             }
             _ => Err(()),
+        }
+    }
+
+    /// Parses an `enum Name { Variant, ... }` declaration, including a
+    /// trailing comma. Variants are bare identifiers; data-carrying
+    /// variants are rejected (the pattern-matching milestone defines their
+    /// syntax).
+    fn parse_enum(&mut self) -> Result<(EnumItem, Span), ()> {
+        let start = self.bump().span(); // 'enum'
+        let name = self.expect_ident()?;
+        if self.current_kind() != TokenKind::LBrace {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedBlock, token.span());
+            return Err(());
+        }
+        let open = self.bump().span();
+        self.open_delims.push((TokenKind::LBrace, open));
+        let mut variants = Vec::new();
+        loop {
+            match self.current_kind() {
+                TokenKind::RBrace => {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    let span = self.join(start, close);
+                    return Ok((
+                        EnumItem {
+                            name,
+                            variants,
+                            span,
+                        },
+                        span,
+                    ));
+                }
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                    return Err(());
+                }
+                _ => {
+                    let token = self.current();
+                    if token.kind() != TokenKind::Ident {
+                        self.record_error(ParseErrorKind::ExpectedIdentifier, token.span());
+                        self.skip_to_variant_boundary();
+                    } else {
+                        let _ = self.bump();
+                        let variant = EnumVariant {
+                            name: Ident {
+                                name: self.text(token.span()),
+                                span: token.span(),
+                            },
+                            span: token.span(),
+                        };
+                        variants.push(variant);
+                    }
+                    match self.current_kind() {
+                        TokenKind::Comma => {
+                            let _ = self.bump();
+                            if self.current_kind() == TokenKind::RBrace {
+                                break;
+                            }
+                        }
+                        TokenKind::RBrace => break,
+                        TokenKind::Eof => {
+                            self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                            return Err(());
+                        }
+                        _ => {
+                            let token = self.current();
+                            self.record_error(ParseErrorKind::ExpectedComma, token.span());
+                            self.skip_to_variant_boundary();
+                            if self.current_kind() == TokenKind::Comma {
+                                let _ = self.bump();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let close = self.bump().span();
+        self.open_delims.pop();
+        let span = self.join(start, close);
+        Ok((
+            EnumItem {
+                name,
+                variants,
+                span,
+            },
+            span,
+        ))
+    }
+
+    /// Skips tokens up to (but not consuming) the next variant boundary:
+    /// `,`, `}`, or `Eof`. Used to recover from a malformed enum variant.
+    fn skip_to_variant_boundary(&mut self) {
+        while !matches!(
+            self.current_kind(),
+            TokenKind::Comma | TokenKind::RBrace | TokenKind::Eof
+        ) {
+            let _ = self.bump();
         }
     }
 
@@ -1383,11 +1495,18 @@ impl<'a> Parser<'a> {
                 let _ = self.bump();
                 let name = self.text(span);
                 let ident = Ident { name, span };
-                // `Name { ... }` is a struct literal unless the expression
-                // sits directly before a block in the grammar (`if`/
-                // `while` conditions, `for` iterables), where the `{` opens
-                // the block instead.
-                if !self.in_block_context && self.current_kind() == TokenKind::LBrace {
+                // `Name::Variant` is an enum variant reference (session 17):
+                // a path whose first segment names an enum type and whose
+                // second names one of its variants. `::` was previously
+                // lexed but rejected; it now forms variant paths only —
+                // module paths (`mod::item`) remain a later milestone.
+                if self.current_kind() == TokenKind::ColonColon {
+                    self.parse_enum_variant(ident)
+                } else if !self.in_block_context && self.current_kind() == TokenKind::LBrace {
+                    // `Name { ... }` is a struct literal unless the
+                    // expression sits directly before a block in the
+                    // grammar (`if`/`while` conditions, `for` iterables),
+                    // where the `{` opens the block instead.
                     self.parse_struct_literal(ident)
                 } else {
                     Ok(Expr {
@@ -1423,6 +1542,31 @@ impl<'a> Parser<'a> {
                 Err(())
             }
         }
+    }
+
+    /// Parses an enum variant reference `Name::Variant` after the enum name
+    /// token. The variant must be a bare identifier; a missing variant is
+    /// `E-P22`.
+    fn parse_enum_variant(&mut self, name: Ident) -> Result<Expr, ()> {
+        let _ = self.bump(); // '::'
+        if self.current_kind() != TokenKind::Ident {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedVariant, token.span());
+            return Err(());
+        }
+        let token = self.bump();
+        let variant = Ident {
+            name: self.text(token.span()),
+            span: token.span(),
+        };
+        let span = self.join(name.span, variant.span);
+        Ok(Expr {
+            kind: ExprKind::EnumVariant {
+                name: Box::new(name),
+                variant: Box::new(variant),
+            },
+            span,
+        })
     }
 
     /// Parses a struct literal `Name { field: value, ... }` after the name

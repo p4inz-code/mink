@@ -36,7 +36,7 @@ use crate::source::{SourceMap, Span};
 
 use super::TypeResult;
 use super::error::TypeError;
-use super::ty::{StructFieldInfo, StructId, TypeId, TypeKind, TypeTable};
+use super::ty::{EnumId, EnumVariantInfo, StructFieldInfo, StructId, TypeId, TypeKind, TypeTable};
 
 /// A struct whose field types are still unresolved: the struct's id plus
 /// each declared field's name, span, and (unresolved) type expression.
@@ -109,6 +109,26 @@ struct StructReg {
     struct_id: StructId,
 }
 
+/// A registered enum declaration in the checker's type namespace.
+///
+/// Enum names are type names, separate from the value namespace of the
+/// semantic symbol table: an enum variant reference's first segment
+/// resolves here, and an enum name used as a value is an ordinary
+/// (unresolved) name. The first declaration of a name wins (duplicates are
+/// reported by semantic analysis); variants are recorded after every
+/// declaration is registered (module-scope order independence) and live in
+/// the [`TypeTable`].
+struct EnumReg {
+    /// The enum's declared name.
+    name: String,
+    /// Span of the declared name.
+    span: Span,
+    /// The enum's type id.
+    id: TypeId,
+    /// The enum's stable id (indexes the table's enum list).
+    enum_id: EnumId,
+}
+
 /// The type checker traversal.
 struct Checker<'a> {
     ast: &'a Ast,
@@ -123,6 +143,8 @@ struct Checker<'a> {
     decls: HashMap<u32, SymbolId>,
     /// The registered structs (type namespace): name → registration.
     structs: HashMap<String, StructReg>,
+    /// The registered enums (type namespace): name → registration.
+    enums: HashMap<String, EnumReg>,
     /// Expression types in traversal order: (expression span, type).
     expr_types: Vec<(Span, TypeId)>,
     /// The spans of every member/index expression whose forward-pass type
@@ -149,6 +171,7 @@ impl<'a> Checker<'a> {
             symbol_types: vec![placeholder; semantic.symbols().len()],
             decls: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             expr_types: Vec::new(),
             deferred: Vec::new(),
             errors: Vec::new(),
@@ -157,6 +180,12 @@ impl<'a> Checker<'a> {
     }
 
     fn run(&mut self) {
+        // Enums are registered before struct field types are resolved:
+        // a struct field may be of enum type, and field resolution needs
+        // every type name visible (module-scope order independence).
+        // Enums themselves have no field types (unit variants), so they
+        // never depend on structs.
+        self.register_enums();
         self.register_structs();
         self.pre_register();
         for item in &self.ast.items {
@@ -214,7 +243,7 @@ impl<'a> Checker<'a> {
                         self.unify_decl(&binding.name, ty, binding.init.span);
                     }
                 }
-                ItemKind::Struct(_) => {}
+                ItemKind::Struct(_) | ItemKind::Enum(_) => {}
             }
         }
     }
@@ -516,7 +545,8 @@ impl<'a> Checker<'a> {
             | ExprKind::Char
             | ExprKind::Bool(_)
             | ExprKind::Null
-            | ExprKind::Ident(_) => (
+            | ExprKind::Ident(_)
+            | ExprKind::EnumVariant { .. } => (
                 self.recorded_ty(expr.span)
                     .unwrap_or_else(|| self.types.push(TypeKind::Error)),
                 false,
@@ -644,6 +674,60 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Registers every enum declaration into the type table (first
+    /// declaration of each name wins, mirroring semantic analysis) and
+    /// records every variant with its deterministic discriminant
+    /// (declaration order, starting at 0).
+    fn register_enums(&mut self) {
+        // Phase 1: register names. Duplicate names are reported by semantic
+        // analysis; the first declaration's type is authoritative.
+        for item in &self.ast.items {
+            let ItemKind::Enum(e) = &item.kind else {
+                continue;
+            };
+            if self.enums.contains_key(&e.name.name) {
+                continue;
+            }
+            let id = self.types.push_enum(e.name.name.clone());
+            let enum_id = self
+                .types
+                .enum_id(id)
+                .expect("a pushed enum type always denotes an enum");
+            self.enums.insert(
+                e.name.name.clone(),
+                EnumReg {
+                    name: e.name.name.clone(),
+                    span: e.name.span,
+                    id,
+                    enum_id,
+                },
+            );
+        }
+        // Phase 2: record variants. The first declaration of each name is
+        // identified by its span (later duplicates are skipped).
+        for item in &self.ast.items {
+            let ItemKind::Enum(e) = &item.kind else {
+                continue;
+            };
+            let Some(reg) = self.enums.get(&e.name.name) else {
+                continue;
+            };
+            if reg.span != e.name.span {
+                continue; // duplicate declaration; the first wins
+            }
+            let variants = e
+                .variants
+                .iter()
+                .enumerate()
+                .map(|(index, variant)| EnumVariantInfo {
+                    name: variant.name.name.clone(),
+                    discriminant: index as u32,
+                })
+                .collect();
+            self.types.set_enum_variants(reg.enum_id, variants);
+        }
+    }
+
     /// Resolves a written type (`Ty`) to its type id, reporting unknown
     /// names and invalid array lengths. A failed type resolves to the
     /// unknown/error type so independent problems keep being reported.
@@ -655,14 +739,17 @@ impl<'a> Checker<'a> {
                 "Bool" => self.types.push(TypeKind::Bool),
                 "Char" => self.types.push(TypeKind::Char),
                 "Str" => self.types.push(TypeKind::Str),
-                _ => match self.structs.get(&ident.name) {
-                    Some(reg) => reg.id,
-                    None => {
+                _ => {
+                    if let Some(reg) = self.structs.get(&ident.name) {
+                        reg.id
+                    } else if let Some(reg) = self.enums.get(&ident.name) {
+                        reg.id
+                    } else {
                         self.errors
                             .push(TypeError::unknown_type(ident.span, &ident.name));
                         self.types.push(TypeKind::Error)
                     }
-                },
+                }
             },
             TyKind::Ptr(inner) => {
                 let elem = self.resolve_type(inner);
@@ -850,9 +937,9 @@ impl<'a> Checker<'a> {
     fn check_item(&mut self, item: &Item) {
         match &item.kind {
             ItemKind::Fn(f) => self.check_fn(f),
-            // Struct declarations were registered (types, field types, and
-            // layout) before any body was analyzed.
-            ItemKind::Struct(_) => {}
+            // Struct and enum declarations were registered (types, fields,
+            // variants, and layout) before any body was analyzed.
+            ItemKind::Struct(_) | ItemKind::Enum(_) => {}
             ItemKind::Let(binding) => {
                 let ty = self.expr_type(&binding.init);
                 self.unify_decl(&binding.name, ty, binding.init.span);
@@ -1122,6 +1209,9 @@ impl<'a> Checker<'a> {
                 self.check_struct_literal(name, fields, expr.span)
             }
             ExprKind::ArrayLit(elems) => self.check_array_literal(elems, expr.span),
+            ExprKind::EnumVariant { name, variant } => {
+                self.check_enum_variant(name, variant, expr.span)
+            }
             ExprKind::Group(inner) => self.expr_type(inner),
         }
     }
@@ -1381,6 +1471,7 @@ impl<'a> Checker<'a> {
         let is_int = matches!(kind, TypeKind::Int);
         let is_bool = matches!(kind, TypeKind::Bool);
         let is_pointer = matches!(kind, TypeKind::Ptr(_));
+        let is_enum = matches!(kind, TypeKind::Enum(_));
         let is_scalar = matches!(
             kind,
             TypeKind::Int
@@ -1416,6 +1507,15 @@ impl<'a> Checker<'a> {
                 Some(c)
             }
             OpCategory::Equality if is_scalar => {
+                let _ = self.types.unify(v, c);
+                Some(self.bool_ty())
+            }
+            // Enum equality (session 17): the unconstrained operand adopts
+            // the enum type and the result is `Bool`. Only the same enum
+            // type compares equal (nominal); the `unify` above pins the
+            // variable to the concrete enum, so a different enum operand
+            // later conflicts.
+            OpCategory::Equality if is_enum => {
                 let _ = self.types.unify(v, c);
                 Some(self.bool_ty())
             }
@@ -1456,6 +1556,13 @@ impl<'a> Checker<'a> {
         );
         let l_ptr = matches!(lk, TypeKind::Ptr(_));
         let r_ptr = matches!(rk, TypeKind::Ptr(_));
+        // Enum equality (session 17): the same enum type compares equal
+        // (`v == Direction::North`); two different enums never unify
+        // (nominal), so the `same_enum` check rejects them.
+        let same_enum = matches!(
+            (lk, rk),
+            (TypeKind::Enum(a), TypeKind::Enum(b)) if a == b
+        );
         match category {
             OpCategory::Arithmetic if same_numeric => Some(l),
             // Byte-addressed pointer arithmetic is only defined for `+`
@@ -1478,6 +1585,7 @@ impl<'a> Checker<'a> {
             OpCategory::Comparison if same_numeric => Some(self.bool_ty()),
             OpCategory::Equality if same_scalar => Some(self.bool_ty()),
             OpCategory::Equality if l_ptr && r_ptr => Some(self.bool_ty()),
+            OpCategory::Equality if same_enum => Some(self.bool_ty()),
             OpCategory::Logical if both_bool => Some(self.bool_ty()),
             _ => None,
         }
@@ -2019,6 +2127,41 @@ impl<'a> Checker<'a> {
             }
         }
         id
+    }
+
+    /// Types an enum variant reference `Name::Variant`: the first segment
+    /// must name a registered enum (`E-T15` when the type is unknown,
+    /// `E-T22` when it names a non-enum type), and the variant must be one
+    /// of its declared alternatives (`E-T23`). The result is the enum's
+    /// type.
+    fn check_enum_variant(&mut self, name: &Ident, variant: &Ident, span: Span) -> TypeId {
+        let Some(reg) = self.enums.get(&name.name) else {
+            if self.structs.contains_key(&name.name) {
+                self.push_error(TypeError::not_an_enum(
+                    span,
+                    &name.name,
+                    self.display(self.structs.get(&name.name).expect("checked above").id),
+                ));
+            } else {
+                self.errors
+                    .push(TypeError::unknown_type(name.span, &name.name));
+            }
+            return self.types.push(TypeKind::Error);
+        };
+        let variants = self
+            .types
+            .enum_info(reg.enum_id)
+            .map(|info| info.variants.clone())
+            .unwrap_or_default();
+        if variants.iter().all(|v| v.name != variant.name) {
+            self.push_error(TypeError::unknown_variant(
+                variant.span,
+                &reg.name,
+                &variant.name,
+            ));
+            return self.types.push(TypeKind::Error);
+        }
+        reg.id
     }
 
     /// Types `[elem, ...]`: every element must unify with the first

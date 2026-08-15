@@ -90,9 +90,9 @@ impl<'a> Lowerer<'a> {
                 HirItemKind::Fn(f) => Some(f.name.symbol),
                 HirItemKind::Let(binding) => Some(binding.name.symbol),
                 HirItemKind::Const(binding) => Some(binding.name.symbol),
-                // Struct declarations are types, not values: they produce
-                // no code and have no symbol.
-                HirItemKind::Struct(_) => None,
+                // Struct and enum declarations are types, not values: they
+                // produce no code and have no symbol.
+                HirItemKind::Struct(_) | HirItemKind::Enum(_) => None,
             })
             // The predeclared runtime intrinsics resolve like module items:
             // a reference is a `Static` operand the backend recognizes.
@@ -109,9 +109,10 @@ impl<'a> Lowerer<'a> {
 
     fn run(&mut self) {
         for item in &self.hir.items {
-            // Struct declarations are types, not values: they lower to no
-            // MIR at all (their layout lives in the type table).
-            if let HirItemKind::Struct(_) = &item.kind {
+            // Struct and enum declarations are types, not values: they
+            // lower to no MIR at all (their structure lives in the type
+            // table).
+            if let HirItemKind::Struct(_) | HirItemKind::Enum(_) = &item.kind {
                 continue;
             }
             let kind = match &item.kind {
@@ -135,7 +136,9 @@ impl<'a> Lowerer<'a> {
                     binding.span,
                     binding.ty,
                 )),
-                HirItemKind::Struct(_) => unreachable!("struct items are skipped above"),
+                HirItemKind::Struct(_) | HirItemKind::Enum(_) => {
+                    unreachable!("struct and enum items are skipped above")
+                }
             };
             self.items.push(MirItem {
                 kind,
@@ -371,8 +374,47 @@ impl<'a> StmtEval<'a> {
                 let elems = elems.iter().map(|elem| self.eval_operand(elem)).collect();
                 self.temp_rvalue(expr, MirRvalueKind::ArrayLit { elems })
             }
+            HirExprKind::EnumVariant { name, variant } => {
+                // The variant's discriminant is compiler-computed from the
+                // enum's variant table (declaration order, starting at 0),
+                // so the constant carries it directly instead of decoding
+                // source text.
+                let discriminant = self
+                    .enum_variant_discriminant(&name.name, &variant.name)
+                    .unwrap_or(0);
+                let constant = MirConstant {
+                    kind: MirConstantKind::Enum {
+                        variant: discriminant,
+                    },
+                    span: expr.span,
+                    ty: expr.ty,
+                };
+                MirOperand {
+                    kind: MirOperandKind::Constant(constant),
+                    span: expr.span,
+                    ty: expr.ty,
+                }
+            }
             HirExprKind::Assign { .. } => self.eval_assign(expr),
         }
+    }
+
+    /// The discriminant of the variant `variant` of the enum type named
+    /// `enum_name`, looked up in the type table (which the front end
+    /// populated during type analysis). Returns `None` when the enum or
+    /// variant is unknown — only reachable on malformed input, since the
+    /// type checker rejects unknown enums and variants before HIR
+    /// lowering.
+    fn enum_variant_discriminant(&self, enum_name: &str, variant: &str) -> Option<u32> {
+        self.table.enums().iter().find_map(|info| {
+            if info.name != enum_name {
+                return None;
+            }
+            info.variants
+                .iter()
+                .find(|v| v.name == variant)
+                .map(|v| v.discriminant)
+        })
     }
 
     /// A literal expression as a constant operand.

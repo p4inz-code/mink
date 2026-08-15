@@ -97,12 +97,14 @@ is a distinct mutable slot.
 
 The core type catalog is exactly what the current milestone requires
 (`docs/language/CORE_LANGUAGE.md` §26). No speculative types were added:
-`Option`/`Result`, tuples, enums, generics, traits, union types,
-ownership types, and every other advanced form in
+`Option`/`Result`, tuples, data-carrying enums, generics, traits, union
+types, ownership types, and every other advanced form in
 `docs/language/TYPE_SYSTEM.md` remain future milestones. Session 14 added
 user-declared **structs** (nominal types, one per declaration) and
 **arrays** (`Array<T, N>`, structural/canonical) — see
-`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`.
+`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`. Session 17 added
+user-declared **enums** (nominal types with data-free variants) — see
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`.
 
 Type identity is the interned [`TypeId`]; equality is canonical identity
 through [`TypeTable::canonical`] and [`TypeTable::unify`]. Compatibility is
@@ -454,6 +456,8 @@ range: `E-T01` … `E-T06`.
 | E-T16| `InvalidArrayLength` | `invalid array length: …`                             |
 | E-T17| `EmptyArrayLiteral`  | `cannot infer the element type of an empty array literal` |
 | E-T18| `InvalidAggregateLayout` | `the struct \`Node\` is recursive and has no finite size` |
+| E-T22| `NotAnEnum`           | `` `S` is not an enum type (it is a `S`); cannot access a variant of it `` |
+| E-T23| `UnknownVariant`      | `` enum `E` has no variant named `B` ``                 |
 
 Every error carries the exact offending span; `E-T01` on assignment also
 carries the target span as a related location, which the CLI renders as
@@ -598,7 +602,7 @@ As before:
     cargo build
     git diff --check
 
-Total suite after session 16: **878 tests** (see
+Total suite after session 17: **919 tests** (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown), all passing.
 
 ## 26. Later Milestones
@@ -607,8 +611,11 @@ The type-system foundation (sessions 06–07) deliberately stops before
 advanced features. Cleanly deferred to later milestones:
 
 - implicit conversions and numeric promotion rules;
-- enums and tuples; generic user-defined types; advanced member/index
-  forms (e.g. indexing `Str` and other built-ins);
+- data-carrying enum variants and pattern matching (data-free enums are
+  implemented — session 17, see
+  `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`); tuples; generic
+  user-defined types; advanced member/index forms (e.g. indexing `Str`
+  and other built-ins);
 - generics, traits/interfaces, type aliases, optional/result types;
 - a general bidirectional inference engine beyond the pinned
   expected-type directions of session 07 (see

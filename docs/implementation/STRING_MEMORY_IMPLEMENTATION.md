@@ -198,7 +198,8 @@ string-data region. A bad index is the new `E-R09`:
   zero-fill, and every string error path.
 
 Full suite after session 16: **878 tests**, all passing (see
-`NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
+`NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown). After session
+17 (data-free enums, which own no heap memory) the suite is **919 tests**.
 
 ## 10. Known limitations
 

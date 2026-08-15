@@ -866,9 +866,10 @@ fn bad_statement_inside_else_branch_then_valid() {
 
 #[test]
 fn bad_item_then_valid_items() {
-    // `enum` is an excluded top-level declaration; recovery must skip it
-    // and keep parsing the valid items after it.
-    let output = parse_src("enum Color { Red } fn main() {} let x = 1;");
+    // `trait` is an excluded top-level declaration; recovery must skip it
+    // and keep parsing the valid items after it. (`enum` declarations
+    // arrived with session 17 and are accepted.)
+    let output = parse_src("trait T {} fn main() {} let x = 1;");
     assert_eq!(output.parse_errors().len(), 1);
     assert_eq!(output.ast().items().len(), 2);
     let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
@@ -1196,6 +1197,12 @@ fn walk_item(item: &Item, text_len: u32, src: &str) {
                 walk_ty(&field.ty, text_len);
             }
         }
+        ItemKind::Enum(e) => {
+            walk_ident(&e.name, text_len, src);
+            for variant in &e.variants {
+                walk_ident(&variant.name, text_len, src);
+            }
+        }
     }
 }
 
@@ -1322,6 +1329,10 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
                 walk_expr(elem, text_len, src);
             }
         }
+        ExprKind::EnumVariant { name, variant } => {
+            walk_ident(name, text_len, src);
+            walk_ident(variant, text_len, src);
+        }
         ExprKind::Group(inner) => walk_expr(inner, text_len, src),
     }
 }
@@ -1341,8 +1352,9 @@ fn assert_span_ok(span: Span, text_len: u32, src: &str) {
 
 #[test]
 fn excluded_declarations_at_top_level_are_rejected() {
+    // `enum` declarations are implemented (session 17) and therefore not
+    // in this list.
     let excluded = [
-        "enum Color { Red }",
         "type X = int;",
         "trait T {}",
         "impl T for U {}",
@@ -1417,8 +1429,9 @@ fn excluded_tokens_and_operators_are_rejected() {
         ("let z = g()?;", ParseErrorKind::ExpectedSemicolon),
         // Fat arrow (match-arm syntax).
         ("let z = a => b;", ParseErrorKind::ExpectedSemicolon),
-        // Path separator `::`.
-        ("let p = std::mem;", ParseErrorKind::ExpectedSemicolon),
+        // Multi-segment paths: `::` forms enum variant paths (session 17),
+        // so a third segment is still rejected.
+        ("let p = std::mem::x;", ParseErrorKind::ExpectedSemicolon),
         // Open-ended ranges (both directions).
         ("let r = 0..;", ParseErrorKind::ExpectedExpression),
         ("let r = ..b;", ParseErrorKind::ExpectedExpression),
