@@ -157,6 +157,7 @@ fn check_target(
                 }
             }
         }
+        MirTargetKind::Deref { operand } => check_operand(operand, local_count, errors, type_count),
     }
 }
 
@@ -194,6 +195,15 @@ fn check_rvalue(
             check_operand(base, local_count, errors, type_count);
             check_operand(index, local_count, errors, type_count);
         }
+        MirRvalueKind::RefAddr { root, steps, .. } => {
+            check_local(root, rvalue.span, local_count, errors);
+            for step in steps {
+                if let MirPlaceStepKind::Index(index) = &step.kind {
+                    check_operand(index, local_count, errors, type_count);
+                }
+            }
+        }
+        MirRvalueKind::Deref { operand } => check_operand(operand, local_count, errors, type_count),
         MirRvalueKind::StructLit { fields } => {
             for (_, value) in fields {
                 check_operand(value, local_count, errors, type_count);

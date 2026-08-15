@@ -67,6 +67,15 @@ pub enum TypeErrorKind {
     /// An aggregate's layout is invalid: a recursive struct, an empty
     /// struct, or a value larger than the runtime memory model.
     InvalidAggregateLayout,
+    /// A reference is taken of something that cannot be borrowed (a
+    /// non-place, an existing reference, or a deref-rooted place — the
+    /// borrow/reborrow forms outside the Session 16 model).
+    InvalidBorrowTarget,
+    /// A value that is not a reference is dereferenced with `*`.
+    DerefNonReference,
+    /// An assignment is made through an immutable reference (`*r = v`
+    /// where `r: &T`); only `&mut T` allows writes through it.
+    AssignThroughImmutableRef,
 }
 
 impl TypeErrorKind {
@@ -95,6 +104,9 @@ impl TypeErrorKind {
             Self::InvalidArrayLength => "E-T16",
             Self::EmptyArrayLiteral => "E-T17",
             Self::InvalidAggregateLayout => "E-T18",
+            Self::InvalidBorrowTarget => "E-T19",
+            Self::DerefNonReference => "E-T20",
+            Self::AssignThroughImmutableRef => "E-T21",
         }
     }
 }
@@ -356,6 +368,39 @@ impl TypeError {
         )
     }
 
+    /// Creates an invalid-borrow-target error at `span` (`E-T19`): the
+    /// borrowed expression is not a borrowable place, is already a
+    /// reference, or is a deref-rooted place (reborrowing is deferred).
+    pub fn invalid_borrow_target(span: Span, detail: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::InvalidBorrowTarget,
+            span,
+            detail.into(),
+            None,
+        )
+    }
+
+    /// Creates a deref-of-non-reference error at `span` (`E-T20`).
+    pub fn deref_non_reference(span: Span, actual: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::DerefNonReference,
+            span,
+            format!("cannot dereference a value of type `{}`", actual.into()),
+            None,
+        )
+    }
+
+    /// Creates an assignment-through-immutable-reference error at `span`
+    /// (`E-T21`).
+    pub fn assign_through_immutable_ref(span: Span) -> Self {
+        Self::custom(
+            TypeErrorKind::AssignThroughImmutableRef,
+            span,
+            "cannot assign through an immutable reference; use `&mut`".to_string(),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -422,7 +467,10 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::UnknownType
             | TypeErrorKind::InvalidArrayLength
             | TypeErrorKind::EmptyArrayLiteral
-            | TypeErrorKind::InvalidAggregateLayout => actual.to_string(),
+            | TypeErrorKind::InvalidAggregateLayout
+            | TypeErrorKind::InvalidBorrowTarget
+            | TypeErrorKind::DerefNonReference
+            | TypeErrorKind::AssignThroughImmutableRef => actual.to_string(),
         };
         f.write_str(&message)
     }

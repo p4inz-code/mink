@@ -158,7 +158,7 @@ loader never scans past them into string data.
   trips, LIFO reuse, every `E-R0N` path, `rt_print_int` output, and
   determinism of both the image bytes and the runtime behavior.
 
-Full suite after session 15: **803 tests**, all passing (see
+Full suite after session 16: **878 tests**, all passing (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
 
 ## 9. Known limitations

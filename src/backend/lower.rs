@@ -220,6 +220,14 @@ impl<'a> Lowerer<'a> {
                 _ => None,
             },
             Some(TypeKind::Str) => Some(BType::Str),
+            // References (session 16) are word-sized addresses regardless
+            // of mutability; the referent's shape is carried by the
+            // load/store instructions (`RefLoad`/`RefStore`), not the
+            // reference's own type.
+            Some(TypeKind::Ref { elem, .. }) => match self.classify(*elem) {
+                Some(BType::Unit) | None => None,
+                Some(_) => Some(BType::Ref),
+            },
             Some(TypeKind::Range(elem)) => match self.program.types.kind(*elem) {
                 Some(TypeKind::Int) => Some(BType::Range),
                 _ => None,
@@ -630,6 +638,16 @@ impl<'a> Lowerer<'a> {
             MirRvalueKind::Index { base, index } => {
                 self.operand_is_unsupported(base) || self.operand_is_unsupported(index)
             }
+            MirRvalueKind::RefAddr { root, steps, .. } => {
+                self.local_is_unsupported(*root)
+                    || steps.iter().any(|step| match &step.kind {
+                        crate::mir::MirPlaceStepKind::Index(index) => {
+                            self.operand_is_unsupported(index)
+                        }
+                        crate::mir::MirPlaceStepKind::Field(_) => false,
+                    })
+            }
+            MirRvalueKind::Deref { operand } => self.operand_is_unsupported(operand),
             MirRvalueKind::StructLit { fields } => fields
                 .iter()
                 .any(|(_, operand)| self.operand_is_unsupported(operand)),
@@ -770,6 +788,36 @@ impl<'a> Lowerer<'a> {
                         BInstKind::PlaceStore {
                             base: *root,
                             steps: addr_steps,
+                            size,
+                            src,
+                        },
+                        stmt.span,
+                    );
+                    Ok::<(), BackendError>(())
+                })();
+                match result {
+                    Ok(()) => Some(()),
+                    Err(error) => {
+                        self.errors.push(error);
+                        None
+                    }
+                }
+            }
+            MirTargetKind::Deref { operand } => {
+                if self.rvalue_touches_unsupported(rvalue) || self.operand_is_unsupported(operand) {
+                    return None;
+                }
+                let result = (|| {
+                    // The target's type is the referent type; the operand
+                    // holds the reference (whose type carries the
+                    // referent) — `referent_info` needs the reference type.
+                    let (elem_ty, size) = self.referent_info(operand.ty, target.span)?;
+                    let reference = self.eval_operand(operand)?;
+                    let src = self.lower_rvalue_to_operand(rvalue)?;
+                    self.push(
+                        BInstKind::RefStore {
+                            reference,
+                            elem_ty,
                             size,
                             src,
                         },
@@ -938,6 +986,27 @@ impl<'a> Lowerer<'a> {
                     stride,
                     len,
                     index: self.eval_operand(index)?,
+                }
+            }
+            MirRvalueKind::RefAddr {
+                mutable: _,
+                root,
+                steps,
+            } => {
+                let (addr_steps, _) = self.resolve_place(*root, steps, rvalue.span)?;
+                BInstKind::RefAddr {
+                    target,
+                    base: *root,
+                    steps: addr_steps,
+                }
+            }
+            MirRvalueKind::Deref { operand } => {
+                let (elem_ty, size) = self.referent_info(operand.ty, rvalue.span)?;
+                BInstKind::RefLoad {
+                    target,
+                    reference: self.eval_operand(operand)?,
+                    elem_ty,
+                    size,
                 }
             }
             // Handled above (multi-instruction literal materialization).
@@ -1190,6 +1259,52 @@ impl<'a> Lowerer<'a> {
             field_layout.size as u32,
             field.ty,
         ))
+    }
+
+    /// The classified type and byte size of a reference's referent, used
+    /// by `RefLoad`/`RefStore`. The referent must classify (a reference to
+    /// an unsupported type is itself unsupported — `classify` already
+    /// rejects it, so this is defensive).
+    fn referent_info(&mut self, ref_ty: TypeId, span: Span) -> Result<(BType, u32), BackendError> {
+        let elem = match self.program.types.kind(ref_ty) {
+            Some(TypeKind::Ref { elem, .. }) => *elem,
+            _ => {
+                return Err(BackendError::invalid_backend_ir(
+                    span,
+                    "a deref operand is not a reference",
+                ));
+            }
+        };
+        let classified = self.classify(elem).ok_or_else(|| {
+            BackendError::unsupported_type(
+                span,
+                format!(
+                    "cannot dereference a reference to `{}`: the referent type is not supported",
+                    self.display(elem)
+                ),
+            )
+        })?;
+        let size = match classified {
+            BType::Struct | BType::Array => self.aggregate_bytes(elem),
+            BType::Int | BType::Ptr | BType::Ref | BType::Str => 8,
+            BType::Bool => 1,
+            BType::Range => 16,
+            BType::Unit => 0,
+        };
+        Ok((classified, size))
+    }
+
+    /// The exact byte size of an aggregate-typed value, from its layout.
+    fn aggregate_bytes(&self, ty: TypeId) -> u32 {
+        match self.program.types.kind(ty) {
+            Some(TypeKind::Struct(id)) => layout::struct_layout(*id, &self.program.types)
+                .map(|layout| layout.size as u32)
+                .unwrap_or(0),
+            Some(TypeKind::Array { .. }) => layout::array_layout(ty, &self.program.types)
+                .map(|layout| layout.size as u32)
+                .unwrap_or(0),
+            _ => 0,
+        }
     }
 
     /// Resolves a multi-step storage place into the address steps the

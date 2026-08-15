@@ -381,6 +381,9 @@ impl Analyzer {
             | ExprKind::Null => {}
             ExprKind::Ident(ident) => self.resolve_name(ident, ctx),
             ExprKind::Unary { operand, .. } => self.analyze_expr(operand, ctx),
+            ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => {
+                self.analyze_expr(operand, ctx);
+            }
             ExprKind::Binary { lhs, rhs, .. } => {
                 self.analyze_expr(lhs, ctx);
                 self.analyze_expr(rhs, ctx);

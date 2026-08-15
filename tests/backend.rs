@@ -489,6 +489,83 @@ fn pointer_arithmetic_lowers_to_add_sub() {
 }
 
 #[test]
+fn references_lower_to_ref_instructions() {
+    // `&mut v`, `*m = 42`, and `*m` lower to `RefAddr`, `RefStore`, and
+    // `RefLoad`; the reference local is typed `Ref`, and the referent is
+    // carried by the load/store instructions, not the reference's type.
+    let src = "fn main() { let mut v = 1; let m = &mut v; *m = 42; let x = *m; rt_print_int(x); return; }";
+    let (_mir, program) = lower_backend(src);
+    let f = function(&program, "main");
+    let insts: Vec<_> = f.blocks.iter().flat_map(|b| &b.insts).collect();
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i.kind, BInstKind::RefAddr { .. }))
+    );
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i.kind, BInstKind::RefStore { .. }))
+    );
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i.kind, BInstKind::RefLoad { .. }))
+    );
+    let m_ty = f
+        .locals
+        .iter()
+        .find(|l| l.name == "m")
+        .map(|l| l.ty)
+        .expect("local `m`");
+    assert_eq!(m_ty, BType::Ref);
+    // The load and store carry the referent type and size: an `Int` is one
+    // 8-byte word here (a `Ref` local is also word-sized).
+    for inst in insts {
+        match inst.kind {
+            BInstKind::RefLoad { elem_ty, size, .. } => {
+                assert_eq!(elem_ty, BType::Int);
+                assert_eq!(size, 8);
+            }
+            BInstKind::RefStore { elem_ty, size, .. } => {
+                assert_eq!(elem_ty, BType::Int);
+                assert_eq!(size, 8);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn reference_calls_lower_through_functions() {
+    // A `&mut Int` passed to a function writes through the caller's slot;
+    // the parameter local is typed `Ref`.
+    let src = "fn bump(p) { *p = *p + 1; } fn main() { let mut v = 41; let m = &mut v; bump(m); rt_print_int(v); return; }";
+    let (_mir, program) = lower_backend(src);
+    let f = function(&program, "bump");
+    let p_ty = f
+        .locals
+        .iter()
+        .find(|l| l.name == "p")
+        .map(|l| l.ty)
+        .expect("local `p`");
+    assert_eq!(p_ty, BType::Ref);
+    let insts: Vec<_> = f.blocks.iter().flat_map(|b| &b.insts).collect();
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i.kind, BInstKind::RefLoad { .. }))
+    );
+    assert!(
+        insts
+            .iter()
+            .any(|i| matches!(i.kind, BInstKind::RefStore { .. }))
+    );
+    // The callee's reads/writes through the reference must survive
+    // optimization: both a RefLoad and a RefStore are still present.
+}
+
+#[test]
 fn string_literal_escapes_decode_to_bytes() {
     let src = "fn main() { let s = \"a\\tb\\n\\\"q\\\"\\0z\"; rt_print_str(s); return; }";
     let (_mir, program) = lower_backend(src);

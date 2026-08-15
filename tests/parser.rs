@@ -613,6 +613,152 @@ fn mixed_postfix_chains() {
 }
 
 // ---------------------------------------------------------------------------
+// References: borrows, derefs, and reference types (session 16)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn borrow_expressions_parse() {
+    let e = expr("&v");
+    let ExprKind::Borrow {
+        mutable: false,
+        operand,
+    } = &e.kind
+    else {
+        panic!("expected a borrow, found {:?}", e.kind)
+    };
+    ident(operand, "v");
+
+    let e = expr("&mut v");
+    let ExprKind::Borrow {
+        mutable: true,
+        operand,
+    } = &e.kind
+    else {
+        panic!("expected a mutable borrow, found {:?}", e.kind)
+    };
+    ident(operand, "v");
+}
+
+#[test]
+fn borrow_operand_keeps_postfix_chains() {
+    // `&p.x[0]` borrows the element, not just `p`.
+    let e = expr("&p.x[0]");
+    let ExprKind::Borrow { operand, .. } = &e.kind else {
+        panic!("expected a borrow")
+    };
+    let ExprKind::Index { base, .. } = &operand.kind else {
+        panic!("expected an index inside the borrow")
+    };
+    let ExprKind::Member { base, member } = &base.kind else {
+        panic!("expected a member access inside the borrow")
+    };
+    ident(base, "p");
+    assert_eq!(member.name, "x");
+}
+
+#[test]
+fn deref_expressions_parse() {
+    let e = expr("*r");
+    let ExprKind::Deref { operand } = &e.kind else {
+        panic!("expected a deref, found {:?}", e.kind)
+    };
+    ident(operand, "r");
+
+    let e = expr("**r");
+    let inner = match &e.kind {
+        ExprKind::Deref { operand } => operand,
+        _ => panic!("expected a deref"),
+    };
+    let ExprKind::Deref { operand } = &inner.kind else {
+        panic!("expected a nested deref")
+    };
+    ident(operand, "r");
+}
+
+#[test]
+fn deref_targets_parse_as_assignment_places() {
+    let e = expr("*r = 5");
+    let ExprKind::Assign { target, value, .. } = &e.kind else {
+        panic!("expected an assignment")
+    };
+    let ExprKind::Deref { operand } = &target.kind else {
+        panic!("expected a deref target, found {:?}", target.kind)
+    };
+    ident(operand, "r");
+    int_lit(value);
+
+    let e = expr("*r += 1");
+    let ExprKind::Assign { op, .. } = &e.kind else {
+        panic!("expected an assignment")
+    };
+    assert_eq!(*op, AssignOp::AddAssign);
+}
+
+#[test]
+fn reference_types_parse_in_struct_fields() {
+    // `&T` and `&mut T` appear in struct field declarations (the only
+    // place the frozen grammar carries type annotations).
+    let ast = parsed("struct A { r: &Int } struct B { r: &mut Int }");
+    let ItemKind::Struct(s) = &ast.items()[0].kind else {
+        panic!("expected a struct")
+    };
+    let TyKind::Ref {
+        mutable: false,
+        inner,
+    } = &s.fields[0].ty.kind
+    else {
+        panic!("expected a shared reference type")
+    };
+    let TyKind::Named(ident) = &inner.kind else {
+        panic!("expected the referent type")
+    };
+    assert_eq!(ident.name, "Int");
+
+    let ItemKind::Struct(s) = &ast.items()[1].kind else {
+        panic!("expected a struct")
+    };
+    let TyKind::Ref {
+        mutable: true,
+        inner,
+    } = &s.fields[0].ty.kind
+    else {
+        panic!("expected a mutable reference type")
+    };
+    let TyKind::Named(ident) = &inner.kind else {
+        panic!("expected the referent type")
+    };
+    assert_eq!(ident.name, "Int");
+}
+
+#[test]
+fn reference_types_chain_into_aggregates() {
+    // `&[Int; 4]` parses as a reference whose referent is an array type.
+    let ast = parsed("struct A { r: &[Int; 4] }");
+    let ItemKind::Struct(s) = &ast.items()[0].kind else {
+        panic!("expected a struct")
+    };
+    let TyKind::Ref { inner, .. } = &s.fields[0].ty.kind else {
+        panic!("expected a reference type")
+    };
+    assert!(matches!(&inner.kind, TyKind::Array { .. }));
+}
+
+#[test]
+fn dangling_reference_types_are_rejected_at_parse() {
+    // `&` with no referent and `&&T` (a reference-to-reference type) do not
+    // parse; type analysis would reject the latter anyway, so the parser
+    // reports `ExpectedType` up front.
+    assert_eq!(
+        error_kinds("struct A { r: & }"),
+        vec![ParseErrorKind::ExpectedType]
+    );
+    assert_eq!(
+        error_kinds("struct A { r: &&Int }"),
+        vec![ParseErrorKind::ExpectedType]
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Assignment and ranges
 // ---------------------------------------------------------------------------
 
@@ -1260,6 +1406,7 @@ fn walk_ty(ty: &Ty, text_len: u32) {
     match &ty.kind {
         TyKind::Named(ident) => walk_ident(ident, text_len, "type"),
         TyKind::Ptr(inner) => walk_ty(inner, text_len),
+        TyKind::Ref { inner, .. } => walk_ty(inner, text_len),
         TyKind::Array { elem, len } => {
             walk_ty(elem, text_len);
             walk_expr(len, text_len, "type");
@@ -1333,6 +1480,9 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
         | ExprKind::Null => {}
         ExprKind::Ident(ident) => walk_ident(ident, text_len, src),
         ExprKind::Unary { operand, .. } => walk_expr(operand, text_len, src),
+        ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => {
+            walk_expr(operand, text_len, src)
+        }
         ExprKind::Binary { lhs, rhs, .. } => {
             walk_expr(lhs, text_len, src);
             walk_expr(rhs, text_len, src);

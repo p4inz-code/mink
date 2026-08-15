@@ -373,6 +373,86 @@ fn verify_inst(
                 }
             }
         }
+        BInstKind::RefAddr {
+            target,
+            base,
+            steps,
+            ..
+        } => {
+            // A reference address is a word-sized slot computed from a
+            // struct/array/any local root.
+            verify_target(function, *target, inst.span, errors);
+            if function.local(*target).map(|local| local.ty) != Some(BType::Ref) {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: a reference address must write a reference slot",
+                        function.name
+                    ),
+                ));
+            }
+            if function.local(*base).is_none() {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: a reference address references an unknown local {}",
+                        function.name,
+                        base.raw()
+                    ),
+                ));
+            }
+            // Every index step's operand must be well-typed.
+            for step in steps {
+                if let crate::backend::ir::PlaceAddrStep::Index { index, .. } = step {
+                    verify_operand(function, index, inst.span, errors);
+                }
+            }
+        }
+        BInstKind::RefLoad {
+            target,
+            reference,
+            elem_ty,
+            ..
+        } => {
+            verify_target(function, *target, inst.span, errors);
+            verify_operand(function, reference, inst.span, errors);
+            // A reference load writes the referent's slot: `Int`/`Bool`/
+            // `Range` are loaded as their own type; `Ref`, `Ptr`, `Str`
+            // and aggregates land in a slot of the same or aggregate kind.
+            match (elem_ty, function.local(*target).map(|local| local.ty)) {
+                (BType::Ref, Some(BType::Ref))
+                | (BType::Ptr, Some(BType::Ptr))
+                | (BType::Str, Some(BType::Str))
+                | (BType::Int, Some(BType::Int))
+                | (BType::Bool, Some(BType::Bool))
+                | (BType::Range, Some(BType::Range))
+                | (BType::Struct, Some(BType::Struct))
+                | (BType::Array, Some(BType::Array)) => {}
+                _ => errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: a reference load writes a mismatched slot",
+                        function.name
+                    ),
+                )),
+            }
+        }
+        BInstKind::RefStore { reference, src, .. } => {
+            verify_operand(function, reference, inst.span, errors);
+            verify_operand(function, src, inst.span, errors);
+            // The reference operand must be a `Ref`-typed value.
+            if let BOperand::Local(id) = reference {
+                if function.local(*id).map(|local| local.ty) != Some(BType::Ref) {
+                    errors.push(error(
+                        inst.span,
+                        format!(
+                            "function `{}`: a reference store must store through a reference",
+                            function.name
+                        ),
+                    ));
+                }
+            }
+        }
     }
 }
 

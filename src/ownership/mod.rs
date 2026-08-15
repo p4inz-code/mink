@@ -53,19 +53,65 @@ pub enum BindingState {
 /// heap storage (Str, or an aggregate containing one).
 type FieldStates = HashMap<String, BindingState>;
 
+/// The borrow state of one root binding (session 16): whether references
+/// to it are currently live, and how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum BorrowState {
+    /// No live references.
+    #[default]
+    None,
+    /// `count` live shared (`&T`) borrows.
+    Shared(u32),
+    /// One live exclusive (`&mut T`) borrow.
+    Exclusive,
+}
+
+/// A view through a reference: the binding the reference borrows, whether
+/// it is mutable, and whether the borrow was already recorded in the
+/// borrow-state table (fresh borrows are recorded when they reach a
+/// binding; copies and transfers arrive pre-counted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BorrowView {
+    /// The borrowed root binding; `None` for caller-provided borrows (a
+    /// reference parameter or an unknown-source call result) whose source
+    /// is outside this function.
+    source: Option<SymbolId>,
+    /// Whether the reference is mutable (`&mut`).
+    mutable: bool,
+    /// Whether the borrow was already counted: `true` for transfers and
+    /// deref views (never re-counted), `false` for fresh borrows and
+    /// copies (counted when they reach a binding).
+    counted: bool,
+}
+
 /// The tracked state of one binding.
 #[derive(Debug, Clone)]
 enum State {
     /// A `Str` value.
     Str(BindingState),
+    /// A reference value (session 16): the binding it borrows (`None` for
+    /// caller-provided borrows) and whether it is mutable. `&T` copies;
+    /// `&mut T` moves (the binding dies with its source cleared).
+    Ref {
+        /// The borrowed root; `None` for caller borrows or after a move.
+        source: Option<SymbolId>,
+        /// Whether the reference is mutable (`&mut`).
+        mutable: bool,
+        /// Whether the reference was moved away.
+        dead: bool,
+    },
     /// A struct value: per-field states for tracked fields plus whether
     /// the whole struct was moved (any field read then errors, even for
-    /// copy-typed fields).
+    /// copy-typed fields), plus the live reference fields (session 16).
     Struct {
-        /// Per-field liveness for tracked (`Str`-containing) fields.
+        /// Per-field liveness for tracked (`Str`/reference-containing)
+        /// fields.
         fields: FieldStates,
         /// The whole struct was moved: every field is inaccessible.
         dead: bool,
+        /// The struct's reference-typed fields: each live reference the
+        /// struct holds, released when the struct dies.
+        ref_fields: HashMap<String, BorrowView>,
     },
     /// An array value: whole-array state (per-element liveness is out of
     /// scope; reading an Owned array's element in a transfer position
@@ -74,12 +120,20 @@ enum State {
 }
 
 /// The evaluated value of an expression: its provenance plus, for struct
-/// values, the per-field liveness of tracked fields.
+/// values, the per-field liveness of tracked fields, and (session 16) the
+/// reference view it carries when it flows through (or out of) a
+/// reference.
 #[derive(Debug, Clone)]
 struct EvalValue {
     provenance: Provenance,
     /// Per-field liveness for struct values (tracked fields only).
     fields: Option<FieldStates>,
+    /// The reference view this value carries, when it is a borrow of (or
+    /// a read through) a reference.
+    view: Option<BorrowView>,
+    /// The reference-typed fields of a struct value, released/transferred
+    /// with the value.
+    ref_borrows: Vec<(String, BorrowView)>,
 }
 
 impl EvalValue {
@@ -87,6 +141,8 @@ impl EvalValue {
         Self {
             provenance: Provenance::Immutable,
             fields: None,
+            view: None,
+            ref_borrows: Vec::new(),
         }
     }
 
@@ -94,6 +150,8 @@ impl EvalValue {
         Self {
             provenance: Provenance::Immutable,
             fields: None,
+            view: None,
+            ref_borrows: Vec::new(),
         }
     }
 
@@ -101,6 +159,8 @@ impl EvalValue {
         Self {
             provenance: Provenance::Owned,
             fields: None,
+            view: None,
+            ref_borrows: Vec::new(),
         }
     }
 
@@ -108,11 +168,34 @@ impl EvalValue {
         Self {
             provenance,
             fields: None,
+            view: None,
+            ref_borrows: Vec::new(),
         }
     }
 
-    /// A struct value: Owned when any tracked field is live-owned.
-    fn struct_value(fields: FieldStates) -> Self {
+    /// A borrow (or deref) view: through a shared reference the value is
+    /// Immutable (a read view); through an exclusive one it is Owned (the
+    /// exclusive borrow, which moves with the value).
+    fn borrow_view(source: Option<SymbolId>, mutable: bool, counted: bool) -> Self {
+        Self {
+            provenance: if mutable {
+                Provenance::Owned
+            } else {
+                Provenance::Immutable
+            },
+            fields: None,
+            view: Some(BorrowView {
+                source,
+                mutable,
+                counted,
+            }),
+            ref_borrows: Vec::new(),
+        }
+    }
+
+    /// A struct value: Owned when any tracked field is live-owned, with
+    /// its reference-typed fields carried alongside.
+    fn struct_value(fields: FieldStates, ref_borrows: Vec<(String, BorrowView)>) -> Self {
         let provenance = if fields
             .values()
             .any(|state| matches!(state, BindingState::Live(Provenance::Owned)))
@@ -124,6 +207,8 @@ impl EvalValue {
         Self {
             provenance,
             fields: Some(fields),
+            view: None,
+            ref_borrows,
         }
     }
 }
@@ -148,8 +233,9 @@ impl OwnershipResult {
 }
 
 /// The per-function result provenance computed by the fixpoint: whether a
-/// `Str`-typed result is Owned, and the per-field provenances of a struct
-/// result.
+/// `Str`-typed result is Owned, the per-field provenances of a struct
+/// result, and (session 16) whether the function returns a reference and
+/// which parameter it derives from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct FnResult {
     /// `Some(Owned)` when any `return` value is Owned, `Some(Immutable)`
@@ -158,6 +244,21 @@ struct FnResult {
     provenance: Option<Provenance>,
     /// Per-field provenances of a struct result (tracked fields only).
     fields: Option<HashMap<String, Provenance>>,
+    /// The reference this function returns, when it returns one: its
+    /// mutability and the parameter index it derives from (`None` when the
+    /// source is not a single identifiable parameter — the conservative
+    /// multi-source case).
+    ref_result: Option<RefResult>,
+}
+
+/// A function's reference result: which parameter's borrow it returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RefResult {
+    /// Whether the returned reference is mutable (`&mut`).
+    mutable: bool,
+    /// The parameter index the reference derives from; `None` for
+    /// unknown/multi-source returns.
+    param: Option<usize>,
 }
 
 /// Runs ownership analysis over `ast` given the semantic and type results
@@ -170,6 +271,9 @@ pub fn check(ast: &Ast, semantic: &SemanticResult, types: &TypeResult) -> Owners
         types,
         decl_spans: HashMap::new(),
         bindings: HashMap::new(),
+        borrows: HashMap::new(),
+        scopes: Vec::new(),
+        param_indices: HashMap::new(),
         errors: Vec::new(),
         result: FnResult::default(),
         fn_results: HashMap::new(),
@@ -195,7 +299,10 @@ enum Mode {
 enum Shape {
     /// A `Str` value.
     Str,
-    /// A struct with at least one tracked (Str-containing) field.
+    /// A reference value (session 16).
+    Ref,
+    /// A struct with at least one tracked (Str/reference-containing)
+    /// field.
     Struct,
     /// An array whose element type may own.
     Array,
@@ -211,6 +318,13 @@ struct Analyzer<'a> {
     decl_spans: HashMap<u32, SymbolId>,
     /// The tracked binding states, keyed by symbol id.
     bindings: HashMap<SymbolId, State>,
+    /// The borrow state of every borrowed root binding (session 16).
+    borrows: HashMap<SymbolId, BorrowState>,
+    /// The symbols declared in the current scope chain (innermost last),
+    /// so borrows are released at scope exit.
+    scopes: Vec<Vec<SymbolId>>,
+    /// Parameter index by symbol, for reference-return tracking.
+    param_indices: HashMap<SymbolId, usize>,
     /// Ownership errors, in traversal order.
     errors: Vec<SemanticError>,
     /// The current function's accumulated result provenance.
@@ -232,6 +346,9 @@ impl<'a> Analyzer<'a> {
         for _ in 0..cap {
             let before = self.fn_results.clone();
             self.bindings.clear();
+            self.borrows.clear();
+            self.scopes.clear();
+            self.param_indices.clear();
             self.errors.clear();
             self.walk_module();
             if self.fn_results == before {
@@ -281,8 +398,13 @@ impl<'a> Analyzer<'a> {
     }
 
     fn analyze_fn(&mut self, f: &FnItem) -> FnResult {
-        for param in &f.params {
+        // Parameters live in a function-level scope (released at function
+        // end); reference parameters are caller borrows (source `None`),
+        // so their release is a no-op.
+        self.scopes.push(Vec::new());
+        for (index, param) in f.params.iter().enumerate() {
             if let Some(symbol) = self.symbol_of(&param.name) {
+                self.param_indices.insert(symbol, index);
                 self.bind_param(symbol);
             }
         }
@@ -290,6 +412,11 @@ impl<'a> Analyzer<'a> {
         self.walk_block(&f.body);
         let result = std::mem::take(&mut self.result);
         self.result = saved;
+        if let Some(scope) = self.scopes.pop() {
+            for symbol in scope {
+                self.release_binding(symbol);
+            }
+        }
         result
     }
 
@@ -305,16 +432,45 @@ impl<'a> Analyzer<'a> {
                 self.bindings
                     .insert(symbol, State::Str(BindingState::Live(Provenance::Owned)));
             }
+            Shape::Ref => {
+                let mutable = matches!(
+                    self.types.types().kind(ty),
+                    Some(TypeKind::Ref { mutable: true, .. })
+                );
+                self.bindings.insert(
+                    symbol,
+                    State::Ref {
+                        source: None,
+                        mutable,
+                        dead: false,
+                    },
+                );
+            }
             Shape::Struct => {
                 let fields = self
                     .tracked_struct_fields(ty)
                     .map(|name| (name, BindingState::Live(Provenance::Owned)))
+                    .collect();
+                let ref_fields = self
+                    .tracked_ref_fields(ty)
+                    .map(|name| {
+                        let mutable = self.ref_field_mutable(ty, &name);
+                        (
+                            name,
+                            BorrowView {
+                                source: None,
+                                mutable,
+                                counted: true,
+                            },
+                        )
+                    })
                     .collect();
                 self.bindings.insert(
                     symbol,
                     State::Struct {
                         fields,
                         dead: false,
+                        ref_fields,
                     },
                 );
             }
@@ -324,6 +480,7 @@ impl<'a> Analyzer<'a> {
             }
             Shape::Copy => {}
         }
+        self.register_scope(symbol);
     }
 
     /// Binds a newly declared name to the evaluated value of its
@@ -341,12 +498,39 @@ impl<'a> Analyzer<'a> {
     /// Binds `symbol` (whose type is `ty`) from `value`: struct bindings
     /// take per-field liveness from the value when known and conservatively
     /// Owned fields otherwise; Str/array bindings take the value's
-    /// provenance.
+    /// provenance; reference bindings take the value's borrow view (a
+    /// fresh or copied borrow is counted; a transfer is not).
     fn bind_name_with_type(&mut self, symbol: SymbolId, ty: TypeId, value: &EvalValue) {
+        // Reassigning an existing binding drops its old value's borrows.
+        if self.bindings.contains_key(&symbol) {
+            self.release_binding(symbol);
+        }
         match self.type_shape(ty) {
             Shape::Str => {
                 self.bindings
                     .insert(symbol, State::Str(BindingState::Live(value.provenance)));
+            }
+            Shape::Ref => {
+                let mutable = matches!(
+                    self.types.types().kind(ty),
+                    Some(TypeKind::Ref { mutable: true, .. })
+                );
+                let view = value.view;
+                if let Some(view) = view {
+                    if let Some(source) = view.source {
+                        if !view.counted {
+                            self.borrow_root(source, view.mutable);
+                        }
+                    }
+                }
+                self.bindings.insert(
+                    symbol,
+                    State::Ref {
+                        source: view.and_then(|view| view.source),
+                        mutable,
+                        dead: false,
+                    },
+                );
             }
             Shape::Struct => {
                 let fields = self
@@ -366,11 +550,28 @@ impl<'a> Analyzer<'a> {
                         (field_name, live_or_immutable(state))
                     })
                     .collect();
+                let mut ref_fields: HashMap<String, BorrowView> = HashMap::new();
+                for (field_name, view) in &value.ref_borrows {
+                    if let Some(source) = view.source {
+                        if !view.counted {
+                            self.borrow_root(source, view.mutable);
+                        }
+                    }
+                    ref_fields.insert(
+                        field_name.clone(),
+                        BorrowView {
+                            source: view.source,
+                            mutable: view.mutable,
+                            counted: true,
+                        },
+                    );
+                }
                 self.bindings.insert(
                     symbol,
                     State::Struct {
                         fields,
                         dead: false,
+                        ref_fields,
                     },
                 );
             }
@@ -380,12 +581,132 @@ impl<'a> Analyzer<'a> {
             }
             Shape::Copy => {}
         }
+        self.register_scope(symbol);
+    }
+
+    /// Records a borrow of `source` in the borrow-state table, checking
+    /// the session-16 rules: the source must be live (E-S10), mutable for
+    /// an exclusive borrow (E-S13), and not borrowed incompatibly (E-S12).
+    /// Shared borrows increment; exclusive borrows require no other borrow.
+    fn borrow_root(&mut self, source: SymbolId, mutable: bool) {
+        let Some(symbol_info) = self.semantic.symbols().get(source) else {
+            return;
+        };
+        let name = symbol_info.name.clone();
+        let span = symbol_info.span;
+        if matches!(
+            self.bindings.get(&source),
+            Some(State::Str(BindingState::Dead))
+                | Some(State::Array(BindingState::Dead))
+                | Some(State::Ref { dead: true, .. })
+                | Some(State::Struct { dead: true, .. })
+        ) {
+            self.errors
+                .push(SemanticError::use_of_moved(name.clone(), span));
+            return;
+        }
+        let current = self.borrows.get(&source).copied().unwrap_or_default();
+        if mutable {
+            match current {
+                BorrowState::None => {}
+                _ => {
+                    self.errors.push(SemanticError::borrow_conflict(
+                        name.clone(),
+                        span,
+                        format!("cannot borrow `{name}` mutably: it is already borrowed"),
+                    ));
+                    return;
+                }
+            }
+            let writable = self
+                .semantic
+                .symbols()
+                .get(source)
+                .is_some_and(|symbol| symbol.kind.is_mutable());
+            if !writable {
+                self.errors.push(SemanticError::invalid_borrow(
+                    span,
+                    format!("cannot mutably borrow `{name}`: it is not mutable"),
+                ));
+                return;
+            }
+            self.borrows.insert(source, BorrowState::Exclusive);
+        } else {
+            match current {
+                BorrowState::None => {
+                    self.borrows.insert(source, BorrowState::Shared(1));
+                }
+                BorrowState::Shared(count) => {
+                    self.borrows.insert(source, BorrowState::Shared(count + 1));
+                }
+                BorrowState::Exclusive => {
+                    self.errors.push(SemanticError::borrow_conflict(
+                        name.clone(),
+                        span,
+                        format!("cannot borrow `{name}` immutably: it is mutably borrowed"),
+                    ));
+                }
+            }
+        }
     }
 
     fn walk_block(&mut self, block: &crate::ast::Block) {
+        // A block is a scope: borrows declared inside it are released when
+        // it exits, so a reference cannot outlive its declaring block.
+        self.scopes.push(Vec::new());
         for stmt in &block.stmts {
             self.walk_stmt(stmt);
         }
+        if let Some(scope) = self.scopes.pop() {
+            for symbol in scope {
+                self.release_binding(symbol);
+            }
+        }
+    }
+
+    /// Records `symbol` as declared in the current innermost scope, so its
+    /// borrows are released at scope exit.
+    fn register_scope(&mut self, symbol: SymbolId) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.push(symbol);
+        }
+    }
+
+    /// Releases the borrows held by `symbol`'s binding (reference values
+    /// and reference-typed struct fields).
+    fn release_binding(&mut self, symbol: SymbolId) {
+        let borrows = match self.bindings.get(&symbol).cloned() {
+            Some(State::Ref {
+                source, mutable, ..
+            }) => source.map(|source| vec![(source, mutable)]),
+            Some(State::Struct { ref_fields, .. }) => Some(
+                ref_fields
+                    .values()
+                    .filter_map(|view| view.source.map(|source| (source, view.mutable)))
+                    .collect(),
+            ),
+            _ => None,
+        };
+        if let Some(borrows) = borrows {
+            for (source, mutable) in borrows {
+                self.release_borrow(source, mutable);
+            }
+        }
+    }
+
+    /// Releases one borrow of `source` (decrementing a shared count,
+    /// clearing an exclusive one).
+    fn release_borrow(&mut self, source: SymbolId, mutable: bool) {
+        let state = self.borrows.get(&source).copied().unwrap_or_default();
+        let next = if mutable {
+            BorrowState::None
+        } else {
+            match state {
+                BorrowState::Shared(count) if count > 1 => BorrowState::Shared(count - 1),
+                _ => BorrowState::None,
+            }
+        };
+        self.borrows.insert(source, next);
     }
 
     fn walk_stmt(&mut self, stmt: &Stmt) {
@@ -400,7 +721,7 @@ impl<'a> Analyzer<'a> {
             }
             StmtKind::Return(Some(value)) => {
                 let evaluated = self.eval_expr(value, Mode::Transfer);
-                self.merge_result(&evaluated);
+                self.merge_result(value, &evaluated);
             }
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
             StmtKind::If(stmt) => self.walk_if(stmt),
@@ -437,13 +758,75 @@ impl<'a> Analyzer<'a> {
 
     /// Records a `return` value's provenance into the current function's
     /// result (a struct result's per-field provenances merge too).
-    fn merge_result(&mut self, value: &EvalValue) {
+    fn merge_result(&mut self, expr: &Expr, value: &EvalValue) {
         match value.provenance {
             Provenance::Owned => self.result.provenance = Some(Provenance::Owned),
             Provenance::Immutable => {
                 if self.result.provenance.is_none() {
                     self.result.provenance = Some(Provenance::Immutable);
                 }
+            }
+        }
+        // A reference return: only caller borrows (source `None`) may
+        // escape; returning a borrow of a function-local value is a
+        // dangling reference (E-S14).
+        if let Some(view) = value.view {
+            if let Some(source) = view.source {
+                let name = self
+                    .semantic
+                    .symbols()
+                    .get(source)
+                    .map(|symbol| symbol.name.clone())
+                    .unwrap_or_else(|| "value".to_string());
+                self.errors.push(SemanticError::dangling_reference(
+                    expr.span,
+                    format!(
+                        "cannot return a reference to `{name}`: it would not outlive the function"
+                    ),
+                ));
+            } else {
+                // A caller borrow. Record which parameter it derives from
+                // when the return expression is a direct reference
+                // parameter; otherwise conservatively record no single
+                // source.
+                let param = match &expr.kind {
+                    ExprKind::Ident(ident) => self
+                        .semantic
+                        .resolve(ident.span)
+                        .and_then(|symbol| self.param_indices.get(&symbol).copied()),
+                    ExprKind::Group(inner) => self.param_index_of_expr(inner),
+                    _ => None,
+                };
+                let candidate = RefResult {
+                    mutable: view.mutable,
+                    param,
+                };
+                match self.result.ref_result {
+                    None => self.result.ref_result = Some(candidate),
+                    Some(existing) => {
+                        // Multi-source or conflicting returns: keep the
+                        // conservative unknown-source result.
+                        if existing.mutable != candidate.mutable
+                            || existing.param != candidate.param
+                        {
+                            self.result.ref_result = Some(RefResult {
+                                mutable: existing.mutable || candidate.mutable,
+                                param: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // Returning an aggregate that carries a reference to a local
+        // value would dangle too.
+        for (_, view) in &value.ref_borrows {
+            if let Some(source) = view.source {
+                self.errors.push(SemanticError::dangling_reference(
+                    expr.span,
+                    "cannot return a value containing a reference to a local value".to_string(),
+                ));
+                let _ = source;
             }
         }
         let Some(fields) = &value.fields else {
@@ -455,6 +838,19 @@ impl<'a> Analyzer<'a> {
             if matches!(state, BindingState::Live(Provenance::Owned)) {
                 *entry = Provenance::Owned;
             }
+        }
+    }
+
+    /// The parameter index of `expr` when it is a plain parameter
+    /// reference (used for reference-return tracking through grouping).
+    fn param_index_of_expr(&self, expr: &Expr) -> Option<usize> {
+        match &expr.kind {
+            ExprKind::Ident(ident) => self
+                .semantic
+                .resolve(ident.span)
+                .and_then(|symbol| self.param_indices.get(&symbol).copied()),
+            ExprKind::Group(inner) => self.param_index_of_expr(inner),
+            _ => None,
         }
     }
 
@@ -477,6 +873,22 @@ impl<'a> Analyzer<'a> {
                 self.eval_expr(operand, Mode::Observe);
                 EvalValue::copy()
             }
+            ExprKind::Borrow { mutable, operand } => self.eval_borrow(*mutable, operand),
+            ExprKind::Deref { operand } => {
+                // `*r`: the referent, as a read view through the
+                // reference. The operand must be a live reference
+                // binding; a deref through an exclusive reference is the
+                // point of the borrow (no conflict), through a shared one
+                // it is a read-only view.
+                let value = self.eval_expr(operand, Mode::Observe);
+                match value.view {
+                    Some(view) => EvalValue::borrow_view(view.source, view.mutable, true),
+                    // Defensive: the type checker rejects derefs of
+                    // non-references, so this branch never runs in a
+                    // clean pipeline.
+                    None => EvalValue::immutable(),
+                }
+            }
             ExprKind::Binary { lhs, rhs, .. } => {
                 self.eval_expr(lhs, Mode::Observe);
                 self.eval_expr(rhs, Mode::Observe);
@@ -497,6 +909,15 @@ impl<'a> Analyzer<'a> {
                 let base_value = self.eval_expr(base, Mode::Observe);
                 if !self.expr_may_own(expr.span) {
                     return EvalValue::copy();
+                }
+                // A reference-typed field: reading it copies a shared
+                // borrow or moves an exclusive one (per-field transfer).
+                if let Some((_, view)) = base_value
+                    .ref_borrows
+                    .iter()
+                    .find(|(name, _)| name == &member.name)
+                {
+                    return self.read_ref_field(base, member, *view, mode);
                 }
                 if let Some(fields) = &base_value.fields {
                     match fields.get(&member.name) {
@@ -562,14 +983,20 @@ impl<'a> Analyzer<'a> {
             }
             ExprKind::StructLit { fields, .. } => {
                 let mut provenances: FieldStates = HashMap::new();
+                let mut ref_borrows = Vec::new();
                 for field in fields {
                     let value = self.eval_expr(&field.value, Mode::Transfer);
                     provenances.insert(
                         field.name.name.clone(),
                         BindingState::Live(value.provenance),
                     );
+                    if let Some(view) = value.view {
+                        if view.source.is_some() {
+                            ref_borrows.push((field.name.name.clone(), view));
+                        }
+                    }
                 }
-                EvalValue::struct_value(provenances)
+                EvalValue::struct_value(provenances, ref_borrows)
             }
             ExprKind::ArrayLit(elems) => {
                 let mut owned = false;
@@ -605,9 +1032,52 @@ impl<'a> Analyzer<'a> {
         {
             return self.copy_const(symbol);
         }
+        // A mutably-borrowed binding cannot be read or transferred at all;
+        // reads of a shared-borrowed binding are fine (the transfer and
+        // mutation paths add their own shared-borrow checks).
+        if matches!(self.borrows.get(&symbol), Some(BorrowState::Exclusive)) {
+            self.errors.push(SemanticError::borrow_conflict(
+                ident.name.clone(),
+                ident.span,
+                format!("cannot use `{}`: it is mutably borrowed", ident.name),
+            ));
+        }
         match self.bindings.get(&symbol).cloned() {
             Some(State::Str(state)) => self.transfer_str(symbol, ident, state, mode),
-            Some(State::Struct { fields, dead }) => {
+            Some(State::Ref {
+                source,
+                mutable,
+                dead: false,
+            }) => {
+                if mode == Mode::Transfer && mutable {
+                    // Move-only: the exclusive borrow transfers and this
+                    // binding dies (its source is cleared so release is a
+                    // no-op).
+                    self.bindings.insert(
+                        symbol,
+                        State::Ref {
+                            source: None,
+                            mutable,
+                            dead: true,
+                        },
+                    );
+                    EvalValue::borrow_view(source, mutable, true)
+                } else {
+                    // A shared reference (or an observed exclusive one)
+                    // is a copy/read view; binding it counts a new borrow.
+                    EvalValue::borrow_view(source, mutable, false)
+                }
+            }
+            Some(State::Ref { dead: true, .. }) => {
+                self.errors
+                    .push(SemanticError::use_of_moved(ident.name.clone(), ident.span));
+                EvalValue::borrow_view(None, false, true)
+            }
+            Some(State::Struct {
+                fields,
+                dead,
+                ref_fields,
+            }) => {
                 if dead {
                     self.errors
                         .push(SemanticError::use_of_moved(ident.name.clone(), ident.span));
@@ -622,7 +1092,16 @@ impl<'a> Analyzer<'a> {
                         BindingState::Live(Provenance::Owned) | BindingState::Dead
                     )
                 });
-                if mode == Mode::Transfer && has_owned {
+                let moving = mode == Mode::Transfer && has_owned;
+                if moving {
+                    if self.is_borrowed(symbol) {
+                        self.errors.push(SemanticError::borrow_conflict(
+                            ident.name.clone(),
+                            ident.span,
+                            format!("cannot move `{}`: it is borrowed", ident.name),
+                        ));
+                        return EvalValue::owned();
+                    }
                     // Order-independent: fields is a HashMap, so scan in
                     // sorted name order to keep the diagnostic stable.
                     let mut names: Vec<&String> = fields
@@ -644,20 +1123,48 @@ impl<'a> Analyzer<'a> {
                         .keys()
                         .map(|name| (name.clone(), BindingState::Dead))
                         .collect();
+                    // The whole struct moves: its reference fields
+                    // transfer to the value (the new binding keeps them).
+                    let ref_borrows: Vec<(String, BorrowView)> = ref_fields
+                        .iter()
+                        .map(|(name, view)| (name.clone(), *view))
+                        .collect();
                     self.bindings.insert(
                         symbol,
                         State::Struct {
                             fields: all_dead,
                             dead: true,
+                            ref_fields: HashMap::new(),
                         },
                     );
+                    EvalValue::struct_value(fields, ref_borrows)
+                } else {
+                    // Copy: shared reference fields are copied (each copy
+                    // adds a live borrow); the binding keeps its own.
+                    let mut ref_borrows = Vec::new();
+                    for (name, view) in &ref_fields {
+                        if !view.mutable {
+                            if let Some(source) = view.source {
+                                self.borrow_root(source, false);
+                            }
+                        }
+                        ref_borrows.push((name.clone(), *view));
+                    }
+                    EvalValue::struct_value(fields, ref_borrows)
                 }
-                EvalValue::struct_value(fields)
             }
             Some(State::Array(state)) => match state {
                 BindingState::Live(Provenance::Immutable) => EvalValue::immutable(),
                 BindingState::Live(Provenance::Owned) => {
                     if mode == Mode::Transfer {
+                        if self.is_borrowed(symbol) {
+                            self.errors.push(SemanticError::borrow_conflict(
+                                ident.name.clone(),
+                                ident.span,
+                                format!("cannot move `{}`: it is borrowed", ident.name),
+                            ));
+                            return EvalValue::owned();
+                        }
                         self.bindings
                             .insert(symbol, State::Array(BindingState::Dead));
                     }
@@ -673,6 +1180,160 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    /// Evaluates a borrow expression: `&place` (shared) or `&mut place`
+    /// (exclusive). The borrow is recorded immediately (checked against
+    /// the frozen rules: live source, no conflicting borrow, mutable
+    /// source for `&mut`) and the returned view is pre-counted, so a
+    /// subsequent binding records the same borrow without re-counting.
+    fn eval_borrow(&mut self, mutable: bool, operand: &Expr) -> EvalValue {
+        let Some(root) = self.root_ident(operand) else {
+            // Not a local-rooted place: no tracked borrow. The type
+            // checker rejects non-place and deref-rooted borrows, so this
+            // is defensive.
+            return EvalValue::borrow_view(None, mutable, true);
+        };
+        let Some(symbol) = self.semantic.resolve(root.span) else {
+            return EvalValue::borrow_view(None, mutable, true);
+        };
+        let name = root.name.clone();
+        let span = root.span;
+        if self
+            .semantic
+            .symbols()
+            .get(symbol)
+            .is_some_and(|symbol| symbol.kind == SymbolKind::Const)
+        {
+            self.errors.push(SemanticError::invalid_borrow(
+                span,
+                format!("cannot borrow `{name}`: it is a constant"),
+            ));
+            return EvalValue::borrow_view(None, mutable, true);
+        }
+        if matches!(
+            self.bindings.get(&symbol),
+            Some(State::Str(BindingState::Dead))
+                | Some(State::Array(BindingState::Dead))
+                | Some(State::Ref { dead: true, .. })
+                | Some(State::Struct { dead: true, .. })
+        ) {
+            self.errors
+                .push(SemanticError::use_of_moved(name.clone(), span));
+            return EvalValue::borrow_view(None, mutable, true);
+        }
+        let current = self.borrows.get(&symbol).copied().unwrap_or_default();
+        if mutable {
+            match current {
+                BorrowState::None => {}
+                _ => {
+                    self.errors.push(SemanticError::borrow_conflict(
+                        name.clone(),
+                        span,
+                        format!("cannot borrow `{name}` mutably: it is already borrowed"),
+                    ));
+                    return EvalValue::borrow_view(None, mutable, true);
+                }
+            }
+            let writable = self
+                .semantic
+                .symbols()
+                .get(symbol)
+                .is_some_and(|symbol| symbol.kind.is_mutable());
+            if !writable {
+                self.errors.push(SemanticError::invalid_borrow(
+                    span,
+                    format!("cannot mutably borrow `{name}`: it is not mutable"),
+                ));
+                return EvalValue::borrow_view(None, mutable, true);
+            }
+            self.borrows.insert(symbol, BorrowState::Exclusive);
+        } else {
+            match current {
+                BorrowState::None => {
+                    self.borrows.insert(symbol, BorrowState::Shared(1));
+                }
+                BorrowState::Shared(count) => {
+                    self.borrows.insert(symbol, BorrowState::Shared(count + 1));
+                }
+                BorrowState::Exclusive => {
+                    self.errors.push(SemanticError::borrow_conflict(
+                        name.clone(),
+                        span,
+                        format!("cannot borrow `{name}` immutably: it is mutably borrowed"),
+                    ));
+                    return EvalValue::borrow_view(None, mutable, true);
+                }
+            }
+        }
+        EvalValue::borrow_view(Some(symbol), mutable, true)
+    }
+
+    /// Reads a reference-typed struct field: a shared field copies (the
+    /// struct keeps its borrow; the copy adds a live reference), an
+    /// exclusive field moves out (the borrow transfers; the field becomes
+    /// dead so the whole struct cannot be moved).
+    fn read_ref_field(
+        &mut self,
+        base: &Expr,
+        member: &Ident,
+        view: BorrowView,
+        mode: Mode,
+    ) -> EvalValue {
+        let _ = mode;
+        let Some(root) = self.root_ident(base) else {
+            return EvalValue::borrow_view(view.source, view.mutable, true);
+        };
+        let Some(symbol) = self.semantic.resolve(root.span) else {
+            return EvalValue::borrow_view(view.source, view.mutable, true);
+        };
+        let mut found = None;
+        if let Some(State::Struct {
+            ref_fields,
+            dead: false,
+            ..
+        }) = self.bindings.get_mut(&symbol)
+        {
+            if let Some(field_view) = ref_fields.get(&member.name).copied() {
+                if field_view.mutable {
+                    // Exclusive: moves out of the struct; the borrow
+                    // transfers to the reader.
+                    ref_fields.remove(&member.name);
+                    found = Some(field_view);
+                } else {
+                    // Shared: the copy adds another live reference; the
+                    // struct keeps its own.
+                    found = Some(field_view);
+                    if let Some(source) = field_view.source {
+                        self.borrow_root(source, false);
+                    }
+                }
+            }
+        }
+        match found {
+            Some(field_view) => {
+                if field_view.mutable {
+                    if let Some(State::Struct { fields, .. }) = self.bindings.get_mut(&symbol) {
+                        fields.insert(member.name.clone(), BindingState::Dead);
+                    }
+                }
+                EvalValue::borrow_view(field_view.source, field_view.mutable, true)
+            }
+            None => {
+                // The field was already moved out (or the base is not a
+                // tracked struct).
+                self.errors.push(SemanticError::use_of_moved(
+                    member.name.clone(),
+                    member.span,
+                ));
+                EvalValue::borrow_view(None, view.mutable, true)
+            }
+        }
+    }
+
+    /// Whether `symbol` is currently borrowed (shared or exclusive).
+    fn is_borrowed(&self, symbol: SymbolId) -> bool {
+        !matches!(self.borrows.get(&symbol), None | Some(BorrowState::None))
+    }
+
     /// Transfers (or observes) a Str binding's value.
     fn transfer_str(
         &mut self,
@@ -685,6 +1346,16 @@ impl<'a> Analyzer<'a> {
             BindingState::Live(Provenance::Immutable) => EvalValue::immutable(),
             BindingState::Live(Provenance::Owned) => {
                 if mode == Mode::Transfer {
+                    // Consuming/moving an owned string while it is
+                    // borrowed invalidates the reference.
+                    if self.is_borrowed(symbol) {
+                        self.errors.push(SemanticError::borrow_conflict(
+                            ident.name.clone(),
+                            ident.span,
+                            format!("cannot move `{}`: it is borrowed", ident.name),
+                        ));
+                        return EvalValue::owned();
+                    }
                     self.bindings.insert(symbol, State::Str(BindingState::Dead));
                 }
                 EvalValue::owned()
@@ -707,11 +1378,16 @@ impl<'a> Analyzer<'a> {
             }
             Some(State::Struct {
                 fields,
+                ref_fields,
                 dead: false,
             }) => EvalValue::struct_value(
                 fields
                     .iter()
                     .map(|(name, state)| (name.clone(), live_or_immutable(*state)))
+                    .collect(),
+                ref_fields
+                    .iter()
+                    .map(|(name, view)| (name.clone(), *view))
                     .collect(),
             ),
             _ => EvalValue::immutable(),
@@ -720,7 +1396,8 @@ impl<'a> Analyzer<'a> {
 
     /// Marks the tracked field `member` of the base binding dead (a
     /// per-field move). The base must be a plain identifier (or a group of
-    /// one) whose binding is a tracked struct.
+    /// one) whose binding is a tracked struct. Moving a field out of a
+    /// borrowed struct invalidates the reference.
     fn mark_field_moved(&mut self, base: &Expr, member: &Ident) {
         let Some(root) = self.root_ident(base) else {
             return;
@@ -728,11 +1405,27 @@ impl<'a> Analyzer<'a> {
         let Some(symbol) = self.semantic.resolve(root.span) else {
             return;
         };
+        if self.is_borrowed(symbol) {
+            self.errors.push(SemanticError::borrow_conflict(
+                root.name.clone(),
+                root.span,
+                format!(
+                    "cannot move field `{}` of `{}`: it is borrowed",
+                    member.name, root.name
+                ),
+            ));
+            return;
+        }
         if let Some(State::Struct {
             fields,
+            ref_fields,
             dead: false,
         }) = self.bindings.get_mut(&symbol)
         {
+            // A reference-typed field moves its borrow out with it.
+            if let Some(view) = ref_fields.remove(&member.name) {
+                let _ = view;
+            }
             fields.insert(member.name.clone(), BindingState::Dead);
         }
     }
@@ -750,11 +1443,31 @@ impl<'a> Analyzer<'a> {
         match self.bindings.get_mut(&symbol) {
             Some(State::Str(state)) => *state = BindingState::Dead,
             Some(State::Array(state)) => *state = BindingState::Dead,
-            Some(State::Struct { fields, dead }) => {
+            Some(State::Ref {
+                source,
+                dead,
+                mutable,
+            }) => {
+                // The moved reference's borrow stays live (conservative:
+                // it is not tracked through the move) but this binding no
+                // longer holds it.
+                *source = None;
+                *dead = true;
+                let _ = mutable;
+            }
+            Some(State::Struct {
+                fields,
+                dead,
+                ref_fields,
+            }) => {
                 *dead = true;
                 for state in fields.values_mut() {
                     *state = BindingState::Dead;
                 }
+                // The moved value's references are no longer tracked
+                // (conservative: their borrows stay live until the
+                // binding's borrows are released at scope exit).
+                ref_fields.clear();
             }
             None => {}
         }
@@ -780,17 +1493,36 @@ impl<'a> Analyzer<'a> {
     /// transfer mode; update the target's tracked state.
     fn apply_assignment(&mut self, op: &AssignOp, target: &Expr, value: &EvalValue) {
         if *op != AssignOp::Assign {
-            // Compound assignment is numeric-only; no ownership effect.
+            // Compound assignment is numeric-only; no ownership effect, but
+            // writing through a borrowed value is still a conflict.
+            if let Some(root) = self.root_ident(target) {
+                if let Some(symbol) = self.semantic.resolve(root.span) {
+                    if self.is_borrowed(symbol) {
+                        self.errors.push(SemanticError::borrow_conflict(
+                            root.name.clone(),
+                            root.span,
+                            format!("cannot assign to `{}`: it is borrowed", root.name),
+                        ));
+                    }
+                }
+            }
             self.eval_expr(target, Mode::Observe);
             return;
         }
         match &target.kind {
             ExprKind::Ident(ident) => {
                 if let Some(symbol) = self.semantic.resolve(ident.span) {
+                    if self.is_borrowed(symbol) {
+                        self.errors.push(SemanticError::borrow_conflict(
+                            ident.name.clone(),
+                            ident.span,
+                            format!("cannot assign to `{}`: it is borrowed", ident.name),
+                        ));
+                        return;
+                    }
                     // Rebind the target from the value; assigning to a
                     // dead binding resurrects it.
                     if let Some(ty) = self.types.symbol_type(symbol) {
-                        self.bindings.remove(&symbol);
                         self.bind_name_with_type(symbol, ty, value);
                     }
                 }
@@ -802,15 +1534,44 @@ impl<'a> Analyzer<'a> {
                 }
                 if let ExprKind::Ident(ident) = &base.kind {
                     if let Some(symbol) = self.semantic.resolve(ident.span) {
+                        if self.is_borrowed(symbol) {
+                            self.errors.push(SemanticError::borrow_conflict(
+                                ident.name.clone(),
+                                ident.span,
+                                format!("cannot assign to `{}`: it is borrowed", ident.name),
+                            ));
+                            return;
+                        }
+                        // Assigning to a reference-typed field replaces
+                        // its borrow with the new value's (recorded before
+                        // the binding is mutated).
+                        let new_view = value.view.map(|view| {
+                            if let Some(source) = view.source {
+                                if !view.counted {
+                                    self.borrow_root(source, view.mutable);
+                                }
+                            }
+                            BorrowView {
+                                source: view.source,
+                                mutable: view.mutable,
+                                counted: true,
+                            }
+                        });
                         match self.bindings.get_mut(&symbol) {
                             Some(State::Struct {
                                 fields,
+                                ref_fields,
                                 dead: false,
                             }) => {
                                 fields.insert(
                                     member.name.clone(),
                                     BindingState::Live(value.provenance),
                                 );
+                                if let Some(view) = new_view {
+                                    ref_fields.insert(member.name.clone(), view);
+                                } else {
+                                    ref_fields.remove(&member.name);
+                                }
                                 return;
                             }
                             Some(State::Struct { dead: true, .. }) => {
@@ -839,6 +1600,14 @@ impl<'a> Analyzer<'a> {
                 }
                 if let ExprKind::Ident(ident) = &base.kind {
                     if let Some(symbol) = self.semantic.resolve(ident.span) {
+                        if self.is_borrowed(symbol) {
+                            self.errors.push(SemanticError::borrow_conflict(
+                                ident.name.clone(),
+                                ident.span,
+                                format!("cannot assign to `{}`: it is borrowed", ident.name),
+                            ));
+                            return;
+                        }
                         if let Some(State::Array(state)) = self.bindings.get_mut(&symbol) {
                             if matches!(state, BindingState::Dead) {
                                 self.errors.push(SemanticError::use_of_moved(
@@ -855,6 +1624,26 @@ impl<'a> Analyzer<'a> {
                 let _ = base_value;
                 if value.provenance == Provenance::Owned {
                     self.mark_root_owned(base);
+                }
+            }
+            ExprKind::Deref { operand } => {
+                // `*r = v`: allowed only through an exclusive reference.
+                let value_operand = self.eval_expr(operand, Mode::Observe);
+                match value_operand.view {
+                    Some(view) if view.mutable => {
+                        // Store through the exclusive borrow: allowed.
+                        let _ = value;
+                    }
+                    Some(_) => {
+                        self.errors.push(SemanticError::borrow_conflict_detail(
+                            target.span,
+                            "cannot assign through an immutable reference".to_string(),
+                        ));
+                    }
+                    None => {
+                        // Defensive: the type checker rejects derefs of
+                        // non-references and stores through `&T`.
+                    }
                 }
             }
             _ => {
@@ -879,11 +1668,13 @@ impl<'a> Analyzer<'a> {
             Some(State::Array(state)) => *state = BindingState::Live(Provenance::Owned),
             Some(State::Struct {
                 fields,
+                ref_fields,
                 dead: false,
             }) => {
                 for state in fields.values_mut() {
                     *state = BindingState::Live(Provenance::Owned);
                 }
+                ref_fields.clear();
             }
             _ => {}
         }
@@ -906,8 +1697,23 @@ impl<'a> Analyzer<'a> {
         }
         // User function.
         self.eval_expr(callee, Mode::Observe);
+        // Evaluate arguments in transfer mode and record the borrows of
+        // reference arguments (a `&x` / `&mut x` borrow is held for the
+        // duration of the call).
+        let mut arg_views: Vec<Option<BorrowView>> = Vec::with_capacity(args.len());
         for arg in args {
-            self.eval_expr(arg, Mode::Transfer);
+            let value = self.eval_expr(arg, Mode::Transfer);
+            // A copied shared-reference argument records a new borrow for
+            // the call; fresh borrows were already recorded by
+            // `eval_borrow` and transfers carry theirs.
+            if let Some(view) = value.view {
+                if let Some(source) = view.source {
+                    if !view.counted {
+                        self.borrow_root(source, view.mutable);
+                    }
+                }
+            }
+            arg_views.push(value.view);
         }
         let result = match &callee.kind {
             ExprKind::Ident(ident) => self
@@ -916,30 +1722,78 @@ impl<'a> Analyzer<'a> {
                 .and_then(|symbol| self.fn_results.get(&symbol).cloned()),
             _ => None,
         };
-        match result {
-            Some(result) => match result.provenance {
-                Some(Provenance::Owned) => match result.fields {
-                    Some(fields) => EvalValue::struct_value(
-                        fields
-                            .into_iter()
-                            .map(|(name, provenance)| (name, BindingState::Live(provenance)))
-                            .collect(),
-                    ),
+        // A call whose result is a reference carries the borrow of the
+        // parameter it derives from; the borrow of every other reference
+        // argument ends when the call completes.
+        let ref_result = result.as_ref().and_then(|result| result.ref_result);
+        match ref_result {
+            Some(ref_result) => {
+                let kept: Vec<usize> = match ref_result.param {
+                    Some(param) => vec![param],
+                    // Unknown source: conservatively keep every
+                    // reference-argument borrow alive.
+                    None => (0..args.len()).collect(),
+                };
+                for (index, view) in arg_views.iter().enumerate() {
+                    if let Some(view) = view {
+                        if let Some(source) = view.source {
+                            if !kept.contains(&index) {
+                                self.release_borrow(source, view.mutable);
+                            }
+                        }
+                    }
+                }
+                let source = match ref_result.param {
+                    Some(param) => arg_views
+                        .get(param)
+                        .copied()
+                        .flatten()
+                        .and_then(|view| view.source),
+                    None => None,
+                };
+                EvalValue::borrow_view(source, ref_result.mutable, true)
+            }
+            None => {
+                // The call consumed its reference arguments: their
+                // borrows end.
+                for view in arg_views.iter().flatten() {
+                    if let Some(source) = view.source {
+                        self.release_borrow(source, view.mutable);
+                    }
+                }
+                match result {
+                    Some(result) => match result.provenance {
+                        Some(Provenance::Owned) => match result.fields {
+                            Some(fields) => EvalValue::struct_value(
+                                fields
+                                    .into_iter()
+                                    .map(|(name, provenance)| {
+                                        (name, BindingState::Live(provenance))
+                                    })
+                                    .collect(),
+                                Vec::new(),
+                            ),
+                            None => EvalValue::owned(),
+                        },
+                        Some(Provenance::Immutable) => match result.fields {
+                            Some(fields) => EvalValue::struct_value(
+                                fields
+                                    .into_iter()
+                                    .map(|(name, provenance)| {
+                                        (name, BindingState::Live(provenance))
+                                    })
+                                    .collect(),
+                                Vec::new(),
+                            ),
+                            None => EvalValue::immutable(),
+                        },
+                        None => EvalValue::copy(),
+                    },
+                    // Unknown callee result (not yet analyzed):
+                    // conservative Owned.
                     None => EvalValue::owned(),
-                },
-                Some(Provenance::Immutable) => match result.fields {
-                    Some(fields) => EvalValue::struct_value(
-                        fields
-                            .into_iter()
-                            .map(|(name, provenance)| (name, BindingState::Live(provenance)))
-                            .collect(),
-                    ),
-                    None => EvalValue::immutable(),
-                },
-                None => EvalValue::copy(),
-            },
-            // Unknown callee result (not yet analyzed): conservative Owned.
-            None => EvalValue::owned(),
+                }
+            }
         }
     }
 
@@ -954,17 +1808,51 @@ impl<'a> Analyzer<'a> {
                 continue;
             }
             if is_free {
-                // Consume: the string is moved (the blob is destroyed).
-                self.eval_expr(arg, Mode::Transfer);
+                // Consume: the string is moved (the blob is destroyed);
+                // moving a borrowed value is a conflict (E-S12) and
+                // freeing through a reference is always a conflict.
+                let value = self.eval_expr(arg, Mode::Transfer);
+                if value.view.is_some() {
+                    self.errors.push(SemanticError::borrow_conflict_detail(
+                        arg.span,
+                        "cannot free a string through a reference".to_string(),
+                    ));
+                }
             } else if is_set_byte {
-                // Mutate borrow: the value must be Owned (E-S11), and it
-                // stays live.
+                // Mutate borrow: through an exclusive reference this is
+                // the point of the borrow; through a shared one it is a
+                // conflict (E-S12); on an Immutable value it is E-S11.
                 let value = self.eval_expr(arg, Mode::Observe);
-                if value.provenance == Provenance::Immutable {
-                    self.errors.push(self.immutable_mutation_error(arg));
+                match value.view {
+                    Some(view) => {
+                        if !view.mutable {
+                            self.errors.push(SemanticError::borrow_conflict_detail(
+                                arg.span,
+                                "cannot mutate a string through a shared reference".to_string(),
+                            ));
+                        }
+                    }
+                    None => {
+                        if let Some(root) = self.root_ident(arg) {
+                            if let Some(symbol) = self.semantic.resolve(root.span) {
+                                if self.is_borrowed(symbol) {
+                                    self.errors.push(SemanticError::borrow_conflict(
+                                        root.name.clone(),
+                                        root.span,
+                                        format!("cannot mutate `{}`: it is borrowed", root.name),
+                                    ));
+                                }
+                            }
+                        }
+                        if value.provenance == Provenance::Immutable {
+                            self.errors.push(self.immutable_mutation_error(arg));
+                        }
+                    }
                 }
             } else {
-                // Read borrow.
+                // Read borrow. Reading through a reference is always fine;
+                // reading a mutably-borrowed binding is a conflict
+                // (reported by `eval_ident`).
                 self.eval_expr(arg, Mode::Observe);
             }
         }
@@ -1009,6 +1897,7 @@ impl<'a> Analyzer<'a> {
     fn type_shape(&self, ty: TypeId) -> Shape {
         match self.types.types().kind(ty) {
             Some(TypeKind::Str) => Shape::Str,
+            Some(TypeKind::Ref { .. }) => Shape::Ref,
             Some(TypeKind::Struct(id)) => {
                 let has_tracked = self
                     .types
@@ -1026,7 +1915,8 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// The names of the struct's tracked (Str-containing) fields.
+    /// The names of the struct's tracked (Str/reference-containing)
+    /// fields.
     fn tracked_struct_fields(&self, ty: TypeId) -> impl Iterator<Item = String> + '_ {
         let info = match self.types.types().kind(ty) {
             Some(TypeKind::Struct(id)) => self.types.types().struct_info(*id),
@@ -1040,10 +1930,48 @@ impl<'a> Analyzer<'a> {
         })
     }
 
-    /// Whether a type may (transitively) own heap storage.
+    /// The names of the struct's reference-typed fields (session 16).
+    fn tracked_ref_fields(&self, ty: TypeId) -> impl Iterator<Item = String> + '_ {
+        let info = match self.types.types().kind(ty) {
+            Some(TypeKind::Struct(id)) => self.types.types().struct_info(*id),
+            _ => None,
+        };
+        info.into_iter().flat_map(|info| {
+            info.fields
+                .iter()
+                .filter(|field| {
+                    matches!(
+                        self.types.types().kind(field.ty),
+                        Some(TypeKind::Ref { .. })
+                    )
+                })
+                .map(|field| field.name.clone())
+        })
+    }
+
+    /// Whether the reference-typed field `name` of struct `ty` is mutable.
+    fn ref_field_mutable(&self, ty: TypeId, name: &str) -> bool {
+        let info = match self.types.types().kind(ty) {
+            Some(TypeKind::Struct(id)) => self.types.types().struct_info(*id),
+            _ => None,
+        };
+        info.and_then(|info| {
+            info.fields
+                .iter()
+                .find(|field| field.name == name)
+                .and_then(|field| match self.types.types().kind(field.ty) {
+                    Some(TypeKind::Ref { mutable, .. }) => Some(*mutable),
+                    _ => None,
+                })
+        })
+        .unwrap_or(false)
+    }
+
+    /// Whether a type may (transitively) own heap storage (or hold a
+    /// reference that must be tracked).
     fn may_own(&self, ty: TypeId) -> bool {
         match self.types.types().kind(ty) {
-            Some(TypeKind::Str) => true,
+            Some(TypeKind::Str) | Some(TypeKind::Ref { .. }) => true,
             Some(TypeKind::Array { elem, .. }) => self.may_own(*elem),
             Some(TypeKind::Struct(id)) => self
                 .types

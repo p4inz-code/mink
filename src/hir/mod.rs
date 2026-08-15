@@ -301,6 +301,20 @@ pub enum HirExprKind {
         /// The operand.
         operand: Box<HirExpr>,
     },
+    /// A reference/borrow expression (session 16): `&place` (shared,
+    /// `mutable: false`) or `&mut place` (exclusive, `mutable: true`).
+    Borrow {
+        /// Whether the borrow is mutable (`&mut`).
+        mutable: bool,
+        /// The borrowed place.
+        operand: Box<HirExpr>,
+    },
+    /// A dereference expression (session 16): `*r` reads (or, as an
+    /// assignment target, writes) the referent of reference `r`.
+    Deref {
+        /// The reference expression.
+        operand: Box<HirExpr>,
+    },
     /// An infix binary operation.
     Binary {
         /// The operator.

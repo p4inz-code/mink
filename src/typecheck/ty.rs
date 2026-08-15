@@ -131,6 +131,21 @@ pub enum TypeKind {
     /// blob address but is not a pointer type, so strings cannot be
     /// dereferenced through the raw memory intrinsics.
     Ptr(TypeId),
+    /// A reference to a value of type `elem` (session 16): `&T`
+    /// (immutable/shared, `mutable: false`) or `&mut T`
+    /// (mutable/exclusive, `mutable: true`). References are interned like
+    /// other concrete types and unify structurally; `&T` never unifies
+    /// with `&mut T`, `Ptr`, `Str`, or a value type. A reference is a
+    /// single machine word holding the machine address of a stack slot
+    /// (or of a field/element region inside one); mutability is purely a
+    /// compile-time concept enforced by the borrow checker (see
+    /// `docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md`).
+    Ref {
+        /// Whether the reference is mutable (`&mut T`).
+        mutable: bool,
+        /// The referent type.
+        elem: TypeId,
+    },
     /// A user-declared struct: a named record of typed fields (session 14).
     /// The struct's fields live in the table's [`StructInfo`] list, indexed
     /// by the [`StructId`]; types are nominal, so two declarations are two
@@ -308,6 +323,24 @@ impl TypeTable {
                 self.unify(*ia, *ib)?;
                 Ok(a)
             }
+            (
+                TypeKind::Ref {
+                    mutable: ma,
+                    elem: ea,
+                },
+                TypeKind::Ref {
+                    mutable: mb,
+                    elem: eb,
+                },
+            ) => {
+                // `&T` and `&mut T` never unify; identical mutability
+                // unifies the element types structurally.
+                if ma != mb {
+                    return Err((a, b));
+                }
+                self.unify(*ea, *eb)?;
+                Ok(a)
+            }
             (TypeKind::Array { elem: ea, len: la }, TypeKind::Array { elem: eb, len: lb }) => {
                 if la != lb {
                     return Err((a, b));
@@ -365,6 +398,13 @@ impl TypeTable {
             Some(TypeKind::Unit) => "Unit".to_string(),
             Some(TypeKind::Range(elem)) => format!("Range<{}>", self.display(*elem)),
             Some(TypeKind::Ptr(elem)) => format!("Ptr<{}>", self.display(*elem)),
+            Some(TypeKind::Ref { mutable, elem }) => {
+                if *mutable {
+                    format!("&mut {}", self.display(*elem))
+                } else {
+                    format!("&{}", self.display(*elem))
+                }
+            }
             Some(TypeKind::Struct(id)) => self
                 .struct_info(*id)
                 .map(|info| info.name.clone())
@@ -549,6 +589,68 @@ mod tests {
         let var = table.push(TypeKind::Infer(None));
         assert!(table.unify(var, point).is_ok());
         assert_eq!(table.canonical(var), point);
+    }
+
+    /// Interns the type `&T` (shared).
+    fn ref_shared(table: &mut TypeTable, elem: TypeId) -> TypeId {
+        table.push(TypeKind::Ref {
+            mutable: false,
+            elem,
+        })
+    }
+
+    /// Interns the type `&mut T` (exclusive).
+    fn ref_mut(table: &mut TypeTable, elem: TypeId) -> TypeId {
+        table.push(TypeKind::Ref {
+            mutable: true,
+            elem,
+        })
+    }
+
+    #[test]
+    fn reference_types_are_interned_and_displayed() {
+        let mut table = TypeTable::new();
+        let int = table.push(TypeKind::Int);
+        let a = ref_shared(&mut table, int);
+        let b = ref_shared(&mut table, int);
+        assert_eq!(a, b, "identical reference types share one id");
+        assert_eq!(table.display(a), "&Int");
+        let m = ref_mut(&mut table, int);
+        assert_ne!(a, m, "&T and &mut T are distinct types");
+        assert_eq!(table.display(m), "&mut Int");
+        // The element type is part of the identity.
+        let str_ty = table.push(TypeKind::Str);
+        let shared_str = ref_shared(&mut table, str_ty);
+        assert_ne!(a, shared_str);
+        assert_eq!(table.display(shared_str), "&Str");
+    }
+
+    #[test]
+    fn reference_unification_is_structural_and_mutability_sensitive() {
+        let mut table = TypeTable::new();
+        let int = table.push(TypeKind::Int);
+        let shared = ref_shared(&mut table, int);
+        let exclusive = ref_mut(&mut table, int);
+        // Identical references unify; mutability never does.
+        let shared2 = ref_shared(&mut table, int);
+        assert!(table.unify(shared, shared2).is_ok());
+        assert!(table.unify(shared, exclusive).is_err());
+        let exclusive2 = ref_mut(&mut table, int);
+        assert!(table.unify(exclusive, exclusive2).is_ok());
+        // A reference resolves a fresh inference variable.
+        let var = table.push(TypeKind::Infer(None));
+        assert!(table.unify(var, shared).is_ok());
+        assert_eq!(table.canonical(var), shared);
+        // Element mismatches surface as element conflicts (like `Ptr`).
+        let str_ty = table.push(TypeKind::Str);
+        let shared_str = ref_shared(&mut table, str_ty);
+        let err = table.unify(shared, shared_str).unwrap_err();
+        assert_eq!(table.canonical(err.0), int);
+        assert_eq!(table.canonical(err.1), str_ty);
+        // A reference never unifies with a value type or a pointer.
+        assert!(table.unify(shared, int).is_err());
+        let ptr = table.push(TypeKind::Ptr(int));
+        assert!(table.unify(shared, ptr).is_err());
     }
 
     #[test]

@@ -126,6 +126,15 @@ pub enum TyKind {
     Named(Ident),
     /// A pointer type: `Ptr<T>`.
     Ptr(Box<Ty>),
+    /// A reference type (session 16): `&T` (immutable) or `&mut T`
+    /// (mutable). References are first-class types enforced by the borrow
+    /// checker; see `docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md`.
+    Ref {
+        /// Whether the reference is mutable (`&mut T`).
+        mutable: bool,
+        /// The referent type.
+        inner: Box<Ty>,
+    },
     /// A fixed-length array type: `[T; N]` where `N` is a non-negative
     /// integer literal (validated by type analysis).
     Array {
@@ -305,6 +314,20 @@ pub enum ExprKind {
         /// The operator.
         op: UnaryOp,
         /// The operand.
+        operand: Box<Expr>,
+    },
+    /// A reference/borrow expression (session 16): `&place` (shared,
+    /// `mutable: false`) or `&mut place` (exclusive, `mutable: true`).
+    Borrow {
+        /// Whether the borrow is mutable (`&mut`).
+        mutable: bool,
+        /// The borrowed place.
+        operand: Box<Expr>,
+    },
+    /// A dereference expression (session 16): `*r` reads (or, as an
+    /// assignment target, writes) the referent of reference `r`.
+    Deref {
+        /// The reference expression.
         operand: Box<Expr>,
     },
     /// An infix binary operation.

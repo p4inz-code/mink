@@ -57,6 +57,12 @@ pub enum BType {
     /// memory intrinsics. Pointer arithmetic is byte-addressed; the
     /// runtime validates alignment and bounds at every access.
     Ptr,
+    /// A reference (session 16): `&T` / `&mut T`, a single word holding
+    /// the machine address of a stack slot (or of a field/element region
+    /// inside one). Mutability is a compile-time concept — the ABI is an
+    /// address either way. The referent's shape and size are carried by
+    /// the `RefLoad`/`RefStore` instructions, never by this type itself.
+    Ref,
     /// A string: a single word holding the address of a length-prefixed
     /// UTF-8 byte blob (immutable image data for literals, a heap block
     /// for `rt_str_alloc` results).
@@ -87,7 +93,7 @@ impl BType {
     /// count instead.
     pub fn words(self) -> usize {
         match self {
-            Self::Int | Self::Bool | Self::Ptr | Self::Str | Self::Unit => 1,
+            Self::Int | Self::Bool | Self::Ptr | Self::Ref | Self::Str | Self::Unit => 1,
             Self::Range => 2,
             Self::Struct | Self::Array => 1,
         }
@@ -100,6 +106,7 @@ impl BType {
             Self::Bool => "Bool",
             Self::Range => "Range<Int>",
             Self::Ptr => "Ptr<Int>",
+            Self::Ref => "reference",
             Self::Str => "Str",
             Self::Struct => "struct",
             Self::Array => "array",
@@ -454,6 +461,47 @@ pub enum BInstKind {
         /// The address steps from the root to the target, outermost first.
         steps: Vec<PlaceAddrStep>,
         /// The target's byte size.
+        size: u32,
+        /// The value being stored.
+        src: BOperand,
+    },
+    /// Form a reference (session 16): compute the machine address of the
+    /// place rooted at `base`'s slot, walked by `steps` from the root's
+    /// first word (field steps subtract their static byte offset; index
+    /// steps are bounds-checked, `E-R10`, and subtract `index * stride`),
+    /// and store the address into `target` (a word-sized `Ref` slot). The
+    /// `E-R10` fail path is the function's shared bounds-check block.
+    RefAddr {
+        /// The destination slot (a `Ref` slot).
+        target: crate::mir::LocalId,
+        /// The local holding the outermost value of the borrowed place.
+        base: crate::mir::LocalId,
+        /// The address steps from the root to the borrowed element,
+        /// outermost first.
+        steps: Vec<PlaceAddrStep>,
+    },
+    /// Load through a reference (session 16): copy `size` bytes from the
+    /// memory addressed by the reference in `reference` into `target`'s
+    /// slot. `elem_ty` is the referent's classified type; `size` its byte
+    /// size. The reference's mutability is not an ABI concern.
+    RefLoad {
+        /// The destination slot.
+        target: crate::mir::LocalId,
+        /// The reference value (a single-word address).
+        reference: BOperand,
+        /// The referent's classified type.
+        elem_ty: BType,
+        /// The referent's byte size.
+        size: u32,
+    },
+    /// Store through a reference (session 16): copy `src`'s `size` bytes
+    /// into the memory addressed by the reference in `reference`.
+    RefStore {
+        /// The reference value (a single-word address).
+        reference: BOperand,
+        /// The referent's classified type.
+        elem_ty: BType,
+        /// The referent's byte size.
         size: u32,
         /// The value being stored.
         src: BOperand,

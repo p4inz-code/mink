@@ -139,6 +139,7 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
         | ExprKind::Null => {}
         ExprKind::Ident(ident) => out.push((ident.name.as_str(), ident.span, false)),
         ExprKind::Unary { operand, .. } => expr_idents(operand, out),
+        ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => expr_idents(operand, out),
         ExprKind::Binary { lhs, rhs, .. } => {
             expr_idents(lhs, out);
             expr_idents(rhs, out);

@@ -31,7 +31,7 @@
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::source::Span;
-use crate::typecheck::TypeId;
+use crate::typecheck::{TypeId, TypeKind, TypeTable};
 
 use super::error::MirError;
 use super::validate;
@@ -221,9 +221,10 @@ fn bool_operand(value: bool, span: Span, ty: TypeId) -> MirOperand {
 /// invalidates every recorded copy *of* that local (their value is the old
 /// one), reassigning the target invalidates its own record, and a
 /// `Member`/`Index`/`Static` target — whose place semantics or reachability
-/// the optimizer cannot prove — clears all records. Calls do not clear
-/// local records because this language has no pointers or references: a
-/// callee cannot observe or modify another function's locals.
+/// the optimizer cannot prove — clears all records. A call whose arguments
+/// include a mutable reference (`&mut T`, possibly nested in a struct or
+/// array) clears all records too: the callee can write through the
+/// reference, so no local copy can be trusted afterwards (session 16).
 pub struct CopyProp;
 
 impl MirPass for CopyProp {
@@ -237,11 +238,15 @@ impl MirPass for CopyProp {
             match &mut item.kind {
                 MirItemKind::Fn(f) => {
                     for block in &mut f.blocks {
-                        changed |= propagate_block(&mut block.stmts, &mut block.terminator);
+                        changed |= propagate_block(
+                            &mut block.stmts,
+                            &mut block.terminator,
+                            &program.types,
+                        );
                     }
                 }
                 MirItemKind::Let(stat) | MirItemKind::Const(stat) => {
-                    changed |= propagate_static(stat);
+                    changed |= propagate_static(stat, &program.types);
                 }
             }
         }
@@ -250,12 +255,16 @@ impl MirPass for CopyProp {
 }
 
 /// Performs copy propagation over one block's statements and terminator.
-fn propagate_block(stmts: &mut [MirStmt], terminator: &mut MirTerminator) -> bool {
+fn propagate_block(
+    stmts: &mut [MirStmt],
+    terminator: &mut MirTerminator,
+    types: &TypeTable,
+) -> bool {
     // `known[i]` is the value local `i` currently provably holds, if any.
     let mut known: Vec<Option<MirOperand>> = Vec::new();
     let mut changed = false;
     for stmt in stmts.iter_mut() {
-        changed |= propagate_stmt(stmt, &mut known);
+        changed |= propagate_stmt(stmt, &mut known, types);
     }
     changed |= rewrite_terminator(terminator, &known);
     changed
@@ -263,18 +272,22 @@ fn propagate_block(stmts: &mut [MirStmt], terminator: &mut MirTerminator) -> boo
 
 /// Performs copy propagation over a module static's statements and final
 /// value operand.
-fn propagate_static(stat: &mut MirStatic) -> bool {
+fn propagate_static(stat: &mut MirStatic, types: &TypeTable) -> bool {
     let mut known: Vec<Option<MirOperand>> = Vec::new();
     let mut changed = false;
     for stmt in stat.stmts.iter_mut() {
-        changed |= propagate_stmt(stmt, &mut known);
+        changed |= propagate_stmt(stmt, &mut known, types);
     }
     changed |= rewrite_operand(&mut stat.value, &known);
     changed
 }
 
 /// Applies the copy-propagation rules to one statement.
-fn propagate_stmt(stmt: &mut MirStmt, known: &mut Vec<Option<MirOperand>>) -> bool {
+fn propagate_stmt(
+    stmt: &mut MirStmt,
+    known: &mut Vec<Option<MirOperand>>,
+    types: &TypeTable,
+) -> bool {
     let MirStmtKind::Assign { target, rvalue } = &mut stmt.kind;
     let mut changed = false;
     let target_local = match &target.kind {
@@ -284,7 +297,8 @@ fn propagate_stmt(stmt: &mut MirStmt, known: &mut Vec<Option<MirOperand>>) -> bo
         MirTargetKind::Static(_)
         | MirTargetKind::Member { .. }
         | MirTargetKind::Index { .. }
-        | MirTargetKind::Place { .. } => {
+        | MirTargetKind::Place { .. }
+        | MirTargetKind::Deref { .. } => {
             known.iter_mut().for_each(|slot| *slot = None);
             None
         }
@@ -293,6 +307,13 @@ fn propagate_stmt(stmt: &mut MirStmt, known: &mut Vec<Option<MirOperand>>) -> bo
         // The target is being (re)defined: any copy *of* it is stale (it
         // now holds a new value), and its own record is replaced below.
         kill_copies_of(known, id);
+    }
+    // A call passing a mutable reference can write through it to any
+    // local whose address is reachable; no recorded copy survives.
+    if let MirRvalueKind::Call { args, .. } = &rvalue.kind {
+        if args.iter().any(|arg| type_has_mut_ref(types, arg.ty)) {
+            known.iter_mut().for_each(|slot| *slot = None);
+        }
     }
     // Rewrite reads in the rvalue.
     changed |= rewrite_rvalue(rvalue, known);
@@ -309,6 +330,8 @@ fn propagate_stmt(stmt: &mut MirStmt, known: &mut Vec<Option<MirOperand>>) -> bo
                 changed |= rewrite_operand(index, known);
             }
         }
+    } else if let MirTargetKind::Deref { operand } = &mut target.kind {
+        changed |= rewrite_operand(operand, known);
     }
     // Record the new copy when this statement is one.
     if let Some(id) = target_local {
@@ -385,6 +408,14 @@ fn rewrite_rvalue(rvalue: &mut MirRvalue, known: &[Option<MirOperand>]) -> bool 
             changed |= rewrite_operand(base, known);
             changed |= rewrite_operand(index, known);
         }
+        MirRvalueKind::RefAddr { steps, .. } => {
+            for step in steps {
+                if let MirPlaceStepKind::Index(index) = &mut step.kind {
+                    changed |= rewrite_operand(index, known);
+                }
+            }
+        }
+        MirRvalueKind::Deref { operand } => changed |= rewrite_operand(operand, known),
         MirRvalueKind::StructLit { fields } => {
             for (_, value) in fields {
                 changed |= rewrite_operand(value, known);
@@ -785,6 +816,7 @@ fn mark_stmt_reads(stmt: &MirStmt, read: &mut [bool]) {
                 }
             }
         }
+        MirTargetKind::Deref { operand } => mark_operand_read(operand, read),
         MirTargetKind::Local(_) | MirTargetKind::Static(_) => {}
     }
 }
@@ -815,6 +847,20 @@ fn mark_rvalue_reads(rvalue: &MirRvalue, read: &mut [bool]) {
             mark_operand_read(base, read);
             mark_operand_read(index, read);
         }
+        MirRvalueKind::RefAddr { root, steps, .. } => {
+            // The root's address is taken: its stores must be kept (a
+            // reference may read through them later), so the root local is
+            // a read here. Deref loads/stores read or write through an
+            // address the optimizer cannot see, so the root of every
+            // borrow is conservatively live.
+            mark_local_read(*root, read);
+            for step in steps {
+                if let MirPlaceStepKind::Index(index) = &step.kind {
+                    mark_operand_read(index, read);
+                }
+            }
+        }
+        MirRvalueKind::Deref { operand } => mark_operand_read(operand, read),
         MirRvalueKind::StructLit { fields } => {
             for (_, value) in fields {
                 mark_operand_read(value, read);
@@ -839,12 +885,37 @@ fn mark_terminator_reads(terminator: &MirTerminator, read: &mut [bool]) {
     }
 }
 
+/// Whether `ty` is (or contains) a mutable reference `&mut T`: the callee
+/// of a call receiving such an argument can write through it, so the
+/// caller's copies must not be trusted afterwards. Shared `&T` references
+/// are read-only and do not force a kill.
+fn type_has_mut_ref(types: &TypeTable, ty: TypeId) -> bool {
+    match types.kind(ty) {
+        Some(TypeKind::Ref { mutable: true, .. }) => true,
+        Some(TypeKind::Ref { mutable: false, .. }) => false,
+        Some(TypeKind::Array { elem, .. }) => type_has_mut_ref(types, *elem),
+        Some(TypeKind::Struct(id)) => types.struct_info(*id).is_some_and(|info| {
+            info.fields
+                .iter()
+                .any(|field| type_has_mut_ref(types, field.ty))
+        }),
+        _ => false,
+    }
+}
+
 /// Marks `operand`'s local read, if any, in `read`.
 fn mark_operand_read(operand: &MirOperand, read: &mut [bool]) {
     if let MirOperandKind::Local(id) = &operand.kind {
-        if let Some(slot) = read.get_mut(id.raw() as usize) {
-            *slot = true;
-        }
+        mark_local_read(*id, read);
+    }
+}
+
+/// Marks one local as read in `read` (bounds-defensive: out-of-range ids
+/// are treated as reads so a defensive path never removes an unknown
+/// local's stores).
+fn mark_local_read(id: LocalId, read: &mut [bool]) {
+    if let Some(slot) = read.get_mut(id.raw() as usize) {
+        *slot = true;
     }
 }
 
@@ -1254,7 +1325,7 @@ mod tests {
             value: Some(local_operand(LocalId::new(2), bool_ty, span)),
             span,
         };
-        assert!(super::propagate_block(&mut stmts, &mut terminator));
+        assert!(super::propagate_block(&mut stmts, &mut terminator, &table));
         // y is read after `a` was reassigned: the read must NOT be rewritten
         // to a read of `a` (which now holds a different value). The copy
         // chain was killed, so the read stays a read of y.
@@ -1307,7 +1378,7 @@ mod tests {
             value: Some(local_operand(LocalId::new(1), bool_ty, span)),
             span,
         };
-        assert!(super::propagate_block(&mut stmts, &mut terminator));
+        assert!(super::propagate_block(&mut stmts, &mut terminator, &table));
         let MirTerminator::Return { value, .. } = terminator else {
             unreachable!()
         };

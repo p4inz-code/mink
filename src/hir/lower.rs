@@ -274,6 +274,13 @@ impl<'a> Lowerer<'a> {
                 op: *op,
                 operand: Box::new(self.lower_expr(operand)),
             },
+            ExprKind::Borrow { mutable, operand } => HirExprKind::Borrow {
+                mutable: *mutable,
+                operand: Box::new(self.lower_expr(operand)),
+            },
+            ExprKind::Deref { operand } => HirExprKind::Deref {
+                operand: Box::new(self.lower_expr(operand)),
+            },
             ExprKind::Binary { op, lhs, rhs } => HirExprKind::Binary {
                 op: *op,
                 lhs: Box::new(self.lower_expr(lhs)),

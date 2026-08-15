@@ -1204,6 +1204,7 @@ fn walk_ty(ty: &Ty, text_len: u32) {
     match &ty.kind {
         TyKind::Named(ident) => walk_ident(ident, text_len, "type"),
         TyKind::Ptr(inner) => walk_ty(inner, text_len),
+        TyKind::Ref { inner, .. } => walk_ty(inner, text_len),
         TyKind::Array { elem, len } => {
             walk_ty(elem, text_len);
             walk_expr(len, text_len, "type");
@@ -1280,6 +1281,9 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
         | ExprKind::Null => {}
         ExprKind::Ident(ident) => walk_ident(ident, text_len, src),
         ExprKind::Unary { operand, .. } => walk_expr(operand, text_len, src),
+        ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => {
+            walk_expr(operand, text_len, src)
+        }
         ExprKind::Binary { lhs, rhs, .. } => {
             walk_expr(lhs, text_len, src);
             walk_expr(rhs, text_len, src);

@@ -176,7 +176,7 @@ The following rules are authoritative for this session.
   adversarial/deep inputs.
 - Native end-to-end tests in `tests/ownership.rs` build and run valid
   ownership programs and verify the exact output and exit codes.
-- Full suite after session 15: **803 tests** (see
+- Full suite after session 16: **878 tests** (see
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
   per-file breakdown).
 - **Aggregate copy rule (implemented):** a struct or array is Copy iff it

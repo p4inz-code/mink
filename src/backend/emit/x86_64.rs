@@ -1329,6 +1329,60 @@ fn emit_inst(
             }
             store_into(code, slots, *src, Reg::Rcx, *size);
         }
+        BInstKind::RefAddr {
+            target,
+            base,
+            steps,
+        } => {
+            // `&place`: compute the place's machine address (the root's
+            // first-word address walked by the same field/index steps as
+            // `PlaceStore`) and store it into the reference slot. The
+            // running address stays in `rcx`; `rax` is scratch for index
+            // arithmetic.
+            let target_word0 = slots[target.raw() as usize].0;
+            code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
+            for step in steps {
+                match step {
+                    PlaceAddrStep::Field { byte_offset } => {
+                        code.sub_r_imm32(Reg::Rcx, *byte_offset);
+                    }
+                    PlaceAddrStep::Index { index, stride, len } => {
+                        eval_rax(code, slots, *index);
+                        code.cmp_r_imm32(Reg::Rax, *len as u32);
+                        code.jcc(0x83, PatchKind::Label(fail_label)); // jae
+                        code.imul_rax_imm32(*stride);
+                        code.sub_rr(Reg::Rcx, Reg::Rax);
+                    }
+                }
+            }
+            code.mov_mem_r(Reg::Rbp, target_word0, Reg::Rcx);
+        }
+        BInstKind::RefLoad {
+            target,
+            reference,
+            elem_ty,
+            size,
+        } => {
+            // `*r` read: copy `size` bytes from the referenced address.
+            // The address lives in `rcx` so `copy_into_slot`'s `rax`
+            // scratch never clobbers it (mirroring `FieldLoad`).
+            eval_rcx(code, slots, *reference);
+            copy_into_slot(code, slots, *target, Reg::Rcx, *size);
+            let _ = elem_ty;
+        }
+        BInstKind::RefStore {
+            reference,
+            elem_ty,
+            size,
+            src,
+        } => {
+            // `*r = v`: store `size` bytes to the referenced address.
+            // The address lives in `rcx` so `store_into`'s `rax` scratch
+            // never clobbers it (mirroring `FieldStore`).
+            eval_rcx(code, slots, *reference);
+            store_into(code, slots, *src, Reg::Rcx, *size);
+            let _ = elem_ty;
+        }
     }
 }
 

@@ -57,6 +57,17 @@ pub enum SemanticErrorKind {
     /// An attempt to mutate an immutable (literal) string via
     /// `rt_str_set_byte` (ownership analysis, session 15).
     MutatingImmutableString,
+    /// A borrow conflict (session 16): borrowing a value that is already
+    /// borrowed incompatibly, or using/mutating/consuming a value while it
+    /// is borrowed.
+    BorrowConflict,
+    /// An invalid borrow (session 16): `&mut` of a binding that is not
+    /// mutable, or borrowing a constant.
+    InvalidBorrow,
+    /// A dangling reference (session 16): returning a reference (or an
+    /// aggregate containing one) to a function-local value, so it would
+    /// outlive its source.
+    DanglingReference,
 }
 
 impl SemanticErrorKind {
@@ -77,6 +88,9 @@ impl SemanticErrorKind {
             Self::DuplicateField => "E-S09",
             Self::UseOfMovedValue => "E-S10",
             Self::MutatingImmutableString => "E-S11",
+            Self::BorrowConflict => "E-S12",
+            Self::InvalidBorrow => "E-S13",
+            Self::DanglingReference => "E-S14",
         }
     }
 }
@@ -250,6 +264,54 @@ impl SemanticError {
         }
     }
 
+    /// Creates a borrow-conflict error for `name` at `span` (E-S12) whose
+    /// message is `detail` instead of the default.
+    pub fn borrow_conflict(name: impl Into<String>, span: Span, detail: String) -> Self {
+        Self {
+            kind: SemanticErrorKind::BorrowConflict,
+            span,
+            name: name.into(),
+            original: None,
+            detail: Some(detail),
+        }
+    }
+
+    /// Creates a borrow-conflict error at `span` (E-S12) whose message is
+    /// `detail` (used when there is no single offending name).
+    pub fn borrow_conflict_detail(span: Span, detail: String) -> Self {
+        Self {
+            kind: SemanticErrorKind::BorrowConflict,
+            span,
+            name: String::new(),
+            original: None,
+            detail: Some(detail),
+        }
+    }
+
+    /// Creates an invalid-borrow error at `span` (E-S13) whose message is
+    /// `detail`.
+    pub fn invalid_borrow(span: Span, detail: String) -> Self {
+        Self {
+            kind: SemanticErrorKind::InvalidBorrow,
+            span,
+            name: String::new(),
+            original: None,
+            detail: Some(detail),
+        }
+    }
+
+    /// Creates a dangling-reference error at `span` (E-S14) whose message
+    /// is `detail`.
+    pub fn dangling_reference(span: Span, detail: String) -> Self {
+        Self {
+            kind: SemanticErrorKind::DanglingReference,
+            span,
+            name: String::new(),
+            original: None,
+            detail: Some(detail),
+        }
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> SemanticErrorKind {
         self.kind
@@ -314,6 +376,18 @@ impl fmt::Display for SemanticError {
                     format!("cannot mutate `{}`: it is an immutable string", self.name)
                 })
             }
+            SemanticErrorKind::BorrowConflict => self
+                .detail
+                .clone()
+                .unwrap_or_else(|| format!("borrow conflict involving `{}`", self.name)),
+            SemanticErrorKind::InvalidBorrow => self
+                .detail
+                .clone()
+                .unwrap_or_else(|| "invalid borrow".to_string()),
+            SemanticErrorKind::DanglingReference => self
+                .detail
+                .clone()
+                .unwrap_or_else(|| "dangling reference".to_string()),
         };
         f.write_str(&message)
     }

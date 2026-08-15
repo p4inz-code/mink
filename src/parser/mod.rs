@@ -444,6 +444,26 @@ impl<'a> Parser<'a> {
     fn parse_type(&mut self) -> Result<Ty, ()> {
         let token = self.current();
         match token.kind() {
+            TokenKind::Amp => {
+                // A reference type (session 16): `&T` (shared) or
+                // `&mut T` (exclusive).
+                let start = self.bump().span();
+                let mutable = if self.current_kind() == TokenKind::Mut {
+                    let _ = self.bump();
+                    true
+                } else {
+                    false
+                };
+                let inner = self.parse_type()?;
+                let span = self.join(start, inner.span);
+                Ok(Ty {
+                    kind: TyKind::Ref {
+                        mutable,
+                        inner: Box::new(inner),
+                    },
+                    span,
+                })
+            }
             TokenKind::Ident => {
                 let _ = self.bump();
                 let name = self.text(token.span());
@@ -1053,21 +1073,78 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary(&mut self) -> Result<Expr, ()> {
-        let (op, start) = match self.current_kind() {
-            TokenKind::Minus => (UnaryOp::Neg, self.bump().span()),
-            TokenKind::Bang => (UnaryOp::Not, self.bump().span()),
-            TokenKind::Tilde => (UnaryOp::BitNot, self.bump().span()),
-            _ => return self.parse_postfix(),
-        };
-        let operand = self.parse_unary()?;
-        let span = self.join(start, operand.span);
-        Ok(Expr {
-            kind: ExprKind::Unary {
-                op,
-                operand: Box::new(operand),
-            },
-            span,
-        })
+        match self.current_kind() {
+            TokenKind::Minus => {
+                let start = self.bump().span();
+                let operand = self.parse_unary()?;
+                let span = self.join(start, operand.span);
+                Ok(Expr {
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::Neg,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                })
+            }
+            TokenKind::Bang => {
+                let start = self.bump().span();
+                let operand = self.parse_unary()?;
+                let span = self.join(start, operand.span);
+                Ok(Expr {
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                })
+            }
+            TokenKind::Tilde => {
+                let start = self.bump().span();
+                let operand = self.parse_unary()?;
+                let span = self.join(start, operand.span);
+                Ok(Expr {
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::BitNot,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                })
+            }
+            TokenKind::Amp => {
+                // `&expr` (shared borrow) or `&mut expr` (exclusive
+                // borrow); `&` in binary position remains bitwise-and.
+                let start = self.bump().span();
+                let mutable = if self.current_kind() == TokenKind::Mut {
+                    let _ = self.bump();
+                    true
+                } else {
+                    false
+                };
+                let operand = self.parse_unary()?;
+                let span = self.join(start, operand.span);
+                Ok(Expr {
+                    kind: ExprKind::Borrow {
+                        mutable,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                })
+            }
+            TokenKind::Star => {
+                // `*expr`: dereference a reference (session 16); `*` in
+                // binary position remains multiplication.
+                let start = self.bump().span();
+                let operand = self.parse_unary()?;
+                let span = self.join(start, operand.span);
+                Ok(Expr {
+                    kind: ExprKind::Deref {
+                        operand: Box::new(operand),
+                    },
+                    span,
+                })
+            }
+            _ => self.parse_postfix(),
+        }
     }
 
     fn parse_postfix(&mut self) -> Result<Expr, ()> {
@@ -1538,9 +1615,13 @@ fn assign_op(kind: TokenKind) -> Option<AssignOp> {
 }
 
 /// Whether `expr` is a valid assignment target (a place expression).
+/// `*r` (session 16) is a place: the storage addressed by reference `r`.
 fn is_place(expr: &Expr) -> bool {
     matches!(
         expr.kind,
-        ExprKind::Ident(_) | ExprKind::Member { .. } | ExprKind::Index { .. }
+        ExprKind::Ident(_)
+            | ExprKind::Member { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::Deref { .. }
     )
 }

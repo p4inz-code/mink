@@ -1935,3 +1935,140 @@ fn pointer_mismatch_across_calls_is_reported() {
     assert_eq!(errors[0].expected(), Some("Ptr<Int>"));
     assert_eq!(errors[0].actual(), Some("Str"));
 }
+
+// ---------------------------------------------------------------------------
+// References (session 16)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn borrow_expressions_type_as_references() {
+    let src = "fn f() { let v = 10; let r = &v; let m = &mut v; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "r")),
+        "&Int"
+    );
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "m")),
+        "&mut Int"
+    );
+    assert_expr_type(src, &types, "&v", "&Int");
+    assert_expr_type(src, &types, "&mut v", "&mut Int");
+}
+
+#[test]
+fn shared_and_mutable_reference_types_are_distinct() {
+    // `&T` and `&mut T` must not unify: assigning a shared reference where
+    // a mutable one is required is a mismatch.
+    let src = "fn f() { let v = 10; let r = &v; let m = &mut v; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    let r = symbol_ty(&types, &_semantic, "r");
+    let m = symbol_ty(&types, &_semantic, "m");
+    assert_ne!(r, m, "`&T` and `&mut T` must be distinct interned types");
+}
+
+#[test]
+fn deref_reads_type_as_the_referent() {
+    let src = "fn f() { let v = 10; let r = &v; let x = *r; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_expr_type(src, &types, "*r", "Int");
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "x")), "Int");
+}
+
+#[test]
+fn deref_writes_through_mutable_references_type_check() {
+    let src = "fn f() { let v = 10; let m = &mut v; *m = 42; *m += 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+}
+
+#[test]
+fn reference_referent_mismatch_is_rejected() {
+    // Writing a `Str` through an `&mut Int` is a type mismatch (E-T01),
+    // not a silent acceptance.
+    let src = "fn f() { let v = 10; let m = &mut v; *m = \"hi\"; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert!(!errors.is_empty());
+    assert_eq!(errors[0].code(), "E-T01");
+}
+
+#[test]
+fn assignment_through_immutable_reference_is_rejected() {
+    let src = "fn f() { let v = 10; let r = &v; *r = 5; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::AssignThroughImmutableRef);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T21");
+}
+
+#[test]
+fn deref_of_non_reference_is_rejected() {
+    let src = "fn f() { let x = 10; *x; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::DerefNonReference);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T20");
+}
+
+#[test]
+fn borrow_of_non_place_is_rejected() {
+    // Borrowing a literal is not a place expression (E-T19).
+    let src = "fn f() { let r = &10; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidBorrowTarget);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T19");
+}
+
+#[test]
+fn borrow_of_an_expression_result_is_rejected() {
+    // Borrowing a call result (not a place) is rejected (E-T19); the
+    // borrow checker also rejects borrowing a reference (reborrowing is
+    // deferred), but non-place borrows are already caught here.
+    let src = "fn g() { return 1; } fn f() { let r = &g(); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidBorrowTarget);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T19");
+}
+
+#[test]
+fn reference_field_types_resolve() {
+    let src = "struct S { r: &Int } fn main() { }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+}
+
+#[test]
+fn references_are_distinct_from_pointers() {
+    // `&v` is a `&Int`, never a `Ptr<Int>`; the two type families must
+    // not unify with each other.
+    let src = "fn f() { let v = 10; let r = &v; rt_mem_load(r); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert!(!errors.is_empty());
+    assert_eq!(errors[0].expected(), Some("Ptr<Int>"));
+    assert_eq!(errors[0].actual(), Some("&Int"));
+}
+
+#[test]
+fn references_flow_through_calls() {
+    let src = "fn bump(p) { *p = *p + 1; } fn main() { let v = 10; let m = &mut v; bump(m); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_expr_type(src, &types, "*p", "Int");
+}
+
+#[test]
+fn reference_binary_operations_are_rejected() {
+    // References are not numeric: `r + 1` is invalid (E-T02).
+    let src = "fn f() { let v = 10; let r = &v; r + 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T02");
+}

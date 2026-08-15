@@ -198,9 +198,12 @@ pub struct ArrayLayout {
 /// types return `None` (they are handled by the recursive layout walker).
 fn scalar_layout(kind: &TypeKind) -> Option<(u64, u64)> {
     match kind {
-        TypeKind::Int | TypeKind::Float | TypeKind::Str | TypeKind::Null | TypeKind::Ptr(_) => {
-            Some((WORD_SIZE, WORD_SIZE))
-        }
+        TypeKind::Int
+        | TypeKind::Float
+        | TypeKind::Str
+        | TypeKind::Null
+        | TypeKind::Ptr(_)
+        | TypeKind::Ref { .. } => Some((WORD_SIZE, WORD_SIZE)),
         TypeKind::Bool | TypeKind::Char => Some((1, 1)),
         TypeKind::Range(_) => Some((2 * WORD_SIZE, WORD_SIZE)),
         // Error and unresolved-inference types never reach a layout in a

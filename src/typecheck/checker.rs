@@ -383,6 +383,35 @@ impl<'a> Checker<'a> {
                     )
                 }
             }
+            ExprKind::Borrow { mutable, operand } => {
+                let (operand_ty, operand_recomputed) = self.resolve_deferred_expr(operand);
+                let recompute = self.deferred.contains(&expr.span) || operand_recomputed;
+                if recompute {
+                    (
+                        self.check_borrow(*mutable, operand, operand_ty, expr.span),
+                        true,
+                    )
+                } else {
+                    (
+                        self.recorded_ty(expr.span)
+                            .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                        false,
+                    )
+                }
+            }
+            ExprKind::Deref { operand } => {
+                let (operand_ty, operand_recomputed) = self.resolve_deferred_expr(operand);
+                let recompute = self.deferred.contains(&expr.span) || operand_recomputed;
+                if recompute {
+                    (self.check_deref(operand_ty, expr.span), true)
+                } else {
+                    (
+                        self.recorded_ty(expr.span)
+                            .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                        false,
+                    )
+                }
+            }
             ExprKind::Binary { op, lhs, rhs } => {
                 let (lhs_ty, lhs_recomputed) = self.resolve_deferred_expr(lhs);
                 let (rhs_ty, rhs_recomputed) = self.resolve_deferred_expr(rhs);
@@ -638,6 +667,32 @@ impl<'a> Checker<'a> {
             TyKind::Ptr(inner) => {
                 let elem = self.resolve_type(inner);
                 self.types.push(TypeKind::Ptr(elem))
+            }
+            TyKind::Ref { mutable, inner } => {
+                let elem = self.resolve_type(inner);
+                if matches!(
+                    self.types.kind(elem),
+                    Some(TypeKind::Ref { .. }) | Some(TypeKind::Error)
+                ) {
+                    // No reference-to-reference types: `&&T` and `&mut &T`
+                    // are rejected (reborrowing is deferred; see the
+                    // references implementation doc).
+                    if !self.types.is_error(elem) {
+                        self.push_error(TypeError::invalid_borrow_target(
+                            inner.span,
+                            format!(
+                                "cannot form a reference to `{}`; reference-to-reference types are not supported",
+                                self.display(elem)
+                            ),
+                        ));
+                    }
+                    self.types.push(TypeKind::Error)
+                } else {
+                    self.types.push(TypeKind::Ref {
+                        mutable: *mutable,
+                        elem,
+                    })
+                }
             }
             TyKind::Array { elem, len } => {
                 let elem = self.resolve_type(elem);
@@ -991,6 +1046,32 @@ impl<'a> Checker<'a> {
                 let operand_ty = self.expr_type(operand);
                 self.check_unary(*op, operand_ty, expr.span)
             }
+            ExprKind::Borrow { mutable, operand } => {
+                let operand_ty = self.expr_type(operand);
+                let canon = self.types.canonical(operand_ty);
+                if matches!(self.types.kind(canon), Some(TypeKind::Infer(_))) {
+                    // Deferred: the operand is an unresolved inference
+                    // variable (a function parameter not yet pinned by a
+                    // call site); re-typed by
+                    // `resolve_deferred_members` once it resolves.
+                    self.deferred.push(expr.span);
+                    self.types.push(TypeKind::Infer(None))
+                } else {
+                    self.check_borrow(*mutable, operand, operand_ty, expr.span)
+                }
+            }
+            ExprKind::Deref { operand } => {
+                let operand_ty = self.expr_type(operand);
+                let canon = self.types.canonical(operand_ty);
+                if matches!(self.types.kind(canon), Some(TypeKind::Infer(_))) {
+                    // Deferred: the operand is an unresolved inference
+                    // variable; re-typed once it resolves.
+                    self.deferred.push(expr.span);
+                    self.types.push(TypeKind::Infer(None))
+                } else {
+                    self.check_deref(operand_ty, expr.span)
+                }
+            }
             ExprKind::Binary { op, lhs, rhs } => {
                 let lhs_ty = self.expr_type(lhs);
                 let rhs_ty = self.expr_type(rhs);
@@ -1120,6 +1201,77 @@ impl<'a> Checker<'a> {
                     Ok(_) => expected,
                     Err(_) => self.unary_error(op, canon, span),
                 }
+            }
+        }
+    }
+
+    /// Types a borrow expression: `&operand` (shared, `mutable: false`)
+    /// or `&mut operand` (exclusive, `mutable: true`). The operand must be
+    /// a borrowable place (not a reference, not a deref, not a value):
+    /// violations are `E-T19`. The result is the corresponding reference
+    /// type; borrow *conflicts* are the ownership stage's concern
+    /// (`E-S12`/`E-S13`).
+    fn check_borrow(
+        &mut self,
+        mutable: bool,
+        operand: &Expr,
+        operand_ty: TypeId,
+        span: Span,
+    ) -> TypeId {
+        let canon = self.types.canonical(operand_ty);
+        if self.types.is_error(canon) {
+            return self.types.push(TypeKind::Error);
+        }
+        if matches!(self.types.kind(canon), Some(TypeKind::Ref { .. })) {
+            self.push_error(TypeError::invalid_borrow_target(
+                span,
+                format!(
+                    "cannot borrow `{}`: it is already a reference (no reference-to-reference types)",
+                    self.display(canon)
+                ),
+            ));
+            return self.types.push(TypeKind::Error);
+        }
+        if !self.is_borrowable_place(operand) {
+            self.push_error(TypeError::invalid_borrow_target(
+                span,
+                "cannot borrow a non-place value; borrow a variable, member, or element"
+                    .to_string(),
+            ));
+            return self.types.push(TypeKind::Error);
+        }
+        self.types.push(TypeKind::Ref {
+            mutable,
+            elem: canon,
+        })
+    }
+
+    /// Whether `expr` is a borrowable place: an identifier, a member or
+    /// index chain rooted at one, or a group of one. Deref-rooted places
+    /// (`*r`, `(*r).x`) are deliberately excluded this session
+    /// (reborrowing is deferred — E-T19).
+    fn is_borrowable_place(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Ident(_) => true,
+            ExprKind::Member { base, .. } | ExprKind::Index { base, .. } => {
+                self.is_borrowable_place(base)
+            }
+            ExprKind::Group(inner) => self.is_borrowable_place(inner),
+            _ => false,
+        }
+    }
+
+    /// Types a dereference: `*operand`. The operand must be a reference
+    /// (`&T` or `&mut T`); the result is the referent type. Dereferencing a
+    /// non-reference is `E-T20`.
+    fn check_deref(&mut self, operand_ty: TypeId, span: Span) -> TypeId {
+        let canon = self.types.canonical(operand_ty);
+        match self.types.kind(canon) {
+            Some(TypeKind::Ref { elem, .. }) => *elem,
+            Some(TypeKind::Error) | None => self.types.push(TypeKind::Error),
+            _ => {
+                self.push_error(TypeError::deref_non_reference(span, self.display(canon)));
+                self.types.push(TypeKind::Error)
             }
         }
     }
@@ -1541,6 +1693,51 @@ impl<'a> Checker<'a> {
                     }
                 }
                 self.check_value_for_target(op, target_ty, value_ty, value_span, span, target.span)
+            }
+            ExprKind::Deref { operand } => {
+                let operand_ty = self.expr_type(operand);
+                let canon = self.types.canonical(operand_ty);
+                // Snapshot the mutability before mutating `self` (the
+                // match on `self.types` borrows it).
+                let through_mut = matches!(
+                    self.types.kind(canon),
+                    Some(TypeKind::Ref { mutable: true, .. })
+                );
+                let through_shared = matches!(
+                    self.types.kind(canon),
+                    Some(TypeKind::Ref { mutable: false, .. })
+                );
+                if through_mut {
+                    // `*r = v` through `&mut T`: value must match T (the
+                    // referent type). Record the target's referent type
+                    // (mirroring the Ident/Member/Index arms, which record
+                    // via `expr_type`) so HIR lowering finds a type for
+                    // the `*r` place.
+                    let target_ty = match self.types.kind(canon) {
+                        Some(TypeKind::Ref { elem, .. }) => *elem,
+                        _ => self.types.push(TypeKind::Error),
+                    };
+                    self.expr_types.push((target.span, target_ty));
+                    self.check_value_for_target(
+                        op,
+                        target_ty,
+                        value_ty,
+                        value_span,
+                        span,
+                        target.span,
+                    )
+                } else if through_shared {
+                    // Writes through an immutable reference are always
+                    // wrong, even when the value type happens to match.
+                    self.push_error(TypeError::assign_through_immutable_ref(target.span));
+                    self.expr_types
+                        .push((target.span, self.types.push(TypeKind::Error)));
+                    self.types.push(TypeKind::Error)
+                } else {
+                    self.expr_types
+                        .push((target.span, self.types.push(TypeKind::Error)));
+                    self.types.push(TypeKind::Error)
+                }
             }
             _ => {
                 // Defensive: the parser rejects non-place targets.

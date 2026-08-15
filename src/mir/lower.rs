@@ -313,6 +313,26 @@ impl<'a> StmtEval<'a> {
                 let args = args.iter().map(|arg| self.eval_operand(arg)).collect();
                 self.temp_rvalue(expr, MirRvalueKind::Call { callee, args })
             }
+            HirExprKind::Borrow { mutable, operand } => {
+                // `&place` / `&mut place`: the address of the local-rooted
+                // place. Module-storage roots have no stack address and are
+                // rejected here (the checker already rejects non-places).
+                let Some((root, steps)) = self.place_path(operand) else {
+                    return self.borrow_target_error(expr);
+                };
+                self.temp_rvalue(
+                    expr,
+                    MirRvalueKind::RefAddr {
+                        mutable: *mutable,
+                        root,
+                        steps,
+                    },
+                )
+            }
+            HirExprKind::Deref { operand } => {
+                let operand = self.eval_operand(operand);
+                self.temp_rvalue(expr, MirRvalueKind::Deref { operand })
+            }
             HirExprKind::Member { base, member } => {
                 let base = self.eval_operand(base);
                 self.temp_rvalue(
@@ -582,7 +602,33 @@ impl<'a> StmtEval<'a> {
                     ty: expr.ty,
                 })
             }
+            HirExprKind::Deref { operand } => {
+                // `*r = v`: the storage addressed by reference `r`.
+                let operand = self.eval_operand(operand);
+                Ok(MirTarget {
+                    kind: MirTargetKind::Deref { operand },
+                    span: expr.span,
+                    ty: expr.ty,
+                })
+            }
             _ => Err(MirError::invalid_assignment_target(expr.span)),
+        }
+    }
+
+    /// Reports an invalid borrow target (a place not rooted at a local)
+    /// and returns a poisoned operand so lowering can continue reporting
+    /// independent problems. The checker already rejects non-place borrows;
+    /// this is the defensive MIR-level gate for module-storage roots.
+    fn borrow_target_error(&mut self, expr: &HirExpr) -> MirOperand {
+        self.errors.push(MirError::invalid_borrow_target(expr.span));
+        MirOperand {
+            kind: MirOperandKind::Constant(MirConstant {
+                kind: MirConstantKind::Int,
+                span: expr.span,
+                ty: expr.ty,
+            }),
+            span: expr.span,
+            ty: expr.ty,
         }
     }
 
@@ -674,6 +720,12 @@ impl<'a> StmtEval<'a> {
                     current = self.loaded_operand_from(step.span, kind, step_ty);
                 }
                 current
+            }
+            MirTargetKind::Deref { operand } => {
+                let kind = MirRvalueKind::Deref {
+                    operand: operand.clone(),
+                };
+                self.loaded_operand(target, kind)
             }
         }
     }

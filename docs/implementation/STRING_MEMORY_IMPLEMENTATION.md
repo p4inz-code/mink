@@ -197,7 +197,7 @@ string-data region. A bad index is the new `E-R09`:
   printing (including escapes and UTF-8), `rt_str_alloc` round trips,
   zero-fill, and every string error path.
 
-Full suite after session 15: **803 tests**, all passing (see
+Full suite after session 16: **878 tests**, all passing (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
 
 ## 10. Known limitations

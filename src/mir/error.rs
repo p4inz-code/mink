@@ -12,7 +12,7 @@
 //! MIR instead of panicking. Both classes are reported structurally, in
 //! deterministic order, with stable machine-readable codes.
 //!
-//! Codes `E-M01` … `E-M11` continue the established stable ranges (`E-L*`
+//! Codes `E-M01` … `E-M12` continue the established stable ranges (`E-L*`
 //! lexical, `E-P*` syntax, `E-S*` semantic, `E-T*` type, `E-H*` HIR); the
 //! full catalog is in `docs/implementation/MIR_IMPLEMENTATION.md`.
 
@@ -41,6 +41,10 @@ pub enum MirErrorKind {
     UnresolvedLocal,
     /// An assignment target is not a place expression.
     InvalidAssignmentTarget,
+    /// A borrow target is not a local-rooted place (session 16): the
+    /// checker rejects non-place borrows, so the error path is defensive
+    /// (module-storage roots have no stack address).
+    InvalidBorrowTarget,
     /// A block was left without a terminator. Blocks are built with exactly
     /// one terminator by construction, so this only occurs through an
     /// internal builder error.
@@ -73,6 +77,7 @@ impl MirErrorKind {
             Self::InvalidTypeReference => "E-M09",
             Self::BlockIdMismatch => "E-M10",
             Self::ParamLocalMismatch => "E-M11",
+            Self::InvalidBorrowTarget => "E-M12",
         }
     }
 }
@@ -129,6 +134,17 @@ impl MirError {
     pub fn invalid_assignment_target(span: Span) -> Self {
         Self {
             kind: MirErrorKind::InvalidAssignmentTarget,
+            span,
+            detail: None,
+        }
+    }
+
+    /// Creates an invalid-borrow-target error at `span` (`E-M12`): the
+    /// borrowed place is not rooted at a local (module storage has no
+    /// stack address to borrow).
+    pub fn invalid_borrow_target(span: Span) -> Self {
+        Self {
+            kind: MirErrorKind::InvalidBorrowTarget,
             span,
             detail: None,
         }
@@ -225,6 +241,9 @@ impl fmt::Display for MirError {
             }
             MirErrorKind::InvalidAssignmentTarget => {
                 f.write_str("cannot lower: invalid assignment target")
+            }
+            MirErrorKind::InvalidBorrowTarget => {
+                f.write_str("cannot lower: borrow target is not a local-rooted place")
             }
             MirErrorKind::MissingTerminator => {
                 f.write_str("cannot lower: block is missing a terminator")

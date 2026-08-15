@@ -260,10 +260,11 @@ All errors carry exact source spans and structured messages.
   and negative indices), bool fields, struct copy semantics, structs
   containing strings, struct arguments, and byte-identical image
   determinism.
-- Existing suite: full `cargo test` passes **803 tests** (703 before
+- Existing suite: full `cargo test` passes **878 tests** (703 before
   Session 14 + 59 new aggregate tests + 41 ownership tests from Session
-  15). See `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for
-  the per-file breakdown.
+  15 + 75 reference/borrowing tests from Session 16). See
+  `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
+  per-file breakdown.
 
 ## 9. Known limitations
 
