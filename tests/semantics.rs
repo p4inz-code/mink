@@ -19,6 +19,12 @@ use mink::semantics::{
 };
 use mink::source::{SourceId, SourceMap, Span};
 
+/// The number of predeclared runtime intrinsics (the semantic analyzer
+/// binds one symbol per entry of the runtime intrinsic table before any
+/// source declaration). Computed from the table so adding an intrinsic
+/// never requires recounting this file.
+const INTRINSICS: usize = mink::runtime::intrinsics::ALL.len();
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -245,7 +251,7 @@ fn empty_program_analyzes() {
     let (_sources, _ast, result) = analyze("");
     assert!(!result.has_errors());
     // Only the predeclared runtime intrinsics are present.
-    assert_eq!(result.symbols().len(), 6);
+    assert_eq!(result.symbols().len(), INTRINSICS);
     assert!(result.resolutions().is_empty());
 }
 
@@ -253,15 +259,15 @@ fn empty_program_analyzes() {
 fn module_declarations_analyze() {
     let (_sources, _ast, result) = analyze("let x = 1; const y = 2; fn f() {}");
     assert!(!result.has_errors());
-    // The three declarations plus the six predeclared intrinsics.
-    assert_eq!(result.symbols().len(), 9);
+    // The three declarations plus the predeclared intrinsics.
+    assert_eq!(result.symbols().len(), 3 + INTRINSICS);
     // The module scope holds all three declarations (after the intrinsics).
     let module = result
         .scopes()
         .iter()
         .find(|s| s.kind == ScopeKind::Module)
         .unwrap();
-    assert_eq!(module.symbols().len(), 9);
+    assert_eq!(module.symbols().len(), 3 + INTRINSICS);
 }
 
 #[test]
@@ -374,8 +380,8 @@ fn multiple_independent_scopes() {
     let src = "fn f() { if true { let a = 1; } else { let a = 2; } let b = 3; }";
     let (_sources, _ast, result) = analyze(src);
     assert!(!result.has_errors());
-    // f, the two sibling `a` bindings, and `b`, plus the six intrinsics.
-    assert_eq!(result.symbols().len(), 10);
+    // f, the two sibling `a` bindings, and `b`, plus the intrinsics.
+    assert_eq!(result.symbols().len(), 4 + INTRINSICS);
 }
 
 #[test]
@@ -402,7 +408,7 @@ fn module_binding_visible_in_its_own_initializer() {
     let src = "let x = x;";
     let (_sources, _ast, result) = analyze(src);
     assert!(!result.has_errors());
-    assert_eq!(result.symbols().len(), 7); // x plus the six intrinsics
+    assert_eq!(result.symbols().len(), 1 + INTRINSICS); // x plus the intrinsics
     // The initializer reference resolves to the binding itself.
     assert_eq!(result.resolutions().len(), 1);
     let x = symbol(&result, "x");
@@ -861,7 +867,7 @@ fn errors_do_not_stop_module_analysis() {
         2
     );
     // All three module declarations are still collected (plus intrinsics).
-    assert_eq!(result.symbols().len(), 10); // a, f, b, c + 6 intrinsics
+    assert_eq!(result.symbols().len(), 4 + INTRINSICS); // a, f, b, c + intrinsics
 }
 
 // ---------------------------------------------------------------------------
@@ -1026,7 +1032,7 @@ fn driver_check_exposes_semantic_result_for_valid_source() {
     assert!(report.errors.is_empty());
     let semantic = report.semantic.expect("semantics ran for valid source");
     assert!(!semantic.has_errors());
-    assert_eq!(semantic.symbols().len(), 9); // base, f, x + 6 intrinsics
+    assert_eq!(semantic.symbols().len(), 3 + INTRINSICS); // base, f, x + intrinsics
     // The reference to `base` inside `f` resolves.
     assert!(!semantic.resolutions().is_empty());
 }
@@ -1112,8 +1118,8 @@ fn many_declarations_and_references_scale() {
     }
     let (_sources, _ast, result) = analyze(&src);
     assert!(!result.has_errors());
-    // const + 200 functions + 200 locals + 6 intrinsics.
-    assert_eq!(result.symbols().len(), 407);
+    // const + 200 functions + 200 locals + the intrinsics.
+    assert_eq!(result.symbols().len(), 401 + INTRINSICS);
     // 200 uses of `base` + 200 uses of each `v`.
     assert_eq!(result.resolutions().len(), 400);
 }

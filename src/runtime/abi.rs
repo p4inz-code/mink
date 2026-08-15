@@ -101,6 +101,13 @@ pub struct RuntimeLayout {
     pub bytes_written: u64,
     /// Scratch buffer for decimal conversion in `rt_print_int` (32 bytes).
     pub print_buf: u64,
+    /// Start of the image's immutable string-data region (an absolute
+    /// address, written by `rt_init`). String blobs (length prefix + UTF-8
+    /// bytes) live here; the bounds let the string intrinsics validate
+    /// literal strings and distinguish them from heap blobs.
+    pub str_data_start: u64,
+    /// One past the end of the image's immutable string-data region.
+    pub str_data_end: u64,
     /// The heap arena, 16-byte aligned.
     pub arena: u64,
     /// The liveness table: `MAX_LIVE_ALLOCS` entries of
@@ -119,9 +126,11 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
     stderr_handle: 32,
     bytes_written: 40,
     print_buf: 48,
-    arena: 80,
-    table: 80 + HEAP_SIZE,
-    size: 80 + HEAP_SIZE + LIVE_TABLE_BYTES,
+    str_data_start: 80,
+    str_data_end: 88,
+    arena: 96,
+    table: 96 + HEAP_SIZE,
+    size: 96 + HEAP_SIZE + LIVE_TABLE_BYTES,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

@@ -197,6 +197,84 @@ impl Allocator {
     pub fn leaks(&self) -> Vec<LiveEntry> {
         self.table.iter().flatten().copied().collect()
     }
+
+    // ------------------------------------------------------------------
+    // String blobs
+    // ------------------------------------------------------------------
+
+    /// Allocates a string blob of `size` bytes: a heap block of `8 + size`
+    /// bytes whose first word holds the length prefix `size` (little-
+    /// endian). The data bytes are zero on fresh bumps and retain old
+    /// contents on free-list reuse, matching [`Allocator::alloc`]. A
+    /// negative size (an `i64` value with the sign bit set) is rejected
+    /// with `E-R08`, mirroring the machine runtime's `StrAlloc` guard.
+    /// Errors: the same as [`Allocator::alloc`] (`E-R02`/`E-R03`/`E-R08`).
+    pub fn alloc_string(&mut self, size: u64) -> Result<u64, RuntimeError> {
+        if size > i64::MAX as u64 {
+            return Err(RuntimeError::new(RuntimeErrorKind::InvalidSize, Some(size)));
+        }
+        let start = self.alloc(size + WORD_SIZE)?;
+        self.memory[start as usize..start as usize + 8].copy_from_slice(&size.to_le_bytes());
+        Ok(start)
+    }
+
+    /// The byte length of the string blob at `s`: the length prefix of a
+    /// live heap block. A pointer that is not the exact start of a live
+    /// block (a freed string, an interior pointer, a literal address — the
+    /// machine runtime additionally accepts image literals, which the
+    /// reference model does not contain) is an out-of-bounds error
+    /// (`E-R05`).
+    pub fn string_len(&self, s: u64) -> Result<u64, RuntimeError> {
+        self.check_string(s)?;
+        Ok(u64::from_le_bytes(
+            self.memory[s as usize..s as usize + 8].try_into().unwrap(),
+        ))
+    }
+
+    /// The byte at `index` of the string blob at `s`, bounds-checked
+    /// against the length prefix. A bad index is `E-R09`; a bad pointer is
+    /// `E-R05`.
+    pub fn string_byte(&self, s: u64, index: u64) -> Result<u8, RuntimeError> {
+        let len = self.string_len(s)?;
+        if index >= len {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::StringIndexOutOfRange,
+                Some(index),
+            ));
+        }
+        Ok(self.memory[s as usize + 8 + index as usize])
+    }
+
+    /// Writes the byte `value` at `index` of the string blob at `s`,
+    /// bounds-checked against the length prefix. A bad index is `E-R09`; a
+    /// bad pointer is `E-R05`.
+    pub fn set_string_byte(&mut self, s: u64, index: u64, value: u8) -> Result<(), RuntimeError> {
+        let len = self.string_len(s)?;
+        if index >= len {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::StringIndexOutOfRange,
+                Some(index),
+            ));
+        }
+        self.memory[s as usize + 8 + index as usize] = value;
+        Ok(())
+    }
+
+    /// Validates that `s` is the exact start of a live heap block large
+    /// enough to hold its length prefix, mirroring the machine runtime's
+    /// heap-string validation (`E-R05` otherwise).
+    fn check_string(&self, s: u64) -> Result<(), RuntimeError> {
+        let valid = self
+            .table
+            .iter()
+            .flatten()
+            .any(|entry| entry.start == s && entry.size >= WORD_SIZE);
+        if valid {
+            Ok(())
+        } else {
+            Err(RuntimeError::new(RuntimeErrorKind::OutOfBounds, Some(s)))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -427,5 +505,101 @@ mod tests {
         assert_eq!(std::mem::size_of::<LiveEntry>(), 16);
         const _: () = assert!(crate::runtime::abi::LIVE_ENTRY_BYTES >= 16);
         assert_eq!(HEAP_SIZE % ALLOC_ALIGNMENT, 0);
+    }
+
+    #[test]
+    fn alloc_string_writes_the_length_prefix() {
+        let mut heap = Allocator::new();
+        let s = heap.alloc_string(3).unwrap();
+        assert_eq!(heap.string_len(s).unwrap(), 3);
+        // The block is 8 + 3 → 16 aligned bytes.
+        assert_eq!(heap.live_entries().next().unwrap().size, ALLOC_ALIGNMENT);
+    }
+
+    #[test]
+    fn string_bytes_round_trip() {
+        let mut heap = Allocator::new();
+        let s = heap.alloc_string(5).unwrap();
+        for (index, byte) in b"hello".iter().enumerate() {
+            heap.set_string_byte(s, index as u64, *byte).unwrap();
+        }
+        let mut bytes = Vec::new();
+        for index in 0..5u64 {
+            bytes.push(heap.string_byte(s, index).unwrap());
+        }
+        assert_eq!(bytes, b"hello");
+    }
+
+    #[test]
+    fn string_index_out_of_range_is_e_ro9() {
+        let mut heap = Allocator::new();
+        let s = heap.alloc_string(4).unwrap();
+        assert_eq!(
+            heap.string_byte(s, 4).unwrap_err().kind(),
+            RuntimeErrorKind::StringIndexOutOfRange
+        );
+        assert_eq!(
+            heap.set_string_byte(s, 4, 1).unwrap_err().kind(),
+            RuntimeErrorKind::StringIndexOutOfRange
+        );
+        assert_eq!(
+            heap.string_byte(s, 5).unwrap_err().kind(),
+            RuntimeErrorKind::StringIndexOutOfRange
+        );
+    }
+
+    #[test]
+    fn string_allocation_of_negative_size_is_e_ro8() {
+        let mut heap = Allocator::new();
+        // The machine runtime's `StrAlloc` rejects sizes with the sign bit
+        // set; the reference mirrors that guard (no wrap-around).
+        assert_eq!(
+            heap.alloc_string(u64::MAX).unwrap_err().kind(),
+            RuntimeErrorKind::InvalidSize
+        );
+        assert_eq!(
+            heap.alloc_string(i64::MAX as u64 + 1).unwrap_err().kind(),
+            RuntimeErrorKind::InvalidSize
+        );
+    }
+
+    #[test]
+    fn string_ops_on_freed_or_foreign_blocks_are_e_ro5() {
+        let mut heap = Allocator::new();
+        let s = heap.alloc_string(4).unwrap();
+        let block = heap.alloc(16).unwrap();
+        // Any live block start reads as a string: block kinds are not
+        // tracked (the type system prevents word blocks from reaching the
+        // string intrinsics). The word block's first word is zero-filled.
+        assert_eq!(heap.string_len(block).unwrap(), 0);
+        // A freed string is dead: reads are out-of-bounds.
+        heap.free(s).unwrap();
+        assert_eq!(
+            heap.string_len(s).unwrap_err().kind(),
+            RuntimeErrorKind::OutOfBounds
+        );
+        assert_eq!(
+            heap.string_byte(s, 0).unwrap_err().kind(),
+            RuntimeErrorKind::OutOfBounds
+        );
+        // A pointer that was never allocated is out-of-bounds too.
+        assert_eq!(
+            heap.string_len(4096).unwrap_err().kind(),
+            RuntimeErrorKind::OutOfBounds
+        );
+    }
+
+    #[test]
+    fn string_allocation_is_deterministic() {
+        let mut first = Allocator::new();
+        let mut second = Allocator::new();
+        for size in [0u64, 1, 8, 33] {
+            assert_eq!(
+                first.alloc_string(size).unwrap(),
+                second.alloc_string(size).unwrap()
+            );
+        }
+        // Zero-length strings are valid: an 8-byte length prefix only.
+        assert_eq!(first.string_len(0).unwrap(), 0);
     }
 }

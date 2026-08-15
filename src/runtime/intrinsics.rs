@@ -11,28 +11,48 @@
 //!
 //! The intrinsics:
 //!
-//! - `rt_alloc(size) -> Int` — allocate a 16-byte-aligned block of at
-//!   least `size` bytes; returns the block's address as an integer, or
-//!   terminates with a runtime error;
-//! - `rt_free(ptr)` — deallocate the block at `ptr` (must be the exact
-//!   start of a live allocation);
-//! - `rt_mem_load(addr) -> Int` — load the 8-byte word at `addr`;
-//! - `rt_mem_store(addr, value)` — store the 8-byte word `value` at
-//!   `addr`;
-//! - `rt_exit(code)` — terminate the process with exit code `code` after
-//!   verifying there are no leaks;
-//! - `rt_print_int(value)` — write the decimal representation of `value`
-//!   plus a newline to stdout.
+//! - `rt_alloc(size: Int) -> Ptr<Int>` — allocate a 16-byte-aligned block
+//!   of at least `size` bytes; returns the block's address as a typed
+//!   pointer (or terminates with a runtime error);
+//! - `rt_free(ptr: Ptr<Int>)` — deallocate the block at `ptr` (must be the
+//!   exact start of a live allocation);
+//! - `rt_mem_load(ptr: Ptr<Int>) -> Int` — load the 8-byte word at `ptr`;
+//! - `rt_mem_store(ptr: Ptr<Int>, value: Int)` — store the 8-byte word
+//!   `value` at `ptr`;
+//! - `rt_str_alloc(size: Int) -> Str` — allocate a zero-initialized string
+//!   blob of `size` bytes (a length-prefixed heap block) and return it;
+//! - `rt_str_free(s: Str)` — deallocate the string blob at `s`;
+//! - `rt_str_len(s: Str) -> Int` — the byte length of `s`;
+//! - `rt_str_byte(s: Str, index: Int) -> Int` — the byte of `s` at
+//!   `index` (0-based, bounds-checked);
+//! - `rt_str_set_byte(s: Str, index: Int, value: Int)` — write the byte
+//!   `value` of `s` at `index` (heap strings only; immutable literals are
+//!   rejected);
+//! - `rt_print_str(s: Str)` — write the bytes of `s` plus a newline to
+//!   stdout;
+//! - `rt_exit(code: Int)` — terminate the process with exit code `code`
+//!   after verifying there are no leaks;
+//! - `rt_print_int(value: Int)` — write the decimal representation of
+//!   `value` plus a newline to stdout.
 //!
-//! Addresses are represented as integers; dereferencing goes through the
-//! validated `rt_mem_load`/`rt_mem_store` accessors, so every memory
-//! operation is checked against the liveness table (see [`allocator`](super::allocator)).
+//! Addresses are typed pointers (`Ptr<Int>`), distinct from strings
+//! (`Str`). Dereferencing goes through the validated `rt_mem_load` /
+//! `rt_mem_store` accessors, so every memory operation is checked against
+//! the liveness table (see [`allocator`](super::allocator)), and string
+//! operations validate their targets against the liveness table and the
+//! image's immutable string-data region.
 
 /// The type of an intrinsic parameter or result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntrinsicType {
-    /// A 64-bit integer (addresses and sizes are integers).
+    /// A 64-bit integer (sizes, indices, and word values).
     Int,
+    /// A typed pointer to a word (`Ptr<Int>`): the type of a heap-block
+    /// address in the runtime model. The pointer element types the model
+    /// needs are a closed set; today only `Ptr<Int>` occurs.
+    Ptr,
+    /// A string value (the address of a length-prefixed byte blob).
+    Str,
     /// No value (the intrinsic produces nothing).
     Unit,
 }
@@ -71,21 +91,51 @@ pub const ALL: &[Intrinsic] = &[
     Intrinsic {
         name: "rt_alloc",
         params: &[IntrinsicType::Int],
-        result: IntrinsicType::Int,
+        result: IntrinsicType::Ptr,
     },
     Intrinsic {
         name: "rt_free",
-        params: &[IntrinsicType::Int],
+        params: &[IntrinsicType::Ptr],
         result: IntrinsicType::Unit,
     },
     Intrinsic {
         name: "rt_mem_load",
-        params: &[IntrinsicType::Int],
+        params: &[IntrinsicType::Ptr],
         result: IntrinsicType::Int,
     },
     Intrinsic {
         name: "rt_mem_store",
-        params: &[IntrinsicType::Int, IntrinsicType::Int],
+        params: &[IntrinsicType::Ptr, IntrinsicType::Int],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_str_alloc",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_str_free",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_str_len",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_str_byte",
+        params: &[IntrinsicType::Str, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_str_set_byte",
+        params: &[IntrinsicType::Str, IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_print_str",
+        params: &[IntrinsicType::Str],
         result: IntrinsicType::Unit,
     },
     Intrinsic {

@@ -229,5 +229,6 @@ Full suite after session 09: **537 tests** (58 CLI + 50 lexer + 88 parser +
 62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR +
 34 MIR + 14 lib unit tests), all passing. After session 10 (optimization)
 the suite is **585 tests**, after session 11 (native backend) it is
-**622 tests**, and after session 12 (native runtime foundation) it is
-**654 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).
+**622 tests**, after session 12 (native runtime foundation) it is
+**654 tests**, and after session 13 (string + memory types) it is
+**700 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).

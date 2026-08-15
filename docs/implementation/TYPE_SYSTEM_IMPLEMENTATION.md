@@ -70,8 +70,10 @@ ids ([`TypeId`]). [`TypeKind`] is the kind of a type:
 | `Float`               | Floating-point values                                      |
 | `Bool`                | Boolean values                                             |
 | `Char`                | A single Unicode scalar value                              |
-| `Str`                 | A string of Unicode scalar values                          |
+| `Str`                 | A string of Unicode scalar values (a word: the address of a length-prefixed UTF-8 blob) |
 | `Null`                | The `null` literal; a distinct concrete type               |
+| `Ptr(element)`        | A typed pointer to `element` (interned; only `Ptr<Int>` is instantiable today) |
+| `Unit`                | No value (intrinsic results such as `rt_free`)             |
 | `Range(element)`      | `start..end` / `start..=end` over values of `element`      |
 | `Fn { params, result }` | A function type                                          |
 | `Infer(Option<TypeId>)` | An inference variable; `Some(target)` once resolved       |
@@ -301,6 +303,25 @@ comparison/equality (result `Bool`) and arithmetic (result is the operand
 type) cannot pin and leave the linked operands unresolved. An `Error`
 operand poisons the result silently (§8).
 
+### 13.3 Pointers and strings (session 13)
+
+- **Byte-addressed pointer arithmetic** — `p + n`, `n + p`, `p - n` with
+  `p: Ptr<T>` and `n: Int` produce `Ptr<T>`; the address advances by `n`
+  bytes. `p + q`, `p - q`, `p + true`, and any other combination are
+  `E-T02` invalid-operator errors. Pointer subtraction is deliberately not
+  specified.
+- **Pointer equality** — `p == q` / `p != q` (two pointers, any element)
+  produce `Bool`; a pointer compared with an `Int` or any other type is
+  rejected. The unconstrained operand of a pointer equality adopts the
+  pointer type.
+- **Strings are scalar but not numeric** — `Str` participates in equality
+  (`s == s` is `Bool`) and nothing else: `s + 1` is `E-T02`.
+- **Null pointer constant** — the integer literal `0`, and only that
+  literal, is accepted in pointer-typed argument positions (§17); a
+  computed `Int` is never a pointer, and `let p = 0` types `p` as `Int`.
+  The checker identifies the literal through the source map (plumbed into
+  `check`), so no reinterpretation of arbitrary values occurs.
+
 ### 13.1 Numeric mixing — documented decision
 
 MINK defines **no implicit numeric conversions at this stage**. Mixed
@@ -371,6 +392,10 @@ Call checking is real but bounded by what the current type model supports:
   parameters are inference variables shared with the body, a call can
   conflict with a constraint the body imposed (`fn f(p) { p + 1; }` then
   `f(true)` is an error);
+- **the null pointer constant** — a pointer-typed parameter additionally
+  accepts the integer literal `0` (identified via the source map); every
+  other value must unify with the pointer type, so `Str` never feeds the
+  raw memory intrinsics and `Ptr<Int>` never feeds the string intrinsics;
 - the call's type is the function's result, propagated to the caller.
 
 Function types carry parameter and result types; there is no closure,
@@ -481,10 +506,13 @@ Compiler input is untrusted. The checker:
 
 ## 24. Tests
 
-Coverage lives in `tests/typecheck.rs` (122 tests) and the type CLI smoke
+Coverage lives in `tests/typecheck.rs` (143 tests) and the type CLI smoke
 tests in `tests/cli.rs` (16 type tests). Session 07 added the inference
-categories in `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md` §7.
-Categories:
+categories in `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md` §7;
+session 13 added the strings-and-pointers categories (pointer typing,
+byte-addressed arithmetic, pointer equality, the null-pointer-`0` rule,
+and every rejection path) documented in
+`STRING_MEMORY_IMPLEMENTATION.md`. Categories:
 
 - **Literals**: integer/float/string/char/bool/null typing and expression
   recording.

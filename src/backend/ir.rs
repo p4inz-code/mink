@@ -33,12 +33,11 @@ use super::error::BackendError;
 /// A value type the backend can represent on a machine.
 ///
 /// This is the closed classification of the MINK types the first native
-/// subset supports: 64-bit integers, booleans (stored as `0`/`1`), and
-/// integer ranges (stored as a two-word value). `Unit` is the type of a
-/// function that produces no value (a bare `return;`, falling off the
-/// end, or a runtime intrinsic that produces nothing). Every other MINK
-/// type (`Float`, `Str`, `Char`, `Null`, unresolved inference types) is
-/// rejected at lowering.
+/// subset supports: 64-bit integers, booleans (stored as `0`/`1`), integer
+/// ranges (stored as a two-word value), typed pointers and strings (each a
+/// single word holding an address), and `Unit` (the type of a function that
+/// produces no value). Every other MINK type (`Float`, `Char`, `Null`,
+/// unresolved inference types) is rejected at lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BType {
     /// A 64-bit two's-complement integer.
@@ -48,6 +47,15 @@ pub enum BType {
     /// A range of integers: a two-word value carrying the (normalized)
     /// exclusive end and the iteration cursor.
     Range,
+    /// A typed pointer (`Ptr<Int>` in the current language): a single word
+    /// holding an address, produced by `rt_alloc` and consumed by the raw
+    /// memory intrinsics. Pointer arithmetic is byte-addressed; the
+    /// runtime validates alignment and bounds at every access.
+    Ptr,
+    /// A string: a single word holding the address of a length-prefixed
+    /// UTF-8 byte blob (immutable image data for literals, a heap block
+    /// for `rt_str_alloc` results).
+    Str,
     /// No value (a function that does not produce one).
     Unit,
 }
@@ -62,7 +70,7 @@ impl BType {
     /// slot or argument list.
     pub fn words(self) -> usize {
         match self {
-            Self::Int | Self::Bool | Self::Unit => 1,
+            Self::Int | Self::Bool | Self::Ptr | Self::Str | Self::Unit => 1,
             Self::Range => 2,
         }
     }
@@ -73,23 +81,42 @@ impl BType {
             Self::Int => "Int",
             Self::Bool => "Bool",
             Self::Range => "Range<Int>",
+            Self::Ptr => "Ptr<Int>",
+            Self::Str => "Str",
             Self::Unit => "unit",
         }
     }
 }
 
-/// A lowered backend program: functions and module bindings in source
-/// order.
+/// A lowered backend program: functions, module bindings, and string
+/// literals in source order.
 ///
 /// The program is self-contained: it owns every value its instructions
-/// reference (locals are per-function, statics are owned here, and
-/// function/static references are indices into the corresponding lists).
+/// reference (locals are per-function, statics and strings are owned here,
+/// and function/static/string references are indices into the
+/// corresponding lists).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BProgram {
     /// The functions, in source order.
     pub functions: Vec<BFunction>,
     /// The module-level `let`/`const` bindings, in source order.
     pub statics: Vec<BStatic>,
+    /// The string literals, in first-use order: the decoded UTF-8 byte
+    /// contents of every string literal in the program, plus its exact
+    /// source span. The emitter places each blob (length prefix + bytes)
+    /// into the image and [`BInstKind::LoadStr`] references it by index.
+    pub strings: Vec<BString>,
+}
+
+/// A decoded string literal: the immutable byte data the image will carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BString {
+    /// The decoded UTF-8 bytes of the literal (escapes already decoded;
+    /// the raw source text is recovered from `span`).
+    pub bytes: Vec<u8>,
+    /// The exact span of the literal token, preserved for diagnostics and
+    /// tooling.
+    pub span: Span,
 }
 
 /// A lowered function: a control-flow graph of blocks over a list of
@@ -227,6 +254,15 @@ pub enum BInstKind {
         /// Index into [`BProgram::statics`].
         static_index: usize,
     },
+    /// Load the address of string blob `string_index` (an index into
+    /// [`BProgram::strings`]) into `target`. The blob lives in the image's
+    /// immutable data; its address is the string value.
+    LoadStr {
+        /// The destination slot (a `Str` slot).
+        target: crate::mir::LocalId,
+        /// Index into [`BProgram::strings`].
+        string_index: usize,
+    },
     /// Store `src`'s value into the module binding `static_index`.
     StoreStatic {
         /// Index into [`BProgram::statics`].
@@ -324,17 +360,34 @@ pub enum BInstKind {
 /// `src/runtime/abi.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeService {
-    /// Runtime initialization: sets the bump cursor to the arena base and
-    /// resets the free list. Called by the entry stub before `main`.
+    /// Runtime initialization: sets the bump cursor to the arena base,
+    /// resets the free list, and records the immutable string-data bounds.
+    /// Called by the entry stub before `main`.
     Init,
-    /// `rt_alloc(size) -> Int`: allocate a 16-byte-aligned block.
+    /// `rt_alloc(size) -> Ptr<Int>`: allocate a 16-byte-aligned block.
     Alloc,
     /// `rt_free(ptr)`: deallocate a live block.
     Free,
-    /// `rt_mem_load(addr) -> Int`: load a validated 8-byte word.
+    /// `rt_mem_load(ptr) -> Int`: load a validated 8-byte word.
     MemLoad,
-    /// `rt_mem_store(addr, value)`: store a validated 8-byte word.
+    /// `rt_mem_store(ptr, value)`: store a validated 8-byte word.
     MemStore,
+    /// `rt_str_alloc(size) -> Str`: allocate a length-prefixed,
+    /// zero-initialized string blob of `size` bytes.
+    StrAlloc,
+    /// `rt_str_free(s)`: deallocate a live string blob.
+    StrFree,
+    /// `rt_str_len(s) -> Int`: the byte length of a validated string.
+    StrLen,
+    /// `rt_str_byte(s, index) -> Int`: the byte of a validated string at
+    /// `index` (`E-R09` when out of range).
+    StrByte,
+    /// `rt_str_set_byte(s, index, value)`: write a byte of a *heap*
+    /// string (`E-R09` when out of range; immutable literals are rejected).
+    StrSetByte,
+    /// `rt_print_str(s)`: write the bytes of a validated string plus a
+    /// newline to stdout.
+    PrintStr,
     /// `rt_exit(code)`: terminate with `code` after the leak check. Also
     /// the exit path the entry stub invokes with `main`'s result.
     Exit,
@@ -348,6 +401,14 @@ pub enum RuntimeService {
     WriteStdout,
     /// Internal: write `rcx`-pointed bytes of `rdx` length to stderr.
     WriteStderr,
+    /// Internal: validate a string pointer (`rax` in → `rax` out, or
+    /// `E-R05`). Accepts a live heap-block start or a pointer into the
+    /// image's immutable string-data region.
+    StrValidate,
+    /// Internal: validate a *mutable* string pointer (`rax` in → `rax`
+    /// out, or `E-R05`). Accepts only a live heap-block start; immutable
+    /// image strings are rejected.
+    StrValidateHeap,
 }
 
 impl RuntimeService {
@@ -355,9 +416,23 @@ impl RuntimeService {
     /// checker guarantees call-site arity; the verifier re-checks it.
     pub fn arity(self) -> usize {
         match self {
-            Self::Init | Self::Fail | Self::WriteStdout | Self::WriteStderr => 0,
-            Self::Alloc | Self::Free | Self::MemLoad | Self::Exit | Self::PrintInt => 1,
-            Self::MemStore => 2,
+            Self::Init
+            | Self::Fail
+            | Self::WriteStdout
+            | Self::WriteStderr
+            | Self::StrValidate
+            | Self::StrValidateHeap => 0,
+            Self::Alloc
+            | Self::Free
+            | Self::MemLoad
+            | Self::StrAlloc
+            | Self::StrFree
+            | Self::StrLen
+            | Self::PrintStr
+            | Self::Exit
+            | Self::PrintInt => 1,
+            Self::MemStore | Self::StrByte => 2,
+            Self::StrSetByte => 3,
         }
     }
 
@@ -366,7 +441,18 @@ impl RuntimeService {
     pub fn is_callable(self) -> bool {
         matches!(
             self,
-            Self::Alloc | Self::Free | Self::MemLoad | Self::MemStore | Self::Exit | Self::PrintInt
+            Self::Alloc
+                | Self::Free
+                | Self::MemLoad
+                | Self::MemStore
+                | Self::StrAlloc
+                | Self::StrFree
+                | Self::StrLen
+                | Self::StrByte
+                | Self::StrSetByte
+                | Self::PrintStr
+                | Self::Exit
+                | Self::PrintInt
         )
     }
 }

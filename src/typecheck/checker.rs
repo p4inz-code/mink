@@ -31,18 +31,19 @@ use crate::ast::{
     ItemKind, Stmt, StmtKind, UnaryOp,
 };
 use crate::semantics::{SemanticResult, SymbolId, SymbolKind};
-use crate::source::Span;
+use crate::source::{SourceMap, Span};
 
 use super::TypeResult;
 use super::error::TypeError;
 use super::ty::{TypeId, TypeKind, TypeTable};
 
-/// Runs type analysis over `ast`, consuming the semantic result.
+/// Runs type analysis over `ast`, consuming the semantic result and reading
+/// literal source text through `sources`.
 ///
 /// The analysis is deterministic: symbol types, expression types, and
 /// errors are produced in source order.
-pub(crate) fn check_ast(ast: &Ast, semantic: &SemanticResult) -> TypeResult {
-    let mut checker = Checker::new(ast, semantic);
+pub(crate) fn check_ast(ast: &Ast, semantic: &SemanticResult, sources: &SourceMap) -> TypeResult {
+    let mut checker = Checker::new(ast, semantic, sources);
     checker.run();
     checker.finish()
 }
@@ -85,6 +86,9 @@ impl OpCategory {
 struct Checker<'a> {
     ast: &'a Ast,
     semantic: &'a SemanticResult,
+    /// The source map, for reading literal source text (the
+    /// null-pointer-constant rule).
+    sources: &'a SourceMap,
     types: TypeTable,
     /// The type of every symbol, indexed by `SymbolId::raw()`.
     symbol_types: Vec<TypeId>,
@@ -99,13 +103,14 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
-    fn new(ast: &'a Ast, semantic: &'a SemanticResult) -> Self {
+    fn new(ast: &'a Ast, semantic: &'a SemanticResult, sources: &'a SourceMap) -> Self {
         let mut types = TypeTable::new();
         // Placeholder for symbol slots until pre-registration fills them.
         let placeholder = types.push(TypeKind::Error);
         Self {
             ast,
             semantic,
+            sources,
             types,
             symbol_types: vec![placeholder; semantic.symbols().len()],
             decls: HashMap::new(),
@@ -163,23 +168,31 @@ impl<'a> Checker<'a> {
     /// The concrete function type of a runtime intrinsic, from its
     /// declared signature. Intrinsics are typed concretely — not through
     /// inference variables — so calling `rt_free` produces `Unit` (which
-    /// cannot be used as a value) and calling `rt_alloc` produces `Int`.
+    /// cannot be used as a value), calling `rt_alloc` produces `Ptr<Int>`,
+    /// and the string intrinsics produce and consume `Str`.
     fn intrinsic_type(&mut self, symbol: &crate::semantics::Symbol) -> TypeId {
         let intrinsic = crate::runtime::intrinsics::by_name(&symbol.name)
             .expect("intrinsic symbols always have a registered signature");
         let params = intrinsic
             .params
             .iter()
-            .map(|param| match param {
-                crate::runtime::intrinsics::IntrinsicType::Int => self.types.push(TypeKind::Int),
-                crate::runtime::intrinsics::IntrinsicType::Unit => self.types.push(TypeKind::Unit),
-            })
+            .map(|param| self.intrinsic_kind_type(*param))
             .collect::<Vec<_>>();
-        let result = match intrinsic.result {
-            crate::runtime::intrinsics::IntrinsicType::Int => self.types.push(TypeKind::Int),
-            crate::runtime::intrinsics::IntrinsicType::Unit => self.types.push(TypeKind::Unit),
-        };
+        let result = self.intrinsic_kind_type(intrinsic.result);
         self.types.push(TypeKind::Fn { params, result })
+    }
+
+    /// The type id of an [`IntrinsicType`] in this checker's table.
+    fn intrinsic_kind_type(&mut self, kind: crate::runtime::intrinsics::IntrinsicType) -> TypeId {
+        match kind {
+            crate::runtime::intrinsics::IntrinsicType::Int => self.types.push(TypeKind::Int),
+            crate::runtime::intrinsics::IntrinsicType::Ptr => {
+                let elem = self.types.push(TypeKind::Int);
+                self.types.push(TypeKind::Ptr(elem))
+            }
+            crate::runtime::intrinsics::IntrinsicType::Str => self.types.push(TypeKind::Str),
+            crate::runtime::intrinsics::IntrinsicType::Unit => self.types.push(TypeKind::Unit),
+        }
     }
 
     // ------------------------------------------------------------------
@@ -398,11 +411,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.expr_type(callee);
-                let args: Vec<(Span, TypeId)> = args
-                    .iter()
-                    .map(|arg| (arg.span, self.expr_type(arg)))
-                    .collect();
-                self.check_call(callee, callee_ty, &args, expr.span)
+                self.check_call(callee, callee_ty, args, expr.span)
             }
             ExprKind::Member { base, .. } => {
                 let base_ty = self.expr_type(base);
@@ -586,21 +595,34 @@ impl<'a> Checker<'a> {
                     OpCategory::Arithmetic => Some(self.types.canonical(l)),
                 }
             }
-            (true, false) => self.rule_with_concrete(category, r, l),
-            (false, true) => self.rule_with_concrete(category, l, r),
-            (false, false) => self.rule_concrete(category, l, r),
+            (true, false) => self.rule_with_concrete(op, r, l, false),
+            (false, true) => self.rule_with_concrete(op, l, r, true),
+            (false, false) => self.rule_concrete(op, l, r),
         }
     }
 
-    /// The result of an operator (via `category`) with one concrete
-    /// operand `c` and one unconstrained variable `v`: the variable adopts
-    /// the operator's requirement. `None` when the concrete operand cannot
-    /// satisfy the operator.
-    fn rule_with_concrete(&mut self, category: OpCategory, c: TypeId, v: TypeId) -> Option<TypeId> {
+    /// Whether `id` denotes a pointer type (any element).
+    fn is_pointer(&self, id: TypeId) -> bool {
+        matches!(self.types.kind(id), Some(TypeKind::Ptr(_)))
+    }
+
+    /// The result of `op` with one concrete operand `c` and one
+    /// unconstrained variable `v`: the variable adopts the operator's
+    /// requirement. `None` when the concrete operand cannot satisfy the
+    /// operator. `c_is_lhs` records which side the concrete operand is on
+    /// (pointer subtraction is directional: only `p - n` is defined).
+    fn rule_with_concrete(
+        &mut self,
+        op: BinaryOp,
+        c: TypeId,
+        v: TypeId,
+        c_is_lhs: bool,
+    ) -> Option<TypeId> {
         let kind = self.types.kind(c)?;
         let is_numeric = matches!(kind, TypeKind::Int | TypeKind::Float);
         let is_int = matches!(kind, TypeKind::Int);
         let is_bool = matches!(kind, TypeKind::Bool);
+        let is_pointer = matches!(kind, TypeKind::Ptr(_));
         let is_scalar = matches!(
             kind,
             TypeKind::Int
@@ -610,6 +632,7 @@ impl<'a> Checker<'a> {
                 | TypeKind::Str
                 | TypeKind::Null
         );
+        let category = OpCategory::of(op);
         match category {
             OpCategory::Arithmetic | OpCategory::Comparison if is_numeric => {
                 let _ = self.types.unify(v, c);
@@ -619,11 +642,28 @@ impl<'a> Checker<'a> {
                     self.bool_ty()
                 })
             }
+            // Pointer arithmetic is byte-addressed and only defined for
+            // `+` and `-`, with the pointer on the left for `-` (only
+            // `p - n`; `n - p` is not defined). The offset side adopts
+            // `Int` and the result is the pointer type.
+            OpCategory::Arithmetic
+                if is_pointer && (op == BinaryOp::Add || (op == BinaryOp::Sub && c_is_lhs)) =>
+            {
+                let offset = self.int_ty();
+                let _ = self.types.unify(v, offset);
+                Some(c)
+            }
             OpCategory::Shift | OpCategory::Bitwise if is_int => {
                 let _ = self.types.unify(v, c);
                 Some(c)
             }
             OpCategory::Equality if is_scalar => {
+                let _ = self.types.unify(v, c);
+                Some(self.bool_ty())
+            }
+            // `p == q` compares two pointers of the same type: the
+            // unconstrained operand adopts the pointer type.
+            OpCategory::Equality if is_pointer => {
                 let _ = self.types.unify(v, c);
                 Some(self.bool_ty())
             }
@@ -635,11 +675,12 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// The result of an operator (via `category`) for two concrete
-    /// operands, or `None` when the combination is invalid.
-    fn rule_concrete(&mut self, category: OpCategory, l: TypeId, r: TypeId) -> Option<TypeId> {
+    /// The result of `op` for two concrete operands, or `None` when the
+    /// combination is invalid.
+    fn rule_concrete(&mut self, op: BinaryOp, l: TypeId, r: TypeId) -> Option<TypeId> {
         let lk = self.types.kind(l)?;
         let rk = self.types.kind(r)?;
+        let category = OpCategory::of(op);
         let same_numeric = matches!(
             (lk, rk),
             (TypeKind::Int, TypeKind::Int) | (TypeKind::Float, TypeKind::Float)
@@ -655,11 +696,30 @@ impl<'a> Checker<'a> {
                 | (TypeKind::Str, TypeKind::Str)
                 | (TypeKind::Null, TypeKind::Null)
         );
+        let l_ptr = matches!(lk, TypeKind::Ptr(_));
+        let r_ptr = matches!(rk, TypeKind::Ptr(_));
         match category {
             OpCategory::Arithmetic if same_numeric => Some(l),
+            // Byte-addressed pointer arithmetic is only defined for `+`
+            // and `-`: `p + n`, `n + p`, and `p - n` (the pointer is the
+            // left operand of `-`). Every other pointer/operator
+            // combination is invalid.
+            OpCategory::Arithmetic
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub)
+                    && l_ptr
+                    && matches!(rk, TypeKind::Int) =>
+            {
+                Some(l)
+            }
+            OpCategory::Arithmetic
+                if op == BinaryOp::Add && r_ptr && matches!(lk, TypeKind::Int) =>
+            {
+                Some(r)
+            }
             OpCategory::Shift | OpCategory::Bitwise if both_int => Some(l),
             OpCategory::Comparison if same_numeric => Some(self.bool_ty()),
             OpCategory::Equality if same_scalar => Some(self.bool_ty()),
+            OpCategory::Equality if l_ptr && r_ptr => Some(self.bool_ty()),
             OpCategory::Logical if both_bool => Some(self.bool_ty()),
             _ => None,
         }
@@ -719,7 +779,9 @@ impl<'a> Checker<'a> {
 
     /// Types a call: the callee must have a function type, the argument
     /// count must match the declared parameters, and each argument must
-    /// unify with its parameter. The result type is the function's result.
+    /// unify with its parameter (a pointer-typed parameter additionally
+    /// accepts the integer literal `0` as the null pointer constant). The
+    /// result type is the function's result.
     ///
     /// Callees without a known type (unresolved names, member/index
     /// results, unconstrained function results) defer honestly: the call
@@ -729,9 +791,15 @@ impl<'a> Checker<'a> {
         &mut self,
         callee: &Expr,
         callee_ty: TypeId,
-        args: &[(Span, TypeId)],
+        args: &[Expr],
         span: Span,
     ) -> TypeId {
+        // Every argument is typed up front (also when the arity is wrong),
+        // so later stages can look every expression's type up by span.
+        let arg_types: Vec<(Span, TypeId)> = args
+            .iter()
+            .map(|arg| (arg.span, self.expr_type(arg)))
+            .collect();
         let canon = self.types.canonical(callee_ty);
         let (params, result) = match self.types.kind(canon) {
             Some(TypeKind::Fn { params, result }) => (params.clone(), *result),
@@ -753,8 +821,8 @@ impl<'a> Checker<'a> {
             return self.types.push(TypeKind::Error);
         }
         let mut poisoned = false;
-        for (param, (arg_span, arg_ty)) in params.iter().zip(args) {
-            if let Err((expected, actual)) = self.types.unify(*param, *arg_ty) {
+        for ((param, arg), (arg_span, arg_ty)) in params.iter().zip(args).zip(&arg_types) {
+            if let Err((expected, actual)) = self.unify_argument(*param, arg, *arg_ty) {
                 self.errors.push(TypeError::mismatch(
                     *arg_span,
                     self.display(expected),
@@ -769,6 +837,56 @@ impl<'a> Checker<'a> {
         } else {
             result
         }
+    }
+
+    /// Unifies a call argument with its parameter, applying the
+    /// null-pointer-constant rule: a pointer-typed parameter accepts the
+    /// integer literal `0` (the null pointer). Everything else goes through
+    /// ordinary unification, so a computed integer can never be silently
+    /// reinterpreted as a pointer.
+    fn unify_argument(
+        &mut self,
+        param: TypeId,
+        arg: &Expr,
+        arg_ty: TypeId,
+    ) -> Result<TypeId, (TypeId, TypeId)> {
+        if self.is_pointer(param)
+            && matches!(
+                self.types.kind(self.types.canonical(arg_ty)),
+                Some(TypeKind::Int)
+            )
+            && self.is_zero_literal(arg)
+        {
+            return Ok(param);
+        }
+        self.types.unify(param, arg_ty)
+    }
+
+    /// Whether `expr` is the integer literal `0` in any spelling (decimal,
+    /// `0x`/`0o`/`0b`, with `_` separators): the null pointer constant.
+    fn is_zero_literal(&self, expr: &Expr) -> bool {
+        if !matches!(expr.kind, ExprKind::Int) {
+            return false;
+        }
+        let Some(file) = self.sources.get(expr.span.file()) else {
+            return false;
+        };
+        let Some(text) = file.span_text(expr.span) else {
+            return false;
+        };
+        let digits = text
+            .strip_prefix("0x")
+            .or_else(|| text.strip_prefix("0X"))
+            .or_else(|| text.strip_prefix("0o"))
+            .or_else(|| text.strip_prefix("0O"))
+            .or_else(|| text.strip_prefix("0b"))
+            .or_else(|| text.strip_prefix("0B"))
+            .unwrap_or(text);
+        !digits.is_empty()
+            && digits
+                .bytes()
+                .filter(|byte| *byte != b'_')
+                .all(|b| b == b'0')
     }
 
     /// Types an assignment.

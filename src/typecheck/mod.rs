@@ -27,20 +27,24 @@ mod ty;
 
 use crate::ast::Ast;
 use crate::semantics::{SemanticResult, SymbolId};
-use crate::source::Span;
+use crate::source::{SourceMap, Span};
 
 pub use error::{TypeError, TypeErrorKind};
 pub use ty::{TypeId, TypeKind, TypeTable};
 
-/// Runs type analysis over `ast`, consuming the session-05 semantic result.
+/// Runs type analysis over `ast`, consuming the session-05 semantic result
+/// and reading literal source text through `sources` (used for the
+/// null-pointer-constant rule: the integer literal `0` is the null pointer
+/// in a pointer-typed argument position; see
+/// `docs/implementation/STRING_MEMORY_IMPLEMENTATION.md`).
 ///
 /// Returns a [`TypeResult`] regardless of whether the program is
 /// well-typed; validity is determined by [`TypeResult::has_errors`].
 /// Analysis is deterministic and continues past independent errors: failed
 /// sub-expressions receive the unknown/error type so one root error does
 /// not cascade into misleading secondary diagnostics.
-pub fn check(ast: &Ast, semantic: &SemanticResult) -> TypeResult {
-    checker::check_ast(ast, semantic)
+pub fn check(ast: &Ast, semantic: &SemanticResult, sources: &SourceMap) -> TypeResult {
+    checker::check_ast(ast, semantic, sources)
 }
 
 /// The result of running type analysis on one program.

@@ -203,4 +203,7 @@ Full suite after session 11: **622 tests** (61 CLI + 50 lexer + 88 parser +
 34 MIR + 38 optimization + 21 lib unit + 37 backend), all passing. After
 session 12 (native runtime foundation) the suite is **654 tests** (39 lib
 unit + 14 runtime end-to-end; the backend image-shape assertions were
-updated in place; see `RUNTIME_IMPLEMENTATION.md` §12).
+updated in place; see `RUNTIME_IMPLEMENTATION.md` §12). After session 13
+(string + memory types) the suite is **700 tests** (49 lib unit + 42
+backend + 24 runtime end-to-end + 143 typecheck; see
+`RUNTIME_IMPLEMENTATION.md` §8).

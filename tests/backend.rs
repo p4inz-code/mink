@@ -11,6 +11,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use mink::ast::BinaryOp;
 use mink::backend::{
     self, BInstKind, BOperand, BProgram, BTerminator, BType, BackendErrorKind, Target,
 };
@@ -411,9 +412,104 @@ fn float_literal_is_rejected() {
 }
 
 #[test]
-fn string_literal_is_rejected() {
-    let kinds = error_kinds("fn main() { let s = \"hi\"; return; }");
-    assert!(kinds.contains(&BackendErrorKind::UnsupportedType));
+fn string_literal_is_supported() {
+    // Session 13: strings are the first memory-backed aggregate type.
+    // A string literal lowers to a LoadStr instruction referencing the
+    // decoded blob, not to a rejected constant.
+    let (_mir, program) = lower_backend("fn main() { let s = \"hi\"; rt_print_str(s); return; }");
+    assert_eq!(program.strings.len(), 1);
+    assert_eq!(program.strings[0].bytes, b"hi");
+    assert_eq!(
+        program.strings[0].span,
+        text_span(
+            "fn main() { let s = \"hi\"; rt_print_str(s); return; }",
+            "\"hi\""
+        )
+    );
+    let f = function(&program, "main");
+    assert!(f.blocks.iter().flat_map(|b| &b.insts).any(|i| matches!(
+        i.kind,
+        BInstKind::LoadStr {
+            string_index: 0,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn pointer_locals_are_typed_ptr() {
+    let (_mir, program) = lower_backend(
+        "fn main() { let p = rt_alloc(16); rt_mem_store(p, 1); rt_mem_load(p); return; }",
+    );
+    let f = function(&program, "main");
+    let p_ty = f
+        .locals
+        .iter()
+        .find(|l| l.name == "p")
+        .map(|l| l.ty)
+        .expect("local `p`");
+    assert_eq!(p_ty, BType::Ptr);
+}
+
+#[test]
+fn pointer_arithmetic_lowers_to_add_sub() {
+    let (_mir, program) = lower_backend(
+        "fn main() { let p = rt_alloc(16); let q = p + 8; let r = q - 2; rt_mem_load(r); return; }",
+    );
+    let f = function(&program, "main");
+    let insts: Vec<_> = f.blocks.iter().flat_map(|b| &b.insts).collect();
+    assert!(insts.iter().any(|i| matches!(
+        i.kind,
+        BInstKind::Binary {
+            op: BinaryOp::Add,
+            ..
+        }
+    )));
+    assert!(insts.iter().any(|i| matches!(
+        i.kind,
+        BInstKind::Binary {
+            op: BinaryOp::Sub,
+            ..
+        }
+    )));
+    let q_ty = f
+        .locals
+        .iter()
+        .find(|l| l.name == "q")
+        .map(|l| l.ty)
+        .expect("local `q`");
+    let r_ty = f
+        .locals
+        .iter()
+        .find(|l| l.name == "r")
+        .map(|l| l.ty)
+        .expect("local `r`");
+    assert_eq!(q_ty, BType::Ptr);
+    assert_eq!(r_ty, BType::Ptr);
+}
+
+#[test]
+fn string_literal_escapes_decode_to_bytes() {
+    let src = "fn main() { let s = \"a\\tb\\n\\\"q\\\"\\0z\"; rt_print_str(s); return; }";
+    let (_mir, program) = lower_backend(src);
+    assert_eq!(program.strings.len(), 1);
+    assert_eq!(program.strings[0].bytes, b"a\tb\n\"q\"\0z");
+}
+
+#[test]
+fn string_literal_utf8_decodes_to_bytes() {
+    let src = "fn main() { let s = \"caf\u{e9}\u{20ac}\"; rt_print_str(s); return; }";
+    let (_mir, program) = lower_backend(src);
+    assert_eq!(program.strings.len(), 1);
+    assert_eq!(program.strings[0].bytes, "café€".as_bytes());
+}
+
+#[test]
+fn string_literal_hex_escapes_decode_to_bytes() {
+    let src = "fn main() { let s = \"\\x41\\x42\"; rt_print_str(s); return; }";
+    let (_mir, program) = lower_backend(src);
+    assert_eq!(program.strings.len(), 1);
+    assert_eq!(program.strings[0].bytes, b"AB");
 }
 
 #[test]
@@ -557,9 +653,9 @@ fn errors_carry_codes_and_spans() {
 #[test]
 fn independent_errors_are_all_reported() {
     // Two unsupported constructs in one program: both reported, in source
-    // order. (The string binding is in its own function so the float
+    // order. (The char binding is in its own function so the float
     // function's result-type error cannot short-circuit it.)
-    let src = "fn g() { let s = \"a\"; return; } fn main() { return 1.5; }";
+    let src = "fn g() { let c = 'a'; return; } fn main() { return 1.5; }";
     let errors = lower_errors(src);
     let kinds = errors.iter().map(|e| e.kind()).collect::<Vec<_>>();
     assert_eq!(

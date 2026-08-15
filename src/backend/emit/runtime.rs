@@ -53,7 +53,8 @@ use crate::runtime::error::RuntimeErrorKind;
 const TABLE_BYTES: i32 = (MAX_LIVE_ALLOCS as u32 * 24) as i32;
 
 /// The offsets of the machine services within `.text`, plus the labels
-/// the services reference (bound by [`emit_data`]).
+/// the services reference (bound by [`emit_data`] and the emitter's string
+/// data).
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeOffsets {
     services: HashMap<RuntimeService, u32>,
@@ -63,6 +64,11 @@ pub(crate) struct RuntimeOffsets {
     pub(crate) msg_table_label: u32,
     /// Label of the `\r\n` constant in `.text`.
     pub(crate) crlf_label: u32,
+    /// Label bounding the start of the image's immutable string-data
+    /// region (bound by the emitter after the runtime data).
+    pub(crate) str_data_start: u32,
+    /// Label bounding one past the end of that region.
+    pub(crate) str_data_end: u32,
 }
 
 impl RuntimeOffsets {
@@ -74,25 +80,46 @@ impl RuntimeOffsets {
 
 /// Emits every runtime service into `code`, returning their offsets and
 /// the data labels the services reference. The message data is emitted
-/// separately by [`emit_data`], which binds those labels.
-pub(crate) fn emit_services(code: &mut Code) -> RuntimeOffsets {
+/// separately by [`emit_data`], and the string data by the caller, which
+/// binds those labels. `str_data_start` and `str_data_end` are the labels
+/// bounding the image's immutable string-data region; `rt_init` records
+/// their addresses so the string intrinsics can validate literal strings.
+pub(crate) fn emit_services(
+    code: &mut Code,
+    str_data_start: u32,
+    str_data_end: u32,
+) -> RuntimeOffsets {
     let mut offsets = RuntimeOffsets {
         services: HashMap::new(),
         msg_blob_label: code.label(),
         msg_table_label: code.label(),
         crlf_label: code.label(),
+        str_data_start,
+        str_data_end,
     };
     let mut emit =
         |code: &mut Code, service: RuntimeService, body: fn(&mut Code, &RuntimeOffsets)| {
             offsets.services.insert(service, code.len() as u32);
             body(code, &offsets);
         };
-    emit(code, RuntimeService::Init, |code, _| emit_init(code));
+    emit(code, RuntimeService::Init, emit_init);
     emit(code, RuntimeService::Alloc, |code, _| emit_alloc(code));
     emit(code, RuntimeService::Free, |code, _| emit_free(code));
     emit(code, RuntimeService::MemLoad, |code, _| emit_mem_load(code));
     emit(code, RuntimeService::MemStore, |code, _| {
         emit_mem_store(code)
+    });
+    emit(code, RuntimeService::StrAlloc, |code, _| {
+        emit_str_alloc(code)
+    });
+    emit(code, RuntimeService::StrFree, |code, _| emit_str_free(code));
+    emit(code, RuntimeService::StrLen, |code, _| emit_str_len(code));
+    emit(code, RuntimeService::StrByte, |code, _| emit_str_byte(code));
+    emit(code, RuntimeService::StrSetByte, |code, _| {
+        emit_str_set_byte(code)
+    });
+    emit(code, RuntimeService::PrintStr, |code, r| {
+        emit_print_str(code, r)
     });
     emit(code, RuntimeService::PrintInt, |code, r| {
         emit_print_int(code, r)
@@ -104,6 +131,12 @@ pub(crate) fn emit_services(code: &mut Code) -> RuntimeOffsets {
     });
     emit(code, RuntimeService::WriteStderr, |code, _| {
         emit_write(code, false)
+    });
+    emit(code, RuntimeService::StrValidate, |code, _| {
+        emit_str_validate(code, false)
+    });
+    emit(code, RuntimeService::StrValidateHeap, |code, _| {
+        emit_str_validate(code, true)
     });
     offsets
 }
@@ -124,6 +157,7 @@ pub(crate) fn emit_data(code: &mut Code, offsets: &RuntimeOffsets) {
         RuntimeErrorKind::Leak,
         RuntimeErrorKind::Misaligned,
         RuntimeErrorKind::InvalidSize,
+        RuntimeErrorKind::StringIndexOutOfRange,
     ];
     kinds.sort_by_key(|kind| kind.number());
     let messages = kinds
@@ -172,15 +206,22 @@ fn fail(code: &mut Code, number: u32) {
 // Services
 // ---------------------------------------------------------------------------
 
-/// `rt_init`: reset the bump cursor and the free list. The `.bss` state
-/// is zero-initialized by the loader, so this is an explicit no-op that
-/// keeps the runtime state deterministic even if the loader contract
+/// `rt_init`: reset the bump cursor and the free list, and record the
+/// bounds of the image's immutable string-data region. The `.bss` state is
+/// zero-initialized by the loader, so the resets are explicit no-ops that
+/// keep the runtime state deterministic even if the loader contract
 /// changes; the cursor is an offset from the arena base (a block lives at
-/// `arena + offset`), so it starts at zero.
-fn emit_init(code: &mut Code) {
+/// `arena + offset`), so it starts at zero. The string-data bounds are
+/// absolute addresses (positions within `.text`), read by the string
+/// intrinsics to validate literal strings.
+fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
     code.mov_rip_imm32(PatchKind::Bss(BSS.cursor as u32), 0);
     code.mov_rip_imm32(PatchKind::Bss(BSS.free_head as u32), 0);
+    code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.str_data_start));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.str_data_start as u32));
+    code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.str_data_end));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.str_data_end as u32));
     code.leave_ret();
 }
 
@@ -392,6 +433,185 @@ fn emit_mem_store(code: &mut Code) {
     code.bind_label(misaligned);
     fail(code, 7); // E-R07
     code.bind_label(oob);
+    fail(code, 5); // E-R05
+}
+
+/// `rt_str_alloc(size) -> Str` (size at `[rbp + 16]`): allocate a
+/// length-prefixed string blob of `size` bytes through the regular
+/// allocator (`8 + size` bytes) and write the length prefix at the block
+/// start. The block's data bytes are zero on fresh bumps and retain old
+/// contents on free-list reuse, matching `rt_alloc`. A negative size is
+/// `E-R08`; the allocator reports exhaustion (`E-R02`/`E-R03`) itself.
+fn emit_str_alloc(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] holds the size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let bad_size = code.label();
+    code.jcc_label(0x8C, bad_size); // js
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    // Allocate 8 + size bytes through `rt_alloc` (the argument is pushed
+    // with alignment padding, so the stack stays 16-aligned at the call).
+    code.add_r_imm8(Reg::Rax, 8);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+
+    // Write the length prefix: [rax] = size.
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rdx);
+    code.leave_ret();
+
+    code.bind_label(bad_size);
+    fail(code, 8); // E-R08
+}
+
+/// `rt_str_free(s)` (s at `[rbp + 16]`): deallocate the string blob at `s`.
+/// The block must be the exact start of a live allocation (`E-R04`/`E-R07`
+/// otherwise, matching `rt_free`), so freeing an immutable literal is a
+/// structured error.
+fn emit_str_free(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(16);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_str_len(s) -> Int` (s at `[rbp + 16]`): the byte length of a
+/// validated string (`E-R05` when `s` is neither a live heap string nor an
+/// image literal).
+fn emit_str_len(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidate));
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // len = [s]
+    code.leave_ret();
+}
+
+/// `rt_str_byte(s, index) -> Int` (s at `[rbp + 16]`, index at `[rbp + 24]`):
+/// the byte of a validated string at `index`, bounds-checked against the
+/// length prefix (`E-R09` out of range, `E-R05` for an invalid string).
+fn emit_str_byte(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidate));
+    code.mov_r_mem(Reg::R8, Reg::Rbp, 24); // index
+    code.test_rr(Reg::R8, Reg::R8);
+    let oob = code.label();
+    code.jcc_label(0x8C, oob); // js
+    code.mov_r_mem(Reg::R9, Reg::Rax, 0); // len
+    code.cmp_rr(Reg::R8, Reg::R9);
+    code.jcc_label(0x83, oob); // jae
+    code.add_r_imm8(Reg::Rax, 8); // data base
+    code.add_rr(Reg::Rax, Reg::R8); // data base + index
+    code.movzx_byte(Reg::Rax, Reg::Rax, 0);
+    code.leave_ret();
+
+    code.bind_label(oob);
+    fail(code, 9); // E-R09
+}
+
+/// `rt_str_set_byte(s, index, value)` (s at `[rbp + 16]`, index at
+/// `[rbp + 24]`, value at `[rbp + 32]`): write the low byte of `value` at
+/// `index` of a *heap* string (immutable image literals are rejected with
+/// `E-R05`; an out-of-range index is `E-R09`).
+fn emit_str_set_byte(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidateHeap));
+    code.mov_r_mem(Reg::R8, Reg::Rbp, 24); // index
+    code.test_rr(Reg::R8, Reg::R8);
+    let oob = code.label();
+    code.jcc_label(0x8C, oob); // js
+    code.mov_r_mem(Reg::R9, Reg::Rax, 0); // len
+    code.cmp_rr(Reg::R8, Reg::R9);
+    code.jcc_label(0x83, oob); // jae
+    code.add_r_imm8(Reg::Rax, 8); // data base
+    code.add_rr(Reg::Rax, Reg::R8); // data base + index
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 32); // value
+    code.mov_mem_r8(Reg::Rax, 0, Reg::Rcx);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+
+    code.bind_label(oob);
+    fail(code, 9); // E-R09
+}
+
+/// `rt_print_str(s)` (s at `[rbp + 16]`): write the bytes of a validated
+/// string plus a CRLF to stdout.
+fn emit_print_str(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidate));
+    code.mov_r_mem(Reg::R8, Reg::Rax, 0); // len
+    code.lea_r_mem(Reg::Rcx, Reg::Rax, 8); // data base
+    code.mov_rr(Reg::Rdx, Reg::R8); // length
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
+    code.mov_r32_imm32(Reg::Rdx, 2);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// Internal string-pointer validator: `rt_str_validate(rax = s) -> s`, or
+/// `E-R05`. With `heap_only`, only a live heap-block start is accepted
+/// (used by `rt_str_set_byte`, which cannot write immutable image data);
+/// otherwise a pointer into the image's string-data region is accepted too
+/// (used by every read). Uses the private register convention: `rax` in
+/// and out; `rcx`/`rdx`/`r8`/`r9` are scratch. Never calls out (the `E-R05`
+/// path goes through `rt_fail`), so its frame needs no extra alignment.
+fn emit_str_validate(code: &mut Code, heap_only: bool) {
+    prologue(code);
+    code.sub_rsp(16);
+
+    // Scan the liveness table for a live entry whose start equals `s`.
+    let scan = code.label();
+    let next = code.label();
+    let not_heap = code.label();
+    let fail5 = code.label();
+    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.table as u32));
+    code.lea_r_mem(Reg::Rdx, Reg::Rcx, TABLE_BYTES);
+    code.bind_label(scan);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x83, not_heap); // jae
+    code.cmp_mem_imm8(Reg::Rcx, 16, 0);
+    code.jcc_label(0x84, next); // je — dead entry
+    code.cmp_r_mem(Reg::Rax, Reg::Rcx, 0);
+    code.jcc_label(0x85, next); // jne — different start
+    code.leave_ret(); // a live heap string
+
+    code.bind_label(next);
+    code.add_r_imm8(Reg::Rcx, 24);
+    code.jmp_label(scan);
+
+    // Not a heap block: only the image's immutable string-data region is
+    // a valid home for a literal string (and only for reads).
+    code.bind_label(not_heap);
+    if heap_only {
+        code.jmp_label(fail5);
+    } else {
+        code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.str_data_start as u32));
+        code.mov_r_rip(Reg::Rdx, PatchKind::Bss(BSS.str_data_end as u32));
+        code.cmp_rr(Reg::Rax, Reg::Rcx);
+        code.jcc_label(0x82, fail5); // jb
+        code.cmp_rr(Reg::Rax, Reg::Rdx);
+        code.jcc_label(0x83, fail5); // jae
+        code.leave_ret();
+    }
+
+    code.bind_label(fail5);
     fail(code, 5); // E-R05
 }
 

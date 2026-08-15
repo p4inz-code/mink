@@ -247,6 +247,15 @@ impl Code {
         self.mem_modrm(src, base, disp);
     }
 
+    /// `movzx r32, byte [base + disp]` (loads a byte, zero-extending it
+    /// into a 64-bit register).
+    pub(crate) fn movzx_byte(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.rex(dst, base);
+        self.u8(0x0F);
+        self.u8(0xB6);
+        self.mem_modrm(dst, base, disp);
+    }
+
     /// `mov qword [base + disp], imm32`.
     pub(crate) fn mov_mem_imm32(&mut self, base: Reg, disp: i32, imm: i32) {
         self.rex_w(Reg::Rax, base);
@@ -693,6 +702,16 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     let mut code = Code::new();
 
     // ------------------------------------------------------------------
+    // Labels. The string-blob labels are created up front so function
+    // bodies can reference them; the region bounds are bound around the
+    // string data and recorded by `rt_init`. All are bound before patch
+    // resolution.
+    // ------------------------------------------------------------------
+    let string_labels: Vec<u32> = (0..program.strings.len()).map(|_| code.label()).collect();
+    let str_data_start_label = code.label();
+    let str_data_end_label = code.label();
+
+    // ------------------------------------------------------------------
     // Entry-point stub. `ret` from the exit service terminates the
     // process with the result as the exit code.
     // ------------------------------------------------------------------
@@ -722,7 +741,7 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     let mut function_starts = Vec::with_capacity(program.functions.len());
     let mut function_block_starts = Vec::with_capacity(program.functions.len());
     for (index, f) in program.functions.iter().enumerate() {
-        let (start, block_starts) = emit_function(&mut code, f, index);
+        let (start, block_starts) = emit_function(&mut code, f, index, &string_labels);
         function_starts.push(start);
         function_block_starts.push(block_starts);
     }
@@ -730,8 +749,22 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     // ------------------------------------------------------------------
     // Embedded runtime: services, then the message data.
     // ------------------------------------------------------------------
-    let runtime_offsets = runtime::emit_services(&mut code);
+    let runtime_offsets =
+        runtime::emit_services(&mut code, str_data_start_label, str_data_end_label);
     runtime::emit_data(&mut code, &runtime_offsets);
+
+    // ------------------------------------------------------------------
+    // Immutable string data: each literal's blob is its length prefix
+    // (8 bytes, little-endian) followed by its UTF-8 bytes. `LoadStr`
+    // patches to the blob's address here.
+    // ------------------------------------------------------------------
+    code.bind_label(str_data_start_label);
+    for (index, string) in program.strings.iter().enumerate() {
+        code.bind_label(string_labels[index]);
+        code.bytes(&(string.bytes.len() as u64).to_le_bytes());
+        code.bytes(&string.bytes);
+    }
+    code.bind_label(str_data_end_label);
 
     // ------------------------------------------------------------------
     // Module bindings: one 8-byte word each, in source order.
@@ -814,6 +847,7 @@ fn emit_function(
     code: &mut Code,
     f: &super::super::ir::BFunction,
     function_index: usize,
+    string_labels: &[u32],
 ) -> (usize, Vec<u32>) {
     let start = code.len();
     let slots = slots(f);
@@ -847,7 +881,7 @@ fn emit_function(
     let mut block_starts = vec![0u32; f.blocks.len()];
     for block in &f.blocks {
         block_starts[block.id.raw() as usize] = (code.len() - start) as u32;
-        emit_block(code, f, &slots, block, function_index);
+        emit_block(code, f, &slots, block, function_index, string_labels);
     }
     (start, block_starts)
 }
@@ -866,9 +900,10 @@ fn emit_block(
     slots: &Slots,
     block: &super::super::ir::BBlock,
     function_index: usize,
+    string_labels: &[u32],
 ) {
     for inst in &block.insts {
-        emit_inst(code, f, slots, inst);
+        emit_inst(code, f, slots, inst, string_labels);
     }
     match &block.terminator {
         BTerminator::Return { value, .. } => {
@@ -1002,6 +1037,7 @@ fn emit_inst(
     f: &super::super::ir::BFunction,
     slots: &Slots,
     inst: &super::super::ir::BInst,
+    string_labels: &[u32],
 ) {
     match &inst.kind {
         BInstKind::LoadLocal { target, src } => {
@@ -1029,6 +1065,15 @@ fn emit_inst(
         BInstKind::StoreStatic { static_index, src } => {
             eval_rax(code, slots, *src);
             code.mov_rip_rax(*static_index);
+        }
+        BInstKind::LoadStr {
+            target,
+            string_index,
+        } => {
+            // The string value is the blob's address in the image's
+            // immutable data (the length prefix), reached RIP-relative.
+            code.lea_r_rip(Reg::Rax, PatchKind::Label(string_labels[*string_index]));
+            code.mov_rbp_rax(slots[target.raw() as usize].0);
         }
         BInstKind::Unary { target, op, src } => {
             eval_rax(code, slots, *src);

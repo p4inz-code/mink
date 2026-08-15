@@ -41,6 +41,9 @@ pub enum RuntimeErrorKind {
     /// An invalid allocation size: `rt_alloc` called with a non-positive
     /// size.
     InvalidSize,
+    /// A string index out of range: `rt_str_byte` / `rt_str_set_byte`
+    /// called with an index not below the string's byte length.
+    StringIndexOutOfRange,
 }
 
 impl RuntimeErrorKind {
@@ -56,6 +59,7 @@ impl RuntimeErrorKind {
             Self::Leak => 6,
             Self::Misaligned => 7,
             Self::InvalidSize => 8,
+            Self::StringIndexOutOfRange => 9,
         }
     }
 
@@ -70,6 +74,7 @@ impl RuntimeErrorKind {
             Self::Leak => "E-R06",
             Self::Misaligned => "E-R07",
             Self::InvalidSize => "E-R08",
+            Self::StringIndexOutOfRange => "E-R09",
         }
     }
 
@@ -85,6 +90,9 @@ impl RuntimeErrorKind {
             Self::Leak => "memory leak: live allocations remain at exit",
             Self::Misaligned => "misaligned access: the address is not properly aligned",
             Self::InvalidSize => "invalid allocation size: the size must be positive",
+            Self::StringIndexOutOfRange => {
+                "string index out of range: the index must be below the string's byte length"
+            }
         }
     }
 

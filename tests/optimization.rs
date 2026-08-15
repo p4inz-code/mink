@@ -40,7 +40,7 @@ fn optimize_mir(src: &str) -> (HirProgram, MirProgram) {
         "semantic errors: {:?}",
         semantic.errors()
     );
-    let types = mink::typecheck::check(&ast, &semantic);
+    let types = mink::typecheck::check(&ast, &semantic, &sources);
     assert!(!types.has_errors(), "type errors: {:?}", types.errors());
     let hir = mink::hir::lower(&ast, &semantic, &types)
         .unwrap_or_else(|errors| panic!("clean front end must lower: {errors:?}"));

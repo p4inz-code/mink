@@ -360,11 +360,13 @@ Resolved in session 06 and authoritative for the implemented milestone; the
 full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
 
 - **Core types.** The current milestone defines exactly the scalar types
-  `Int`, `Float`, `Bool`, `Char`, `Str`, and `Null`, plus `Range<T>` and
-  function types. `Int` and `Float` are single types; exact widths are a
-  runtime/ABI decision. No other types exist yet (no tuples, structs,
-  enums, generics, optional/result types, …) — they arrive with later
-  milestones per `docs/language/TYPE_SYSTEM.md`.
+  `Int`, `Float`, `Bool`, `Char`, `Str`, and `Null`, plus `Range<T>`, the
+  pointer type `Ptr<T>`, and function types. `Int` and `Float` are single
+  types; exact widths are a runtime/ABI decision. Only `Ptr<Int>` is
+  instantiable today (the raw memory intrinsics' word pointer); `Unit`
+  types the value-less intrinsic results. No other types exist yet (no
+  tuples, structs, enums, generics, optional/result types, …) — they
+  arrive with later milestones per `docs/language/TYPE_SYSTEM.md`.
 - **Literals.** Integer, floating-point, string, character, boolean, and
   `null` literals have the corresponding types above.
 - **No implicit conversions.** MINK defines no implicit numeric
@@ -391,6 +393,18 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   count matches the declared parameters, and that each argument is
   compatible with its parameter. Function parameter and result types are
   inferred from usage at this stage; there is no signature syntax yet.
+- **Strings and pointers (session 13).** A `Str` value is the address of
+  a length-prefixed UTF-8 byte blob; string literals are immutable blob
+  data, and `rt_str_alloc`/`rt_str_free`/`rt_str_len`/`rt_str_byte`/
+  `rt_str_set_byte`/`rt_print_str` operate on them (indices are
+  bounds-checked, `E-R09`). `Ptr<Int>` is produced by `rt_alloc` and
+  consumed by `rt_free`/`rt_mem_load`/`rt_mem_store`. Pointer arithmetic
+  is byte-addressed (`p + n`, `n + p`, `p - n`); pointer equality is
+  `Bool`. Strings and pointers are distinct: neither satisfies the other's
+  intrinsic parameters (`E-T01`). The integer literal `0` is the null
+  pointer constant in pointer-typed argument positions only — a computed
+  `Int` is never a pointer. No ownership/borrow checking, no raw pointer
+  syntax, and no string concatenation yet.
 - **Iteration.** Only ranges are iterable at this stage; a `for` variable
   has the range's element type, and iterating a non-range is a type error.
 - **Member/index deferral.** Member access, indexing, and their

@@ -44,8 +44,8 @@ use crate::typecheck::{TypeId, TypeKind};
 
 use super::error::BackendError;
 use super::ir::{
-    BBlock, BFunction, BInst, BInstKind, BLocal, BOperand, BProgram, BStatic, BTerminator, BType,
-    LowerResult, RuntimeService,
+    BBlock, BFunction, BInst, BInstKind, BLocal, BOperand, BProgram, BStatic, BString, BTerminator,
+    BType, LowerResult, RuntimeService,
 };
 
 /// The resolved target of a call: a user function or an embedded runtime
@@ -55,6 +55,31 @@ enum Callee {
     Function(usize),
     /// A runtime service (`rt_*` intrinsic).
     Runtime(RuntimeService),
+}
+
+/// A decoded literal constant: a machine word or a string-blob reference.
+///
+/// String literals have no machine constant form — their value is the
+/// address of the decoded blob in the image — so they lower to
+/// [`BInstKind::LoadStr`] instead of [`BInstKind::LoadConst`].
+enum DecodedConstant {
+    /// An integer or boolean value, decoded to its 64-bit machine value.
+    Word(i64),
+    /// A string literal: an index into [`BProgram::strings`].
+    Str(usize),
+}
+
+/// The value of an ASCII hex digit, or a structured decode error.
+fn hex_digit(byte: u8, span: Span) -> Result<u8, BackendError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(BackendError::decode_error(
+            span,
+            "invalid hex digit in string escape",
+        )),
+    }
 }
 
 /// Lowers an optimized [`MirProgram`] into a [`BProgram`].
@@ -69,6 +94,7 @@ pub(crate) fn lower(program: &MirProgram, sources: &SourceMap) -> LowerResult {
         Ok(BProgram {
             functions: lowerer.functions,
             statics: lowerer.statics,
+            strings: lowerer.strings,
         })
     } else {
         Err(lowerer.errors)
@@ -90,6 +116,11 @@ struct Lowerer<'a> {
     static_types: Vec<Option<BType>>,
     functions: Vec<BFunction>,
     statics: Vec<BStatic>,
+    /// The decoded string literals, in first-use order.
+    strings: Vec<BString>,
+    /// Bytes → string index, so identical literals share one image blob
+    /// (deterministic deduplication).
+    string_index: HashMap<Vec<u8>, usize>,
     errors: Vec<BackendError>,
     /// Locals of the function currently being lowered (a copy of the MIR
     /// function's locals, classified, plus any lowering temporaries).
@@ -127,6 +158,8 @@ impl<'a> Lowerer<'a> {
             static_types: Vec::new(),
             functions: Vec::new(),
             statics: Vec::new(),
+            strings: Vec::new(),
+            string_index: HashMap::new(),
             errors: Vec::new(),
             fn_locals: Vec::new(),
             fn_classified: Vec::new(),
@@ -159,15 +192,20 @@ impl<'a> Lowerer<'a> {
 
     /// Classifies a MIR type id into a backend value type.
     ///
-    /// `Int`, `Bool`, and `Range<Int>` are representable; an unresolved
-    /// inference type is unit (a value that is never meaningfully read);
-    /// everything else (`Float`, `Str`, `Char`, `Null`, the error type,
-    /// `Range` over another element, function types) is unsupported and
-    /// classifies to `None`.
+    /// `Int`, `Bool`, `Range<Int>`, `Ptr<Int>`, and `Str` are
+    /// representable; an unresolved inference type is unit (a value that is
+    /// never meaningfully read); everything else (`Float`, `Char`, `Null`,
+    /// the error type, `Ptr` over another element, `Range` over another
+    /// element, function types) is unsupported and classifies to `None`.
     fn classify(&self, ty: TypeId) -> Option<BType> {
         match self.program.types.kind(ty) {
             Some(TypeKind::Int) => Some(BType::Int),
             Some(TypeKind::Bool) => Some(BType::Bool),
+            Some(TypeKind::Ptr(elem)) => match self.program.types.kind(*elem) {
+                Some(TypeKind::Int) => Some(BType::Ptr),
+                _ => None,
+            },
+            Some(TypeKind::Str) => Some(BType::Str),
             Some(TypeKind::Range(elem)) => match self.program.types.kind(*elem) {
                 Some(TypeKind::Int) => Some(BType::Range),
                 _ => None,
@@ -179,7 +217,6 @@ impl<'a> Lowerer<'a> {
             Some(
                 TypeKind::Error
                 | TypeKind::Float
-                | TypeKind::Str
                 | TypeKind::Char
                 | TypeKind::Null
                 | TypeKind::Fn { .. },
@@ -270,7 +307,18 @@ impl<'a> Lowerer<'a> {
         }
         let value = match &s.value.kind {
             MirOperandKind::Constant(constant) => match self.decode_constant(constant) {
-                Ok(value) => value,
+                Ok(DecodedConstant::Word(value)) => value,
+                // Defensive: module bindings of string type are rejected by
+                // classification before this point (their value would need
+                // a patched blob address, which the constant model cannot
+                // represent).
+                Ok(DecodedConstant::Str(_)) => {
+                    self.errors.push(BackendError::unsupported_static(
+                        s.span,
+                        "string literals cannot initialize module bindings yet",
+                    ));
+                    return;
+                }
                 Err(error) => {
                     self.errors.push(error);
                     return;
@@ -512,9 +560,12 @@ impl<'a> Lowerer<'a> {
         let kind = match &rvalue.kind {
             MirRvalueKind::Use(operand) => match &operand.kind {
                 MirOperandKind::Local(src) => BInstKind::LoadLocal { target, src: *src },
-                MirOperandKind::Constant(constant) => BInstKind::LoadConst {
-                    target,
-                    value: self.decode_constant(constant)?,
+                MirOperandKind::Constant(constant) => match self.decode_constant(constant)? {
+                    DecodedConstant::Word(value) => BInstKind::LoadConst { target, value },
+                    DecodedConstant::Str(string_index) => BInstKind::LoadStr {
+                        target,
+                        string_index,
+                    },
                 },
                 MirOperandKind::Static(symbol) => BInstKind::LoadStatic {
                     target,
@@ -686,6 +737,12 @@ impl<'a> Lowerer<'a> {
             "rt_free" => RuntimeService::Free,
             "rt_mem_load" => RuntimeService::MemLoad,
             "rt_mem_store" => RuntimeService::MemStore,
+            "rt_str_alloc" => RuntimeService::StrAlloc,
+            "rt_str_free" => RuntimeService::StrFree,
+            "rt_str_len" => RuntimeService::StrLen,
+            "rt_str_byte" => RuntimeService::StrByte,
+            "rt_str_set_byte" => RuntimeService::StrSetByte,
+            "rt_print_str" => RuntimeService::PrintStr,
             "rt_exit" => RuntimeService::Exit,
             "rt_print_int" => RuntimeService::PrintInt,
             _ => return None,
@@ -718,9 +775,23 @@ impl<'a> Lowerer<'a> {
     fn eval_operand(&mut self, operand: &MirOperand) -> Result<BOperand, BackendError> {
         match &operand.kind {
             MirOperandKind::Local(id) => Ok(BOperand::Local(*id)),
-            MirOperandKind::Constant(constant) => {
-                Ok(BOperand::Const(self.decode_constant(constant)?))
-            }
+            MirOperandKind::Constant(constant) => match self.decode_constant(constant)? {
+                DecodedConstant::Word(value) => Ok(BOperand::Const(value)),
+                // A string literal has no machine constant form: its value
+                // is the blob's address, loaded through an explicit
+                // instruction into a temporary slot.
+                DecodedConstant::Str(string_index) => {
+                    let temp = self.alloc_temp(BType::Str, constant.span);
+                    self.push(
+                        BInstKind::LoadStr {
+                            target: temp,
+                            string_index,
+                        },
+                        constant.span,
+                    );
+                    Ok(BOperand::Local(temp))
+                }
+            },
             MirOperandKind::Static(symbol) => {
                 let slot = self.resolve_static(*symbol, operand.span)?;
                 let ty = self.static_types[slot]
@@ -738,26 +809,163 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Decodes a literal constant into a 64-bit machine value.
+    /// Decodes a literal constant into its backend form: a machine word
+    /// (integer or boolean) or a reference to a decoded string blob.
     ///
-    /// Integers are decoded from the literal's source text (the backend is
-    /// the first stage to decode literal values; the text is recovered via
-    /// the source map). Booleans carry their value directly. Every other
-    /// literal kind is rejected — and, since unsupported literal kinds
-    /// always pair with unsupported local types, this path is defensive: a
-    /// clean pipeline reports the type error first.
-    fn decode_constant(&self, constant: &crate::mir::MirConstant) -> Result<i64, BackendError> {
+    /// Integers and strings are decoded from the literal's source text (the
+    /// backend is the first stage to decode literal values; the text is
+    /// recovered via the source map). Booleans carry their value directly.
+    /// Identical string literals are deduplicated: they share one image
+    /// blob. Every other literal kind is rejected — and, since unsupported
+    /// literal kinds always pair with unsupported local types, this path is
+    /// defensive: a clean pipeline reports the type error first.
+    fn decode_constant(
+        &mut self,
+        constant: &crate::mir::MirConstant,
+    ) -> Result<DecodedConstant, BackendError> {
         match constant.kind {
-            MirConstantKind::Bool(value) => Ok(i64::from(value)),
-            MirConstantKind::Int => self.decode_int(constant.span),
-            MirConstantKind::Float
-            | MirConstantKind::Str
-            | MirConstantKind::Char
-            | MirConstantKind::Null => Err(BackendError::unsupported_constant(
-                constant.span,
-                "only integer and boolean literals are supported by the native subset",
-            )),
+            MirConstantKind::Bool(value) => Ok(DecodedConstant::Word(i64::from(value))),
+            MirConstantKind::Int => Ok(DecodedConstant::Word(self.decode_int(constant.span)?)),
+            MirConstantKind::Str => {
+                let bytes = self.decode_str(constant.span)?;
+                let index = match self.string_index.get(&bytes) {
+                    Some(&index) => index,
+                    None => {
+                        let index = self.strings.len();
+                        self.strings.push(BString {
+                            bytes: bytes.clone(),
+                            span: constant.span,
+                        });
+                        self.string_index.insert(bytes, index);
+                        index
+                    }
+                };
+                Ok(DecodedConstant::Str(index))
+            }
+            MirConstantKind::Float | MirConstantKind::Char | MirConstantKind::Null => {
+                Err(BackendError::unsupported_constant(
+                    constant.span,
+                    "only integer, boolean, and string literals are supported by the native subset",
+                ))
+            }
         }
+    }
+
+    /// Decodes a string literal's source text (including its quotes) into
+    /// the literal's UTF-8 byte contents, decoding every escape sequence
+    /// (`\n`, `\r`, `\t`, `\0`, `\\`, `\"`, `\'`, `\xHH`, `\u{...}`).
+    /// The lexer validates escapes, so this path is defensive: malformed
+    /// text is reported as a structured decode error instead of panicking.
+    fn decode_str(&self, span: Span) -> Result<Vec<u8>, BackendError> {
+        let Some(file) = self.sources.get(span.file()) else {
+            return Err(BackendError::decode_error(
+                span,
+                "no source file for the string literal",
+            ));
+        };
+        let Some(text) = file.span_text(span) else {
+            return Err(BackendError::decode_error(
+                span,
+                "string literal text is unavailable",
+            ));
+        };
+        let bytes = text.as_bytes();
+        if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
+            return Err(BackendError::decode_error(
+                span,
+                "malformed string literal token",
+            ));
+        }
+        let mut out = Vec::with_capacity(bytes.len() - 2);
+        let mut index = 1;
+        let end = bytes.len() - 1;
+        while index < end {
+            let byte = bytes[index];
+            if byte == b'\\' {
+                index += 1;
+                if index >= end {
+                    return Err(BackendError::decode_error(
+                        span,
+                        "unterminated escape sequence in string literal",
+                    ));
+                }
+                let escape = bytes[index];
+                index += 1;
+                match escape {
+                    b'n' => out.push(b'\n'),
+                    b'r' => out.push(b'\r'),
+                    b't' => out.push(b'\t'),
+                    b'0' => out.push(0),
+                    b'\\' => out.push(b'\\'),
+                    b'"' => out.push(b'"'),
+                    b'\'' => out.push(b'\''),
+                    b'x' => {
+                        if index + 2 > end {
+                            return Err(BackendError::decode_error(
+                                span,
+                                "incomplete `\\x` escape in string literal",
+                            ));
+                        }
+                        let hi = hex_digit(bytes[index], span)?;
+                        let lo = hex_digit(bytes[index + 1], span)?;
+                        out.push(hi << 4 | lo);
+                        index += 2;
+                    }
+                    b'u' => {
+                        if index >= end || bytes[index] != b'{' {
+                            return Err(BackendError::decode_error(
+                                span,
+                                "malformed `\\u` escape in string literal",
+                            ));
+                        }
+                        index += 1;
+                        let digits_start = index;
+                        let mut value: u32 = 0;
+                        while index < end && bytes[index] != b'}' {
+                            if index - digits_start >= 6 {
+                                return Err(BackendError::decode_error(
+                                    span,
+                                    "`\\u` escape has more than six digits",
+                                ));
+                            }
+                            value =
+                                value.wrapping_mul(16) + u32::from(hex_digit(bytes[index], span)?);
+                            index += 1;
+                        }
+                        if index >= end || bytes[index] != b'}' || index == digits_start {
+                            return Err(BackendError::decode_error(
+                                span,
+                                "malformed `\\u` escape in string literal",
+                            ));
+                        }
+                        index += 1;
+                        let ch = char::from_u32(value).ok_or_else(|| {
+                            BackendError::decode_error(
+                                span,
+                                "`\\u` escape is not a valid Unicode scalar value",
+                            )
+                        })?;
+                        let mut buf = [0u8; 4];
+                        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                    }
+                    _ => {
+                        return Err(BackendError::decode_error(
+                            span,
+                            "unknown escape sequence in string literal",
+                        ));
+                    }
+                }
+            } else {
+                // A raw character: copy its full UTF-8 encoding.
+                let ch = text[index..end].chars().next().ok_or_else(|| {
+                    BackendError::decode_error(span, "malformed UTF-8 in string literal")
+                })?;
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                index += ch.len_utf8();
+            }
+        }
+        Ok(out)
     }
 
     /// Decodes an integer literal's source text into a 64-bit two's

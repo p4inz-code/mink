@@ -2,7 +2,7 @@
 //!
 //! The type system uses a small arena of [`TypeKind`]s addressed by stable
 //! [`TypeId`]s and owned by a [`TypeTable`]. Concrete types (`Int`, `Float`,
-//! …, `Range`, `Fn`) are interned, so identical types share one id and
+//! …, `Range`, `Ptr`, `Fn`) are interned, so identical types share one id and
 //! compare equal by identity; inference variables are arena slots whose
 //! content unification can resolve, mirroring the classic union-find style
 //! used by many statically typed compilers.
@@ -77,6 +77,17 @@ pub enum TypeKind {
     Unit,
     /// A range `start..end` / `start..=end` over values of `element`.
     Range(TypeId),
+    /// A pointer to a value of type `element` (session 13): the type of
+    /// addresses in the runtime model. Pointers are interned like other
+    /// concrete types, so `Ptr<Int>` and `Ptr<Str>` are distinct stable
+    /// types that compare equal by identity. A pointer is a single machine
+    /// word holding an address; arithmetic is byte-addressed and the
+    /// runtime validates alignment and bounds at every access (see
+    /// `docs/implementation/STRING_MEMORY_IMPLEMENTATION.md`). `Ptr` is a
+    /// value type, distinct from `Str` — a string is *represented* as a
+    /// blob address but is not a pointer type, so strings cannot be
+    /// dereferenced through the raw memory intrinsics.
+    Ptr(TypeId),
     /// A function taking `params` and producing `result`.
     Fn {
         /// The parameter types, in declaration order.
@@ -228,6 +239,10 @@ impl TypeTable {
                 self.unify(*ia, *ib)?;
                 Ok(a)
             }
+            (TypeKind::Ptr(ia), TypeKind::Ptr(ib)) => {
+                self.unify(*ia, *ib)?;
+                Ok(a)
+            }
             (
                 TypeKind::Fn {
                     params: pa,
@@ -272,6 +287,7 @@ impl TypeTable {
             Some(TypeKind::Null) => "Null".to_string(),
             Some(TypeKind::Unit) => "Unit".to_string(),
             Some(TypeKind::Range(elem)) => format!("Range<{}>", self.display(*elem)),
+            Some(TypeKind::Ptr(elem)) => format!("Ptr<{}>", self.display(*elem)),
             Some(TypeKind::Fn { params, result }) => {
                 let params = params
                     .iter()
@@ -292,5 +308,66 @@ impl TypeTable {
     /// Whether the table contains no types.
     pub fn is_empty(&self) -> bool {
         self.kinds.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Interns the type `Ptr<Int>`.
+    fn ptr_int(table: &mut TypeTable) -> TypeId {
+        let elem = table.push(TypeKind::Int);
+        table.push(TypeKind::Ptr(elem))
+    }
+
+    #[test]
+    fn pointer_types_are_interned() {
+        let mut table = TypeTable::new();
+        let a = ptr_int(&mut table);
+        let b = ptr_int(&mut table);
+        assert_eq!(a, b, "identical pointer types share one id");
+    }
+
+    #[test]
+    fn pointer_element_types_distinguish_identity() {
+        let mut table = TypeTable::new();
+        let int = table.push(TypeKind::Int);
+        let unit = table.push(TypeKind::Unit);
+        let ptr_int = table.push(TypeKind::Ptr(int));
+        let ptr_unit = table.push(TypeKind::Ptr(unit));
+        assert_ne!(ptr_int, ptr_unit, "Ptr<Int> and Ptr<Unit> are distinct");
+        assert_eq!(table.display(ptr_int), "Ptr<Int>");
+        assert_eq!(table.display(ptr_unit), "Ptr<Unit>");
+    }
+
+    #[test]
+    fn pointer_unification_is_structural() {
+        let mut table = TypeTable::new();
+        let a = ptr_int(&mut table);
+        let b = ptr_int(&mut table);
+        assert_eq!(table.unify(a, b).unwrap(), a);
+        // A pointer unifies with a fresh inference variable, resolving the
+        // variable to the pointer type.
+        let var = table.push(TypeKind::Infer(None));
+        let unified = table.unify(var, a).unwrap();
+        assert_eq!(table.canonical(var), a);
+        assert_eq!(unified, a);
+    }
+
+    #[test]
+    fn pointer_conflicts_are_reported() {
+        let mut table = TypeTable::new();
+        let ptr_int = ptr_int(&mut table);
+        let elem = table.push(TypeKind::Str);
+        let ptr_str = table.push(TypeKind::Ptr(elem));
+        let err = table.unify(ptr_int, ptr_str).unwrap_err();
+        // A `Ptr<Int>` vs `Ptr<Str>` conflict surfaces as a conflict of the
+        // element types (consistent with `Range`), which the caller renders.
+        let (a, b) = err;
+        assert_eq!(table.canonical(a), table.push(TypeKind::Int));
+        assert_eq!(table.canonical(b), table.push(TypeKind::Str));
+        // A pointer never unifies with a non-pointer concrete type.
+        assert!(table.unify(ptr_int, elem).is_err());
     }
 }

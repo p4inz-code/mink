@@ -1264,7 +1264,7 @@ mod tests {
         );
         let (ast, _, _) = parsed.into_parts();
         let semantic = semantics::analyze(&ast);
-        let types = typecheck::check(&ast, &semantic);
+        let types = typecheck::check(&ast, &semantic, &sources);
         (ast, semantic, types)
     }
 

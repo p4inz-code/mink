@@ -1,6 +1,6 @@
 # MINK Runtime Implementation
 
-**Status:** Implemented (Session 12)
+**Status:** Implemented (Sessions 12–13)
 **Version:** 0.1.0
 
 This document describes the first real MINK runtime and memory-model
@@ -87,6 +87,12 @@ The `.text` entry-point stub:
 | `Free`             | `rt_free(ptr)`                    | exact live start required (`E-R04/07`)  |
 | `MemLoad`          | `rt_mem_load(addr) -> word`       | 8-byte word inside a live block (`E-R05/07`) |
 | `MemStore`         | `rt_mem_store(addr, value)`       | same validation                        |
+| `StrAlloc`         | `rt_str_alloc(size) -> addr`      | heap blob `8 + size`, negative rejected (`E-R08`) |
+| `StrFree`          | `rt_str_free(str)`                | heap blob only (`E-R05` otherwise)     |
+| `StrLen`           | `rt_str_len(str) -> len`          | length prefix; validates the pointer   |
+| `StrByte`          | `rt_str_byte(str, i) -> byte`     | bounds-checked index (`E-R09`)         |
+| `StrSetByte`       | `rt_str_set_byte(str, i, v)`      | bounds-checked index (`E-R09`)         |
+| `PrintStr`         | `rt_print_str(str)`               | bytes + CRLF to stdout                 |
 | `PrintInt`         | `rt_print_int(value)`             | decimal digits + CRLF to stdout        |
 | `Exit`             | `rt_exit(code)`                   | leak check, restore stack, return      |
 | `Fail`             | `rt_fail(number)`                 | write diagnostic, exit `100 + number`  |
@@ -94,10 +100,18 @@ The `.text` entry-point stub:
 | `WriteStderr`      | `write(buf, len)`                 | cached handle through `WriteFile`      |
 
 The intrinsics are predeclared as `SymbolKind::Intrinsic` module symbols
-(`rt_alloc`, `rt_free`, `rt_mem_load`, `rt_mem_store`, `rt_exit`,
-`rt_print_int`), typed by the type checker, threaded through HIR/MIR as
-module-item-style statics, and lowered by the backend to
-`BInstKind::RuntimeCall` with a stable `RuntimeService` id.
+(`rt_alloc`, `rt_free`, `rt_mem_load`, `rt_mem_store`, `rt_str_alloc`,
+`rt_str_free`, `rt_str_len`, `rt_str_byte`, `rt_str_set_byte`,
+`rt_print_str`, `rt_exit`, `rt_print_int`), typed by the type checker,
+threaded through HIR/MIR as module-item-style statics, and lowered by the
+backend to `BInstKind::RuntimeCall` with a stable `RuntimeService` id.
+
+String values are one word: the address of a length-prefixed UTF-8 byte
+blob. String literals are immutable blobs in the image's `.text`
+string-data region (bounds recorded into `.bss` at `rt_init`);
+`rt_str_alloc` creates heap blobs through the validated allocator. The
+string intrinsics validate their pointer argument first (`E-R05`) and
+bounds-check every index (`E-R09`).
 
 ## 6. Runtime diagnostics
 
@@ -114,6 +128,7 @@ structured `mink: runtime error[E-R0N]: <message>` line to stderr:
 | E-R06| 6      | leak (live allocation at exit)                 |
 | E-R07| 7      | misaligned pointer                             |
 | E-R08| 8      | invalid allocation size                        |
+| E-R09| 9      | string index out of range                      |
 
 ## 7. Image layout
 
@@ -135,13 +150,16 @@ loader never scans past them into string data.
   trips, LIFO reuse, every `E-R0N` path, `rt_print_int` output, and
   determinism of both the image bytes and the runtime behavior.
 
-Full suite after session 12: **654 tests**, all passing (see
+Full suite after session 13: **700 tests**, all passing (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown).
 
 ## 9. Known limitations
 
 - The runtime supports a single-threaded, single-heap model; no GC, no
   ownership/borrow checking (deliberate — see §1).
-- String/struct/array types are not yet implemented; `rt_mem_*` operate on
-  raw 8-byte words.
+- Strings are byte sequences without runtime UTF-8 validation; literals are
+  immutable (no built-in concatenation). Strings and raw `rt_mem_*`
+  pointers are distinct types and never mix.
+- Struct/array types are not yet implemented; `rt_mem_*` operate on raw
+  8-byte words at typed `Ptr<Int>` addresses.
 - The arena is a fixed 1 MiB; exhaustion is a structured error.

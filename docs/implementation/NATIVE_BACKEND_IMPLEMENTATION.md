@@ -2,7 +2,8 @@
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 11 — Native Backend / Code Generation Foundation
+**Sessions:** 11 — Native Backend / Code Generation Foundation, 13 —
+String + Memory Types (strings and typed pointers)
 
 ## 1. Purpose
 
@@ -98,11 +99,17 @@ first milestone implements one target).
   params and locals are typed `BLocal`s (name, symbol, `BType`, mutability,
   span); temporaries created during lowering are unnamed locals;
 - `BType` — `Int` (64-bit), `Bool` (`0`/`1`), `Range` (a two-word value:
-  the normalized exclusive end and the iteration cursor), and `Unit` (a
-  function that produces no value);
+  the normalized exclusive end and the iteration cursor), `Ptr` (a typed
+  pointer, one word), `Str` (a string, one word: the address of a
+  length-prefixed UTF-8 blob), and `Unit` (a function that produces no
+  value);
 - `BInst` — instructions with exact source spans:
   `LoadConst`, `LoadLocal`, `StoreLocal`, `LoadStatic`, `StoreStatic`,
-  `Binary`, `Unary`, `Call`, `RangeInit`, `RangeNext`, `RangeFinished`;
+  `LoadStr`, `Binary`, `Unary`, `Call`, `RangeInit`, `RangeNext`,
+  `RangeFinished`;
+- `BProgram` additionally carries `strings: Vec<BString>` — decoded literal
+  blobs (bytes + exact source span) emitted into the image's immutable
+  string-data region;
 - `BTerminator` — `Return` (with optional value), `Jump`, `Branch`
   (condition + then/else blocks);
 - `BStatic` — module bindings with decoded constant values
@@ -114,23 +121,27 @@ first milestone implements one target).
 resolution, type checking, or MIR analysis — it only consumes the answers
 MIR already carries (classified types, locals, operands, control flow).
 
-**Supported subset.** Types `Int`, `Bool`, `Range<Int>`; integer and
-boolean literals **decoded from the source text** (the backend is the first
-stage to decode literal values: decimal, `0x` hex, and `_` separators, plus
-`true`/`false`); local loads and stores; module-binding loads and stores;
-arithmetic (`+ - * / %`), shifts (`<< >>`), bitwise (`& ^ | ~`),
-comparisons and equality (`< <= > >= == !=`), logical (`&& || !`),
-negation (`-`), range construction and iteration (`for` loops via
-`RangeInit`/`RangeNext`/`RangeFinished`), direct function calls, and
-`if`/`else`, `while`, `for`, `loop`, `break`, `continue`, `return`.
+**Supported subset.** Types `Int`, `Bool`, `Range<Int>`, `Ptr<Int>`, and
+`Str`; integer and boolean literals **decoded from the source text** (the
+backend is the first stage to decode literal values: decimal, `0x` hex, and
+`_` separators, plus `true`/`false`); string literals decoded into byte
+blobs (escape, UTF-8, and `\xNN` hex escapes resolved from the source
+text, with the exact literal span preserved on `BString`); local loads and
+stores; module-binding loads and stores; byte-addressed pointer arithmetic
+(`p + n`, `n + p`, `p - n`); arithmetic (`+ - * / %`), shifts (`<< >>`),
+bitwise (`& ^ | ~`), comparisons and equality (`< <= > >= == !=`),
+logical (`&& || !`), negation (`-`), range construction and iteration
+(`for` loops via `RangeInit`/`RangeNext`/`RangeFinished`), direct function
+calls, and `if`/`else`, `while`, `for`, `loop`, `break`, `continue`,
+`return`.
 
 **Rejected constructs** (structured errors, never miscompilation):
 
 | Construct | Code |
 |---|---|
 | Member loads, index loads, function values | `E-B01` |
-| Float / string / char / `null` literals | `E-B02` |
-| `Float`, `Str`, `Char`, `Null`, unresolved inference, `Range` in a single-word position (function result, static, operand) | `E-B03` |
+| Float / char / `null` literals | `E-B02` |
+| `Float`, `Char`, `Null`, unresolved inference, `Range` in a single-word position (function result, static, operand) | `E-B03` |
 | Member / index assignment targets | `E-B04` |
 | Module bindings initialized by non-constant expressions | `E-B05` |
 | Calls whose callee is not a module-level function | `E-B06` |
@@ -169,10 +180,15 @@ against malformed hand-built or mutated instructions.
   emitter only sees comparisons, arithmetic, and jumps. Calls follow the
   Windows x64 calling convention (register args, stack return slots),
   with the callee's result moved into the caller's target slot.
-- **`pe.rs`** assembles the sections (`.text`, `.data` when there are
-  module bindings, `.reloc`) into a complete PE image with correct
-  headers, section table, RVAs, and file padding. Entry point RVA is
-  `0x1000` (the start of `.text`).
+  `LoadStr` emits the length-prefixed blob's image address into the
+  target slot; the blob's data bytes live in `.text` between the
+  `str_data_start`/`str_data_end` label bounds recorded into `.bss` by
+  `rt_init`.
+- **`pe.rs`** assembles the sections (`.text` containing user code, the
+  embedded runtime, and the immutable string-data region; `.data` when
+  there are module bindings; `.reloc`) into a complete PE image with
+  correct headers, section table, RVAs, and file padding. Entry point RVA
+  is `0x1000` (the start of `.text`).
 - The `main` function's integer/boolean result becomes the process exit
   code; a unit `main` exits `0`.
 
@@ -238,6 +254,13 @@ documented in `src/runtime/abi.rs`:
   `E-R05` when accessing a freed or never-allocated block. All memory is
   zero-initialized, so behavior is deterministic and leak-safe for every
   supported program.
+- **String services** — `rt_str_alloc(size)` allocates a heap blob of
+  `8 + size` bytes (negative sizes trap `E-R08`) with a length prefix;
+  `rt_str_len`/`rt_str_byte`/`rt_str_set_byte` validate the pointer
+  (`E-R05`) and bounds-check every index (`E-R09`); `rt_str_free` returns
+  heap blobs to the free list; `rt_print_str` writes the blob's bytes plus
+  CRLF to stdout. Literal strings are validated against the immutable
+  string-data bounds recorded by `rt_init`.
 - **Services** — `rt_print_int` writes an integer plus newline to stdout;
   `rt_exit(code)` traps with `E-R06` when a live block is leaked.
 - **Runtime table** — a `.bss` region holds the entry stack slot, heap
@@ -249,10 +272,13 @@ documented in `src/runtime/abi.rs`:
 - Only the first native target (`x86_64-windows-pe`) is implemented;
   `x86_64-linux-elf` and `aarch64-linux-elf` are recognized but rejected
   (`E-B11`).
-- No floating point, strings, characters, `null`, member/index places,
-  function values, or structs — all rejected with structured errors. The
-  memory-layout model (`src/runtime/layout.rs`) is the groundwork for
-  future aggregates but nothing consumes it yet.
+- No floating point, characters, `null`, member/index places, function
+  values, or structs — all rejected with structured errors. Strings are
+  byte sequences (no runtime UTF-8 validation, no concatenation, literals
+  immutable); `TypeKind::Ptr<T>` exists in the type system but only
+  `Ptr<Int>` is instantiable today. The memory-layout model
+  (`src/runtime/layout.rs`) is the groundwork for future aggregates but
+  nothing consumes it yet.
 - No debug info, no symbol tables beyond what the PE format requires, and
   no optimizations in the backend itself (the MIR pipeline already
   optimized the input).
@@ -269,16 +295,18 @@ documented in `src/runtime/abi.rs`:
     cargo build
     git diff --check
 
-Full suite after session 12: **654 tests** (61 CLI + 50 lexer + 88 parser +
-62 parser hardening + 72 semantics + 12 source + 122 typecheck + 25 HIR +
-34 MIR + 38 optimization + 39 lib unit + 37 backend + 14 runtime
+Full suite after session 13: **700 tests** (61 CLI + 50 lexer + 88 parser +
+62 parser hardening + 72 semantics + 12 source + 143 typecheck + 25 HIR +
+34 MIR + 38 optimization + 49 lib unit + 42 backend + 24 runtime
 end-to-end), all passing. The backend tests (`tests/backend.rs`) cover
 program structure and determinism, functions/locals/instructions, constant
-decoding, arithmetic, comparisons and logical operators, calls, module
-bindings, range iteration, every rejected construct with its code and
-span, multi-error reporting, verifier checks on malformed instructions, PE
-image structure, emission determinism, and the CLI end-to-end build (build
-+ run the generated binary). The runtime tests (`tests/runtime.rs`) build
-and run native binaries that allocate, store, load, and free heap blocks,
-print integers, trap with the documented `E-R01+` exit codes on invalid
-memory operations, and leak-check on exit.
+decoding, string decoding (escapes, UTF-8, hex), `LoadStr` lowering with
+exact spans, pointer locals and arithmetic, arithmetic, comparisons and
+logical operators, calls, module bindings, range iteration, every rejected
+construct with its code and span, multi-error reporting, verifier checks
+on malformed instructions, PE image structure, emission determinism, and
+the CLI end-to-end build (build + run the generated binary). The runtime
+tests (`tests/runtime.rs`) build and run native binaries that allocate,
+store, load, and free heap blocks and string blobs, print integers and
+strings, trap with the documented `E-R01+` exit codes on invalid memory
+operations, and leak-check on exit.

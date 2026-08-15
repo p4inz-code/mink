@@ -139,6 +139,27 @@ fn verify_inst(
             verify_target(function, *target, inst.span, errors);
             verify_static_index(program, *static_index, inst.span, errors);
         }
+        BInstKind::LoadStr {
+            target,
+            string_index,
+        } => {
+            verify_target(function, *target, inst.span, errors);
+            if program.strings.get(*string_index).is_none() {
+                errors.push(error(
+                    inst.span,
+                    format!("instruction references unknown string literal {string_index}"),
+                ));
+            }
+            if function.local(*target).map(|local| local.ty) != Some(BType::Str) {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: a string load must write a string slot",
+                        function.name
+                    ),
+                ));
+            }
+        }
         BInstKind::StoreStatic { static_index, src } => {
             verify_static_index(program, *static_index, inst.span, errors);
             verify_operand(function, src, inst.span, errors);
@@ -352,6 +373,65 @@ fn verify_binary_types(
 ) {
     use BinaryOp::*;
     let produces_bool = matches!(op, Lt | Le | Gt | Ge | Eq | Ne | And | Or);
+    let operand_ty = |operand: &BOperand| match operand {
+        BOperand::Local(id) => function.local(*id).map(|local| local.ty),
+        BOperand::Const(_) => None,
+    };
+    let lhs_ty = operand_ty(lhs);
+    let rhs_ty = operand_ty(rhs);
+    let lhs_ptr = lhs_ty == Some(BType::Ptr);
+    let rhs_ptr = rhs_ty == Some(BType::Ptr);
+    // Pointer forms: `Ptr ± Int -> Ptr` (byte-addressed arithmetic) and
+    // `Ptr == Ptr -> Bool`. Arithmetic allows exactly one pointer side;
+    // `-` is directional (the pointer must be the left operand, so only
+    // `p - n` is valid), and `+` accepts `p + n` / `n + p`; equality
+    // needs both sides to be pointers.
+    if lhs_ptr || rhs_ptr {
+        let valid = match op {
+            Add => lhs_ptr != rhs_ptr,
+            Sub => lhs_ptr && !rhs_ptr,
+            Eq | Ne => lhs_ptr && rhs_ptr,
+            _ => false,
+        };
+        if !valid {
+            errors.push(error(
+                span,
+                format!(
+                    "function `{}`: binary pointer operand combination does not match the operator",
+                    function.name
+                ),
+            ));
+        }
+        let expected_result = if produces_bool {
+            BType::Bool
+        } else {
+            BType::Ptr
+        };
+        if function.local(target).map(|local| local.ty) != Some(expected_result) {
+            errors.push(error(
+                span,
+                format!(
+                    "function `{}`: binary result type does not match the operator",
+                    function.name
+                ),
+            ));
+        }
+        // The non-pointer side of pointer arithmetic must be an integer.
+        for (operand, is_ptr) in [(lhs, lhs_ptr), (rhs, rhs_ptr)] {
+            if let BOperand::Local(id) = operand {
+                if !is_ptr && function.local(*id).map(|local| local.ty) != Some(BType::Int) {
+                    errors.push(error(
+                        span,
+                        format!(
+                            "function `{}`: the non-pointer operand of pointer arithmetic must be an integer",
+                            function.name
+                        ),
+                    ));
+                }
+            }
+        }
+        return;
+    }
     let expected_operand: Option<BType> = match op {
         And | Or => Some(BType::Bool),
         Lt | Le | Gt | Ge => Some(BType::Int),

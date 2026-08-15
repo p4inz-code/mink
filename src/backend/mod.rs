@@ -109,7 +109,7 @@ fn entry_function(lowered: &BProgram) -> Result<usize, BackendError> {
             "the entry function `main` must not take parameters",
         ));
     }
-    if main.result == BType::Range {
+    if matches!(main.result, BType::Range | BType::Ptr | BType::Str) {
         return Err(BackendError::invalid_entry_point(
             main.span,
             "the entry function `main` must produce an integer, a boolean, or nothing",

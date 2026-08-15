@@ -262,7 +262,7 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
     // analysis unsafe or meaningless, and skipping it avoids cascades.
     let (semantic, types, hir, mir) = if parsed.is_valid() {
         let semantic = semantics::analyze(parsed.ast());
-        let types = typecheck::check(parsed.ast(), &semantic);
+        let types = typecheck::check(parsed.ast(), &semantic, sources);
         errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
         errors.extend(types.errors().iter().cloned().map(CheckError::Type));
         let (hir, mir) = if errors.is_empty() {

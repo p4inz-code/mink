@@ -146,13 +146,15 @@ foundation in this document and the planning documents under `docs/` was
 reviewed and cross-checked, and implementation proceeds incrementally from
 foundations toward dependent systems per `docs/roadmap/IMPLEMENTATION_ROADMAP.md`.
 
-As of session 12 the compiler implements the pipeline
+As of session 13 the compiler implements the pipeline
 
     Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis
         → HIR → MIR → Optimization → Backend → Runtime → executable
 
-for the `x86_64-windows-pe` target (see `README.md` and
-`docs/implementation/` for the current status and the supported subset).
+for the `x86_64-windows-pe` target, including strings (`Str`) and typed
+pointers (`Ptr<Int>`) as the first memory-backed types (see `README.md`
+and `docs/implementation/` for the current status and the supported
+subset).
 The planning documents remain the authoritative long-term specification;
 the implementation documents record what is actually built, and where the
 two differ, the implementation documents reflect current reality.

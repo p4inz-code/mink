@@ -41,7 +41,7 @@ fn lower_src(src: &str) -> (SourceMap, Ast, SemanticResult, TypeResult, HirProgr
         "semantic errors: {:?}",
         semantic.errors()
     );
-    let types = mink::typecheck::check(&ast, &semantic);
+    let types = mink::typecheck::check(&ast, &semantic, &sources);
     assert!(!types.has_errors(), "type errors: {:?}", types.errors());
     let program = mink::hir::lower(&ast, &semantic, &types)
         .unwrap_or_else(|errors| panic!("clean front end must lower: {errors:?}"));
@@ -692,7 +692,7 @@ fn unresolved_reference_is_a_lowering_error() {
         span: next_span(),
     }]);
     let semantic = mink::semantics::analyze(&ast);
-    let types = mink::typecheck::check(&ast, &semantic);
+    let types = mink::typecheck::check(&ast, &semantic, &sources);
     let errors = hir::lower(&ast, &semantic, &types).unwrap_err();
     assert_eq!(errors.len(), 1, "errors: {errors:?}");
     assert_eq!(errors[0].kind(), HirErrorKind::UnresolvedSymbol);

@@ -65,8 +65,8 @@ $ echo $?
 1
 ```
 
-MINK also ships a deterministic runtime heap with explicit, leak-checked
-memory management:
+MINK ships strings and typed pointers on top of the deterministic,
+leak-checked runtime heap:
 
 ```mink
 fn main() {
@@ -81,9 +81,22 @@ fn main() {
 }
 ```
 
+```mink
+fn main() {
+    let s = rt_str_alloc(5);
+    rt_str_set_byte(s, 0, 104);
+    rt_str_set_byte(s, 1, 105);
+    rt_str_set_byte(s, 2, 33);
+    rt_print_str(s);              // prints: hi!
+    rt_str_free(s);
+    rt_print_str("done");          // string literals are immutable byte data
+    return 0;
+}
+```
+
 Access a freed or never-allocated block and the runtime traps with a
-structured `E-R05` diagnostic — no silent corruption, no segfault guessing
-games.
+structured `E-R05` diagnostic; index past a string's end and it traps with
+`E-R09` — no silent corruption, no segfault guessing games.
 
 ## What works today
 
@@ -92,18 +105,21 @@ games.
   folding, copy propagation, CFG simplification, unreachable-block
   elimination, dead-code elimination) → native code generation → embedded
   runtime.
-- **Language subset** — integers, booleans, comparisons, logical and bitwise
+- **Language subset** — integers, booleans, **strings** (`Str`),
+  **typed pointers** (`Ptr<Int>`), comparisons, logical and bitwise
   operators, `if`/`while`/`for`/`loop` control flow, direct function calls,
   module bindings, and integer results becoming process exit codes.
 - **Runtime intrinsics** — `rt_alloc`, `rt_free`, `rt_mem_load`,
-  `rt_mem_store` (validated against a bounded liveness table), `rt_exit`,
-  and `rt_print_int`, backed by a deterministic bump/free-list heap with
-  structured `E-R01+` diagnostics.
+  `rt_mem_store` (validated against a bounded liveness table), and the
+  string intrinsics `rt_str_alloc`/`rt_str_free`/`rt_str_len`/
+  `rt_str_byte`/`rt_str_set_byte`/`rt_print_str` (bounds-checked, `E-R09`),
+  plus `rt_exit` and `rt_print_int`, backed by a deterministic
+  bump/free-list heap with structured `E-R01+` diagnostics.
 - **Native target** — `x86_64-windows-pe`: a self-contained code generator
   and PE container builder producing runnable Windows executables with no
   external toolchain.
 - **Honest errors** — everything outside the supported subset (floating
-  point, strings, …) is rejected with structured diagnostics instead of
+  point, characters, …) is rejected with structured diagnostics instead of
   being miscompiled.
 
 ## Quick start
@@ -153,12 +169,15 @@ Honest status, because durable engineering starts with accurate claims:
   (`E-B11`).
 - **Fixed 1 MiB heap** — exhaustion is a structured error (`E-R02`).
 - **Single-threaded runtime** — no concurrency primitives yet.
-- **No strings/structs/arrays** — `rt_mem_*` operates on raw 8-byte words;
-  the memory-layout groundwork exists but no aggregate types consume it yet.
+- **No structs/arrays** — `rt_mem_*` operates on raw 8-byte words at typed
+  `Ptr<Int>` addresses; the memory-layout groundwork exists but no
+  composite types consume it yet.
+- **Strings are byte sequences** — literals are immutable, there is no
+  concatenation, and UTF-8 well-formedness is not validated at runtime.
 - **No ownership/borrow checking** — deliberately deferred; the memory model
   is established so safety features have a stable foundation.
 - **No garbage collector** — allocation is explicit and leak-checked on exit.
-- **Limited native subset** — no floating point, strings, characters, `null`,
+- **Limited native subset** — no floating point, characters, `null`,
   member/index places, or function values in the native backend yet.
 - **No stdlib or package manager yet** — and no IDE tooling beyond the CLI.
 
@@ -176,7 +195,9 @@ that matters.
 
 - [`docs/implementation/`](docs/implementation/) — implementation records
   for every stage: lexer, parser, semantic analysis, type system and
-  inference, HIR, MIR, optimization, native backend, and runtime.
+  inference, HIR, MIR, optimization, native backend, runtime, and the
+  string + memory type foundation
+  ([`STRING_MEMORY_IMPLEMENTATION.md`](docs/implementation/STRING_MEMORY_IMPLEMENTATION.md)).
 - [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md)
   — compiler architecture and pipeline.
 - [`docs/language/`](docs/language/) — language specifications; the frozen
@@ -196,7 +217,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (654, all passing)
+├── tests/      Compiler tests (700, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

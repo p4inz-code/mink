@@ -37,7 +37,7 @@ fn check_src(src: &str) -> (SourceMap, Ast, SemanticResult, TypeResult) {
     let (ast, lex_errors, parse_errors) = parsed.into_parts();
     assert!(lex_errors.is_empty() && parse_errors.is_empty());
     let semantic = mink::semantics::analyze(&ast);
-    let types = mink::typecheck::check(&ast, &semantic);
+    let types = mink::typecheck::check(&ast, &semantic, &sources);
     (sources, ast, semantic, types)
 }
 
@@ -1209,7 +1209,7 @@ fn hand_built_unusual_asts_do_not_panic() {
         span,
     }]);
     let semantic = mink::semantics::analyze(&ast);
-    let types = mink::typecheck::check(&ast, &semantic);
+    let types = mink::typecheck::check(&ast, &semantic, &sources);
     // The literal/group targets are treated as plain expressions; the
     // literal callee is a genuine not-callable error — but nothing panics.
     assert_eq!(type_errors(&types, TypeErrorKind::NotCallable).len(), 1);
@@ -1690,7 +1690,7 @@ fn hand_built_inference_shapes_do_not_panic() {
         span: next_span(),
     }]);
     let semantic = mink::semantics::analyze(&ast);
-    let types = mink::typecheck::check(&ast, &semantic);
+    let types = mink::typecheck::check(&ast, &semantic, &sources);
     // The five unresolved identifiers are semantic errors; type analysis
     // pins nothing (error types absorb) and reports nothing extra.
     assert_eq!(
@@ -1708,4 +1708,223 @@ fn error_spans(result: &SemanticResult, kind: SemanticErrorKind) -> Vec<Span> {
         .filter(|error| error.kind() == kind)
         .map(mink::semantics::SemanticError::span)
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Strings and pointers (session 13)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn string_literal_expr_type_is_str_in_fn_body() {
+    let src = "fn main() { let s = \"hi\"; s; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "s")), "Str");
+    assert_expr_type(src, &types, "\"hi\"", "Str");
+}
+
+#[test]
+fn str_intrinsics_type_check() {
+    let src = "fn main() { let s = rt_str_alloc(4); rt_str_len(s); rt_str_byte(s, 0); rt_str_set_byte(s, 0, 65); rt_print_str(s); rt_str_free(s); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "s")), "Str");
+    assert_expr_type(src, &types, "rt_str_alloc(4)", "Str");
+    assert_expr_type(src, &types, "rt_str_len(s)", "Int");
+    assert_expr_type(src, &types, "rt_str_byte(s, 0)", "Int");
+}
+
+#[test]
+fn rt_alloc_returns_ptr_int() {
+    let src = "fn main() { let p = rt_alloc(16); p; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "p")),
+        "Ptr<Int>"
+    );
+    assert_expr_type(src, &types, "rt_alloc(16)", "Ptr<Int>");
+}
+
+#[test]
+fn pointer_arithmetic_keeps_pointer_type() {
+    let src = "fn main() { let p = rt_alloc(16); let q = p + 1; let r = q - 2; r; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(
+        type_name(&types, symbol_ty(&types, &_semantic, "p")),
+        "Ptr<Int>"
+    );
+    assert_expr_type(src, &types, "p + 1", "Ptr<Int>");
+    assert_expr_type(src, &types, "q - 2", "Ptr<Int>");
+}
+
+#[test]
+fn pointer_minus_pointer_is_rejected() {
+    // Only byte-addressed arithmetic is defined: `p - p` has no meaning
+    // until subtraction of two pointers is specified.
+    let src = "fn main() { let p = rt_alloc(16); let q = p + 8; q - p; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T02");
+}
+
+#[test]
+fn pointer_plus_pointer_is_rejected() {
+    let src = "fn main() { let p = rt_alloc(16); let q = rt_alloc(16); p + q; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T02");
+}
+
+#[test]
+fn pointer_arithmetic_with_bool_is_rejected() {
+    let src = "fn main() { let p = rt_alloc(16); p + true; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T02");
+}
+
+#[test]
+fn pointer_multiply_is_rejected() {
+    // Pointer arithmetic is only `+`/`-`; every other operator is invalid.
+    for src in [
+        "fn main() { let p = rt_alloc(16); p * 2; }",
+        "fn main() { let p = rt_alloc(16); 2 * p; }",
+        "fn main() { let p = rt_alloc(16); p / 2; }",
+        "fn main() { let p = rt_alloc(16); p % 2; }",
+        "fn main() { let p = rt_alloc(16); p << 1; }",
+        "fn main() { let p = rt_alloc(16); p & 1; }",
+    ] {
+        let (_sources, _ast, _semantic, types) = check_src(src);
+        let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+        assert_eq!(errors.len(), 1, "expected one E-T02 for `{src}`");
+        assert_eq!(errors[0].code(), "E-T02");
+    }
+}
+
+#[test]
+fn int_minus_pointer_is_rejected() {
+    // Subtraction is directional: only `p - n` is byte-addressed
+    // arithmetic; `n - p` is invalid.
+    let src = "fn main() { let p = rt_alloc(16); 2 - p; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T02");
+}
+
+#[test]
+fn pointer_arithmetic_with_unconstrained_offset_pins_int() {
+    // `p + x` with `x` otherwise unconstrained pins `x` to `Int`.
+    let src = "fn main() { let p = rt_alloc(16); let x = p + 1; let y = x - 2; y; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_expr_type(src, &types, "p + 1", "Ptr<Int>");
+    assert_expr_type(src, &types, "x - 2", "Ptr<Int>");
+}
+
+#[test]
+fn pointer_equality_is_bool() {
+    let src =
+        "fn main() { let p = rt_alloc(16); let q = p + 8; let b = p == q; let c = p != q; b; c; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_expr_type(src, &types, "p == q", "Bool");
+    assert_expr_type(src, &types, "p != q", "Bool");
+}
+
+#[test]
+fn pointer_equality_with_non_pointer_is_rejected() {
+    let src = "fn main() { let p = rt_alloc(16); p == 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+}
+
+#[test]
+fn null_pointer_zero_in_pointer_argument_position() {
+    // The literal `0` is the null pointer constant only in pointer-typed
+    // argument positions; it must not change the type of ordinary `0`s.
+    let src = "fn main() { rt_mem_load(0); rt_free(0); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+}
+
+#[test]
+fn zero_is_still_int_outside_pointer_positions() {
+    let src = "fn main() { let z = 0; rt_print_int(z); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+    assert_eq!(type_name(&types, symbol_ty(&types, &_semantic, "z")), "Int");
+}
+
+#[test]
+fn string_cannot_feed_raw_memory_intrinsics() {
+    let src = "fn main() { let s = rt_str_alloc(4); rt_free(s); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].expected(), Some("Ptr<Int>"));
+    assert_eq!(errors[0].actual(), Some("Str"));
+}
+
+#[test]
+fn pointer_cannot_feed_string_intrinsics() {
+    let src = "fn main() { let p = rt_alloc(16); rt_str_len(p); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].expected(), Some("Str"));
+    assert_eq!(errors[0].actual(), Some("Ptr<Int>"));
+}
+
+#[test]
+fn int_cannot_feed_pointer_intrinsics() {
+    // Only the literal `0` is the null pointer constant; a computed `Int`
+    // is not a pointer.
+    let src = "fn main() { let n = 1; rt_free(n); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].expected(), Some("Ptr<Int>"));
+    assert_eq!(errors[0].actual(), Some("Int"));
+}
+
+#[test]
+fn string_arithmetic_is_rejected() {
+    let src = "fn main() { let s = rt_str_alloc(4); s + 1; }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::InvalidOperator);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].code(), "E-T02");
+}
+
+#[test]
+fn pointer_types_unify_across_calls() {
+    // A user function parameter constrained to `Ptr<Int>` accepts a
+    // pointer from `rt_alloc` and rejects strings and ints.
+    let src = "fn f(p) { rt_mem_load(p); } fn main() { let p = rt_alloc(16); f(p); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+}
+
+#[test]
+fn string_types_unify_across_calls() {
+    let src = "fn f(s) { rt_str_len(s); } fn main() { let s = rt_str_alloc(4); f(s); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    assert!(!types.has_errors());
+}
+
+#[test]
+fn pointer_mismatch_across_calls_is_reported() {
+    let src = "fn f(p) { rt_mem_load(p); } fn main() { f(\"hi\"); }";
+    let (_sources, _ast, _semantic, types) = check_src(src);
+    let errors = type_errors(&types, TypeErrorKind::TypeMismatch);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].expected(), Some("Ptr<Int>"));
+    assert_eq!(errors[0].actual(), Some("Str"));
 }

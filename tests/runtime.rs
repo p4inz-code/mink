@@ -216,6 +216,130 @@ fn print_int_zero_and_single_digit() {
 }
 
 // ---------------------------------------------------------------------------
+// Strings: rt_print_str, rt_str_alloc, rt_str_len, byte access
+// ---------------------------------------------------------------------------
+
+#[test]
+fn print_str_writes_literal_bytes() {
+    let exe = build("fn main() { rt_print_str(\"hello, mink!\"); return 0; }");
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"hello, mink!\r\n");
+}
+
+#[test]
+fn print_str_preserves_embedded_escapes() {
+    let exe = build("fn main() { rt_print_str(\"a\\tb\\n\\\"q\\\"\\0z\"); return 0; }");
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"a\tb\n\"q\"\0z\r\n");
+}
+
+#[test]
+fn print_str_accepts_utf8_bytes() {
+    let exe = build("fn main() { rt_print_str(\"caf\u{e9}\u{20ac}\"); return 0; }");
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    let mut expected = "café€".as_bytes().to_vec();
+    expected.extend_from_slice(b"\r\n");
+    assert_eq!(stdout, expected);
+}
+
+#[test]
+fn empty_string_literal_prints_crlf() {
+    let exe = build("fn main() { rt_print_str(\"\"); return 0; }");
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"\r\n");
+}
+
+#[test]
+fn str_alloc_len_and_bytes_round_trip() {
+    let exe = build(
+        "fn main() {
+            let s = rt_str_alloc(3);
+            rt_str_set_byte(s, 0, 104);
+            rt_str_set_byte(s, 1, 105);
+            rt_str_set_byte(s, 2, 33);
+            rt_print_str(s);
+            rt_print_int(rt_str_len(s));
+            rt_print_int(rt_str_byte(s, 0));
+            rt_print_int(rt_str_byte(s, 2));
+            rt_str_free(s);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"hi!\r\n3\r\n104\r\n33\r\n");
+}
+
+#[test]
+fn str_alloc_starts_zero_filled() {
+    let exe = build(
+        "fn main() {
+            let s = rt_str_alloc(2);
+            rt_print_int(rt_str_byte(s, 0));
+            rt_print_int(rt_str_byte(s, 1));
+            rt_str_free(s);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"0\r\n0\r\n");
+}
+
+#[test]
+fn str_byte_out_of_range_is_e_ro9() {
+    let exe = build(
+        "fn main() {
+            let s = rt_str_alloc(2);
+            let b = rt_str_byte(s, 5);
+            rt_print_int(b);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 109);
+    assert!(stdout.is_empty());
+}
+
+#[test]
+fn str_set_byte_out_of_range_is_e_ro9() {
+    let exe = build(
+        "fn main() {
+            let s = rt_str_alloc(1);
+            rt_str_set_byte(s, 3, 65);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 109);
+    assert!(stdout.is_empty());
+}
+
+#[test]
+fn str_alloc_negative_size_is_e_ro8() {
+    let exe = build("fn main() { let s = rt_str_alloc(-1); return 0; }");
+    let (code, _stdout) = run(&exe);
+    assert_eq!(code, 108);
+}
+
+#[test]
+fn str_byte_negative_index_is_e_ro9() {
+    let exe = build(
+        "fn main() {
+            let s = rt_str_alloc(2);
+            rt_print_int(rt_str_byte(s, -1));
+            return 0;
+        }",
+    );
+    let (code, _stdout) = run(&exe);
+    assert_eq!(code, 109);
+}
+
+// ---------------------------------------------------------------------------
 // Determinism
 // ---------------------------------------------------------------------------
 
