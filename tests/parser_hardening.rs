@@ -10,8 +10,8 @@
 //! accuracy, and long-chain scale behavior.
 
 use mink::ast::{
-    AssignOp, BinaryOp, Block, ElseBranch, Expr, ExprKind, Ident, IfStmt, Item, ItemKind, Stmt,
-    StmtKind, Ty, TyKind, UnaryOp,
+    AssignOp, BinaryOp, Block, ElseBranch, Expr, ExprKind, Ident, IfStmt, Item, ItemKind,
+    MatchStmt, Stmt, StmtKind, Ty, TyKind, UnaryOp,
 };
 use mink::parser::{ParseErrorKind, ParseOutput, parse};
 use mink::source::{SourceMap, Span};
@@ -1258,7 +1258,17 @@ fn walk_stmt(stmt: &Stmt, text_len: u32, src: &str) {
             walk_block(body, text_len, src);
         }
         StmtKind::Loop(body) => walk_block(body, text_len, src),
+        StmtKind::Match(stmt) => walk_match_stmt(stmt, text_len, src),
         StmtKind::Expr(expr) => walk_expr(expr, text_len, src),
+    }
+}
+
+fn walk_match_stmt(stmt: &MatchStmt, text_len: u32, src: &str) {
+    assert_span_ok(stmt.span, text_len, src);
+    walk_expr(&stmt.scrutinee, text_len, src);
+    for arm in &stmt.arms {
+        assert_span_ok(arm.pattern.span(), text_len, src);
+        walk_block(&arm.body, text_len, src);
     }
 }
 
@@ -1379,8 +1389,8 @@ fn excluded_constructs_inside_functions_are_rejected() {
     let excluded: &[(&str, ParseErrorKind)] = &[
         // Type annotation on a binding.
         ("let x: int = 5;", ParseErrorKind::ExpectedEqual),
-        // match statement.
-        ("match x { _ => 1 }", ParseErrorKind::ExpectedExpression),
+        // match statements arrived with session 18 and are accepted; a
+        // pattern without `=>` is a dedicated E-P24.
         // Closure.
         ("let g = |x| x + 1;", ParseErrorKind::ExpectedExpression),
         // Block expression.

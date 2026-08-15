@@ -211,7 +211,8 @@ human-readable message, exact span) and reserve the `E-S*` range:
 `SemanticError` carries the offending name (for name-related kinds) and, for
 duplicates, the original declaration span, which the CLI renders as a note
 (`note: previous declaration is here`). Existing codes `E-L01`…`E-L08` and
-`E-P01`…`E-P22` are untouched.
+`E-P01`…`E-P24` are untouched (sessions 17–18 added `E-P22`…`E-P24` in the
+parser).
 
 Ownership diagnostics (`E-S10`/`E-S11`) come from the dedicated ownership
 stage (`src/ownership/`, session 15 — see

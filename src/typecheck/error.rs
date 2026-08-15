@@ -81,6 +81,17 @@ pub enum TypeErrorKind {
     NotAnEnum,
     /// An enum has no variant with the accessed name.
     UnknownVariant,
+    /// A `match` statement is not exhaustive: some value of the
+    /// scrutinee's type matches no arm (missing variants, or a finite
+    /// domain without a catch-all).
+    NonExhaustiveMatch,
+    /// A `match` arm can never run: it follows a `_`/binding arm that
+    /// already matches every value, or repeats a pattern an earlier arm
+    /// already matches.
+    UnreachableMatchArm,
+    /// A `match` scrutinee has a type that cannot be matched on (only
+    /// `Int`, `Bool`, and enums are matchable in this milestone).
+    InvalidMatchScrutinee,
 }
 
 impl TypeErrorKind {
@@ -114,6 +125,9 @@ impl TypeErrorKind {
             Self::AssignThroughImmutableRef => "E-T21",
             Self::NotAnEnum => "E-T22",
             Self::UnknownVariant => "E-T23",
+            Self::NonExhaustiveMatch => "E-T24",
+            Self::UnreachableMatchArm => "E-T25",
+            Self::InvalidMatchScrutinee => "E-T26",
         }
     }
 }
@@ -432,6 +446,37 @@ impl TypeError {
         )
     }
 
+    /// Creates a non-exhaustive-match error at `span` (`E-T24`), whose
+    /// message explains what is missing (the uncovered variants, or the
+    /// required catch-all arm).
+    pub fn non_exhaustive_match(span: Span, detail: impl Into<String>) -> Self {
+        Self::custom(TypeErrorKind::NonExhaustiveMatch, span, detail.into(), None)
+    }
+
+    /// Creates an unreachable-match-arm error at `span` (`E-T25`).
+    pub fn unreachable_match_arm(span: Span, detail: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::UnreachableMatchArm,
+            span,
+            detail.into(),
+            None,
+        )
+    }
+
+    /// Creates an invalid-match-scrutinee error at `span` (`E-T26`), where
+    /// `actual` is the rendered type of the matched value.
+    pub fn invalid_match_scrutinee(span: Span, actual: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::InvalidMatchScrutinee,
+            span,
+            format!(
+                "cannot match on a value of type `{}`; only `Int`, `Bool`, and enums are matchable",
+                actual.into()
+            ),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -503,7 +548,10 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::DerefNonReference
             | TypeErrorKind::AssignThroughImmutableRef
             | TypeErrorKind::NotAnEnum
-            | TypeErrorKind::UnknownVariant => actual.to_string(),
+            | TypeErrorKind::UnknownVariant
+            | TypeErrorKind::NonExhaustiveMatch
+            | TypeErrorKind::UnreachableMatchArm
+            | TypeErrorKind::InvalidMatchScrutinee => actual.to_string(),
         };
         f.write_str(&message)
     }

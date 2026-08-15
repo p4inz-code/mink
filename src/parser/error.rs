@@ -73,6 +73,10 @@ pub enum ParseErrorKind {
     /// A variant name was required after `::` in an enum variant
     /// reference (`Name::`).
     ExpectedVariant,
+    /// A match pattern was required (the left side of a `=>` arm).
+    ExpectedPattern,
+    /// `=>` was required after a match arm's pattern.
+    ExpectedFatArrow,
 }
 
 impl ParseErrorKind {
@@ -104,6 +108,8 @@ impl ParseErrorKind {
             Self::ExpectedType => "E-P20",
             Self::ExpectedGT => "E-P21",
             Self::ExpectedVariant => "E-P22",
+            Self::ExpectedPattern => "E-P23",
+            Self::ExpectedFatArrow => "E-P24",
         }
     }
 }
@@ -135,6 +141,10 @@ impl fmt::Display for ParseErrorKind {
             Self::ExpectedType => "expected a type",
             Self::ExpectedGT => "expected '>'",
             Self::ExpectedVariant => "expected a variant name after '::'",
+            Self::ExpectedPattern => {
+                "expected a match pattern (`_`, a name, `E::V`, a boolean, or an integer)"
+            }
+            Self::ExpectedFatArrow => "expected '=>' after the match pattern",
         };
         f.write_str(message)
     }

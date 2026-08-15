@@ -242,8 +242,89 @@ pub enum HirStmtKind {
     },
     /// An unconditional `loop { body }`.
     Loop(HirBlock),
+    /// A `match` statement (session 18): a `match scrutinee { pattern =>
+    /// block, ... }` dispatching on the scalar value of `scrutinee`.
+    Match(HirMatch),
     /// An expression evaluated for its side effects.
     Expr(HirExpr),
+}
+
+/// A lowered `match` statement: the typed scrutinee plus its arms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirMatch {
+    /// The value being matched, evaluated exactly once.
+    pub scrutinee: HirExpr,
+    /// The arms, in source order.
+    pub arms: Vec<HirMatchArm>,
+    /// Span covering the whole `match` statement.
+    pub span: Span,
+}
+
+/// One lowered `match` arm: a pattern and its body block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirMatchArm {
+    /// The pattern this arm matches.
+    pub pattern: HirPattern,
+    /// The block run when the pattern matches.
+    pub body: HirBlock,
+    /// Span covering the whole arm.
+    pub span: Span,
+}
+
+/// A lowered match pattern. Mirrors the AST [`Pattern`](crate::ast::Pattern):
+/// `_` and `name` match anything (a binding carries its resolved symbol),
+/// `true`/`false` match booleans, integer literals (optionally negated)
+/// match `Int` values, and `EnumName::Variant` matches by discriminant.
+/// Literal values stay undecoded: MIR lowering builds its comparison
+/// constants from the literal's span, matching the IR convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HirPattern {
+    /// `_`: matches any value and binds nothing.
+    Wildcard {
+        /// Span of the `_` token.
+        span: Span,
+    },
+    /// `name`: matches any value and binds it in the arm's scope.
+    Binding(HirIdent),
+    /// `EnumName::Variant`: matches the enum value with that discriminant.
+    EnumVariant {
+        /// The enum type name.
+        name: Box<HirName>,
+        /// The variant name.
+        variant: Box<HirName>,
+        /// Span of the whole pattern.
+        span: Span,
+    },
+    /// `true` or `false`.
+    Bool {
+        /// The literal value.
+        value: bool,
+        /// Span of the literal token.
+        span: Span,
+    },
+    /// An integer literal pattern: `5` or `-5`.
+    Int {
+        /// Whether the literal is negated.
+        negative: bool,
+        /// Span of the integer-literal token (whose text is decoded by the
+        /// backend).
+        literal_span: Span,
+        /// Span of the whole pattern (including any `-`).
+        span: Span,
+    },
+}
+
+impl HirPattern {
+    /// The span covered by the whole pattern as written.
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Wildcard { span } => *span,
+            Self::Binding(ident) => ident.span,
+            Self::EnumVariant { span, .. } => *span,
+            Self::Bool { span, .. } => *span,
+            Self::Int { span, .. } => *span,
+        }
+    }
 }
 
 /// A lowered `{ ... }` block.

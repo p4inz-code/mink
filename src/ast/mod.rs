@@ -281,8 +281,105 @@ pub enum StmtKind {
     },
     /// An unconditional `loop { body }`.
     Loop(Block),
+    /// A `match` statement (session 18): `match scrutinee { pattern =>
+    /// block, ... }` dispatching on the scalar value of `scrutinee`.
+    Match(MatchStmt),
     /// An expression evaluated for its side effects, followed by `;`.
     Expr(Expr),
+}
+
+/// A `match` statement (session 18): evaluates `scrutinee` once, then runs
+/// the block of the first arm whose pattern matches its value.
+///
+/// Matching is a statement, not an expression: arms are statement blocks,
+/// like `if` bodies, and `match` produces no value. Only scalar values are
+/// matchable — `Int` (integer-literal patterns), `Bool` (`true`/`false`),
+/// and enums (variant paths `E::V`) — plus the catch-all `_` wildcard and
+/// `name` binding patterns. The type checker requires every match to be
+/// exhaustive and rejects unreachable arms; see
+/// `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchStmt {
+    /// The value being matched, evaluated exactly once.
+    pub scrutinee: Expr,
+    /// The arms, in source order. The first matching arm's block runs.
+    pub arms: Vec<MatchArm>,
+    /// Span covering the whole `match` statement including its braces.
+    pub span: Span,
+}
+
+/// One arm of a [`MatchStmt`]: `pattern => block`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    /// The pattern this arm matches.
+    pub pattern: Pattern,
+    /// The block run when the pattern matches.
+    pub body: Block,
+    /// Span covering the whole arm (pattern, `=>`, and block).
+    pub span: Span,
+}
+
+/// A match pattern (session 18): the left side of a `=>` arm.
+///
+/// Patterns match scalar values: `_` and `name` match anything (a `name`
+/// additionally binds the value in the arm's scope), `true`/`false` match
+/// booleans, integer literals (optionally negated) match `Int` values, and
+/// `E::V` matches the enum variant `V` of enum `E` by discriminant.
+/// Literal values are not decoded into the tree: the raw source text is
+/// recovered from the literal's span, matching the expression convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pattern {
+    /// `_`: matches any value and binds nothing.
+    Wildcard {
+        /// Span of the `_` token.
+        span: Span,
+    },
+    /// `name`: matches any value and binds it (immutably) in the arm's
+    /// scope.
+    Binding(Ident),
+    /// `EnumName::Variant`: matches the enum value whose discriminant is
+    /// `Variant`'s position in `EnumName`'s variant list.
+    EnumVariant {
+        /// The enum type name.
+        name: Ident,
+        /// The variant name.
+        variant: Ident,
+    },
+    /// `true` or `false`: matches a boolean value.
+    Bool {
+        /// The literal value.
+        value: bool,
+        /// Span of the literal token.
+        span: Span,
+    },
+    /// An integer literal pattern: `5` or `-5`. The literal is an
+    /// `ExprKind::Int` node whose span covers the digit token; `negative`
+    /// records a leading `-`.
+    Int {
+        /// Whether the literal is negated (`-5`).
+        negative: bool,
+        /// The integer-literal expression (its span covers the digits).
+        literal: Expr,
+        /// Span covering the whole pattern (including any `-`).
+        span: Span,
+    },
+}
+
+impl Pattern {
+    /// The span covered by the whole pattern as written.
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Wildcard { span } => *span,
+            Self::Binding(ident) => ident.span,
+            Self::EnumVariant { name, variant } => {
+                let start = name.span.start().min(variant.span.start());
+                let end = name.span.end().max(variant.span.end());
+                Span::new(name.span.file(), start..end)
+            }
+            Self::Bool { span, .. } => *span,
+            Self::Int { span, .. } => *span,
+        }
+    }
 }
 
 /// An `if` statement with an optional `else` branch.

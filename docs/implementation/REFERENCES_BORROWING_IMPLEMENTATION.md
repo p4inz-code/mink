@@ -250,7 +250,9 @@ this (drop `y` by reassigning it, or use a scope).
   instructions (`tests/parser.rs`, `tests/typecheck.rs`, `tests/backend.rs`).
 - Existing suite (878 tests) remains green; the full suite after session
   17 (data-free enums) is **919 tests** (see
-  `NATIVE_BACKEND_IMPLEMENTATION.md` §13).
+  `NATIVE_BACKEND_IMPLEMENTATION.md` §13), and after session 18 (pattern
+  matching) it is **963 tests** (see
+  `PATTERN_MATCHING_IMPLEMENTATION.md` §6).
 
 ## 7. Status
 

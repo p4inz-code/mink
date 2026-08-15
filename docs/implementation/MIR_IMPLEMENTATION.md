@@ -331,4 +331,7 @@ rvalues and the multi-step place representation) it is **762 tests**,and after s
 lowering) it is **803 tests**, and after session 16 (references and
 borrowing) it is **878 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7),
 and after session 17 (data-free enums, with the `Enum` variant constant)
-it is **919 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7).
+it is **919 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7), and after
+session 18 (pattern matching, lowered to a chain of equality
+branches with binding copies) it is **963 tests** (see
+`PATTERN_MATCHING_IMPLEMENTATION.md` §6).

@@ -107,10 +107,11 @@ pattern-matching is the expected consumption style), derive `Debug`, `Clone`,
 
 Syntax errors live in `src/parser/error.rs`, mirroring the lexer's model:
 
-- `ParseErrorKind` — stable categories with codes `E-P01` … `E-P22`
+- `ParseErrorKind` — stable categories with codes `E-P01` … `E-P24`
   (e.g. `E-P03` expected an expression, `E-P06` expected `;`,
-  `E-P14` unclosed `{`, `E-P22` expected a variant name after `::`),
-  each with a human-readable message.
+  `E-P14` unclosed `{`, `E-P22` expected a variant name after `::`,
+  `E-P23` expected a match pattern, `E-P24` expected `=>` after a
+  pattern), each with a human-readable message.
 - `ParseError { kind, span }` — `Copy`, with `kind()`, `span()`, and
   `Display`.
 
@@ -160,7 +161,7 @@ into an x86-64 Windows PE executable (see
 ## 7. Design Decisions
 
 - **Grammar freeze scope.** Only constructs the session's milestone requires
-  are implemented; everything else (types, modules, match, async, unsafe,
+  are implemented; everything else (types, modules, async, unsafe,
   closures, block expressions) is rejected with diagnostics and documented
   as a later milestone in `docs/language/CORE_GRAMMAR.md`. See §8 for the
   full exclusion list.
@@ -203,9 +204,10 @@ into an x86-64 Windows PE executable (see
 
 - Adding `name: Type` parameters and `-> Type` return types extends
   `parse_params`/`parse_fn` without restructuring.
-- Adding match, struct/enum/type/trait/impl, mod/use/pub, async/await, and
-  unsafe extends `parse_item`/`parse_statement` dispatch — the parser was
-  shaped so each construct is one method plus a dispatch arm.
+- Adding type/trait/impl, mod/use/pub, async/await, and unsafe extends
+  `parse_item`/`parse_statement` dispatch — the parser was shaped so each
+  construct is one method plus a dispatch arm. (Match statements and
+  patterns arrived in session 18 via `parse_match`/`parse_pattern`.)
 - Block/`if` expressions extend `parse_primary`.
 - The delimiter stack and error kinds are ready to feed the structured
   diagnostic engine (severity, related spans, machine-readable output).
@@ -280,10 +282,12 @@ grammar description against the implementation. Findings and changes:
   lexical-only, its keyword table omitted `Mut`, and `CORE_GRAMMAR.md` §10
   listed the lexed-but-unused tokens without `:` and `?`. All three were
   corrected in this session.
-- Every excluded keyword (`struct`, `enum`, `type`, `trait`, `impl`, `mod`,
-  `use`, `pub`, `match`, `async`, `await`, `unsafe`) and every excluded
-  token (`:`, `->`, `?`, `::`, `=>`) is now regression-tested to be rejected
+- Every excluded keyword (`type`, `trait`, `impl`, `mod`,
+  `use`, `pub`, `async`, `await`, `unsafe`) and every excluded
+  token (`:`, `->`, `?`) is now regression-tested to be rejected
   at both item and statement positions — never silently accepted.
+  (`struct`/`enum` landed in sessions 14/17, and `match`/`=>` in session
+  18, so they are no longer in the rejected set.)
 
 ### Parser fixes
 

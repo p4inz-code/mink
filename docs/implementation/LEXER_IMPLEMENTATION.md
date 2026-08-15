@@ -173,10 +173,12 @@ forms below stand as implemented.
 The set in §2 is the conventional minimal set covering the categories the
 specification names (arithmetic, comparison, equality, boolean logic,
 assignment, bitwise, range construction, optional handling). No speculative
-operators were added. `:` (type annotation), `->` (return type), `=>` (match
-arm), `::` (path separator), and `?` (optional handling) are lexed but not
-part of any grammar production; the parser rejects them with diagnostics
-until their milestones land (see `docs/language/CORE_GRAMMAR.md` §10 and
+operators were added. `:` gained a use in session 14 (struct-field type
+annotations), `::` in session 17 (enum variant paths), and `=>` in session
+18 (match arms). `->` (return type) and `?` (optional handling) are lexed
+but not part of any grammar production; the parser rejects them with
+diagnostics until their milestones land (see
+`docs/language/CORE_GRAMMAR.md` §10 and
 `docs/implementation/PARSER_IMPLEMENTATION.md` §13).
 
 ### Comments

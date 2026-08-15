@@ -742,9 +742,28 @@ impl<'a> Analyzer<'a> {
                 self.walk_block(body);
             }
             StmtKind::Loop(body) => self.walk_block(body),
+            StmtKind::Match(stmt) => self.walk_match(stmt),
             StmtKind::Expr(expr) => {
                 self.eval_expr(expr, Mode::Observe);
             }
+        }
+    }
+
+    /// Walks a `match` statement: the scrutinee is observed (matchable
+    /// types — `Int`, `Bool`, enums — are scalars that never move), and
+    /// each arm's body is walked as its own block scope. A pattern binding
+    /// copies the scrutinee value, so it binds as a copy; arms inherit the
+    /// enclosing loop/function context (their bodies may `break`,
+    /// `continue`, or `return`).
+    fn walk_match(&mut self, stmt: &crate::ast::MatchStmt) {
+        self.eval_expr(&stmt.scrutinee, Mode::Observe);
+        for arm in &stmt.arms {
+            if let crate::ast::Pattern::Binding(name) = &arm.pattern {
+                // A scalar copy: no ownership state is tracked, but the
+                // binding is registered so its scope release is correct.
+                self.bind(name.span, &EvalValue::copy());
+            }
+            self.walk_block(&arm.body);
         }
     }
 

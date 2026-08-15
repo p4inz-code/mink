@@ -28,7 +28,7 @@ use std::collections::HashMap;
 
 use crate::ast::{
     AssignOp, Ast, BinaryOp, Block, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, Item,
-    ItemKind, Stmt, StmtKind, StructFieldInit, Ty, TyKind, UnaryOp,
+    ItemKind, MatchStmt, Pattern, Stmt, StmtKind, StructFieldInit, Ty, TyKind, UnaryOp,
 };
 use crate::runtime::layout::{self, LayoutError};
 use crate::semantics::{SemanticResult, SymbolId, SymbolKind};
@@ -53,6 +53,19 @@ pub(crate) fn check_ast(ast: &Ast, semantic: &SemanticResult, sources: &SourceMa
     let mut checker = Checker::new(ast, semantic, sources);
     checker.run();
     checker.finish()
+}
+
+/// One value a refutable match pattern covers, used for exhaustiveness
+/// and duplicate-arm detection. Patterns of the same key match the same
+/// value, so a repeated key is an unreachable arm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CoverageKey {
+    /// The boolean literal `true` or `false`.
+    Bool(bool),
+    /// An integer literal's decoded value (negative literals negated).
+    Int(i64),
+    /// An enum variant, by name.
+    Variant(String),
 }
 
 /// The operator categories the checker distinguishes; each category has
@@ -309,9 +322,26 @@ impl<'a> Checker<'a> {
                 self.resolve_deferred_block(body);
             }
             StmtKind::Loop(body) => self.resolve_deferred_block(body),
+            StmtKind::Match(stmt) => self.resolve_deferred_match(stmt),
             StmtKind::Expr(expr) => {
                 self.resolve_deferred_expr(expr);
             }
+        }
+    }
+
+    /// Re-checks a `match` whose scrutinee contained a deferred
+    /// member/index: the scrutinee is re-typed, the arms' patterns and
+    /// exhaustiveness are re-checked against the resolved type (duplicates
+    /// are deduplicated by [`Checker::push_error`]), and the arm bodies are
+    /// re-walked. Without this, a pattern that mismatched the *resolved*
+    /// scrutinee type would silently reach the backend.
+    fn resolve_deferred_match(&mut self, stmt: &MatchStmt) {
+        let (scrutinee_ty, recomputed) = self.resolve_deferred_expr(&stmt.scrutinee);
+        if recomputed {
+            self.check_match_patterns(stmt, scrutinee_ty);
+        }
+        for arm in &stmt.arms {
+            self.resolve_deferred_block(&arm.body);
         }
     }
 
@@ -1030,9 +1060,213 @@ impl<'a> Checker<'a> {
                 self.check_block(body);
             }
             StmtKind::Loop(body) => self.check_block(body),
+            StmtKind::Match(stmt) => self.check_match(stmt),
             StmtKind::Expr(expr) => {
                 self.expr_type(expr);
             }
+        }
+    }
+
+    /// Types a `match` statement: the scrutinee is typed, every arm's
+    /// pattern is checked against it, the match must be exhaustive, and
+    /// unreachable arms are rejected (see
+    /// `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`).
+    fn check_match(&mut self, stmt: &MatchStmt) {
+        let scrutinee_ty = self.expr_type(&stmt.scrutinee);
+        self.check_match_patterns(stmt, scrutinee_ty);
+        for arm in &stmt.arms {
+            self.check_block(&arm.body);
+        }
+    }
+
+    /// Checks every arm of a `match` against the scrutinee type and
+    /// verifies exhaustiveness. Shared by the forward pass and the
+    /// deferred member re-type pass (which re-checks the arms once a
+    /// deferred scrutinee resolves); duplicate diagnostics are deduplicated
+    /// by [`Checker::push_error`].
+    fn check_match_patterns(&mut self, stmt: &MatchStmt, scrutinee_ty: TypeId) {
+        let mut canon = self.types.canonical(scrutinee_ty);
+        // The unknown/error type (a root cause reported elsewhere) is
+        // silent: its match is not checked, so one root error never
+        // cascades into a swarm of match diagnostics.
+        if self.types.is_error(canon) {
+            return;
+        }
+        // Only `Int`, `Bool`, and enums are matchable in this milestone;
+        // anything else is a single E-T26 and the arms are not checked (the
+        // root cause is the scrutinee type, not the arms). An unresolved
+        // scrutinee is deferred: its patterns pin its type.
+        let matchable = matches!(
+            self.types.kind(canon),
+            Some(TypeKind::Int | TypeKind::Bool | TypeKind::Enum(_))
+        );
+        if !matchable && !matches!(self.types.kind(canon), Some(TypeKind::Infer(_))) {
+            self.push_error(TypeError::invalid_match_scrutinee(
+                stmt.scrutinee.span,
+                self.display(canon),
+            ));
+            return;
+        }
+        let mut covered: Vec<CoverageKey> = Vec::new();
+        let mut has_catch_all = false;
+        for arm in &stmt.arms {
+            // Re-canonicalize per arm: an earlier refutable pattern may
+            // have pinned an unresolved scrutinee to its type.
+            canon = self.types.canonical(scrutinee_ty);
+            if has_catch_all {
+                // Every value already matches the earlier `_`/binding arm.
+                self.push_error(TypeError::unreachable_match_arm(
+                    arm.pattern.span(),
+                    "this arm can never run: an earlier `_` or binding arm already matches every value",
+                ));
+                continue;
+            }
+            match &arm.pattern {
+                Pattern::Wildcard { .. } => has_catch_all = true,
+                Pattern::Binding(name) => {
+                    // The binding copies the scrutinee's value into the
+                    // arm's scope; its type is the scrutinee's type.
+                    has_catch_all = true;
+                    self.unify_decl(name, canon, name.span);
+                }
+                Pattern::Bool { value, span } => {
+                    let expected = self.bool_ty();
+                    match self.types.unify(canon, expected) {
+                        Ok(_) => {
+                            self.record_coverage(&mut covered, CoverageKey::Bool(*value), *span)
+                        }
+                        Err((expected, actual)) => self.push_error(TypeError::mismatch(
+                            *span,
+                            self.display(expected),
+                            self.display(actual),
+                            None,
+                        )),
+                    }
+                }
+                Pattern::Int {
+                    negative,
+                    literal,
+                    span,
+                } => {
+                    let expected = self.int_ty();
+                    match self.types.unify(canon, expected) {
+                        Ok(_) => {
+                            let value = self
+                                .decode_int_literal(literal)
+                                .map(|value| {
+                                    if *negative {
+                                        value.wrapping_neg()
+                                    } else {
+                                        value
+                                    }
+                                })
+                                .unwrap_or(0);
+                            self.record_coverage(&mut covered, CoverageKey::Int(value), *span);
+                        }
+                        Err((expected, actual)) => self.push_error(TypeError::mismatch(
+                            *span,
+                            self.display(expected),
+                            self.display(actual),
+                            None,
+                        )),
+                    }
+                }
+                Pattern::EnumVariant { name, variant } => {
+                    let pattern_span = arm.pattern.span();
+                    if let Some(enum_ty) = self.enum_variant_type(name, variant, pattern_span) {
+                        match self.types.unify(canon, enum_ty) {
+                            Ok(_) => self.record_coverage(
+                                &mut covered,
+                                CoverageKey::Variant(variant.name.clone()),
+                                pattern_span,
+                            ),
+                            Err((expected, actual)) => self.push_error(TypeError::mismatch(
+                                pattern_span,
+                                self.display(expected),
+                                self.display(actual),
+                                None,
+                            )),
+                        }
+                    }
+                }
+            }
+        }
+        // Exhaustiveness: after every pattern has pinned the scrutinee,
+        // the canonical type determines what a catch-all-free match must
+        // cover.
+        canon = self.types.canonical(scrutinee_ty);
+        if self.types.is_error(canon) || matches!(self.types.kind(canon), Some(TypeKind::Infer(_)))
+        {
+            return;
+        }
+        match self.types.kind(canon) {
+            Some(TypeKind::Int) => {
+                if !has_catch_all {
+                    self.push_error(TypeError::non_exhaustive_match(
+                        stmt.span,
+                        "the match is not exhaustive: integer values cannot all be listed; add a `_` or binding arm",
+                    ));
+                }
+            }
+            Some(TypeKind::Bool) => {
+                let has_true = covered
+                    .iter()
+                    .any(|key| matches!(key, CoverageKey::Bool(true)));
+                let has_false = covered
+                    .iter()
+                    .any(|key| matches!(key, CoverageKey::Bool(false)));
+                if !has_catch_all && !(has_true && has_false) {
+                    self.push_error(TypeError::non_exhaustive_match(
+                        stmt.span,
+                        "the match is not exhaustive: a `Bool` match must cover both `true` and `false`, or add a `_` or binding arm",
+                    ));
+                }
+            }
+            Some(TypeKind::Enum(id)) => {
+                let covered_names: Vec<&str> = covered
+                    .iter()
+                    .filter_map(|key| match key {
+                        CoverageKey::Variant(name) => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                let missing = self
+                    .types
+                    .enum_info(*id)
+                    .map(|info| {
+                        info.variants
+                            .iter()
+                            .filter(|variant| !covered_names.contains(&variant.name.as_str()))
+                            .map(|variant| format!("`{}`", variant.name))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if !has_catch_all && !missing.is_empty() {
+                    self.push_error(TypeError::non_exhaustive_match(
+                        stmt.span,
+                        format!(
+                            "the match is not exhaustive: the variant{} {} {} not covered; add a `_` or binding arm or cover every variant",
+                            if missing.len() == 1 { "" } else { "s" },
+                            missing.join(", "),
+                            if missing.len() == 1 { "is" } else { "are" },
+                        ),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Records `key` as covered by an arm, rejecting a repeat: a pattern
+    /// an earlier arm already matches can never run (`E-T25`).
+    fn record_coverage(&mut self, covered: &mut Vec<CoverageKey>, key: CoverageKey, span: Span) {
+        if covered.contains(&key) {
+            self.push_error(TypeError::unreachable_match_arm(
+                span,
+                "this arm can never run: an earlier arm already matches the same value",
+            ));
+        } else {
+            covered.push(key);
         }
     }
 
@@ -2135,6 +2369,16 @@ impl<'a> Checker<'a> {
     /// of its declared alternatives (`E-T23`). The result is the enum's
     /// type.
     fn check_enum_variant(&mut self, name: &Ident, variant: &Ident, span: Span) -> TypeId {
+        self.enum_variant_type(name, variant, span)
+            .unwrap_or_else(|| self.types.push(TypeKind::Error))
+    }
+
+    /// Resolves `Name::Variant` to the enum's type, reporting the same
+    /// diagnostics as the expression form: `E-T15` when the name is not a
+    /// known type, `E-T22` when it names a non-enum type, and `E-T23` when
+    /// the variant is not declared. Returns `None` on any failure so the
+    /// caller skips the pattern (a failed variant pattern covers nothing).
+    fn enum_variant_type(&mut self, name: &Ident, variant: &Ident, span: Span) -> Option<TypeId> {
         let Some(reg) = self.enums.get(&name.name) else {
             if self.structs.contains_key(&name.name) {
                 self.push_error(TypeError::not_an_enum(
@@ -2146,7 +2390,7 @@ impl<'a> Checker<'a> {
                 self.errors
                     .push(TypeError::unknown_type(name.span, &name.name));
             }
-            return self.types.push(TypeKind::Error);
+            return None;
         };
         let variants = self
             .types
@@ -2159,9 +2403,9 @@ impl<'a> Checker<'a> {
                 &reg.name,
                 &variant.name,
             ));
-            return self.types.push(TypeKind::Error);
+            return None;
         }
-        reg.id
+        Some(reg.id)
     }
 
     /// Types `[elem, ...]`: every element must unify with the first

@@ -30,10 +30,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{AssignOp, BinaryOp};
+use crate::ast::{AssignOp, BinaryOp, UnaryOp};
 use crate::hir::{
     HirBlock, HirConst, HirElseBranch, HirExpr, HirExprKind, HirFn, HirIdent, HirIf, HirItemKind,
-    HirLet, HirProgram, HirStmt, HirStmtKind,
+    HirLet, HirMatch, HirPattern, HirProgram, HirStmt, HirStmtKind,
 };
 use crate::semantics::SymbolId;
 use crate::source::{SourceId, Span};
@@ -1155,6 +1155,7 @@ impl<'a> FnBuilder<'a> {
                 body,
             } => self.lower_for(var, iterable, body, stmt.span),
             HirStmtKind::Loop(body) => self.lower_loop(body, stmt.span),
+            HirStmtKind::Match(stmt) => self.lower_match(stmt, stmt.span),
             HirStmtKind::Expr(expr) => {
                 // Evaluate for side effects; the value is discarded. A dead
                 // expression (after a terminator) starts a fresh block so
@@ -1478,6 +1479,226 @@ impl<'a> FnBuilder<'a> {
         self.jump_to(header, span);
         self.loops.pop();
         self.start_block(exit, span);
+    }
+
+    /// Lowers a `match` statement into a chain of pattern-test blocks that
+    /// branch into the matching arm's body:
+    ///
+    /// ```text
+    /// pre:     scrutinee = <scrutinee value>     (evaluated once)
+    ///          jump test0
+    /// test0:   cond = scrutinee == <arm0 const>  (refutable arms only)
+    ///          branch cond → arm0, test1
+    /// ...
+    /// testn:   cond = scrutinee == <armn const>
+    ///          branch cond → armn, unreachable
+    /// armk:    [binding copy] <arm body>         (jumps to `after`)
+    /// unreachable: return                        (never reached)
+    /// after:   ...
+    /// ```
+    ///
+    /// Irrefutable arms (`_`, `name`) skip the test and jump straight into
+    /// their body; a binding pattern copies the scrutinee value into a
+    /// fresh local first. The defensive `unreachable` block exists only
+    /// when the last arm is refutable: its else path is provably
+    /// impossible, because the type checker guarantees every value of the
+    /// scrutinee's type matches some arm (exhaustiveness, E-T24), so it is
+    /// never executed. It ends in a bare return so the graph stays
+    /// structurally valid.
+    fn lower_match(&mut self, stmt: &HirMatch, span: Span) {
+        let mut after: Option<BlockId> = None;
+        let mut unreachable: Option<BlockId> = None;
+        // Evaluate the scrutinee exactly once, in the block the `match`
+        // statement occupies.
+        self.ensure_current(span);
+        let scrutinee = self.eval.eval_operand(&stmt.scrutinee);
+        let first_test = self.alloc_block();
+        self.terminate(MirTerminator::Jump {
+            target: first_test,
+            span,
+        });
+        let mut test = first_test;
+        let arm_count = stmt.arms.len();
+        for (index, arm) in stmt.arms.iter().enumerate() {
+            let is_last = index + 1 == arm_count;
+            self.start_block(test, arm.span);
+            let body_block = self.alloc_block();
+            match &arm.pattern {
+                HirPattern::Wildcard { .. } => {
+                    self.terminate(MirTerminator::Jump {
+                        target: body_block,
+                        span: arm.span,
+                    });
+                }
+                HirPattern::Binding(ident) => {
+                    // The binding copies the scrutinee value into a fresh
+                    // local; references inside the arm body resolve through
+                    // the symbol → local mapping.
+                    let local = self.eval.declare_local(
+                        ident.name.clone(),
+                        Some(ident.symbol),
+                        ident.ty,
+                        false,
+                        ident.span,
+                    );
+                    self.eval.symbols.insert(ident.symbol, local);
+                    self.eval.emit(MirStmt {
+                        kind: MirStmtKind::Assign {
+                            target: MirTarget {
+                                kind: MirTargetKind::Local(local),
+                                span: ident.span,
+                                ty: ident.ty,
+                            },
+                            rvalue: use_rvalue(scrutinee.clone(), ident.span, ident.ty),
+                        },
+                        span: ident.span,
+                    });
+                    self.terminate(MirTerminator::Jump {
+                        target: body_block,
+                        span: arm.span,
+                    });
+                }
+                _ => {
+                    let cond = self.pattern_test(&arm.pattern, &scrutinee, arm.span);
+                    let next = if is_last {
+                        *unreachable.get_or_insert_with(|| self.alloc_block())
+                    } else {
+                        self.alloc_block()
+                    };
+                    self.terminate(MirTerminator::Branch {
+                        cond,
+                        then_block: body_block,
+                        else_block: next,
+                        span: arm.span,
+                    });
+                    test = next;
+                }
+            }
+            self.start_block(body_block, arm.body.span);
+            self.lower_block(&arm.body);
+            self.finish_into(&mut after, span);
+        }
+        // The defensive fallback for a refutable last arm (provably
+        // unreachable: the checker guarantees exhaustiveness).
+        if let Some(unreachable) = unreachable {
+            self.start_block(unreachable, span);
+            self.terminate(MirTerminator::Return { value: None, span });
+        }
+        if let Some(after) = after {
+            self.start_block(after, span);
+        }
+    }
+
+    /// Emits the equality test for a refutable pattern against the
+    /// scrutinee value and returns the `Bool` condition operand: the
+    /// pattern's constant compared with `==` into a fresh temporary. A
+    /// negative integer pattern negates its literal into a temporary first
+    /// (the sign is not part of the literal token).
+    fn pattern_test(
+        &mut self,
+        pattern: &HirPattern,
+        scrutinee: &MirOperand,
+        span: Span,
+    ) -> MirOperand {
+        let bool_ty = self.eval.bool_ty();
+        let rhs = match pattern {
+            HirPattern::Int {
+                negative,
+                literal_span,
+                ..
+            } => {
+                let constant = MirOperand {
+                    kind: MirOperandKind::Constant(MirConstant {
+                        kind: MirConstantKind::Int,
+                        span: *literal_span,
+                        ty: scrutinee.ty,
+                    }),
+                    span: *literal_span,
+                    ty: scrutinee.ty,
+                };
+                if *negative {
+                    self.emit_temp_rvalue(
+                        scrutinee.ty,
+                        *literal_span,
+                        MirRvalueKind::Unary {
+                            op: UnaryOp::Neg,
+                            operand: constant,
+                        },
+                    )
+                } else {
+                    constant
+                }
+            }
+            HirPattern::Bool {
+                value,
+                span: pattern_span,
+            } => MirOperand {
+                kind: MirOperandKind::Constant(MirConstant {
+                    kind: MirConstantKind::Bool(*value),
+                    span: *pattern_span,
+                    ty: scrutinee.ty,
+                }),
+                span: *pattern_span,
+                ty: scrutinee.ty,
+            },
+            HirPattern::EnumVariant { name, variant, .. } => {
+                // The discriminant is compiler-computed from the enum's
+                // variant table (declaration order); only reachable on
+                // clean programs, where the checker already resolved it.
+                let discriminant = self
+                    .eval
+                    .enum_variant_discriminant(&name.name, &variant.name)
+                    .unwrap_or(0);
+                MirOperand {
+                    kind: MirOperandKind::Constant(MirConstant {
+                        kind: MirConstantKind::Enum {
+                            variant: discriminant,
+                        },
+                        span: pattern.span(),
+                        ty: scrutinee.ty,
+                    }),
+                    span: pattern.span(),
+                    ty: scrutinee.ty,
+                }
+            }
+            HirPattern::Wildcard { .. } | HirPattern::Binding(_) => {
+                unreachable!("irrefutable patterns never emit a test")
+            }
+        };
+        self.emit_temp_rvalue(
+            bool_ty,
+            span,
+            MirRvalueKind::Binary {
+                op: BinaryOp::Eq,
+                lhs: scrutinee.clone(),
+                rhs,
+            },
+        )
+    }
+
+    /// Computes `kind` into a fresh temporary and returns the temporary's
+    /// load. Mirrors [`StmtEval::temp_rvalue`] but takes raw pieces
+    /// instead of a source `HirExpr`: match lowering builds synthetic
+    /// comparison rvalues with no source expression.
+    fn emit_temp_rvalue(&mut self, ty: TypeId, span: Span, kind: MirRvalueKind) -> MirOperand {
+        let temp = self.eval.temp(ty, span);
+        let target = MirTarget {
+            kind: MirTargetKind::Local(temp),
+            span,
+            ty,
+        };
+        self.eval.emit(MirStmt {
+            kind: MirStmtKind::Assign {
+                target,
+                rvalue: MirRvalue { kind, span, ty },
+            },
+            span,
+        });
+        MirOperand {
+            kind: MirOperandKind::Local(temp),
+            span,
+            ty,
+        }
     }
 }
 

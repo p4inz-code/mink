@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use crate::ast::{
     Ast, Block, ConstItem, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind,
-    LetItem, Param, Stmt, StmtKind, StructItem,
+    LetItem, MatchArm, MatchStmt, Param, Pattern, Stmt, StmtKind, StructItem,
 };
 use crate::semantics::{SemanticResult, SymbolId};
 use crate::source::Span;
@@ -34,7 +34,8 @@ use crate::typecheck::{TypeId, TypeKind, TypeResult, TypeTable};
 use super::error::HirError;
 use super::{
     HirBlock, HirConst, HirElseBranch, HirEnum, HirExpr, HirExprKind, HirFn, HirIdent, HirIf,
-    HirItem, HirItemKind, HirLet, HirName, HirParam, HirProgram, HirStmt, HirStmtKind, HirStruct,
+    HirItem, HirItemKind, HirLet, HirMatch, HirMatchArm, HirName, HirParam, HirPattern, HirProgram,
+    HirStmt, HirStmtKind, HirStruct,
 };
 
 /// Lowers `ast` with its semantic and type results into HIR.
@@ -249,11 +250,63 @@ impl<'a> Lowerer<'a> {
                 body: self.lower_block(body),
             },
             StmtKind::Loop(body) => HirStmtKind::Loop(self.lower_block(body)),
+            StmtKind::Match(stmt) => HirStmtKind::Match(self.lower_match(stmt)),
             StmtKind::Expr(expr) => HirStmtKind::Expr(self.lower_expr(expr)),
         };
         HirStmt {
             kind,
             span: stmt.span,
+        }
+    }
+
+    fn lower_match(&mut self, stmt: &MatchStmt) -> HirMatch {
+        HirMatch {
+            scrutinee: self.lower_expr(&stmt.scrutinee),
+            arms: stmt
+                .arms
+                .iter()
+                .map(|arm| self.lower_match_arm(arm))
+                .collect(),
+            span: stmt.span,
+        }
+    }
+
+    fn lower_match_arm(&mut self, arm: &MatchArm) -> HirMatchArm {
+        let pattern = match &arm.pattern {
+            Pattern::Wildcard { span } => HirPattern::Wildcard { span: *span },
+            // A pattern binding is a declaration of the arm's scope; it
+            // resolves through the declaration index like any other
+            // binding and carries its (canonical) type.
+            Pattern::Binding(ident) => HirPattern::Binding(self.lower_decl_ident(ident)),
+            Pattern::EnumVariant { name, variant } => HirPattern::EnumVariant {
+                name: Box::new(HirName {
+                    name: name.name.clone(),
+                    span: name.span,
+                }),
+                variant: Box::new(HirName {
+                    name: variant.name.clone(),
+                    span: variant.span,
+                }),
+                span: arm.pattern.span(),
+            },
+            Pattern::Bool { value, span } => HirPattern::Bool {
+                value: *value,
+                span: *span,
+            },
+            Pattern::Int {
+                negative,
+                literal,
+                span,
+            } => HirPattern::Int {
+                negative: *negative,
+                literal_span: literal.span,
+                span: *span,
+            },
+        };
+        HirMatchArm {
+            pattern,
+            body: self.lower_block(&arm.body),
+            span: arm.span,
         }
     }
 

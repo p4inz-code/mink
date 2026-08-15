@@ -32,11 +32,10 @@ Constructs the specifications describe but that belong to later milestones
 are **not** part of this grammar and are rejected with parser diagnostics.
 Notable exclusions:
 
-- Type declarations (`type`, `enum`, `trait`, `impl`) — type-system
-  milestone (`struct` declarations and the field `Type` syntax arrived in
-  session 14, §11)
+- Type declarations (`type`, `trait`, `impl`) — type-system milestone
+  (`struct` and `enum` declarations arrived in sessions 14 and 17; see
+  §11 and §12)
 - Module system (`mod`, `use`, `pub`) — module-system milestone
-- Pattern matching (`match`) — pattern-matching milestone
 - Async/await and unsafe — concurrency/unsafe milestones
 - Type annotations on parameters, bindings, and return types — type-system
   milestone (the `:` token is used by struct field declarations since
@@ -194,10 +193,10 @@ milestones justify them.
 
 The following are **not** part of the frozen grammar and produce parser
 errors if used, until their milestones land: return-type annotations,
-`enum`/`type`/`trait`/`impl` declarations (struct declarations and field
-type annotations arrived in session 14 — see §11), `mod`/`use`/`pub`,
-`match` arms, `async fn`/`await`, `unsafe` blocks, closures, block
-expressions, `if` expressions, and the `?` operator.
+`type`/`trait`/`impl` declarations (struct and enum declarations arrived
+in sessions 14 and 17 — see §11 and §12), `mod`/`use`/`pub`, `async
+fn`/`await`, `unsafe` blocks, closures, block expressions, `if`
+expressions, and the `?` operator.
 
 ## 10. Grammar-Freeze Changes to the Lexer
 
@@ -210,11 +209,14 @@ Freezing the grammar required one minimal lexer change:
   table plus a `TokenKind::Mut` variant; identifiers like `mutt` and `_mut`
   are unaffected.
 
-No other lexical forms changed. `:` (type annotation), `->` (return type),
-`?` (optional handling), `::` (path separator), and `=>` (match arm) remain
-lexed but unused by this grammar; the parser rejects them with diagnostics
-(verified by regression tests in `tests/parser_hardening.rs`), as documented
-in `docs/implementation/LEXER_IMPLEMENTATION.md`.
+No other lexical forms changed. `:` gained a use in session 14 as the
+struct-field type-annotation separator (see §11); `::` gained one in
+session 17 as the variant-path separator (see §12); and `=>` gained one in
+session 18 as the match-arm separator (see §13). `->` (return type) and
+`?` (optional handling) remain lexed but unused by this grammar; the
+parser rejects them with diagnostics (verified by regression tests in
+`tests/parser_hardening.rs`), as documented in
+`docs/implementation/LEXER_IMPLEMENTATION.md`.
 
 ## 11. Session-14 Additions: Structs and Arrays
 
@@ -299,10 +301,47 @@ EnumVariantPath := Ident '::' Ident
 
 The session-17 lexer needed no changes (`::` and `,` already existed).
 Exclusions from §2 and §9 that remain (tuples, `type` aliases, generics,
-parameter/return annotations, data-carrying variants, pattern matching)
-are unchanged.
+parameter/return annotations, data-carrying variants) are unchanged.
 
-## 13. Status
+## 13. Session-18 Additions: Pattern Matching
+
+**Session:** 18 — Pattern matching
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17 additions above remain authoritative; the new
+productions are:
+
+```
+Stmt       := ... | MatchStmt
+MatchStmt  := 'match' Expr '{' MatchArm* '}'
+MatchArm   := Pattern '=>' Block
+Pattern    := IntLit | '-' IntLit | BoolLit | Ident '::' Ident | Ident
+```
+
+- **Match statements** (`match e { 1 => { .. } _ => { .. } }`) are
+  statements: they dispatch on the scrutinee `Expr` and run the block of
+  the first arm whose pattern matches. `=>` is the match-arm separator,
+  used here for the first time. Arms are separated by commas (a trailing
+  comma is allowed); the body of each arm is a block, so braces are
+  required around it.
+- **Patterns** have four forms this session: an integer literal (`1`,
+  and negative literals `-1`), a boolean literal (`true`/`false`), an
+  enum variant path (`E::V`), and a bare identifier, which binds the
+  scrutinee (a catch-all `_` binds nothing and matches everything).
+  Wildcard `_` is an identifier pattern that never binds a name.
+- The scrutinee may be any expression. Type analysis decides whether its
+  type is matchable: `Int`, `Bool`, and enums are matchable; every other
+  type (structs, arrays, strings, pointers, references) is rejected with
+  `E-T26` (see `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`).
+- A missing `=>` after a pattern is `E-P24` (expected `=>`); a non-pattern
+  token where a pattern is required (e.g. a string literal) is `E-P23`.
+
+The session-18 lexer needed no changes (`=>`, `,`, `{`, `}` already
+existed). Exclusions from §2 and §9 that remain (tuples, `type` aliases,
+generics, parameter/return annotations, data-carrying variants) are
+unchanged.
+
+## 14. Status
 
 This grammar is frozen for the constructs it covers. Statements and
 declarations outside it are rejected by the parser with stable diagnostics

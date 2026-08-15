@@ -180,7 +180,9 @@ The following rules are authoritative for this session.
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
   per-file breakdown); after session 17 (data-free enums, which own
   nothing and are therefore unaffected by move semantics) the suite is
-  **919 tests**.
+  **919 tests**; after session 18 (pattern matching, whose scrutinee is
+  copied per arm and whose bindings are copies, never moves) it is
+  **963 tests**.
 - **Aggregate copy rule (implemented):** a struct or array is Copy iff it
   contains no Owned value — `P { name: \"a\", age: 1 }` copies freely
   (`let q = p; let r = p;` both fine), while `P { name: rt_str_alloc(3) }`

@@ -10,8 +10,9 @@ single-word discriminant layout, enum equality, and native x86-64
 execution. It builds directly on the aggregate foundation of Session 14
 (`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`) and the
 ownership/move and reference/borrowing foundations of Sessions 15–16, and
-deliberately does **not** introduce data-carrying variants, pattern
-matching, exhaustiveness, generics, or implicit conversions.
+deliberately does **not** introduce data-carrying variants, generics, or
+implicit conversions. (Pattern matching over enums landed in Session 18 —
+see `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`.)
 
 ## 1. Frozen Session 17 rules
 
@@ -100,7 +101,6 @@ code generation.
 
 - Data-carrying variants (`enum Option { Some(Int), None }`), payload
   storage, and sum-type layout.
-- Pattern matching and exhaustiveness diagnostics.
 - Explicit discriminants (`enum E { A = 5 }`).
 - `Int`/enum conversion, enum iteration, or deriving.
 - Generics over enums.
@@ -169,8 +169,10 @@ code generation.
 
 - **No payloads.** Variants carry no data; a future session adds
   data-carrying variants and sum-type layout.
-- **No pattern matching.** Matching/`switch` over variants is future
-  work; today programs test equality (`e == E::V`).
+- **Pattern matching is variant-exhaustive.** `match` over enums (session
+  18) requires every variant to be covered or a catch-all arm; a missing
+  arm is `E-T24` and an unreachable one is `E-T25`. Programs can also
+  still test equality (`e == E::V`).
 - **No explicit discriminants.** Values are assigned by declaration
   order; there is no `= n` syntax.
 - **Empty enums are legal but useless.** `enum Empty {}` compiles (and
@@ -226,8 +228,10 @@ fn main() {
   equality/inequality typing, enums in struct fields.
 - `tests/backend.rs` (+2) — enum locals lower to word-sized
   `BType::Enum`, discriminant values survive lowering and folding.
-- Existing suite (878 tests) remains green; full suite after session 17:
-  **919 tests**, all passing.
+- Existing suite (878 tests) remained green; full suite after session 17:
+  **919 tests**, all passing; after session 18 (pattern matching) it is
+  **963 tests** (see
+  `PATTERN_MATCHING_IMPLEMENTATION.md` §6).
 
 ## 7. Status
 

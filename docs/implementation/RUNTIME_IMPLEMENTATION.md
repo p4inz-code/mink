@@ -161,7 +161,8 @@ loader never scans past them into string data.
 Full suite after session 16: **878 tests**, all passing (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown). After session
 17 (data-free enums, a single-word scalar with no runtime support
-needed) the suite is **919 tests**.
+needed) the suite is **919 tests**. After session 18 (pattern matching,
+which lowers to ordinary branches over word values) it is **963 tests**.
 
 ## 9. Known limitations
 

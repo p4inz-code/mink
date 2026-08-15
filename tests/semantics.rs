@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use mink::ast::{
     AssignOp, Ast, Block, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind,
-    LetItem, Param, Stmt, StmtKind,
+    LetItem, Param, Pattern, Stmt, StmtKind,
 };
 use mink::driver::CheckError;
 use mink::parser;
@@ -115,6 +115,15 @@ fn stmt_idents<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span, bool)>) {
             block_idents(body, out);
         }
         StmtKind::Loop(body) => block_idents(body, out),
+        StmtKind::Match(stmt) => {
+            expr_idents(&stmt.scrutinee, out);
+            for arm in &stmt.arms {
+                if let Pattern::Binding(name) = &arm.pattern {
+                    out.push((name.name.as_str(), name.span, false));
+                }
+                block_idents(&arm.body, out);
+            }
+        }
         StmtKind::Expr(expr) => expr_idents(expr, out),
     }
 }

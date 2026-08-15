@@ -113,6 +113,10 @@ MIR lowering consumes (session 09):
 - **loops** — `HirStmtKind::While { cond, body }`,
   `HirStmtKind::For { var, iterable, body }` (the loop variable resolved to
   its `ForVar` symbol), and `HirStmtKind::Loop(body)`;
+- **match** (session 18) — `HirStmtKind::Match(HirMatch)` with
+  `HirPattern` arms (literal/variant/binding/wildcard), lowered to a
+  chain of equality branches by MIR lowering (see
+  `PATTERN_MATCHING_IMPLEMENTATION.md` §1.4);
 - **jumps** — `Break`, `Continue`, and `Return(Option<HirExpr>)` (the
   value is `None` for a bare `return;`).
 
@@ -237,4 +241,6 @@ lowering) it is **803 tests**, and after session 16 (references and
 borrowing) it is **878 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7),
 and after session 17 (data-free enums, with `HirEnum` items and the
 `EnumVariant` expression form) it is **919 tests** (see
-`OPTIMIZATION_IMPLEMENTATION.md` §7).
+`OPTIMIZATION_IMPLEMENTATION.md` §7), and after session 18 (pattern
+matching, with `HirStmtKind::Match` and `HirPattern`) it is
+**963 tests** (see `PATTERN_MATCHING_IMPLEMENTATION.md` §6).

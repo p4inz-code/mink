@@ -209,8 +209,10 @@ backend + 24 runtime end-to-end + 143 typecheck; see
 `RUNTIME_IMPLEMENTATION.md` §8). After session 14 (structs + arrays) the
 suite is **762 tests** (+59 aggregate), and after session 15 (ownership
 analysis) it is **803 tests** (+41 ownership), and after session 16
-(references and borrowing) it is **878 tests** (+51 references), and after
-session 17 (data-free enums, whose variant constants are ordinary word
-values to the optimizer) it is **919 tests** (+25 enums + 3 parser +
+(references and borrowing) it is **878 tests** (+51 references),and after session 17 (data-free enums, whose variant constants are ordinary
+word values to the optimizer) it is **919 tests** (+25 enums + 3 parser +
 3 semantics + 7 typecheck + 2 backend + 1 lib unit; see
-`NATIVE_BACKEND_IMPLEMENTATION.md` §13).
+`NATIVE_BACKEND_IMPLEMENTATION.md` §13), and after session 18 (pattern
+matching, lowered to ordinary equality branches, constants, and copies) it
+is **963 tests** (+44 pattern matching; see
+`PATTERN_MATCHING_IMPLEMENTATION.md` §6).

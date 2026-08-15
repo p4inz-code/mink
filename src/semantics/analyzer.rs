@@ -23,8 +23,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    Ast, Block, ElseBranch, EnumItem, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind, Stmt,
-    StmtKind, StructItem,
+    Ast, Block, ElseBranch, EnumItem, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind,
+    Pattern, Stmt, StmtKind, StructItem,
 };
 use crate::source::Span;
 
@@ -410,7 +410,28 @@ impl Analyzer {
                     },
                 );
             }
+            StmtKind::Match(stmt) => self.analyze_match(stmt, ctx),
             StmtKind::Expr(expr) => self.analyze_expr(expr, ctx),
+        }
+    }
+
+    /// Analyzes a `match` statement: the scrutinee is analyzed in the
+    /// enclosing scope, and each arm's body runs in its own block scope
+    /// that additionally declares the arm's pattern binding (an immutable
+    /// binding matching any value, like a `let` of the scrutinee's value).
+    /// Match arms inherit the enclosing loop/function context, so
+    /// `break`/`continue`/`return` inside an arm behave as they would
+    /// inside any nested block.
+    fn analyze_match(&mut self, stmt: &crate::ast::MatchStmt, ctx: Ctx) {
+        self.analyze_expr(&stmt.scrutinee, ctx);
+        for arm in &stmt.arms {
+            let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+            if let Pattern::Binding(name) = &arm.pattern {
+                // A pattern binding is immutable, like a `let` binding: it
+                // may be read but never assigned.
+                self.bind(name, SymbolKind::Let { mutable: false }, scope);
+            }
+            self.analyze_block(&arm.body, Ctx { scope, ..ctx });
         }
     }
 

@@ -28,8 +28,8 @@ mod error;
 
 use crate::ast::{
     AssignOp, Ast, BinaryOp, Block, ConstItem, ElseBranch, EnumItem, EnumVariant, Expr, ExprKind,
-    FnItem, Ident, IfStmt, Item, ItemKind, LetItem, Param, Stmt, StmtKind, StructField,
-    StructFieldInit, StructItem, Ty, TyKind, UnaryOp,
+    FnItem, Ident, IfStmt, Item, ItemKind, LetItem, MatchArm, MatchStmt, Param, Pattern, Stmt,
+    StmtKind, StructField, StructFieldInit, StructItem, Ty, TyKind, UnaryOp,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::source::{SourceFile, Span};
@@ -382,8 +382,9 @@ impl<'a> Parser<'a> {
 
     /// Parses an `enum Name { Variant, ... }` declaration, including a
     /// trailing comma. Variants are bare identifiers; data-carrying
-    /// variants are rejected (the pattern-matching milestone defines their
-    /// syntax).
+    /// variants are rejected (a future milestone defines their syntax).
+    /// Match statements (session 18) reference variants through
+    /// `E::V` patterns in `parse_pattern`, not through the declaration.
     fn parse_enum(&mut self) -> Result<(EnumItem, Span), ()> {
         let start = self.bump().span(); // 'enum'
         let name = self.expect_ident()?;
@@ -835,6 +836,7 @@ impl<'a> Parser<'a> {
             TokenKind::While => self.parse_while(),
             TokenKind::For => self.parse_for(),
             TokenKind::Loop => self.parse_loop(),
+            TokenKind::Match => self.parse_match(),
             _ => {
                 let expr = self.parse_expression()?;
                 let semi = self.expect_semi()?;
@@ -976,6 +978,217 @@ impl<'a> Parser<'a> {
             kind: StmtKind::Loop(body),
             span,
         })
+    }
+
+    /// Parses a `match scrutinee { pattern => block, ... }` statement
+    /// (session 18). Arms are `pattern => block` pairs separated by commas
+    /// (a trailing comma is allowed); a block terminates its arm
+    /// unambiguously, so the separator is required only between arms.
+    fn parse_match(&mut self) -> Result<Stmt, ()> {
+        let start = self.bump().span(); // 'match'
+        // The scrutinee is followed by a `{ ... }` block in the grammar,
+        // so an `Ident {` in it is the block, never a struct literal.
+        let saved = self.in_block_context;
+        self.in_block_context = true;
+        let scrutinee = self.parse_expression()?;
+        self.in_block_context = saved;
+        if self.current_kind() != TokenKind::LBrace {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedBlock, token.span());
+            return Err(());
+        }
+        let open = self.bump().span();
+        self.open_delims.push((TokenKind::LBrace, open));
+        let mut arms = Vec::new();
+        loop {
+            match self.current_kind() {
+                TokenKind::RBrace => {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    let span = self.join(start, close);
+                    return Ok(Stmt {
+                        kind: StmtKind::Match(MatchStmt {
+                            scrutinee,
+                            arms,
+                            span,
+                        }),
+                        span,
+                    });
+                }
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                    return Err(());
+                }
+                _ => match self.parse_match_arm() {
+                    Ok(arm) => arms.push(arm),
+                    Err(()) => self.skip_to_arm_boundary(),
+                },
+            }
+            // The separator after an arm: a comma (trailing commas are
+            // allowed, mirroring struct fields and enum variants) or the
+            // closing brace. A missing comma is recorded and recovered
+            // from; an arm's block ends unambiguously, so parsing can
+            // continue at the next arm.
+            match self.current_kind() {
+                TokenKind::Comma => {
+                    let _ = self.bump();
+                    if self.current_kind() == TokenKind::RBrace {
+                        break;
+                    }
+                }
+                TokenKind::RBrace => break,
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                    return Err(());
+                }
+                _ => {
+                    let token = self.current();
+                    self.record_error(ParseErrorKind::ExpectedComma, token.span());
+                    self.skip_to_arm_boundary();
+                    if self.current_kind() == TokenKind::Comma {
+                        let _ = self.bump();
+                    }
+                }
+            }
+        }
+        // The arm list ended at the closing brace (the separator `break`).
+        let close = self.bump().span();
+        self.open_delims.pop();
+        let span = self.join(start, close);
+        Ok(Stmt {
+            kind: StmtKind::Match(MatchStmt {
+                scrutinee,
+                arms,
+                span,
+            }),
+            span,
+        })
+    }
+
+    /// Parses one match arm: `pattern => block`.
+    fn parse_match_arm(&mut self) -> Result<MatchArm, ()> {
+        let pattern = self.parse_pattern()?;
+        if self.current_kind() != TokenKind::FatArrow {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedFatArrow, token.span());
+            return Err(());
+        }
+        let _ = self.bump(); // '=>'
+        let body = match self.parse_block_body() {
+            Ok(block) => block,
+            Err(()) => {
+                self.recover_statement();
+                Block {
+                    stmts: Vec::new(),
+                    span: self.point_span(),
+                }
+            }
+        };
+        let span = self.join(pattern.span(), body.span);
+        Ok(MatchArm {
+            pattern,
+            body,
+            span,
+        })
+    }
+
+    /// Parses a match pattern (session 18): `_`, a name (binding), an enum
+    /// variant path `E::V`, a boolean literal, or an (optionally negated)
+    /// integer literal.
+    fn parse_pattern(&mut self) -> Result<Pattern, ()> {
+        let token = self.current();
+        match token.kind() {
+            // `_` is a reserved-word-like wildcard; the lexer produces it
+            // as an identifier, so it is recognized by spelling.
+            TokenKind::Ident if self.text(token.span()) == "_" => {
+                let _ = self.bump();
+                Ok(Pattern::Wildcard { span: token.span() })
+            }
+            TokenKind::Ident => {
+                let _ = self.bump();
+                let name = self.text(token.span());
+                let ident = Ident {
+                    name,
+                    span: token.span(),
+                };
+                if self.current_kind() == TokenKind::ColonColon {
+                    // `E::V`: an enum variant pattern. A missing variant
+                    // name is the same `E-P22` the expression form reports.
+                    let _ = self.bump(); // '::'
+                    if self.current_kind() != TokenKind::Ident {
+                        let token = self.current();
+                        self.record_error(ParseErrorKind::ExpectedVariant, token.span());
+                        return Err(());
+                    }
+                    let token = self.bump();
+                    let variant = Ident {
+                        name: self.text(token.span()),
+                        span: token.span(),
+                    };
+                    Ok(Pattern::EnumVariant {
+                        name: ident,
+                        variant,
+                    })
+                } else {
+                    Ok(Pattern::Binding(ident))
+                }
+            }
+            TokenKind::True | TokenKind::False => {
+                let _ = self.bump();
+                Ok(Pattern::Bool {
+                    value: token.kind() == TokenKind::True,
+                    span: token.span(),
+                })
+            }
+            TokenKind::Int => {
+                let _ = self.bump();
+                Ok(Pattern::Int {
+                    negative: false,
+                    literal: Expr {
+                        kind: ExprKind::Int,
+                        span: token.span(),
+                    },
+                    span: token.span(),
+                })
+            }
+            TokenKind::Minus => {
+                let start = self.bump().span(); // '-'
+                let token = self.current();
+                if token.kind() != TokenKind::Int {
+                    self.record_error(ParseErrorKind::ExpectedIntegerLiteral, token.span());
+                    return Err(());
+                }
+                let _ = self.bump();
+                let span = self.join(start, token.span());
+                Ok(Pattern::Int {
+                    negative: true,
+                    literal: Expr {
+                        kind: ExprKind::Int,
+                        span: token.span(),
+                    },
+                    span,
+                })
+            }
+            _ => {
+                self.record_error(ParseErrorKind::ExpectedPattern, token.span());
+                Err(())
+            }
+        }
+    }
+
+    /// Skips tokens up to (but not consuming) the next match-arm boundary:
+    /// `,`, `}`, or `Eof`. Used to recover from a malformed match arm.
+    fn skip_to_arm_boundary(&mut self) {
+        while !matches!(
+            self.current_kind(),
+            TokenKind::Comma | TokenKind::RBrace | TokenKind::Eof
+        ) {
+            if self.current_kind() == TokenKind::LBrace {
+                self.skip_balanced_brace_group();
+            } else {
+                let _ = self.bump();
+            }
+        }
     }
 
     /// Parses a `{ ... }` block body; on a missing `{` records

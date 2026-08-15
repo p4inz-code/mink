@@ -458,6 +458,9 @@ range: `E-T01` … `E-T06`.
 | E-T18| `InvalidAggregateLayout` | `the struct \`Node\` is recursive and has no finite size` |
 | E-T22| `NotAnEnum`           | `` `S` is not an enum type (it is a `S`); cannot access a variant of it `` |
 | E-T23| `UnknownVariant`      | `` enum `E` has no variant named `B` ``                 |
+| E-T24| `NonExhaustiveMatch`  | `the match is not exhaustive: the variant `B` is not covered; add a `_` or binding arm or cover every variant` |
+| E-T25| `UnreachableMatchArm` | `this arm can never run: an earlier arm already matches the same value` |
+| E-T26| `InvalidMatchScrutinee` | `cannot match on a value of type `Str`; only `Int`, `Bool`, and enums are matchable` |
 
 Every error carries the exact offending span; `E-T01` on assignment also
 carries the target span as a related location, which the CLI renders as
@@ -604,6 +607,8 @@ As before:
 
 Total suite after session 17: **919 tests** (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown), all passing.
+After session 18 (pattern matching, `E-T24`…`E-T26`) it is **963 tests**
+(see `PATTERN_MATCHING_IMPLEMENTATION.md` §6).
 
 ## 26. Later Milestones
 
@@ -611,14 +616,16 @@ The type-system foundation (sessions 06–07) deliberately stops before
 advanced features. Cleanly deferred to later milestones:
 
 - implicit conversions and numeric promotion rules;
-- data-carrying enum variants and pattern matching (data-free enums are
-  implemented — session 17, see
-  `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`); tuples; generic
-  user-defined types; advanced member/index forms (e.g. indexing `Str`
-  and other built-ins);
+- data-carrying enum variants (data-free enums are implemented — session
+  17, see `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`; pattern
+  matching over them is implemented — session 18, see
+  `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`); tuples;
+  generic user-defined types; advanced member/index forms (e.g. indexing
+  `Str` and other built-ins);
 - generics, traits/interfaces, type aliases, optional/result types;
 - a general bidirectional inference engine beyond the pinned
   expected-type directions of session 07 (see
   `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md` §6);
-- pattern matching and exhaustiveness;
+- richer patterns (ranges, or-patterns, struct/array destructuring) and
+  match expressions; optional/result matching;
 - HIR/MIR lowering, optimization, code generation, runtime.

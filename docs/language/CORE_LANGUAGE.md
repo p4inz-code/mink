@@ -445,11 +445,26 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   (duplicates are `E-S08`/`E-S15`); duplicate variants within one enum
   are `E-S16`. Enums compose with structs, arrays, parameters, returns,
   and bindings.
-- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T23`
+- **Pattern matching (session 18).** A `match e { pat => { .. }, .. }`
+  statement dispatches on a scrutinee of `Int`, `Bool`, or enum type.
+  Patterns are integer literals (including negatives), boolean literals,
+  enum variant paths, identifier bindings, and the `_` wildcard; the
+  first matching arm runs. Matches over enums must be exhaustive: a
+  missing variant arm without a catch-all is `E-T24` (non-exhaustive
+  match), an arm after an exhaustive prefix or catch-all is `E-T25`
+  (unreachable arm), and a scrutinee of any non-matchable type (struct,
+  array, string, pointer, reference) is `E-T26`. Integer/bool matches
+  need no exhaustiveness proof (`_` or a final catch-all is the way to
+  write them). Arms bind patterns: an identifier pattern introduces a
+  copy of the scrutinee (`let x = e;` semantics) in its own scope, and
+  `_` binds nothing. See
+  [`PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/PATTERN_MATCHING_IMPLEMENTATION.md).
+- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T26`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
-  count, not iterable, the session-14 aggregate rules, and the session-17
-  enum rules above). They carry the exact offending span, rendered
-  expected/actual types where useful, and a related span for assignments.
+  count, not iterable, the session-14 aggregate rules, the session-17
+  enum rules, and the session-18 match rules above). They carry the exact
+  offending span, rendered expected/actual types where useful, and a
+  related span for assignments.
 - **Cascade control.** An unknown/error type absorbs failed sub-expressions
   so one root error (an unresolved name, an invalid operator) never
   cascades into misleading secondary diagnostics; independent errors are
