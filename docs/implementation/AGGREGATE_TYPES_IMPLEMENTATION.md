@@ -35,8 +35,10 @@ whole; an all-immutable struct copies) — see
 - **No explicit borrow syntax; no GC; no arbitrary raw-pointer syntax;
   no generics.** Since session 15, aggregates containing an Owned value
   move as a whole on transfer (use-after-move is `E-S10`); aggregates
-  holding only Immutable values copy freely. Unsupported aggregate
-  behavior fails deterministically at compile time (`E-B03`, see §6).
+  holding only Immutable values copy freely. Since session 22, aggregates
+  can also be returned from functions (caller-allocated return slot) and
+  stored at module scope (constant-evaluated value images); the only
+  aggregate restriction left is `main`'s result (`E-B09`).
 - **No unsafe Rust.** Everything is safe Rust plus emitted machine code.
 - **Deterministic.** Identical sources produce byte-identical images and
   identical runtime behavior; every runtime error has a stable code and
@@ -203,8 +205,11 @@ allocated with `ceil(size / 8)` words.
   every member/index against `struct_layout` / `array_layout` (the same
   engine the type checker used), so backend and typechecker cannot
   disagree about offsets.
-- Aggregate **returns** and aggregate **module statics** are rejected
-  during lowering (`E-B03`), so no unsupported aggregate ABI path exists.
+- Aggregate **returns** are returned through a caller-allocated return
+  slot (the hidden argument after the visible parameters, session 22),
+  and aggregate **module statics** are constant-evaluated into value
+  images in the data section with byte-exact load/store bridging; the
+  only aggregate rejection left is `main`'s result (`E-B09`).
 
 ### x86-64 emitter (`src/backend/emit/x86_64.rs`)
 
@@ -235,7 +240,7 @@ allocated with `ceil(size / 8)` words.
 | E-T17 | typecheck | empty array literal                            |
 | E-T18 | typecheck | invalid aggregate layout (recursive/empty/oversized) |
 | E-R10 | runtime  | array index out of range (exit status 110)     |
-| E-B03 | backend  | unsupported aggregate return/static            |
+| E-B09 | backend  | `main` returns an aggregate (exit-code constraint) |
 
 All errors carry exact source spans and structured messages.
 
@@ -245,7 +250,6 @@ All errors carry exact source spans and structured messages.
   aggregates are enforced at compile time (session 15, `E-S10`).
 - No arbitrary raw-pointer syntax (`&`, casts, address-of).
 - No generics; no reflection or dynamic object model.
-- No aggregate returns or aggregate module statics (rejected with `E-B03`).
 - No string concatenation/slicing beyond Session 13's intrinsics.
 
 ## 8. Validation
@@ -268,19 +272,23 @@ All errors carry exact source spans and structured messages.
   matching, +44 in `tests/pattern_matching.rs`), **1007 tests** after
   Session 19 (sum types, +44 in `tests/sum_types.rs`), **1039 tests**
   after Session 20 (explicit discriminants, +32 in
-  `tests/discriminants.rs`), and **1048 tests** after the Session 21 deep
-  audit. See
+  `tests/discriminants.rs`), **1048 tests** after the Session 21 deep
+  audit, and **1096 tests** after Session 22 (aggregate returns and
+  module-scope aggregate statics, +48 in `tests/aggregate_returns.rs`,
+  including sub-word guard-word regressions). See
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
   per-file breakdown.
 
 ## 9. Known limitations
 
-- Aggregate values cannot be returned from functions or stored at module
-  scope yet (`E-B03`).
+- `main` cannot return an aggregate: its result becomes the process exit
+  code, so struct, array, and tagged-union results are rejected with
+  `E-B09` (other functions return aggregates through a caller-allocated
+  return slot, session 22).
+- A struct that packs booleans into byte offsets 1–7 immediately before
+  an integer field reads those booleans as `false` (the integer chunk's
+  qword covers the booleans' downward tail bytes); word-aligned boolean
+  placements (offsets 0 and 8-aligned) are correct.
 - Arrays are fixed-size values; no resizing, no slices, no iteration
   beyond manual index loops.
-- No data-carrying enums/unions/tagged values yet (data-free enums with
-  single-word discriminants arrived in session 17 — see
-  `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`); structs, arrays,
-  and data-free enums are the user-defined forms today.
 - The 1 MiB heap bound is also the maximum single aggregate value size.

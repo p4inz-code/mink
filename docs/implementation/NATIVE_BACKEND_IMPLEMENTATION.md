@@ -143,11 +143,19 @@ runtime bounds checks (`E-R10`) on every index step.
 Aggregate layout is resolved during lowering through the same
 `struct_layout`/`array_layout` engine the type checker used, so backend
 and typechecker cannot disagree about offsets. Aggregate values in stack
-slots follow the downward value-image convention (byte `b` of a value
-lives at `slot_word0 - b`); copies and argument marshalling are word-wise
-with byte-wise unaligned tails. Aggregate **returns** and aggregate
-**module statics** are rejected (`E-B03`); aggregate **arguments** are
-supported.
+slots follow the downward value-image convention: full-word chunks fill
+qwords upward from `slot_word0 - 8k`, while sub-word chunks (booleans,
+sub-word element arrays, tails) run byte-wise downward from `word0`;
+copies and argument marshalling are word-wise with byte-wise unaligned
+tails. Every slot reserves guard words so the next slot's first qword can
+never overwrite a sub-word value's tail bytes (sub-word element arrays
+and boolean tails get one extra word when their byte size has a tail of
+two or more). Aggregate **returns** (through a caller-allocated return
+slot) and aggregate **module statics** (constant-evaluated value images
+in the data section) are supported since session 22; only `main` may not
+return an aggregate (`E-B09`), and aggregate **arguments** are supported.
+Module-binding data regions hold values in normal byte order; loads and
+stores bridge the two conventions byte-exactly.
 
 **Rejected constructs** (structured errors, never miscompilation):
 
@@ -155,7 +163,8 @@ supported.
 |---|---|
 | Function values | `E-B01` |
 | Float / char / `null` literals | `E-B02` |
-| `Float`, `Char`, `Null`, unresolved inference, `Range` in a single-word position (function result, static, operand), aggregate returns / aggregate statics | `E-B03` |
+| `Float`, `Char`, `Null`, unresolved inference, `Range` in a single-word position (function result, static, operand) | `E-B03` |
+| `main` returning an aggregate (struct, array, tagged-union enum, `Range`) | `E-B09` |
 | Unsupported assignment targets | `E-B04` |
 | Module bindings initialized by non-constant expressions | `E-B05` |
 | Calls whose callee is not a module-level function | `E-B06` |
@@ -290,9 +299,12 @@ documented in `src/runtime/abi.rs`:
   rejected with structured errors. Strings are byte sequences (no runtime
   UTF-8 validation, no concatenation, literals immutable);
   `TypeKind::Ptr<T>` exists in the type system but only `Ptr<Int>` is
-  instantiable today. Structs and arrays are supported as values (member/
-  index access, place mutation, arguments), but aggregate returns and
-  aggregate module statics are rejected (`E-B03`).
+  instantiable today. Structs, arrays, and tagged-union enums are
+  supported as values (member/index access, place mutation, arguments,
+  returns, module statics). A struct that packs boolean fields into byte
+  offsets 1–7 immediately followed by an integer field is a known layout
+  limitation: the integer chunk's qword covers the booleans' downward
+  tail bytes, so those booleans read back as `false`.
 - No debug info, no symbol tables beyond what the PE format requires, and
   no optimizations in the backend itself (the MIR pipeline already
   optimized the input).

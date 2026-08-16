@@ -680,9 +680,10 @@ fn tagged_enum_locals_are_multi_word() {
 }
 
 #[test]
-fn tagged_enum_results_are_rejected() {
-    // The calling convention returns one word; a tagged union cannot be a
-    // function result.
+fn tagged_enum_results_lower_with_hidden_return_slot() {
+    // Session 22: a tagged-union (multi-word) result is returned through
+    // a caller-allocated return slot — the callee's result spans its
+    // layout's words and the function lowers cleanly.
     let src = "enum E { A, B(Int) } fn id(x) { return x; } fn main() { let x = id(E::B(5)); }";
     let mut sources = SourceMap::new();
     let name = std::thread::current()
@@ -702,10 +703,12 @@ fn tagged_enum_results_are_rejected() {
         report.errors
     );
     let mir = report.mir.as_ref().expect("clean program lowers to MIR");
-    assert!(
-        backend::lower(mir, &sources).is_err(),
-        "a tagged-union result must be rejected by the backend"
-    );
+    let program = backend::lower(mir, &sources)
+        .unwrap_or_else(|errors| panic!("a tagged-union result must lower: {errors:?}"));
+    backend::verify(&program).expect("lowered program must verify");
+    let id = program.functions.iter().find(|f| f.name == "id").unwrap();
+    assert_eq!(id.result, BType::Enum);
+    assert_eq!(id.result_words, 2, "a tagged union spans two words");
 }
 
 // ---------------------------------------------------------------------------

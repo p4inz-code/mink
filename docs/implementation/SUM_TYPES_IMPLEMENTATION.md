@@ -185,8 +185,9 @@ before code generation.
   `BInstKind::EnumInit`/`EnumTag`/`EnumPayload`; `classify_enum` and
   `words_of` give a tagged union its layout's word count; the emitter
   loads/stores the tag word and the payload area; `FieldLoad`/`FieldStore`
-  accept enum bases; tagged-union function results are rejected
-  (`E-B03`-style unsupported type).
+  accept enum bases; tagged-union function results are returned through
+  the caller-allocated return slot (session 22; only `main`'s aggregate
+  result is rejected, `E-B09`).
 - `src/ownership/mod.rs` — `Shape::Enum`/`State::Enum` with payload
   provenance, construction transfer, payload-pattern binding, and
   scrutinee consumption on owned-payload matches.

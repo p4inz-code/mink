@@ -195,9 +195,13 @@ Honest status, because durable engineering starts with accurate claims:
 - **Fixed 1 MiB heap** — exhaustion is a structured error (`E-R02`).
 - **Single-threaded runtime** — no concurrency primitives yet.
 - **Aggregate limits** — structs, arrays, and tagged-union enums are
-  values with deterministic C-style layout; they cannot be returned from
-  functions or stored at module scope yet (rejected with `E-B03`).
-  Tagged-union enums cannot be compared with `==`/`!=` (`E-T30`); there
+  values with deterministic C-style layout; they can be returned from
+  functions and stored at module scope through a caller-allocated return
+  slot and constant-evaluated data images (session 22). `main` still
+  cannot return an aggregate (its result is the exit code, `E-B09`), and
+  a packed run of boolean fields immediately followed by an integer field
+  is a known layout limitation. Tagged-union enums cannot be compared
+  with `==`/`!=` (`E-T30`); there
   is no enum-to-`Int` conversion; pattern matching covers
   `Int`/`Bool`/enum scrutinees only (no struct/array destructuring,
   ranges, or or-patterns yet), and there are no tuples or generics.

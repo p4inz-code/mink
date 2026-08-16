@@ -181,6 +181,12 @@ pub struct BFunction {
     pub blocks: Vec<BBlock>,
     /// The function's result type.
     pub result: BType,
+    /// The number of 64-bit words the result value occupies in its slot
+    /// (1 for every scalar, `ceil(size / 8)` for aggregate results). A
+    /// multi-word result is returned through a caller-allocated return
+    /// slot (session 22): the caller passes the target slot's address as a
+    /// hidden argument and the callee copies the value into it.
+    pub result_words: u32,
     /// Span covering the whole `fn` item.
     pub span: Span,
 }
@@ -228,8 +234,12 @@ pub struct BLocal {
 
 /// A module-level `let`/`const` binding lowered to a machine global.
 ///
-/// The first native subset supports only bindings whose initializer is a
-/// single constant; the constant's decoded value is stored directly.
+/// The first native subset supports bindings whose initializer is a
+/// constant: word bindings (integers and booleans) carry the decoded word
+/// in [`BStatic::value`], and aggregate bindings (session 22: structs,
+/// arrays, and enums) carry their full decoded value image in
+/// [`BStatic::bytes`]. Every binding also stores its image bytes so the
+/// emitter writes one contiguous data region per binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BStatic {
     /// The bound name.
@@ -241,8 +251,20 @@ pub struct BStatic {
     pub mutable: bool,
     /// The binding's classified value type.
     pub ty: BType,
-    /// The decoded constant value the binding is initialized to.
+    /// The decoded constant value the binding is initialized to, for word
+    /// bindings (integers and booleans). `0` for aggregate bindings, whose
+    /// value lives in [`BStatic::bytes`].
     pub value: i64,
+    /// The binding's full value image: `ceil(size / 8) * 8` bytes in
+    /// normal byte order (byte `b` of the value at offset `b`), always a
+    /// multiple of 8 so every binding region starts word-aligned. Word
+    /// bindings store `value.to_le_bytes()`.
+    pub bytes: Vec<u8>,
+    /// The binding value's byte size (not the padded region): 8 for word
+    /// bindings, the layout size for aggregate bindings. The emitter
+    /// copies exactly this many bytes when loading and storing the value,
+    /// so sub-word values keep their byte layout.
+    pub size: u32,
     /// Span of the whole binding.
     pub span: Span,
 }

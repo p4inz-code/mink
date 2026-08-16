@@ -339,19 +339,37 @@ pub enum MirTargetKind {
         /// The evaluated reference value (a single-word address).
         operand: MirOperand,
     },
-    /// A multi-step storage place: `root` (a local holding the outermost
-    /// value) plus a path of field/index steps to the addressed element.
-    /// Chains are kept structurally so an assignment reaches the root
-    /// value instead of a temporary copy of an intermediate member/index
-    /// result (the backend resolves each step's byte offset/stride from
-    /// the deterministic layout).
+    /// A multi-step storage place: `root` (the storage holding the
+    /// outermost value) plus a path of field/index steps to the addressed
+    /// element. Chains are kept structurally so an assignment reaches the
+    /// root value instead of a temporary copy of an intermediate
+    /// member/index result (the backend resolves each step's byte
+    /// offset/stride from the deterministic layout). Since session 22 the
+    /// root may be module-level storage as well as a local, so `a[i] = v`
+    /// and `g.rows[1].y = v` on module-scope aggregates write through to
+    /// the binding instead of a temporary copy.
     Place {
-        /// The local holding the outermost value of the chain.
-        root: LocalId,
+        /// The storage holding the outermost value of the chain.
+        root: MirPlaceRoot,
+        /// The type of the value at the root, for resolving the step
+        /// geometry (a module-storage root's aggregate shape is not a
+        /// function local).
+        root_ty: TypeId,
         /// The steps from the root to the addressed element, in source
         /// order (outermost first).
         steps: Vec<MirPlaceStep>,
     },
+}
+
+/// The storage root of a multi-step place ([`MirTargetKind::Place`]): a
+/// function-local slot or module-level storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirPlaceRoot {
+    /// A function-local slot.
+    Local(LocalId),
+    /// Module-level storage (a module-scope `let`/`const` binding),
+    /// referenced by its declaration's [`SymbolId`].
+    Static(SymbolId),
 }
 
 /// One step of a multi-step storage place ([`MirTargetKind::Place`]).

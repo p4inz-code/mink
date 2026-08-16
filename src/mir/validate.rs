@@ -149,8 +149,20 @@ fn check_target(
             check_operand(base, local_count, errors, type_count);
             check_operand(index, local_count, errors, type_count);
         }
-        MirTargetKind::Place { root, steps } => {
-            check_local(root, target.span, local_count, errors);
+        MirTargetKind::Place {
+            root,
+            root_ty,
+            steps,
+        } => {
+            check_type(*root_ty, target.span, errors, type_count);
+            match root {
+                crate::mir::MirPlaceRoot::Local(id) => {
+                    check_local(id, target.span, local_count, errors)
+                }
+                // Module-storage roots have no local to check; their index
+                // steps are checked below.
+                crate::mir::MirPlaceRoot::Static(_) => {}
+            }
             for step in steps {
                 if let MirPlaceStepKind::Index(index) = &step.kind {
                     check_operand(index, local_count, errors, type_count);

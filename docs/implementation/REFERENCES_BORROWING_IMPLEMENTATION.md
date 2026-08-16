@@ -117,7 +117,9 @@ The following rules are authoritative for this session.
 - Arrays of references are supported as values; reading `a[i]` yields the
   reference (copy or move by element type).
 - Struct/array values containing references cannot be returned from
-  functions or stored at module scope (existing E-B03 / constant rules).
+  functions or stored at module scope (references need local storage;
+  module bindings accept only constant-decodable values, and the
+  reference/borrow machinery is local-only).
 
 ### 1.6 Diagnostics (stable E-T / E-S ranges)
 

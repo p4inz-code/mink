@@ -552,11 +552,6 @@ impl Code {
         self.mov_r_mem(Reg::Rcx, Reg::Rbp, disp);
     }
 
-    /// `mov rax, [rip + disp32]` (patched later).
-    fn mov_rax_rip(&mut self, static_index: usize) {
-        self.mov_r_rip(Reg::Rax, PatchKind::Static(static_index));
-    }
-
     /// `mov [rip + disp32], rax` (patched later).
     fn mov_rip_rax(&mut self, static_index: usize) {
         self.mov_rip_r(Reg::Rax, PatchKind::Static(static_index));
@@ -754,10 +749,12 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     // ------------------------------------------------------------------
     // Functions, in source order.
     // ------------------------------------------------------------------
+
     let mut function_starts = Vec::with_capacity(program.functions.len());
     let mut function_block_starts = Vec::with_capacity(program.functions.len());
     for (index, f) in program.functions.iter().enumerate() {
-        let (start, block_starts) = emit_function(&mut code, f, index, &string_labels);
+        let (start, block_starts) =
+            emit_function(&mut code, f, index, &string_labels, &program.statics);
         function_starts.push(start);
         function_block_starts.push(block_starts);
     }
@@ -783,11 +780,16 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     code.bind_label(str_data_end_label);
 
     // ------------------------------------------------------------------
-    // Module bindings: one 8-byte word each, in source order.
+    // Module bindings: each binding's value image region, in source
+    // order. Every region is a multiple of 8 bytes, so the bases stay
+    // word-aligned; `static_bases[i]` is the byte offset of binding `i`
+    // within `.data` and the `Static` patches resolve against it.
     // ------------------------------------------------------------------
-    let mut data = Vec::with_capacity(program.statics.len() * 8);
+    let mut static_bases = Vec::with_capacity(program.statics.len());
+    let mut data = Vec::new();
     for s in &program.statics {
-        data.extend_from_slice(&s.value.to_le_bytes());
+        static_bases.push(data.len());
+        data.extend_from_slice(&s.bytes);
     }
 
     // ------------------------------------------------------------------
@@ -816,7 +818,7 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
             PatchKind::Static(index) => {
                 // RIP-relative: target VA minus the address after the
                 // instruction. The image base cancels out.
-                (layout.data_rva as i64 + 8 * *index as i64)
+                (layout.data_rva as i64 + static_bases[*index] as i64)
                     - (text_rva as i64 + patch.offset as i64 + 4)
             }
             PatchKind::RuntimeService(service) => {
@@ -864,6 +866,7 @@ fn emit_function(
     f: &super::super::ir::BFunction,
     function_index: usize,
     string_labels: &[u32],
+    statics: &[super::super::ir::BStatic],
 ) -> (usize, Vec<u32>) {
     let start = code.len();
     let (slots, total_words) = slots(f);
@@ -894,6 +897,10 @@ fn emit_function(
         }
         arg_words += words;
     }
+    // A multi-word result is returned through the caller-allocated return
+    // slot whose address is the hidden argument right after the visible
+    // parameters (session 22).
+    let param_words = arg_words;
 
     // The function's shared `E-R10` failure block: bound after the last
     // block, referenced by every generated array bounds check in the
@@ -914,6 +921,8 @@ fn emit_function(
             function_index,
             string_labels,
             fail_label,
+            param_words,
+            statics,
         );
     }
     code.bind_label(fail_label);
@@ -929,6 +938,7 @@ fn block_target(function_index: usize, target: BlockId) -> PatchKind {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // the emitter context is threaded per block
 fn emit_block(
     code: &mut Code,
     f: &super::super::ir::BFunction,
@@ -937,12 +947,39 @@ fn emit_block(
     function_index: usize,
     string_labels: &[u32],
     fail_label: u32,
+    param_words: usize,
+    statics: &[super::super::ir::BStatic],
 ) {
     for inst in &block.insts {
-        emit_inst(code, f, slots, inst, string_labels, fail_label);
+        emit_inst(code, f, slots, inst, string_labels, fail_label, statics);
     }
     match &block.terminator {
         BTerminator::Return { value, .. } => {
+            // A multi-word result (session 22: structs, arrays, tagged-
+            // union enums) is returned through the caller-allocated return
+            // slot: copy the value image into the memory addressed by the
+            // hidden argument (word `k` at `slot_addr - 8k`, matching the
+            // slot convention).
+            if f.result_words > 1 {
+                code.mov_r_mem(Reg::Rcx, Reg::Rbp, (16 + 8 * param_words) as i32);
+                let size = (8 * f.result_words as usize) as u32;
+                match value {
+                    Some(operand) => {
+                        store_into(code, slots, *operand, Reg::Rcx, size);
+                    }
+                    // A bare return in an aggregate-returning function
+                    // contributes no value; zero the region for
+                    // determinism.
+                    None => {
+                        for k in 0..f.result_words as usize {
+                            code.movabs_rax(0);
+                            code.mov_mem_r(Reg::Rcx, -((8 * k) as i32), Reg::Rax);
+                        }
+                    }
+                }
+                code.leave_ret();
+                return;
+            }
             // Unit functions (and bare returns in non-unit functions) return
             // zero; a value return loads the value into rax first.
             let has_value = value.is_some() && f.result != BType::Unit;
@@ -1059,6 +1096,7 @@ fn emit_runtime_call(
     code.mov_rbp_rax(slots[target.raw() as usize].0);
 }
 
+#[allow(clippy::too_many_arguments)] // the emitter context is threaded per instruction
 fn emit_inst(
     code: &mut Code,
     f: &super::super::ir::BFunction,
@@ -1066,6 +1104,7 @@ fn emit_inst(
     inst: &super::super::ir::BInst,
     string_labels: &[u32],
     fail_label: u32,
+    statics: &[super::super::ir::BStatic],
 ) {
     match &inst.kind {
         BInstKind::LoadLocal { target, src } => {
@@ -1087,12 +1126,43 @@ fn emit_inst(
             target,
             static_index,
         } => {
-            code.mov_rax_rip(*static_index);
-            code.mov_rbp_rax(slots[target.raw() as usize].0);
+            // The data region holds the value in normal byte order (byte
+            // `b` at `base + b`); the slot's downward image (byte `b` at
+            // `word0 - b`) is filled with the matching byte-exact copy, so
+            // sub-word values (boolean tails, sub-word element arrays)
+            // keep their byte layout.
+            code.lea_r_rip(Reg::Rcx, PatchKind::Static(*static_index));
+            let size = statics[*static_index].size;
+            copy_static_into_slot(code, slots, *target, Reg::Rcx, size);
         }
         BInstKind::StoreStatic { static_index, src } => {
-            eval_rax(code, slots, *src);
-            code.mov_rip_rax(*static_index);
+            let size = statics[*static_index].size;
+            if size <= 8 {
+                // A single-word (or single-byte) binding is stored as its
+                // word value.
+                eval_rax(code, slots, *src);
+                code.mov_rip_rax(*static_index);
+            } else {
+                // A multi-word aggregate binding: copy the slot's downward
+                // image into the data region's normal byte order with the
+                // byte-exact store used for every value move.
+                code.lea_r_rip(Reg::Rcx, PatchKind::Static(*static_index));
+                match src {
+                    // Defensive: a clean pipeline never stores a constant
+                    // into a multi-word binding (aggregate values are
+                    // materialized into locals); zero the region for
+                    // determinism rather than emitting nothing.
+                    BOperand::Const(value) => {
+                        code.movabs_rax(*value);
+                        for k in 0..size.div_ceil(8) {
+                            code.mov_mem_r(Reg::Rcx, (8 * k) as i32, Reg::Rax);
+                        }
+                    }
+                    BOperand::Local(id) => {
+                        store_slot_to_static(code, slots, *id, Reg::Rcx, size);
+                    }
+                }
+            }
         }
         BInstKind::LoadStr {
             target,
@@ -1181,22 +1251,40 @@ fn emit_inst(
             // The alignment padding is pushed before the arguments (odd
             // argument counts), so argument 1 is on top of the stack at
             // the call and the callee reads it at `[rbp + 16]`.
+            //
+            // A multi-word result (session 22: structs, arrays, tagged-
+            // union enums) is returned through a caller-allocated return
+            // slot: the target slot's address is pushed as a hidden
+            // argument (rightmost, so it sits just after the visible
+            // parameters), the callee copies its result into it, and the
+            // caller does not read `rax`.
+            let aggregate = f
+                .local(*target)
+                .map(|local| local.words > 1)
+                .unwrap_or(false);
             let mut words = 0usize;
             for arg in args {
                 words += operand_words(f, *arg);
             }
-            let pad = words % 2;
+            let total = words + usize::from(aggregate);
+            let pad = total % 2;
             if pad == 1 {
                 code.sub_rsp(8);
+            }
+            if aggregate {
+                code.lea_r_mem(Reg::Rax, Reg::Rbp, slots[target.raw() as usize].0);
+                code.push_rax();
             }
             for arg in args.iter().rev() {
                 push_operand(code, f, slots, *arg);
             }
             code.call(*callee);
-            if words + pad > 0 {
-                code.add_rsp((8 * (words + pad)) as i32);
+            if total > 0 {
+                code.add_rsp((8 * total) as i32);
             }
-            code.mov_rbp_rax(slots[target.raw() as usize].0);
+            if !aggregate {
+                code.mov_rbp_rax(slots[target.raw() as usize].0);
+            }
         }
         BInstKind::RuntimeCall {
             target,
@@ -1449,6 +1537,56 @@ fn copy_into_slot(code: &mut Code, slots: &Slots, dst: crate::mir::LocalId, src:
         let byte = (words * 8 + k) as i32;
         code.movzx_byte(Reg::Rax, src, -byte);
         code.mov_mem_r8(Reg::Rbp, word0 - byte, Reg::Rax);
+    }
+}
+
+/// Copies `size` bytes from a static data region (normal byte order:
+/// byte `b` at `[base + b]`) into the destination local's downward slot
+/// image (byte `b` at `[word0 - b]`). Full words move as qwords; the
+/// sub-word remainder moves byte by byte, so sub-word values (booleans,
+/// sub-word element arrays) keep their byte layout.
+fn copy_static_into_slot(
+    code: &mut Code,
+    slots: &Slots,
+    dst: crate::mir::LocalId,
+    src: Reg,
+    size: u32,
+) {
+    let word0 = slots[dst.raw() as usize].0;
+    let words = size / 8;
+    for k in 0..words {
+        let k = (8 * k) as i32;
+        code.mov_r_mem(Reg::Rax, src, k);
+        code.mov_mem_r(Reg::Rbp, word0 - k, Reg::Rax);
+    }
+    for k in 0..(size % 8) {
+        let byte = (words * 8 + k) as i32;
+        code.movzx_byte(Reg::Rax, src, byte);
+        code.mov_mem_r8(Reg::Rbp, word0 - byte, Reg::Rax);
+    }
+}
+
+/// Stores a source local's downward slot image into a static data region
+/// (normal byte order: byte `b` at `[base + b]`), the inverse of
+/// [`copy_static_into_slot`].
+fn store_slot_to_static(
+    code: &mut Code,
+    slots: &Slots,
+    src: crate::mir::LocalId,
+    dst: Reg,
+    size: u32,
+) {
+    let word0 = slots[src.raw() as usize].0;
+    let words = size / 8;
+    for k in 0..words {
+        let k = (8 * k) as i32;
+        code.mov_rax_rbp(word0 - k);
+        code.mov_mem_r(dst, k, Reg::Rax);
+    }
+    for k in 0..(size % 8) {
+        let byte = (words * 8 + k) as i32;
+        code.movzx_byte(Reg::Rax, Reg::Rbp, word0 - byte);
+        code.mov_mem_r8(dst, byte, Reg::Rax);
     }
 }
 

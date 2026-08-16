@@ -572,9 +572,10 @@ fn tagged_enum_locals_are_multi_word_with_explicit_tags() {
 }
 
 #[test]
-fn tagged_enum_results_are_still_rejected() {
-    // The calling convention returns one word; a tagged union cannot be a
-    // function result, explicit tags or not.
+fn tagged_enum_results_are_supported_with_explicit_tags() {
+    // Session 22: a tagged-union (multi-word) result is returned through
+    // a caller-allocated return slot; explicit discriminants flow through
+    // the returned value unchanged.
     let src =
         "enum E { A = 5, B(Int) = 42 } fn id(x) { return x; } fn main() { let x = id(E::B(5)); }";
     let mut sources = SourceMap::new();
@@ -595,10 +596,12 @@ fn tagged_enum_results_are_still_rejected() {
         report.errors
     );
     let mir = report.mir.as_ref().expect("clean program lowers to MIR");
-    assert!(
-        backend::lower(mir, &sources).is_err(),
-        "a tagged-union result must be rejected by the backend"
-    );
+    let program = backend::lower(mir, &sources)
+        .unwrap_or_else(|errors| panic!("a tagged-union result must lower: {errors:?}"));
+    backend::verify(&program).expect("lowered program must verify");
+    let id = program.functions.iter().find(|f| f.name == "id").unwrap();
+    assert_eq!(id.result, BType::Enum);
+    assert_eq!(id.result_words, 2, "a tagged union spans two words");
 }
 
 // ---------------------------------------------------------------------------

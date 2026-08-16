@@ -138,6 +138,44 @@ fn verify_inst(
         } => {
             verify_target(function, *target, inst.span, errors);
             verify_static_index(program, *static_index, inst.span, errors);
+            // The target slot must match the binding's shape: the same
+            // word count, and a matching classified type for word
+            // bindings (aggregate bindings land in aggregate slots).
+            if let Some(static_binding) = program.statics.get(*static_index) {
+                let words = static_binding.bytes.len() / 8;
+                let local_words = function.local(*target).map(|local| local.words as usize);
+                // Sub-word values carry an extra guard word (session 22
+                // slot padding), so the slot may be one word wider than
+                // the binding's image region.
+                if local_words.is_none() || local_words.unwrap() < words {
+                    errors.push(error(
+                        inst.span,
+                        format!(
+                            "function `{}`: a static load writes a slot of {} word(s), but binding {} occupies {words}",
+                            function.name,
+                            local_words.unwrap_or(0),
+                            static_index
+                        ),
+                    ));
+                }
+                if words == 1 {
+                    if let Some(local) = function.local(*target) {
+                        // Word bindings are integers, booleans, or unit-
+                        // only enum discriminants; the slot must carry the
+                        // same classified type.
+                        let compatible = local.ty == static_binding.ty;
+                        if !compatible {
+                            errors.push(error(
+                                inst.span,
+                                format!(
+                                    "function `{}`: a static load must write a slot matching the binding's type",
+                                    function.name
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
         }
         BInstKind::LoadStr {
             target,
@@ -163,6 +201,32 @@ fn verify_inst(
         BInstKind::StoreStatic { static_index, src } => {
             verify_static_index(program, *static_index, inst.span, errors);
             verify_operand(function, src, inst.span, errors);
+            // A stored local must carry the binding's full width (a
+            // multi-word binding is written as a whole value).
+            if let BOperand::Local(id) = src {
+                if let Some(static_binding) = program.statics.get(*static_index) {
+                    let words = static_binding.bytes.len() / 8;
+                    // The source slot may carry the guard word for
+                    // sub-word bindings; it must at least span the
+                    // binding's image region.
+                    if function
+                        .local(*id)
+                        .map(|local| local.words as usize)
+                        .unwrap_or(0)
+                        < words
+                    {
+                        errors.push(error(
+                            inst.span,
+                            format!(
+                                "function `{}`: a static store writes {} word(s) into binding {}, which occupies {words}",
+                                function.name,
+                                function.local(*id).map(|local| local.words as usize).unwrap_or(0),
+                                static_index
+                            ),
+                        ));
+                    }
+                }
+            }
         }
         BInstKind::Unary { target, op, src } => {
             verify_target(function, *target, inst.span, errors);
@@ -194,6 +258,24 @@ fn verify_inst(
                         function.name
                     ),
                 ));
+            }
+            // A multi-word result (session 22) is returned through the
+            // caller-allocated slot; the target slot must span the callee's
+            // result width.
+            if let Some(callee_fn) = program.functions.get(*callee) {
+                if callee_fn.result_words > 1
+                    && function.local(*target).map(|local| local.words)
+                        != Some(callee_fn.result_words)
+                {
+                    errors.push(error(
+                        inst.span,
+                        format!(
+                            "function `{}`: call result slot does not span the callee's {} result word(s)",
+                            function.name,
+                            callee_fn.result_words
+                        ),
+                    ));
+                }
             }
             for arg in args {
                 verify_operand(function, arg, inst.span, errors);

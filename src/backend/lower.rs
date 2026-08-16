@@ -58,6 +58,18 @@ enum Callee {
     Runtime(RuntimeService),
 }
 
+/// The resolved storage root of a multi-step place assignment: a function
+/// local slot, or a module binding that must be read-modify-written.
+#[derive(Clone, Copy)]
+enum RootHandling {
+    /// A local slot; the place store writes it directly.
+    Local(crate::mir::LocalId),
+    /// A module binding: the value is loaded into a temporary, written,
+    /// and stored back. `ty` is the binding's MIR type (the temporary's
+    /// shape for place-step resolution).
+    Static { slot: usize, ty: TypeId },
+}
+
 /// A decoded literal constant: a machine word or a string-blob reference.
 ///
 /// String literals have no machine constant form — their value is the
@@ -81,6 +93,71 @@ fn hex_digit(byte: u8, span: Span) -> Result<u8, BackendError> {
             "invalid hex digit in string escape",
         )),
     }
+}
+
+/// The word count a slot needs so that the slot that follows it never
+/// overwrites this value's lowest bytes.
+///
+/// Aggregate value bytes run *downward* from the slot's first word: full
+/// 8-byte chunks occupy `[word0 - 8k, word0 - 8k + 7]` and sub-word chunks
+/// (booleans, sub-word elements and tails) occupy `[word0 - b, word0]` for
+/// their lowest byte `b`. The next slot is placed `8 * words` bytes below
+/// `word0` and its first full word covers `[word0 - 8 * words, word0 -
+/// 8 * words + 7]`; for the two regions to stay disjoint the slot needs
+/// `8 * words >= bottom + 8`. Full-word-only values (integers, integer
+/// arrays) already satisfy this with `ceil(size / 8)`; sub-word tails and
+/// sub-word-element arrays need the guard word.
+fn value_bottom_words(size: u64, bottom: u64) -> u64 {
+    let _ = size;
+    (bottom + 8).div_ceil(8)
+}
+
+/// The lowest byte offset (below a value's first word) a struct occupies:
+/// the maximum, over fields, of `offset + size - 1` for sub-word fields
+/// and `offset + size - 8` for full-word fields (their qword starts at
+/// `word0 - offset` and covers `[word0 - offset, word0 - offset + 7]`).
+fn struct_bottom_offset(layout: &layout::StructLayout) -> u64 {
+    layout
+        .fields
+        .iter()
+        .map(|field| {
+            let tail = if field.size % 8 == 0 {
+                field.size - 8
+            } else {
+                field.size - 1
+            };
+            field.offset + tail
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The lowest byte offset (below a value's first word) an array occupies.
+/// Element `k` starts at `word0 - k * elem_size`; full-word elements fill
+/// qwords *upward* from their start (so the last element's bottom is its
+/// final qword at `elem_size - 8`), while sub-word elements run downward
+/// (so the last element's bottom is its final byte at `elem_size - 1`).
+fn array_bottom_offset(layout: &layout::ArrayLayout) -> u64 {
+    let tail = if layout.elem_size % 8 == 0 {
+        layout.elem_size - 8
+    } else {
+        layout.elem_size - 1
+    };
+    layout.len.saturating_sub(1) * layout.elem_size + tail
+}
+
+/// The lowest byte offset (below a value's first word) a tagged-union
+/// enum occupies: the discriminant word starts at `word0 - tag_offset`,
+/// and the payload area behaves like a struct field at `payload_offset`.
+fn enum_bottom_offset(layout: &layout::EnumLayout) -> u64 {
+    let tag = layout.tag_offset; // the tag is a full word
+    let payload = layout.payload_offset
+        + if layout.payload_size % 8 == 0 {
+            layout.payload_size - 8
+        } else {
+            layout.payload_size - 1
+        };
+    tag.max(payload)
 }
 
 /// Lowers an optimized [`MirProgram`] into a [`BProgram`].
@@ -115,6 +192,13 @@ struct Lowerer<'a> {
     /// The classification of each static slot; `None` means the binding's
     /// type was already rejected.
     static_types: Vec<Option<BType>>,
+    /// The MIR type id of each static slot, for resolving aggregate
+    /// structure (place steps, value images) during lowering.
+    static_mir_types: Vec<TypeId>,
+    /// The decoded value image of each successfully lowered binding (slot
+    /// index → image bytes), so a later binding's constant initializer may
+    /// reference an earlier one by copying its image.
+    static_images: HashMap<usize, Vec<u8>>,
     functions: Vec<BFunction>,
     statics: Vec<BStatic>,
     /// The decoded string literals, in first-use order.
@@ -164,6 +248,8 @@ impl<'a> Lowerer<'a> {
             fn_index,
             static_slots,
             static_types: Vec::new(),
+            static_mir_types: Vec::new(),
+            static_images: HashMap::new(),
             functions: Vec::new(),
             statics: Vec::new(),
             strings: Vec::new(),
@@ -380,7 +466,10 @@ impl<'a> Lowerer<'a> {
             BType::Enum => {
                 if let Some(id) = self.program.types.enum_id(ty) {
                     match layout::enum_layout(id, &self.program.types) {
-                        Ok(layout) if layout.tagged => (layout.size.div_ceil(8)).max(1) as u32,
+                        Ok(layout) if layout.tagged => {
+                            (value_bottom_words(layout.size, enum_bottom_offset(&layout))).max(1)
+                                as u32
+                        }
                         _ => 1,
                     }
                 } else {
@@ -395,16 +484,18 @@ impl<'a> Lowerer<'a> {
     /// A validated aggregate always has a layout; the fallback keeps a
     /// defensive path from panicking on inconsistent input.
     fn aggregate_words(&self, ty: TypeId) -> u32 {
-        let size = match self.program.types.kind(ty) {
-            Some(TypeKind::Struct(id)) => layout::struct_layout(*id, &self.program.types)
-                .map(|layout| layout.size)
-                .unwrap_or(0),
-            Some(TypeKind::Array { .. }) => layout::array_layout(ty, &self.program.types)
-                .map(|layout| layout.size)
-                .unwrap_or(0),
-            _ => 0,
+        let (size, bottom) = match self.program.types.kind(ty) {
+            Some(TypeKind::Struct(id)) => match layout::struct_layout(*id, &self.program.types) {
+                Ok(layout) => (layout.size, struct_bottom_offset(&layout)),
+                Err(_) => (0, 0),
+            },
+            Some(TypeKind::Array { .. }) => match layout::array_layout(ty, &self.program.types) {
+                Ok(layout) => (layout.size, array_bottom_offset(&layout)),
+                Err(_) => (0, 0),
+            },
+            _ => (0, 0),
         };
-        (size.div_ceil(8)).max(1) as u32
+        value_bottom_words(size, bottom).max(1) as u32
     }
 
     /// An unsupported-type error for `ty`, appending the recorded aggregate
@@ -433,11 +524,19 @@ impl<'a> Lowerer<'a> {
     ///
     /// Unsupported binding types report one error and keep the slot marked
     /// `None`; function bodies that reference the binding skip their
-    /// statements instead of re-reporting.
+    /// statements instead of re-reporting. Word bindings (integers and
+    /// booleans) and aggregate bindings (structs, arrays, and enums —
+    /// session 22) are representable; strings, pointers, references,
+    /// ranges, and unit values are rejected because their initializers
+    /// cannot be decoded to constant data (strings need a patched image
+    /// address; references are local-only).
     fn classify_static(&mut self, s: &MirStatic) {
         let slot = self.static_slots[&s.name.symbol];
         match self.classify(s.ty) {
-            Some(ty @ (BType::Int | BType::Bool)) => self.static_types.push(Some(ty)),
+            Some(ty @ (BType::Int | BType::Bool | BType::Struct | BType::Array | BType::Enum)) => {
+                self.static_types.push(Some(ty));
+                self.static_mir_types.push(s.ty);
+            }
             _ => {
                 self.errors.push(BackendError::unsupported_type(
                     s.span,
@@ -447,9 +546,11 @@ impl<'a> Lowerer<'a> {
                     ),
                 ));
                 self.static_types.push(None);
+                self.static_mir_types.push(s.ty);
             }
         }
         debug_assert_eq!(self.static_types.len(), slot + 1);
+        debug_assert_eq!(self.static_mir_types.len(), slot + 1);
     }
 
     /// The classified result type of a function, or a structured error.
@@ -466,18 +567,11 @@ impl<'a> Lowerer<'a> {
             }
         };
         match self.classify(result) {
-            // Range and aggregate values cannot be returned by the first
-            // native subset: the calling convention returns one word in
-            // `rax`, which cannot carry a multi-word value. A tagged-union
-            // enum (session 19) is likewise multi-word.
-            Some(BType::Range | BType::Struct | BType::Array) => {
-                self.errors.push(BackendError::unsupported_type(
-                    f.span,
-                    format!("cannot return a value of type `{}`", self.display(result)),
-                ));
-                None
-            }
-            Some(BType::Enum) if self.words_of(result, BType::Enum) > 1 => {
+            // A range cannot be returned: the calling convention returns
+            // values through `rax` (or, since session 22, a caller-
+            // allocated return slot for aggregate values); a range is an
+            // iteration value, not a data value, and stays rejected.
+            Some(BType::Range) => {
                 self.errors.push(BackendError::unsupported_type(
                     f.span,
                     format!("cannot return a value of type `{}`", self.display(result)),
@@ -508,51 +602,306 @@ impl<'a> Lowerer<'a> {
             // The binding's type was already rejected; skip it.
             return;
         };
-        if !s.stmts.is_empty() || !s.locals.is_empty() {
-            self.errors.push(BackendError::unsupported_static(
-                s.span,
-                "the native subset supports only module bindings initialized by a constant",
-            ));
-            return;
-        }
-        let value = match &s.value.kind {
-            MirOperandKind::Constant(constant) => match self.decode_constant(constant) {
-                Ok(DecodedConstant::Word(value)) => value,
-                // Defensive: module bindings of string type are rejected by
-                // classification before this point (their value would need
-                // a patched blob address, which the constant model cannot
-                // represent).
-                Ok(DecodedConstant::Str(_)) => {
-                    self.errors.push(BackendError::unsupported_static(
-                        s.span,
-                        "string literals cannot initialize module bindings yet",
-                    ));
-                    return;
-                }
-                Err(error) => {
-                    self.errors.push(error);
-                    return;
-                }
-            },
-            _ => {
+        // Word bindings (integers and booleans): the initializer is a
+        // single decoded constant. A unit-only enum binding is also a
+        // single word, but its value is a variant discriminant decoded
+        // through the same constant path; a one-word *struct* binding goes
+        // through the aggregate image path below (its literal needs
+        // materialization).
+        if matches!(ty, BType::Int | BType::Bool) {
+            if !s.stmts.is_empty() || !s.locals.is_empty() {
                 self.errors.push(BackendError::unsupported_static(
                     s.span,
-                    format!(
-                        "the initializer of `{}` references other values; only constants are supported",
-                        s.name.name
-                    ),
+                    "the native subset supports only module bindings initialized by a constant",
                 ));
                 return;
             }
+            let value = match &s.value.kind {
+                MirOperandKind::Constant(constant) => match self.decode_constant(constant) {
+                    Ok(DecodedConstant::Word(value)) => value,
+                    // Defensive: module bindings of string type are
+                    // rejected by classification before this point (their
+                    // value would need a patched blob address, which the
+                    // constant model cannot represent).
+                    Ok(DecodedConstant::Str(_)) => {
+                        self.errors.push(BackendError::unsupported_static(
+                            s.span,
+                            "string literals cannot initialize module bindings yet",
+                        ));
+                        return;
+                    }
+                    Err(error) => {
+                        self.errors.push(error);
+                        return;
+                    }
+                },
+                _ => {
+                    self.errors.push(BackendError::unsupported_static(
+                        s.span,
+                        format!(
+                            "the initializer of `{}` references other values; only constants are supported",
+                            s.name.name
+                        ),
+                    ));
+                    return;
+                }
+            };
+            let bytes = value.to_le_bytes().to_vec();
+            self.static_images.insert(slot, bytes.clone());
+            self.statics.push(BStatic {
+                name: s.name.name.clone(),
+                symbol: s.name.symbol,
+                mutable: s.mutable,
+                ty,
+                value,
+                size: 8,
+                bytes,
+                span: s.span,
+            });
+            return;
+        }
+        // Aggregate bindings (session 22): constant-evaluate the
+        // initializer into the value's image bytes.
+        match self.eval_static_image(s, ty) {
+            Ok(bytes) => {
+                self.static_images.insert(slot, bytes.clone());
+                self.statics.push(BStatic {
+                    name: s.name.name.clone(),
+                    symbol: s.name.symbol,
+                    mutable: s.mutable,
+                    ty,
+                    value: 0,
+                    size: self.aggregate_value_size(s.ty) as u32,
+                    bytes,
+                    span: s.span,
+                });
+            }
+            Err(error) => {
+                self.errors.push(error);
+            }
+        }
+    }
+
+    /// The byte size of an aggregate-typed value, from its layout (the
+    /// static image's value size, used for byte-exact load/store copies).
+    fn aggregate_value_size(&self, ty: TypeId) -> u64 {
+        match self.program.types.kind(ty) {
+            Some(TypeKind::Struct(id)) => layout::struct_layout(*id, &self.program.types)
+                .map(|layout| layout.size)
+                .unwrap_or(8),
+            Some(TypeKind::Array { .. }) => layout::array_layout(ty, &self.program.types)
+                .map(|layout| layout.size)
+                .unwrap_or(8),
+            Some(TypeKind::Enum(id)) => layout::enum_layout(*id, &self.program.types)
+                .map(|layout| layout.size)
+                .unwrap_or(8),
+            _ => 8,
+        }
+    }
+
+    /// Constant-evaluates an aggregate module binding's initializer into
+    /// its value image: `words * 8` bytes in normal byte order (byte `b`
+    /// of the value at offset `b`), with the tail rounded up to a full
+    /// word. The initializer must be literal-shaped — `Use` of a constant
+    /// or of an earlier binding, or a struct/array/enum literal over such
+    /// values — anything else (`E-B05`) is rejected; string, pointer, and
+    /// reference constants have no constant image and are rejected the
+    /// same way (their values need runtime or patched addresses).
+    fn eval_static_image(
+        &mut self,
+        s: &MirStatic,
+        _classified: BType,
+    ) -> Result<Vec<u8>, BackendError> {
+        let mut images: Vec<Option<Vec<u8>>> = vec![None; s.locals.len()];
+        for stmt in &s.stmts {
+            let MirStmtKind::Assign { target, rvalue } = &stmt.kind;
+            let MirTargetKind::Local(id) = &target.kind else {
+                return Err(BackendError::unsupported_static(
+                    stmt.span,
+                    "a module binding's initializer must be a constant literal",
+                ));
+            };
+            let image = self.eval_static_rvalue(rvalue, &images)?;
+            images[id.raw() as usize] = Some(image);
+        }
+        let image = match &s.value.kind {
+            MirOperandKind::Local(id) => images[id.raw() as usize].clone().ok_or_else(|| {
+                BackendError::unsupported_static(
+                    s.span,
+                    "a module binding's initializer must be a constant literal",
+                )
+            })?,
+            MirOperandKind::Constant(constant) => self.static_constant_image(constant)?,
+            MirOperandKind::Static(symbol) => {
+                let Some(&slot) = self.static_slots.get(symbol) else {
+                    return Err(BackendError::unsupported_static(
+                        s.span,
+                        "the initializer references an unknown module binding",
+                    ));
+                };
+                self.static_images.get(&slot).cloned().ok_or_else(|| {
+                    BackendError::unsupported_static(
+                        s.span,
+                        format!(
+                            "the initializer of `{}` references an unsupported or later module binding",
+                            s.name.name
+                        ),
+                    )
+                })?
+            }
         };
-        self.statics.push(BStatic {
-            name: s.name.name.clone(),
-            symbol: s.name.symbol,
-            mutable: s.mutable,
-            ty,
-            value,
-            span: s.span,
-        });
+        // The region is `ceil(size / 8) * 8` bytes (word-aligned, at
+        // least one word); the value's own bytes are the image prefix.
+        // The padded *slot* word count is not used here: the data region
+        // holds only the value's bytes.
+        let size = self.aggregate_value_size(s.ty) as usize;
+        let region = size.div_ceil(8) * 8;
+        let mut bytes = vec![0u8; region];
+        let copy = image.len().min(region);
+        bytes[..copy].copy_from_slice(&image[..copy]);
+        Ok(bytes)
+    }
+
+    /// Constant-evaluates one rvalue of a module binding's initializer
+    /// into its value image. `images` holds the already-evaluated
+    /// temporaries.
+    fn eval_static_rvalue(
+        &mut self,
+        rvalue: &crate::mir::MirRvalue,
+        images: &[Option<Vec<u8>>],
+    ) -> Result<Vec<u8>, BackendError> {
+        match &rvalue.kind {
+            MirRvalueKind::Use(operand) => self.static_operand_image(operand, images),
+            MirRvalueKind::StructLit { fields } => {
+                let (info, layout) = self.struct_layout_of(rvalue.ty, rvalue.span)?;
+                let mut image = vec![0u8; layout.size as usize];
+                for (member, value) in fields {
+                    let index = info
+                        .fields
+                        .iter()
+                        .position(|field| field.name == member.name)
+                        .ok_or_else(|| {
+                            BackendError::invalid_backend_ir(
+                                member.span,
+                                format!(
+                                    "struct literal initializes undeclared field `{}`",
+                                    member.name
+                                ),
+                            )
+                        })?;
+                    let field_size = layout.fields[index].size as usize;
+                    let operand_image = self.static_operand_image(value, images)?;
+                    let offset = layout.fields[index].offset as usize;
+                    let copy = operand_image.len().min(field_size);
+                    image[offset..offset + copy].copy_from_slice(&operand_image[..copy]);
+                }
+                Ok(image)
+            }
+            MirRvalueKind::ArrayLit { elems } => {
+                let (_, stride, len) = self.resolve_array(rvalue.ty, rvalue.span)?;
+                let stride = stride as usize;
+                let mut image = vec![0u8; stride * len as usize];
+                for (i, elem) in elems.iter().enumerate() {
+                    let elem_image = self.static_operand_image(elem, images)?;
+                    let offset = i * stride;
+                    let copy = elem_image.len().min(stride);
+                    image[offset..offset + copy].copy_from_slice(&elem_image[..copy]);
+                }
+                Ok(image)
+            }
+            MirRvalueKind::EnumInit {
+                discriminant,
+                payload,
+            } => {
+                let enum_id = self.program.types.enum_id(rvalue.ty).ok_or_else(|| {
+                    BackendError::invalid_backend_ir(
+                        rvalue.span,
+                        "an enum construction has a non-enum type",
+                    )
+                })?;
+                let layout = layout::enum_layout(enum_id, &self.program.types)
+                    .map_err(|_| self.unsupported_type_error(rvalue.span, rvalue.ty))?;
+                let variant = layout
+                    .variants
+                    .iter()
+                    .find(|v| v.discriminant == *discriminant)
+                    .ok_or_else(|| {
+                        BackendError::invalid_backend_ir(
+                            rvalue.span,
+                            format!(
+                                "enum construction references unknown discriminant {discriminant}"
+                            ),
+                        )
+                    })?;
+                let mut image = vec![0u8; layout.size as usize];
+                let tag_offset = layout.tag_offset as usize;
+                let tag = discriminant.to_le_bytes();
+                image[tag_offset..tag_offset + 8].copy_from_slice(&tag);
+                if let Some(payload) = payload {
+                    let payload_image = self.static_operand_image(payload, images)?;
+                    let payload_offset = layout.payload_offset as usize;
+                    let copy = payload_image.len().min(variant.size as usize);
+                    image[payload_offset..payload_offset + copy]
+                        .copy_from_slice(&payload_image[..copy]);
+                }
+                Ok(image)
+            }
+            _ => Err(BackendError::unsupported_static(
+                rvalue.span,
+                "a module binding's initializer must be a constant literal",
+            )),
+        }
+    }
+
+    /// The value image of an initializer operand: a constant (an 8-byte
+    /// word for integers, booleans, and enum discriminants), a temporary
+    /// from `images`, or an earlier module binding's image.
+    fn static_operand_image(
+        &mut self,
+        operand: &MirOperand,
+        images: &[Option<Vec<u8>>],
+    ) -> Result<Vec<u8>, BackendError> {
+        match &operand.kind {
+            MirOperandKind::Local(id) => images[id.raw() as usize].clone().ok_or_else(|| {
+                BackendError::unsupported_static(
+                    operand.span,
+                    "a module binding's initializer must be a constant literal",
+                )
+            }),
+            MirOperandKind::Constant(constant) => self.static_constant_image(constant),
+            MirOperandKind::Static(symbol) => {
+                let Some(&slot) = self.static_slots.get(symbol) else {
+                    return Err(BackendError::unsupported_static(
+                        operand.span,
+                        "the initializer references an unknown module binding",
+                    ));
+                };
+                self.static_images.get(&slot).cloned().ok_or_else(|| {
+                    BackendError::unsupported_static(
+                        operand.span,
+                        "the initializer references an unsupported or later module binding",
+                    )
+                })
+            }
+        }
+    }
+
+    /// The 8-byte little-endian word image of a constant initializer
+    /// value. Only integer, boolean, and enum-discriminant constants have
+    /// constant images; string constants (and anything else) need a
+    /// patched or runtime address and are rejected (`E-B05`).
+    fn static_constant_image(
+        &mut self,
+        constant: &crate::mir::MirConstant,
+    ) -> Result<Vec<u8>, BackendError> {
+        match self.decode_constant(constant) {
+            Ok(DecodedConstant::Word(value)) => Ok(value.to_le_bytes().to_vec()),
+            Ok(DecodedConstant::Str(_)) => Err(BackendError::unsupported_static(
+                constant.span,
+                "string literals cannot initialize module bindings yet",
+            )),
+            Err(error) => Err(error),
+        }
     }
 
     fn lower_fn(&mut self, f: &MirFn) {
@@ -560,6 +909,15 @@ impl<'a> Lowerer<'a> {
             // The result-type error was reported; the body cannot be
             // emitted meaningfully.
             return;
+        };
+        // The result's slot word count: 1 for every scalar, `ceil(size /
+        // 8)` for aggregate results (a multi-word result is returned
+        // through a caller-allocated return slot).
+        let result_words = match self.program.types.kind(f.ty) {
+            Some(TypeKind::Fn {
+                result: result_ty, ..
+            }) => self.words_of(*result_ty, result),
+            _ => 1,
         };
         // Classify every local up front. Unsupported locals report one
         // error each and classify to `None`; statements that touch them are
@@ -613,6 +971,7 @@ impl<'a> Lowerer<'a> {
             locals: std::mem::take(&mut self.fn_locals),
             blocks,
             result,
+            result_words,
             span: f.span,
         });
         self.fn_classified.clear();
@@ -847,9 +1206,12 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            MirTargetKind::Place { root, steps } => {
+            MirTargetKind::Place {
+                root,
+                root_ty,
+                steps,
+            } => {
                 if self.rvalue_touches_unsupported(rvalue)
-                    || self.local_is_unsupported(*root)
                     || steps.iter().any(|step| match &step.kind {
                         crate::mir::MirPlaceStepKind::Index(index) => {
                             self.operand_is_unsupported(index)
@@ -859,18 +1221,69 @@ impl<'a> Lowerer<'a> {
                 {
                     return None;
                 }
+                // A local root stores through the root slot. A module-
+                // storage root (session 22) stores through a read-modify-
+                // write: the binding is loaded into a temporary, the place
+                // is written inside it, and the whole value is stored
+                // back — so `a[i] = v` and `g.rows[1].y = v` reach the
+                // module binding, never a temporary copy.
+                let root_handling = match root {
+                    crate::mir::MirPlaceRoot::Local(id) => {
+                        if self.local_is_unsupported(*id) {
+                            return None;
+                        }
+                        RootHandling::Local(*id)
+                    }
+                    crate::mir::MirPlaceRoot::Static(symbol) => {
+                        let Some(&slot) = self.static_slots.get(symbol) else {
+                            self.errors.push(BackendError::invalid_backend_ir(
+                                stmt.span,
+                                "assignment target references an unknown module binding",
+                            ));
+                            return None;
+                        };
+                        if self.static_is_unsupported(slot) {
+                            return None;
+                        }
+                        RootHandling::Static { slot, ty: *root_ty }
+                    }
+                };
                 let result = (|| {
-                    let (addr_steps, size) = self.resolve_place(*root, steps, target.span)?;
+                    let (base, write_back) = match root_handling {
+                        RootHandling::Local(id) => (id, None),
+                        RootHandling::Static { slot, ty } => {
+                            let classified = self.classify(ty).expect("supported statics classify");
+                            let temp = self.alloc_temp(ty, classified, stmt.span);
+                            self.push(
+                                BInstKind::LoadStatic {
+                                    target: temp,
+                                    static_index: slot,
+                                },
+                                stmt.span,
+                            );
+                            (temp, Some(slot))
+                        }
+                    };
+                    let (addr_steps, size) = self.resolve_place(base, steps, target.span)?;
                     let src = self.lower_rvalue_to_operand(rvalue)?;
                     self.push(
                         BInstKind::PlaceStore {
-                            base: *root,
+                            base,
                             steps: addr_steps,
                             size,
                             src,
                         },
                         stmt.span,
                     );
+                    if let Some(slot) = write_back {
+                        self.push(
+                            BInstKind::StoreStatic {
+                                static_index: slot,
+                                src: BOperand::Local(base),
+                            },
+                            stmt.span,
+                        );
+                    }
                     Ok::<(), BackendError>(())
                 })();
                 match result {

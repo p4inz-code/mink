@@ -1037,6 +1037,15 @@ impl<'a> Checker<'a> {
         });
         match layout::array_layout(ty, &self.types) {
             Ok(_) => ty,
+            // An empty element is either a genuinely empty struct (reported
+            // by `validate_aggregate_layouts` at its own declaration) or a
+            // struct whose fields are not resolved yet — `resolve_struct_
+            // fields` fills declarations in source order, so a field type
+            // may reference a *later* struct whose fields are still empty
+            // here. Both cases re-validate after every struct's fields are
+            // set, so the eager check defers `Empty` instead of rejecting
+            // a valid forward reference.
+            Err(LayoutError::Empty { .. }) => ty,
             Err(error) => {
                 self.push_error(TypeError::invalid_aggregate_layout(
                     span,
