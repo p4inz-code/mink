@@ -110,12 +110,22 @@ fn entry_function(lowered: &BProgram) -> Result<usize, BackendError> {
         ));
     }
     // The entry stub passes `main`'s result in `rax` to the exit service;
-    // an aggregate result (a struct, array, or tagged-union enum — even a
-    // one-word struct — or a two-word `Range`) cannot become an exit
-    // code, so every aggregate result is rejected here (E-B09).
+    // only an integer, a boolean, or nothing can become an exit code.
+    // Aggregate results (a struct, array, or tagged-union enum — even a
+    // one-word struct — or a two-word `Range`), addresses (`Ptr`/`Str`),
+    // and the session-24 scalar types without an integer interpretation
+    // (`Float`, `Char`, `Null`) are rejected here (E-B09).
     if matches!(
         main.result,
-        BType::Range | BType::Ptr | BType::Str | BType::Struct | BType::Array | BType::Enum
+        BType::Range
+            | BType::Ptr
+            | BType::Str
+            | BType::Struct
+            | BType::Array
+            | BType::Enum
+            | BType::Float
+            | BType::Char
+            | BType::Null
     ) || main.result_words > 1
     {
         return Err(BackendError::invalid_entry_point(

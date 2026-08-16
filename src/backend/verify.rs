@@ -236,13 +236,14 @@ fn verify_inst(
         BInstKind::Binary {
             target,
             op,
+            ty,
             lhs,
             rhs,
         } => {
             verify_target(function, *target, inst.span, errors);
             verify_operand(function, lhs, inst.span, errors);
             verify_operand(function, rhs, inst.span, errors);
-            verify_binary_types(function, *target, *op, lhs, rhs, inst.span, errors);
+            verify_binary_types(function, *target, *op, *ty, lhs, rhs, inst.span, errors);
         }
         BInstKind::Call {
             target,
@@ -648,8 +649,9 @@ fn verify_range_operand(
 
 /// Unary operations: the result must be the operator's result type (`Int`
 /// for `-`/`~`, `Bool` for `!`) and a local operand must have the
-/// operator's operand type. Constants carry no distinct boolean/integer
-/// marker at the machine level, so they pass the operand check.
+/// operator's operand type. Negation accepts `Int` or `Float` (the target
+/// slot tells them apart); constants carry no distinct boolean/integer/
+/// float marker at the machine level, so they pass the operand check.
 fn verify_unary_types(
     function: &super::ir::BFunction,
     target: LocalId,
@@ -659,7 +661,22 @@ fn verify_unary_types(
     errors: &mut Vec<BackendError>,
 ) {
     let (expected_operand, expected_result) = match op {
-        UnaryOp::Neg | UnaryOp::BitNot => (BType::Int, BType::Int),
+        UnaryOp::Neg => {
+            // `-x` on a Float target is float negation; on an Int target
+            // it is integer negation. A local operand must share the
+            // target's numeric type.
+            let ty = function
+                .local(target)
+                .map(|local| local.ty)
+                .unwrap_or(BType::Int);
+            let operand_ty = if ty == BType::Float {
+                BType::Float
+            } else {
+                BType::Int
+            };
+            (operand_ty, ty)
+        }
+        UnaryOp::BitNot => (BType::Int, BType::Int),
         UnaryOp::Not => (BType::Bool, BType::Bool),
     };
     if function.local(target).map(|local| local.ty) != Some(expected_result) {
@@ -688,12 +705,16 @@ fn verify_unary_types(
 /// (operand type for arithmetic/shift/bitwise, `Bool` for every
 /// boolean-producing operator) and local operands must have the operator's
 /// operand type — `Int` for arithmetic, shifts, bitwise, and comparisons;
-/// `Bool` for logical operators; `Int` or `Bool` for equality. Constants
-/// pass the operand check (see [`verify_unary_types`]).
+/// `Float` for the session-24 SSE2 arithmetic/comparison/equality path;
+/// `Bool` for logical operators; `Int`, `Bool`, `Float`, `Char`, `Null`,
+/// `Str`, or a unit-only `Enum` for equality. Constants pass the operand
+/// check (see [`verify_unary_types`]).
+#[allow(clippy::too_many_arguments)] // the verification context is threaded per call
 fn verify_binary_types(
     function: &super::ir::BFunction,
     target: LocalId,
     op: BinaryOp,
+    ty: BType,
     lhs: &BOperand,
     rhs: &BOperand,
     span: Span,
@@ -760,6 +781,53 @@ fn verify_binary_types(
         }
         return;
     }
+    // The floating-point path (session 24): arithmetic keeps the
+    // operand type, comparisons and equality produce `Bool`, and
+    // logical operators can never be float (the type checker pins
+    // them to `Bool`).
+    if ty == BType::Float {
+        if matches!(op, And | Or) {
+            errors.push(error(
+                span,
+                format!(
+                    "function `{}`: a float binary instruction cannot be a logical operator",
+                    function.name
+                ),
+            ));
+        }
+        let expected_result = if produces_bool {
+            BType::Bool
+        } else {
+            BType::Float
+        };
+        if function.local(target).map(|local| local.ty) != Some(expected_result) {
+            errors.push(error(
+                span,
+                format!(
+                    "function `{}`: binary result type does not match the operator",
+                    function.name
+                ),
+            ));
+        }
+        for operand in [lhs, rhs] {
+            if let BOperand::Local(id) = operand {
+                if function.local(*id).map(|local| local.ty) != Some(BType::Float) {
+                    errors.push(error(
+                        span,
+                        format!(
+                            "function `{}`: binary operand type does not match the operator",
+                            function.name
+                        ),
+                    ));
+                }
+            }
+        }
+        return;
+    }
+    // Equality on the remaining scalars (`Char`, `Null`, `Str`, a
+    // unit-only `Enum`) is word equality with a `Bool` result; the
+    // generic rules below already accept it (`Eq`/`Ne` skip the
+    // operand check and require a `Bool` target).
     let expected_operand: Option<BType> = match op {
         And | Or => Some(BType::Bool),
         Lt | Le | Gt | Ge => Some(BType::Int),

@@ -143,9 +143,9 @@ corruption, no segfault guessing games.
 - **Native target** — `x86_64-windows-pe`: a self-contained code generator
   and PE container builder producing runnable Windows executables with no
   external toolchain.
-- **Honest errors** — everything outside the supported subset (floating
-  point, characters, …) is rejected with structured diagnostics instead of
-  being miscompiled.
+- **Honest errors** — everything outside the supported subset (function
+  values, `Range` in a single-word position, …) is rejected with
+  structured diagnostics instead of being miscompiled.
 
 ## Quick start
 
@@ -199,8 +199,11 @@ Honest status, because durable engineering starts with accurate claims:
   functions and stored at module scope through a caller-allocated return
   slot and constant-evaluated data images (session 22), and booleans
   packed at any byte offset coexist correctly with the integer fields
-  that follow them (session 23). `main` still cannot return an aggregate
-  (its result is the exit code, `E-B09`). Tagged-union enums cannot be
+  that follow them (session 23). Since session 24, `Float`, `Char`, and
+  `Null` are first-class native scalars (SSE2 float arithmetic and exact
+  decimal printing; `rt_print_char`). `main` still cannot return an
+  aggregate or a `Float`/`Char`/`Null` (its result is the exit code,
+  `E-B09`). Tagged-union enums cannot be
   compared with `==`/`!=` (`E-T30`); there
   is no enum-to-`Int` conversion; pattern matching covers
   `Int`/`Bool`/enum scrutinees only (no struct/array destructuring,
@@ -217,8 +220,9 @@ Honest status, because durable engineering starts with accurate claims:
   through a deref (`(*r).x = v`) is `E-T33` (see
   [`REFERENCES_BORROWING_IMPLEMENTATION.md`](docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md)).
 - **No garbage collector** — allocation is explicit and leak-checked on exit.
-- **Limited native subset** — no floating point, characters, `null`, or
-  function values in the native backend yet.
+- **Limited native subset** — Float, Char, and Null are first-class
+  native scalars (SSE2 float arithmetic and exact decimal printing), but
+  function values are not representable yet.
 - **No stdlib or package manager yet** — and no IDE tooling beyond the CLI.
 
 ## Roadmap
@@ -269,7 +273,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1121, all passing)
+├── tests/      Compiler tests (1148, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

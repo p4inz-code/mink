@@ -33,14 +33,18 @@ use super::error::BackendError;
 /// A value type the backend can represent on a machine.
 ///
 /// This is the closed classification of the MINK types the first native
-/// subset supports: 64-bit integers, booleans (stored as `0`/`1`), integer
-/// ranges (stored as a two-word value), typed pointers and strings (each a
-/// single word holding an address), structs and arrays (session 14: values
-/// occupying a fixed number of words in a slot, with the byte layout
-/// resolved by the lowering stage from the deterministic layout engine),
-/// and `Unit` (the type of a function that produces no value). Every other
-/// MINK type (`Float`, `Char`, `Null`, unresolved inference types) is
-/// rejected at lowering.
+/// subset supports: 64-bit integers, booleans (stored as `0`/`1`),
+/// 64-bit IEEE-754 doubles (session 24: arithmetic, comparisons,
+/// equality, and decimal printing through `rt_print_float`),
+/// byte-sized characters (session 24: literals, equality, printing),
+/// the `null` literal's `Null` type (session 24: a word holding `0`,
+/// equality only), integer ranges (stored as a two-word value), typed
+/// pointers and strings (each a single word holding an address), structs
+/// and arrays (session 14: values occupying a fixed number of words in a
+/// slot, with the byte layout resolved by the lowering stage from the
+/// deterministic layout engine), and `Unit` (the type of a function that
+/// produces no value). Unresolved inference types and `Range` over a
+/// non-`Int` element are rejected at lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BType {
     /// A 64-bit two's-complement integer.
@@ -49,6 +53,19 @@ pub enum BType {
     /// boolean occupies one byte; as a standalone value it occupies one
     /// word.
     Bool,
+    /// A 64-bit IEEE-754 double-precision floating-point value (session
+    /// 24). Stored in a slot as its bit pattern in a single word;
+    /// arithmetic and comparisons are evaluated with SSE2 instructions.
+    Float,
+    /// A character: a byte-sized value holding the code point of a
+    /// single-byte character (session 24). Stored like a boolean — one
+    /// byte within an aggregate value, one word as a standalone value —
+    /// and supports equality only.
+    Char,
+    /// The `null` literal's type (session 24): a single word holding `0`,
+    /// supporting equality only. `null` is not a bottom type; it unifies
+    /// only with itself.
+    Null,
     /// A range of integers: a two-word value carrying the (normalized)
     /// exclusive end and the iteration cursor.
     Range,
@@ -89,7 +106,10 @@ pub enum BType {
 impl BType {
     /// Whether values of this type occupy exactly one machine word.
     pub fn is_word_sized(self) -> bool {
-        matches!(self, Self::Int | Self::Bool)
+        matches!(
+            self,
+            Self::Int | Self::Bool | Self::Float | Self::Char | Self::Null
+        )
     }
 
     /// The number of 64-bit words a scalar value of this type occupies in
@@ -101,6 +121,9 @@ impl BType {
         match self {
             Self::Int
             | Self::Bool
+            | Self::Float
+            | Self::Char
+            | Self::Null
             | Self::Ptr
             | Self::Ref
             | Self::Str
@@ -116,6 +139,9 @@ impl BType {
         match self {
             Self::Int => "Int",
             Self::Bool => "Bool",
+            Self::Float => "Float",
+            Self::Char => "Char",
+            Self::Null => "Null",
             Self::Range => "Range<Int>",
             Self::Ptr => "Ptr<Int>",
             Self::Ref => "reference",
@@ -353,6 +379,12 @@ pub enum BInstKind {
         target: crate::mir::LocalId,
         /// The operator.
         op: BinaryOp,
+        /// The operands' classified type (the operands always share one
+        /// type; the type checker rejects mixed arithmetic). `Float`
+        /// selects the SSE2 path — the operands' machine form carries no
+        /// type, so the emitter needs this to distinguish `1.5 + 2.5`
+        /// from `1 + 2` even when both operands are constants.
+        ty: BType,
         /// The left operand.
         lhs: BOperand,
         /// The right operand.
@@ -657,6 +689,13 @@ pub enum RuntimeService {
     /// `rt_print_int(value)`: write the decimal value plus a newline to
     /// stdout.
     PrintInt,
+    /// `rt_print_float(value)`: write the decimal representation of the
+    /// double (session 24: up to six fractional digits, trailing zeros
+    /// trimmed, `nan`/`inf` forms) plus a newline to stdout.
+    PrintFloat,
+    /// `rt_print_char(value)`: write the single byte of the character
+    /// plus a newline to stdout.
+    PrintChar,
     /// Internal: report a runtime error (`rcx` = error number) to stderr
     /// and terminate with exit code `100 + number`. Never returns.
     Fail,
@@ -693,7 +732,9 @@ impl RuntimeService {
             | Self::StrLen
             | Self::PrintStr
             | Self::Exit
-            | Self::PrintInt => 1,
+            | Self::PrintInt
+            | Self::PrintFloat
+            | Self::PrintChar => 1,
             Self::MemStore | Self::StrByte => 2,
             Self::StrSetByte => 3,
         }
@@ -716,6 +757,8 @@ impl RuntimeService {
                 | Self::PrintStr
                 | Self::Exit
                 | Self::PrintInt
+                | Self::PrintFloat
+                | Self::PrintChar
         )
     }
 }

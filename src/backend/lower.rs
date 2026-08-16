@@ -296,19 +296,23 @@ impl<'a> Lowerer<'a> {
 
     /// Classifies a MIR type id into a backend value type.
     ///
-    /// `Int`, `Bool`, `Range<Int>`, `Ptr<Int>`, and `Str` are
-    /// representable; an unresolved inference type is unit (a value that is
-    /// never meaningfully read); structs and arrays are representable when
-    /// their deterministic layout is finite and every field/element type is
-    /// itself representable (a failed aggregate records its reason in
-    /// [`Lowerer::unsupported_aggregates`] for the diagnostic); everything
-    /// else (`Float`, `Char`, `Null`, the error type, `Ptr` over another
-    /// element, `Range` over another element, function types) is
-    /// unsupported and classifies to `None`.
+    /// `Int`, `Bool`, `Float`, `Char`, `Null`, `Range<Int>`, `Ptr<Int>`,
+    /// and `Str` are representable (session 24 adds the three remaining
+    /// scalar types); an unresolved inference type is unit (a value that
+    /// is never meaningfully read); structs and arrays are representable
+    /// when their deterministic layout is finite and every field/element
+    /// type is itself representable (a failed aggregate records its reason
+    /// in [`Lowerer::unsupported_aggregates`] for the diagnostic);
+    /// everything else (the error type, `Ptr` over another element,
+    /// `Range` over another element, function types) is unsupported and
+    /// classifies to `None`.
     fn classify(&mut self, ty: TypeId) -> Option<BType> {
         match self.program.types.kind(ty) {
             Some(TypeKind::Int) => Some(BType::Int),
             Some(TypeKind::Bool) => Some(BType::Bool),
+            Some(TypeKind::Float) => Some(BType::Float),
+            Some(TypeKind::Char) => Some(BType::Char),
+            Some(TypeKind::Null) => Some(BType::Null),
             Some(TypeKind::Ptr(elem)) => match self.program.types.kind(*elem) {
                 Some(TypeKind::Int) => Some(BType::Ptr),
                 _ => None,
@@ -339,14 +343,7 @@ impl<'a> Lowerer<'a> {
             // variable is the only `Infer` that remains. Unit is the type
             // of intrinsics that produce no value.
             Some(TypeKind::Infer(_)) | Some(TypeKind::Unit) => Some(BType::Unit),
-            Some(
-                TypeKind::Error
-                | TypeKind::Float
-                | TypeKind::Char
-                | TypeKind::Null
-                | TypeKind::Fn { .. },
-            )
-            | None => None,
+            Some(TypeKind::Error | TypeKind::Fn { .. }) | None => None,
         }
     }
 
@@ -541,7 +538,16 @@ impl<'a> Lowerer<'a> {
     fn classify_static(&mut self, s: &MirStatic) {
         let slot = self.static_slots[&s.name.symbol];
         match self.classify(s.ty) {
-            Some(ty @ (BType::Int | BType::Bool | BType::Struct | BType::Array | BType::Enum)) => {
+            Some(
+                ty @ (BType::Int
+                | BType::Bool
+                | BType::Float
+                | BType::Char
+                | BType::Null
+                | BType::Struct
+                | BType::Array
+                | BType::Enum),
+            ) => {
                 self.static_types.push(Some(ty));
                 self.static_mir_types.push(s.ty);
             }
@@ -616,7 +622,10 @@ impl<'a> Lowerer<'a> {
         // through the same constant path; a one-word *struct* binding goes
         // through the aggregate image path below (its literal needs
         // materialization).
-        if matches!(ty, BType::Int | BType::Bool) {
+        if matches!(
+            ty,
+            BType::Int | BType::Bool | BType::Float | BType::Char | BType::Null
+        ) {
             if !s.stmts.is_empty() || !s.locals.is_empty() {
                 self.errors.push(BackendError::unsupported_static(
                     s.span,
@@ -1471,12 +1480,18 @@ impl<'a> Lowerer<'a> {
                 op: *op,
                 src: self.eval_operand(operand)?,
             },
-            MirRvalueKind::Binary { op, lhs, rhs } => BInstKind::Binary {
-                target,
-                op: *op,
-                lhs: self.eval_operand(lhs)?,
-                rhs: self.eval_operand(rhs)?,
-            },
+            MirRvalueKind::Binary { op, lhs, rhs } => {
+                let ty = self
+                    .classify(lhs.ty)
+                    .ok_or_else(|| self.unsupported_type_error(rvalue.span, lhs.ty))?;
+                BInstKind::Binary {
+                    target,
+                    op: *op,
+                    ty,
+                    lhs: self.eval_operand(lhs)?,
+                    rhs: self.eval_operand(rhs)?,
+                }
+            }
             MirRvalueKind::Call { callee, args } => {
                 let mut lowered_args = Vec::with_capacity(args.len());
                 for arg in args {
@@ -1719,6 +1734,8 @@ impl<'a> Lowerer<'a> {
             "rt_print_str" => RuntimeService::PrintStr,
             "rt_exit" => RuntimeService::Exit,
             "rt_print_int" => RuntimeService::PrintInt,
+            "rt_print_float" => RuntimeService::PrintFloat,
+            "rt_print_char" => RuntimeService::PrintChar,
             _ => return None,
         };
         debug_assert!(service.is_callable());
@@ -1880,8 +1897,14 @@ impl<'a> Lowerer<'a> {
         })?;
         let size = match classified {
             BType::Struct | BType::Array => self.aggregate_bytes(elem),
-            BType::Int | BType::Ptr | BType::Ref | BType::Str | BType::Enum => 8,
-            BType::Bool => 1,
+            BType::Int
+            | BType::Float
+            | BType::Null
+            | BType::Ptr
+            | BType::Ref
+            | BType::Str
+            | BType::Enum => 8,
+            BType::Bool | BType::Char => 1,
             BType::Range => 16,
             BType::Unit => 0,
         };
@@ -1913,8 +1936,12 @@ impl<'a> Lowerer<'a> {
                     .ok()
                     .map(|layout| layout.size as u32)
             }
-            BType::Int | BType::Ptr | BType::Ref | BType::Str => Some(8),
-            BType::Bool => Some(1),
+            // `Null` is word-sized (the layout treats it like a pointer
+            // slot); `Char` is a single byte (layout `(1, 1)`).
+            BType::Int | BType::Ptr | BType::Ref | BType::Str | BType::Float | BType::Null => {
+                Some(8)
+            }
+            BType::Bool | BType::Char => Some(1),
             BType::Range => Some(16),
             BType::Unit => Some(0),
         }
@@ -2071,12 +2098,13 @@ impl<'a> Lowerer<'a> {
                 };
                 Ok(DecodedConstant::Str(index))
             }
-            MirConstantKind::Float | MirConstantKind::Char | MirConstantKind::Null => {
-                Err(BackendError::unsupported_constant(
-                    constant.span,
-                    "only integer, boolean, and string literals are supported by the native subset",
-                ))
-            }
+            // Session 24: floating-point and character literals are
+            // decoded from their source text (their values are carried as
+            // words — the double's bit pattern, the character's byte); the
+            // `null` literal is the zero word.
+            MirConstantKind::Float => Ok(DecodedConstant::Word(self.decode_float(constant.span)?)),
+            MirConstantKind::Char => Ok(DecodedConstant::Word(self.decode_char(constant.span)?)),
+            MirConstantKind::Null => Ok(DecodedConstant::Word(0)),
         }
     }
 
@@ -2251,6 +2279,150 @@ impl<'a> Lowerer<'a> {
             value = value.wrapping_mul(radix as u64).wrapping_add(digit);
         }
         Ok(value as i64)
+    }
+
+    /// Decodes a floating-point literal's source text into its 64-bit
+    /// IEEE-754 bit pattern (stored as a machine word). Digit separators
+    /// (`_`) are stripped; the lexer has already validated the literal's
+    /// shape, so a parse failure here is defensive.
+    fn decode_float(&self, span: Span) -> Result<i64, BackendError> {
+        let Some(file) = self.sources.get(span.file()) else {
+            return Err(BackendError::decode_error(
+                span,
+                "no source file for the floating-point literal",
+            ));
+        };
+        let Some(text) = file.span_text(span) else {
+            return Err(BackendError::decode_error(
+                span,
+                "floating-point literal text is unavailable",
+            ));
+        };
+        let cleaned: String = text.chars().filter(|c| *c != '_').collect();
+        let value: f64 = cleaned
+            .parse()
+            .map_err(|_| BackendError::decode_error(span, "invalid floating-point literal"))?;
+        Ok(value.to_bits() as i64)
+    }
+
+    /// Decodes a character literal's source text (including its quotes)
+    /// into its byte value: the character's code point, which must fit in
+    /// one byte (the runtime's char model is byte-sized, matching the
+    /// `(1, 1)` char layout). Escapes (`\n`, `\r`, `\t`, `\0`, `\\`,
+    /// `\"`, `\'`, `\xHH`, `\u{...}`) decode to their scalar value; a
+    /// scalar above 255 has no byte representation and is rejected
+    /// deterministically rather than silently truncated. The lexer has
+    /// already validated the literal, so failures here are defensive.
+    fn decode_char(&self, span: Span) -> Result<i64, BackendError> {
+        let Some(file) = self.sources.get(span.file()) else {
+            return Err(BackendError::decode_error(
+                span,
+                "no source file for the character literal",
+            ));
+        };
+        let Some(text) = file.span_text(span) else {
+            return Err(BackendError::decode_error(
+                span,
+                "character literal text is unavailable",
+            ));
+        };
+        let bytes = text.as_bytes();
+        if bytes.len() < 3 || bytes[0] != b'\'' || bytes[bytes.len() - 1] != b'\'' {
+            return Err(BackendError::decode_error(
+                span,
+                "malformed character literal token",
+            ));
+        }
+        let inner = &bytes[1..bytes.len() - 1];
+        let scalar: u32 = if inner[0] == b'\\' {
+            self.decode_char_escape(inner, span)?
+        } else {
+            // A single raw character (the lexer guarantees exactly one).
+            let s = std::str::from_utf8(inner).map_err(|_| {
+                BackendError::decode_error(span, "character literal is not valid UTF-8")
+            })?;
+            let mut chars = s.chars();
+            let ch = chars
+                .next()
+                .ok_or_else(|| BackendError::decode_error(span, "empty character literal"))?;
+            if chars.next().is_some() {
+                return Err(BackendError::decode_error(
+                    span,
+                    "character literal contains more than one character",
+                ));
+            }
+            ch as u32
+        };
+        if scalar > 0xFF {
+            return Err(BackendError::decode_error(
+                span,
+                "character value does not fit in one byte; the native char model is byte-sized",
+            ));
+        }
+        Ok(i64::from(scalar))
+    }
+
+    /// Decodes one character-literal escape (the inner bytes after the
+    /// backslash) into its Unicode scalar value.
+    fn decode_char_escape(&self, inner: &[u8], span: Span) -> Result<u32, BackendError> {
+        let escape = *inner.get(1).ok_or_else(|| {
+            BackendError::decode_error(span, "unterminated escape sequence in character literal")
+        })?;
+        let scalar = match escape {
+            b'n' => u32::from(b'\n'),
+            b'r' => u32::from(b'\r'),
+            b't' => u32::from(b'\t'),
+            b'0' => 0,
+            b'\\' => u32::from(b'\\'),
+            b'"' => u32::from(b'"'),
+            b'\'' => u32::from(b'\''),
+            b'x' => {
+                if inner.len() != 4 {
+                    return Err(BackendError::decode_error(
+                        span,
+                        "incomplete `\\x` escape in character literal",
+                    ));
+                }
+                let hi = hex_digit(inner[2], span)?;
+                let lo = hex_digit(inner[3], span)?;
+                u32::from(hi << 4 | lo)
+            }
+            b'u' => {
+                if inner.len() < 4 || inner[2] != b'{' || inner[inner.len() - 1] != b'}' {
+                    return Err(BackendError::decode_error(
+                        span,
+                        "malformed `\\u` escape in character literal",
+                    ));
+                }
+                let digits = &inner[3..inner.len() - 1];
+                if digits.is_empty() || digits.len() > 6 {
+                    return Err(BackendError::decode_error(
+                        span,
+                        "`\\u` escape has an invalid digit count",
+                    ));
+                }
+                let mut value: u32 = 0;
+                for byte in digits {
+                    value = value
+                        .wrapping_mul(16)
+                        .wrapping_add(u32::from(hex_digit(*byte, span)?));
+                }
+                if char::from_u32(value).is_none() {
+                    return Err(BackendError::decode_error(
+                        span,
+                        "`\\u` escape is not a valid Unicode scalar value",
+                    ));
+                }
+                value
+            }
+            _ => {
+                return Err(BackendError::decode_error(
+                    span,
+                    "unknown escape sequence in character literal",
+                ));
+            }
+        };
+        Ok(scalar)
     }
 
     /// Lowers a block's terminator, pushing any temporary loads its operand

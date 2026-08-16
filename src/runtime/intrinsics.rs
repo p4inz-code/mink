@@ -33,7 +33,13 @@
 //! - `rt_exit(code: Int)` — terminate the process with exit code `code`
 //!   after verifying there are no leaks;
 //! - `rt_print_int(value: Int)` — write the decimal representation of
-//!   `value` plus a newline to stdout.
+//!   `value` plus a newline to stdout;
+//! - `rt_print_float(value: Float)` — write the decimal representation of
+//!   `value` plus a newline to stdout (session 24: exact
+//!   17-significant-digit expansion, fixed or scientific, with
+//!   `Inf`/`NaN`/`-0` forms);
+//! - `rt_print_char(value: Char)` — write the single byte of `value` plus
+//!   a newline to stdout.
 //!
 //! Addresses are typed pointers (`Ptr<Int>`), distinct from strings
 //! (`Str`). Dereferencing goes through the validated `rt_mem_load` /
@@ -53,6 +59,11 @@ pub enum IntrinsicType {
     Ptr,
     /// A string value (the address of a length-prefixed byte blob).
     Str,
+    /// A 64-bit IEEE-754 double-precision floating-point value.
+    Float,
+    /// A byte-sized character (a Unicode scalar value that fits in one
+    /// byte; the runtime's char model is byte-sized).
+    Char,
     /// No value (the intrinsic produces nothing).
     Unit,
 }
@@ -146,6 +157,16 @@ pub const ALL: &[Intrinsic] = &[
     Intrinsic {
         name: "rt_print_int",
         params: &[IntrinsicType::Int],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_print_float",
+        params: &[IntrinsicType::Float],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_print_char",
+        params: &[IntrinsicType::Char],
         result: IntrinsicType::Unit,
     },
 ];

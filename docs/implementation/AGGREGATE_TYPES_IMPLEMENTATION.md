@@ -288,7 +288,8 @@ All errors carry exact source spans and structured messages.
   integer fields through stores, place chains, whole-value copies,
   statics, parameters, returns, references, and enum payloads). See
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
-  per-file breakdown.
+  per-file breakdown. After session 24 (scalar types) the suite is
+  **1148 tests** (+27 in `tests/scalar_types.rs`).
 
 ## 9. Known limitations
 

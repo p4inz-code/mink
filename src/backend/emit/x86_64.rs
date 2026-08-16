@@ -70,6 +70,7 @@ pub(crate) enum Reg {
     Rdx = 2,
     Rsp = 4,
     Rbp = 5,
+    Rsi = 6,
     Rdi = 7,
     R8 = 8,
     R9 = 9,
@@ -77,6 +78,8 @@ pub(crate) enum Reg {
     R11 = 11,
     R12 = 12,
     R13 = 13,
+    R14 = 14,
+    R15 = 15,
 }
 
 /// A per-local pair of slot offsets from `rbp` (negative). Word 0 is the
@@ -277,15 +280,18 @@ impl Code {
     }
 
     /// `mov r64, imm32` (zero-extends; writes the 32-bit register).
+    /// The register is encoded in the opcode (`B8+rd`), so its extension
+    /// bit is REX.B — the ModRM-style helpers use REX.R instead.
     pub(crate) fn mov_r32_imm32(&mut self, dst: Reg, imm: u32) {
-        self.rex(dst, Reg::Rax);
+        self.rex(Reg::Rax, dst);
         self.u8(0xB8 | (dst as u8 & 7));
         self.i32_le(imm as i32);
     }
 
-    /// `movabs r64, imm64`.
+    /// `movabs r64, imm64` (the register is opcode-encoded, so its
+    /// extension bit is REX.B, like [`Self::mov_r32_imm32`]).
     pub(crate) fn movabs(&mut self, dst: Reg, imm: u64) {
-        self.rex_w(dst, Reg::Rax);
+        self.rex_w(Reg::Rax, dst);
         self.u8(0xB8 | (dst as u8 & 7));
         self.buf.extend_from_slice(&imm.to_le_bytes());
     }
@@ -319,6 +325,14 @@ impl Code {
         self.u8(imm);
     }
 
+    /// `cmp byte [base+disp], imm8` — a single-byte comparison.
+    pub(crate) fn cmp_mem8_imm8(&mut self, base: Reg, disp: i32, imm: u8) {
+        self.rex(Reg::Rdi, base);
+        self.u8(0x80);
+        self.mem_modrm(Reg::Rdi, base, disp); // /7
+        self.u8(imm);
+    }
+
     /// `cmp r64, imm8`.
     pub(crate) fn cmp_r_imm8(&mut self, a: Reg, imm: u8) {
         self.rex_w(Reg::Rax, a);
@@ -348,6 +362,124 @@ impl Code {
         self.u8(0xF7);
         self.u8(0xC0 | (a as u8 & 7)); // /0
         self.i32_le(imm as i32);
+    }
+
+    /// `and a, b` (`a &= b`). Opcode `21` ands `reg` into `r/m`.
+    pub(crate) fn and_rr(&mut self, a: Reg, b: Reg) {
+        self.rex_w(b, a);
+        self.u8(0x21);
+        self.modrm_rm_reg(a, b);
+    }
+
+    /// `or a, b` (`a |= b`). Opcode `09` ors `reg` into `r/m`.
+    pub(crate) fn or_rr(&mut self, a: Reg, b: Reg) {
+        self.rex_w(b, a);
+        self.u8(0x09);
+        self.modrm_rm_reg(a, b);
+    }
+
+    /// `xor a, b` (`a ^= b`). Opcode `31` xors `reg` into `r/m`.
+    pub(crate) fn xor_rr(&mut self, a: Reg, b: Reg) {
+        self.rex_w(b, a);
+        self.u8(0x31);
+        self.modrm_rm_reg(a, b);
+    }
+
+    /// `shl r64, cl`. Opcode `D3 /4`.
+    pub(crate) fn shl_r_cl(&mut self, a: Reg) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xD3);
+        self.u8(0xE0 | (a as u8 & 7)); // /4
+    }
+
+    /// `shr r64, imm8` (logical). Opcode `C1 /5`.
+    pub(crate) fn shr_r_imm8(&mut self, a: Reg, imm: u8) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xC1);
+        self.u8(0xE8 | (a as u8 & 7)); // /5
+        self.u8(imm);
+    }
+
+    /// `not r64`. Opcode `F7 /2`.
+    pub(crate) fn not_r(&mut self, a: Reg) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xF7);
+        self.u8(0xD0 | (a as u8 & 7)); // /2
+    }
+
+    // ------------------------------------------------------------------
+    // SSE2 helpers (session 24: Float arithmetic, comparisons, printing)
+    // ------------------------------------------------------------------
+    // The xmm registers are hardcoded to 0/1/2 in the ModRM reg field;
+    // `mem_modrm` emits the ModRM byte for `[base + disp]` with a GP
+    // register's number, and passing `Rax`/`Rcx`/`Rdx` (0/1/2) yields the
+    // identical byte for xmm0/xmm1/xmm2. No REX prefix is needed for
+    // xmm0-7.
+
+    /// `movsd [base + disp], xmm0`.
+    pub(crate) fn movsd_mem_xmm0(&mut self, base: Reg, disp: i32) {
+        self.bytes(&[0xF2, 0x0F, 0x11]);
+        self.mem_modrm(Reg::Rax, base, disp);
+    }
+
+    /// `addsd xmm0, xmm1`.
+    pub(crate) fn addsd_xmm0_xmm1(&mut self) {
+        self.bytes(&[0xF2, 0x0F, 0x58, 0xC1]);
+    }
+
+    /// `subsd xmm0, xmm1`.
+    pub(crate) fn subsd_xmm0_xmm1(&mut self) {
+        self.bytes(&[0xF2, 0x0F, 0x5C, 0xC1]);
+    }
+
+    /// `mulsd xmm0, xmm1`.
+    pub(crate) fn mulsd_xmm0_xmm1(&mut self) {
+        self.bytes(&[0xF2, 0x0F, 0x59, 0xC1]);
+    }
+
+    /// `divsd xmm0, xmm1`.
+    pub(crate) fn divsd_xmm0_xmm1(&mut self) {
+        self.bytes(&[0xF2, 0x0F, 0x5E, 0xC1]);
+    }
+
+    /// `ucomisd xmm0, xmm1` (sets ZF/PF/CF like a compare).
+    pub(crate) fn ucomisd_xmm0_xmm1(&mut self) {
+        self.bytes(&[0x66, 0x0F, 0x2E, 0xC1]);
+    }
+
+    /// `movq xmm0, rax` (the low 64 bits of `rax` as a double).
+    pub(crate) fn movq_xmm0_rax(&mut self) {
+        self.bytes(&[0x66, 0x48, 0x0F, 0x6E, 0xC0]);
+    }
+
+    /// `movq rax, xmm0` (the double's bit pattern).
+    pub(crate) fn movq_rax_xmm0(&mut self) {
+        self.bytes(&[0x66, 0x48, 0x0F, 0x7E, 0xC0]);
+    }
+
+    /// `setcc al` (sets the low byte of `rax`; no REX).
+    pub(crate) fn setcc_al(&mut self, condition: u8) {
+        self.bytes(&[0x0F, condition, 0xC0]);
+    }
+
+    /// `setcc dl` (sets the low byte of `rdx`; no REX).
+    pub(crate) fn setcc_dl(&mut self, condition: u8) {
+        self.bytes(&[0x0F, condition, 0xC2]);
+    }
+
+    /// `and al, dl`.
+    pub(crate) fn and_al_dl(&mut self) {
+        self.bytes(&[0x20, 0xD0]);
+    }
+
+    /// `or al, dl`.
+    pub(crate) fn or_al_dl(&mut self) {
+        self.bytes(&[0x08, 0xD0]);
+    }
+
+    /// `movzx rax, al` (zero-extends the comparison byte).
+    pub(crate) fn movzx_rax_al(&mut self) {
+        self.bytes(&[0x0F, 0xB6, 0xC0]);
     }
 
     /// `add a, b` (`a += b`). Opcode `01` adds `reg` into `r/m`.
@@ -415,6 +547,13 @@ impl Code {
         self.rex_w(Reg::Rax, a);
         self.u8(0xFF);
         self.u8(0xC8 | (a as u8 & 7)); // /1
+    }
+
+    /// `mul r64` (unsigned `rax * a`, product in `rdx:rax`).
+    pub(crate) fn mul_r(&mut self, a: Reg) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0xF7);
+        self.u8(0xE0 | (a as u8 & 7)); // /4
     }
 
     /// `div r64` (unsigned `rdx:rax / a`, quotient in `rax`, remainder in
@@ -1176,8 +1315,20 @@ fn emit_inst(
             code.mov_rbp_rax(slots[target.raw() as usize].0);
         }
         BInstKind::Unary { target, op, src } => {
+            let float_neg =
+                *op == UnaryOp::Neg && f.local(*target).map(|local| local.ty) == Some(BType::Float);
             eval_rax(code, slots, *src);
             match op {
+                UnaryOp::Neg if float_neg => {
+                    // Float negation flips the sign bit (IEEE-754): `-x`
+                    // is the same magnitude with the opposite sign, which
+                    // is exactly a bitwise xor of the sign bit — no SSE
+                    // required.
+                    // i64::MIN is the sign-bit mask: `-x` == xor of the
+                    // sign bit (works for ±0 and NaN too).
+                    code.movabs_rcx(i64::MIN);
+                    code.xor_rr(Reg::Rax, Reg::Rcx);
+                }
                 UnaryOp::Neg => code.neg_rax(),
                 UnaryOp::BitNot => code.not_rax(),
                 UnaryOp::Not => {
@@ -1190,60 +1341,66 @@ fn emit_inst(
         BInstKind::Binary {
             target,
             op,
+            ty,
             lhs,
             rhs,
         } => {
-            eval_rax(code, slots, *lhs);
-            eval_rcx(code, slots, *rhs);
-            use BinaryOp::*;
-            match op {
-                Add => code.alu_rax_rcx(0x01),
-                Sub => code.alu_rax_rcx(0x29),
-                Mul => code.imul_rax_rcx(),
-                Div => {
-                    code.cqo();
-                    code.idiv_rcx();
+            if *ty == BType::Float {
+                emit_float_binary(code, f, slots, *target, *op, *lhs, *rhs);
+            } else {
+                eval_rax(code, slots, *lhs);
+                eval_rcx(code, slots, *rhs);
+                use BinaryOp::*;
+                match op {
+                    Add => code.alu_rax_rcx(0x01),
+                    Sub => code.alu_rax_rcx(0x29),
+                    Mul => code.imul_rax_rcx(),
+                    Div => {
+                        code.cqo();
+                        code.idiv_rcx();
+                    }
+                    Rem => {
+                        code.cqo();
+                        code.idiv_rcx();
+                        code.mov_rax_rdx();
+                    }
+                    Shl => code.shift_rax_cl(0xE0),
+                    // The language's `>>` is defined as an arithmetic
+                    // shift (signed semantics), matching the 64-bit
+                    // integer model.
+                    Shr => code.shift_rax_cl(0xF8),
+                    Lt => {
+                        code.cmp_rax_rcx();
+                        code.setcc_rax(0x9C); // setl
+                    }
+                    Le => {
+                        code.cmp_rax_rcx();
+                        code.setcc_rax(0x9E); // setle
+                    }
+                    Gt => {
+                        code.cmp_rax_rcx();
+                        code.setcc_rax(0x9F); // setg
+                    }
+                    Ge => {
+                        code.cmp_rax_rcx();
+                        code.setcc_rax(0x9D); // setge
+                    }
+                    Eq => {
+                        code.cmp_rax_rcx();
+                        code.setcc_rax(0x94); // sete
+                    }
+                    Ne => {
+                        code.cmp_rax_rcx();
+                        code.setcc_rax(0x95); // setne
+                    }
+                    BitAnd => code.alu_rax_rcx(0x21),
+                    BitXor => code.alu_rax_rcx(0x31),
+                    BitOr => code.alu_rax_rcx(0x09),
+                    And => code.alu_rax_rcx(0x21),
+                    Or => code.alu_rax_rcx(0x09),
                 }
-                Rem => {
-                    code.cqo();
-                    code.idiv_rcx();
-                    code.mov_rax_rdx();
-                }
-                Shl => code.shift_rax_cl(0xE0),
-                // The language's `>>` is defined as an arithmetic shift
-                // (signed semantics), matching the 64-bit integer model.
-                Shr => code.shift_rax_cl(0xF8),
-                Lt => {
-                    code.cmp_rax_rcx();
-                    code.setcc_rax(0x9C); // setl
-                }
-                Le => {
-                    code.cmp_rax_rcx();
-                    code.setcc_rax(0x9E); // setle
-                }
-                Gt => {
-                    code.cmp_rax_rcx();
-                    code.setcc_rax(0x9F); // setg
-                }
-                Ge => {
-                    code.cmp_rax_rcx();
-                    code.setcc_rax(0x9D); // setge
-                }
-                Eq => {
-                    code.cmp_rax_rcx();
-                    code.setcc_rax(0x94); // sete
-                }
-                Ne => {
-                    code.cmp_rax_rcx();
-                    code.setcc_rax(0x95); // setne
-                }
-                BitAnd => code.alu_rax_rcx(0x21),
-                BitXor => code.alu_rax_rcx(0x31),
-                BitOr => code.alu_rax_rcx(0x09),
-                And => code.alu_rax_rcx(0x21),
-                Or => code.alu_rax_rcx(0x09),
+                code.mov_rbp_rax(slots[target.raw() as usize].0);
             }
-            code.mov_rbp_rax(slots[target.raw() as usize].0);
         }
         BInstKind::Call {
             target,
@@ -1556,6 +1713,138 @@ fn emit_inst(
             copy_into_slot(code, slots, *target, Reg::Rcx, *payload_size);
         }
     }
+}
+
+/// Emits the SSE2 evaluation of a float binary operation (session 24):
+/// loads the operands into `xmm0`/`xmm1`, applies the operator, and
+/// stores the result — a `Float` for arithmetic (in `xmm0`), a `Bool`
+/// `0`/`1` for comparisons and equality (in `rax`) — into the target
+/// slot. `%` is the IEEE truncation remainder `x - y*trunc(x/y)`, with
+/// `trunc` computed by masking the fractional mantissa bits toward zero
+/// (SSE2 has no remainder instruction).
+fn emit_float_binary(
+    code: &mut Code,
+    f: &super::super::ir::BFunction,
+    slots: &Slots,
+    target: crate::mir::LocalId,
+    op: BinaryOp,
+    lhs: BOperand,
+    rhs: BOperand,
+) {
+    load_float(code, slots, lhs, Reg::Rax); // xmm0
+    load_float(code, slots, rhs, Reg::Rcx); // xmm1
+    use BinaryOp::*;
+    let arithmetic = matches!(op, Add | Sub | Mul | Div | Rem);
+    match op {
+        Add => code.addsd_xmm0_xmm1(),
+        Sub => code.subsd_xmm0_xmm1(),
+        Mul => code.mulsd_xmm0_xmm1(),
+        Div => code.divsd_xmm0_xmm1(),
+        Rem => {
+            // xmm0 = x/y; truncate toward zero by clearing the fractional
+            // mantissa bits (for |v| < 2^52; NaN/Inf are left alone, and
+            // |v| < 1 truncates to zero).
+            let done = code.label();
+            let zero = code.label();
+            code.divsd_xmm0_xmm1(); // xmm0 = x / y
+            code.movq_rax_xmm0();
+            code.mov_rr(Reg::Rcx, Reg::Rax); // a copy for the exponent
+            code.shr_r_imm8(Reg::Rcx, 52);
+            code.movabs(Reg::Rdx, 0x7FF);
+            code.and_rr(Reg::Rcx, Reg::Rdx); // exponent field
+            code.cmp_r_imm32(Reg::Rcx, 0x7FF);
+            code.jcc_label(0x83, done); // jae: NaN/Inf stay as-is
+            code.cmp_r_imm32(Reg::Rcx, 1023);
+            code.jcc_label(0x82, zero); // jb: |v| < 1, trunc = 0
+            code.movabs(Reg::Rdx, 1075);
+            code.sub_rr(Reg::Rdx, Reg::Rcx); // shift = 1075 - exp (2..=52)
+            code.mov_rr(Reg::Rcx, Reg::Rdx); // shift into rcx for `shl r8, cl`
+            code.movabs(Reg::R8, 1);
+            code.shl_r_cl(Reg::R8); // 1 << shift
+            code.dec_r(Reg::R8); // mask = 2^shift - 1
+            code.not_r(Reg::R8); // ~mask
+            code.and_rr(Reg::Rax, Reg::R8);
+            code.jmp_label(done);
+            code.bind_label(zero);
+            code.xor_rr32(Reg::Rax, Reg::Rax);
+            code.bind_label(done);
+            code.movq_xmm0_rax(); // trunc(x/y)
+            // rem = x - y*trunc(x/y): reload `x` into xmm2.
+            code.mulsd_xmm0_xmm1();
+            load_float(code, slots, lhs, Reg::Rdx); // xmm2
+            code.bytes(&[0xF2, 0x0F, 0x5C, 0xD0]); // subsd xmm2, xmm0
+            code.bytes(&[0xF2, 0x0F, 0x10, 0xC2]); // movsd xmm0, xmm2
+        }
+        Lt => emit_float_compare(code, 0x92, 0x9B, CompareForm::OrderedAnd), // setb && setnp
+        Le => emit_float_compare(code, 0x96, 0x9B, CompareForm::OrderedAnd), // setbe && setnp
+        Gt => emit_float_compare(code, 0x97, 0, CompareForm::Plain),         // seta
+        Ge => emit_float_compare(code, 0x93, 0, CompareForm::Plain),         // setae
+        Eq => emit_float_compare(code, 0x94, 0x9B, CompareForm::OrderedAnd), // sete && setnp
+        Ne => emit_float_compare(code, 0x95, 0x9A, CompareForm::UnorderedOr), // setne || setp
+        _ => unreachable!("the type checker rejects non-float operators on Float"),
+    }
+    if arithmetic {
+        code.movsd_mem_xmm0(Reg::Rbp, slots[target.raw() as usize].0);
+    } else {
+        code.mov_rbp_rax(slots[target.raw() as usize].0);
+    }
+    let _ = f;
+}
+
+/// Loads a float operand into an xmm register: a local's slot with
+/// `movsd`, or a constant's bit pattern via `movabs` + `movq`. The `reg`
+/// argument is the GP register whose number matches the xmm register
+/// (0/1/2 → `Rax`/`Rcx`/`Rdx`), which `mem_modrm` uses for the ModRM
+/// field.
+fn load_float(code: &mut Code, slots: &Slots, operand: BOperand, reg: Reg) {
+    match operand {
+        BOperand::Const(value) => {
+            code.movabs_rax(value);
+            // `movq xmmN, rax`: REX.W + the ModRM reg field (bits 3-5)
+            // holding the xmm destination; rm is rax (000).
+            code.bytes(&[0x66, 0x48, 0x0F, 0x6E, 0xC0 | ((reg as u8 & 7) << 3)]);
+        }
+        BOperand::Local(id) => {
+            code.bytes(&[0xF2, 0x0F, 0x10]);
+            code.mem_modrm(reg, Reg::Rbp, slots[id.raw() as usize].0); // movsd xmmN, [rbp+disp]
+        }
+    }
+}
+
+/// How a float comparison's setcc sequence combines with the parity flag
+/// (which `ucomisd` sets when either operand is NaN): ordered comparisons
+/// mask the unordered case out (`&& !PF`), `!=` is true when unordered
+/// (`|| PF`), and `>`/`>=` fall out false from the flags alone.
+#[derive(Clone, Copy)]
+enum CompareForm {
+    /// `setcc al; setnp dl; and al, dl` — true only when ordered and `cc`.
+    OrderedAnd,
+    /// `setcc al; setp dl; or al, dl` — true when unordered or `cc`.
+    UnorderedOr,
+    /// `setcc al` alone (unordered yields false from the flags).
+    Plain,
+}
+
+/// Emits `ucomisd xmm0, xmm1` followed by the comparison's setcc
+/// sequence, leaving the `Bool` result (`0`/`1`) zero-extended in `rax`.
+fn emit_float_compare(code: &mut Code, setcc: u8, extra: u8, form: CompareForm) {
+    code.ucomisd_xmm0_xmm1();
+    match form {
+        CompareForm::OrderedAnd => {
+            code.setcc_al(setcc);
+            code.setcc_dl(extra);
+            code.and_al_dl();
+        }
+        CompareForm::UnorderedOr => {
+            code.setcc_al(setcc);
+            code.setcc_dl(extra);
+            code.or_al_dl();
+        }
+        CompareForm::Plain => {
+            code.setcc_al(setcc);
+        }
+    }
+    code.movzx_rax_al();
 }
 
 /// Copies `size` bytes from the memory at `src` (a register holding the

@@ -1158,6 +1158,8 @@ impl<'a> Checker<'a> {
                 self.types.push(TypeKind::Ptr(elem))
             }
             crate::runtime::intrinsics::IntrinsicType::Str => self.types.push(TypeKind::Str),
+            crate::runtime::intrinsics::IntrinsicType::Float => self.types.push(TypeKind::Float),
+            crate::runtime::intrinsics::IntrinsicType::Char => self.types.push(TypeKind::Char),
             crate::runtime::intrinsics::IntrinsicType::Unit => self.types.push(TypeKind::Unit),
         }
     }

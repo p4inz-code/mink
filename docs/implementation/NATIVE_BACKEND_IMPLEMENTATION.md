@@ -167,9 +167,9 @@ byte-exactly.
 | Construct | Code |
 |---|---|
 | Function values | `E-B01` |
-| Float / char / `null` literals | `E-B02` |
-| `Float`, `Char`, `Null`, unresolved inference, `Range` in a single-word position (function result, static, operand) | `E-B03` |
-| `main` returning an aggregate (struct, array, tagged-union enum, `Range`) | `E-B09` |
+| An out-of-range `Float`/`Char` literal | `E-B02` |
+| Unresolved inference, `Range` in a single-word position (function result, static, operand), non-`Int` pointer elements | `E-B03` |
+| `main` returning an aggregate (struct, array, tagged-union enum, `Range`) or a scalar without an integer interpretation (`Float`, `Char`, `Null`) | `E-B09` |
 | Unsupported assignment targets | `E-B04` |
 | Module bindings initialized by non-constant expressions | `E-B05` |
 | Calls whose callee is not a module-level function | `E-B06` |
@@ -300,16 +300,20 @@ documented in `src/runtime/abi.rs`:
 - Only the first native target (`x86_64-windows-pe`) is implemented;
   `x86_64-linux-elf` and `aarch64-linux-elf` are recognized but rejected
   (`E-B11`).
-- No floating point, characters, `null`, or function values — all
-  rejected with structured errors. Strings are byte sequences (no runtime
-  UTF-8 validation, no concatenation, literals immutable);
-  `TypeKind::Ptr<T>` exists in the type system but only `Ptr<Int>` is
-  instantiable today. Structs, arrays, and tagged-union enums are
-  supported as values (member/index access, place mutation, arguments,
-  returns, module statics). Since session 23, booleans packed at any byte
-  offset coexist correctly with the integer fields that follow them (the
-  chunked slot image keeps sub-word pieces inside their own 8-byte
-  chunk).
+- No function values — rejected with structured errors (`E-B01`).
+  Strings are byte sequences (no runtime UTF-8 validation, no
+  concatenation, literals immutable); `TypeKind::Ptr<T>` exists in the
+  type system but only `Ptr<Int>` is instantiable today. Structs,
+  arrays, and tagged-union enums are supported as values (member/index
+  access, place mutation, arguments, returns, module statics). Since
+  session 23, booleans packed at any byte offset coexist correctly with
+  the integer fields that follow them (the chunked slot image keeps
+  sub-word pieces inside their own 8-byte chunk). Since session 24,
+  `Float`, `Char`, and `Null` are first-class native scalars: `Float`
+  arithmetic (`+ - * / %`), comparisons, and negation run on SSE2, and
+  `rt_print_float` prints the exact 17-significant-digit decimal
+  expansion (fixed or scientific, with `Inf`/`NaN`/`-0`);
+  `rt_print_char` prints a single byte.
 - No debug info, no symbol tables beyond what the PE format requires, and
   no optimizations in the backend itself (the MIR pipeline already
   optimized the input).
@@ -340,8 +344,10 @@ discriminants) it is **1039 tests** (+32 in `tests/discriminants.rs`; see
 audit it is **1048 tests** (+7 in `tests/references.rs`, +2 in
 `tests/ownership.rs`). After session 22 (aggregate returns and
 module-scope aggregate statics) it is **1100 tests** (+52 in
-`tests/aggregate_returns.rs`), and after session 23 (the sub-word
-layout fix, `tests/bool_packing.rs`) it is **1121 tests** (+21).
+`tests/aggregate_returns.rs`), after session 23 (the sub-word layout
+fix, `tests/bool_packing.rs`) it is **1121 tests** (+21), and after
+session 24 (the scalar-types milestone, `tests/scalar_types.rs`) it is
+**1148 tests** (+27).
 The backend tests
 (`tests/backend.rs`) cover program structure and determinism,
 functions/locals/instructions, constant decoding, string decoding

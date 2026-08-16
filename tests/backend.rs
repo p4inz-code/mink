@@ -406,9 +406,34 @@ fn range_iteration_lowers_to_init_next_finished() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn float_literal_is_rejected() {
-    let kinds = error_kinds("fn main() { return 1.5; }");
-    assert_eq!(kinds, [BackendErrorKind::UnsupportedType]);
+fn float_literal_is_supported() {
+    // Session 24: Float is a fully supported scalar type.
+    let (_mir, program) = lower_backend("fn main() { let f = 1.5; rt_print_float(f); return; }");
+    let f = function(&program, "main");
+    assert!(f.locals.iter().any(|l| l.ty == BType::Float));
+    assert!(f.blocks.iter().flat_map(|b| &b.insts).any(|i| matches!(
+        i.kind,
+        BInstKind::RuntimeCall {
+            service: backend::RuntimeService::PrintFloat,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn float_binary_is_supported() {
+    let (_mir, program) = lower_backend(
+        "fn main() { let a = 1.5; let b = 2.5; let c = a + b; rt_print_float(c); return; }",
+    );
+    let f = function(&program, "main");
+    assert!(f.blocks.iter().flat_map(|b| &b.insts).any(|i| matches!(
+        i.kind,
+        BInstKind::Binary {
+            ty: BType::Float,
+            op: BinaryOp::Add,
+            ..
+        }
+    )));
 }
 
 #[test]
@@ -590,61 +615,56 @@ fn string_literal_hex_escapes_decode_to_bytes() {
 }
 
 #[test]
-fn char_and_null_are_rejected() {
-    let kinds = error_kinds("fn main() { let c = 'a'; return; }");
-    assert!(kinds.contains(&BackendErrorKind::UnsupportedType));
-    let kinds = error_kinds("fn main() { let n = null; return; }");
-    assert!(kinds.contains(&BackendErrorKind::UnsupportedType));
+fn char_and_null_are_supported() {
+    // Session 24: Char and Null are word-sized scalar types.
+    let (_mir, program) =
+        lower_backend("fn main() { let c = 'a'; let n = null; rt_print_char(c); return; }");
+    let f = function(&program, "main");
+    assert!(f.locals.iter().any(|l| l.ty == BType::Char));
+    assert!(f.locals.iter().any(|l| l.ty == BType::Null));
 }
 
 #[test]
-fn float_parameter_is_rejected() {
-    // The call site pins the parameter to Float.
-    let kinds = error_kinds("fn f(p) { return p; } fn main() { f(1.5); return; }");
-    assert!(kinds.contains(&BackendErrorKind::UnsupportedType));
+fn float_parameter_is_supported() {
+    // Float flows through parameters, returns, and calls.
+    let (_mir, program) = lower_backend("fn f(p) { return p; } fn main() { f(1.5); return; }");
+    let f = function(&program, "f");
+    assert!(f.locals.iter().any(|l| l.ty == BType::Float));
 }
 
 #[test]
-fn member_access_is_rejected() {
-    // Struct member access is supported for representable structs; a
-    // struct whose field type the native subset cannot represent (here
-    // `Float`) is rejected deterministically (every binding and temporary
-    // touching the type reports `E-B03`, never a silent miscompile).
-    let kinds =
-        error_kinds("struct S { f: Float } fn main() { let s = S { f: 1.5 }; s.f; return; }");
-    assert!(!kinds.is_empty());
-    assert!(
-        kinds
-            .iter()
-            .all(|kind| *kind == BackendErrorKind::UnsupportedType)
+fn float_member_and_index_access_are_supported() {
+    // Float is representable, so struct members and array elements of
+    // type Float lower without error.
+    let (_mir, program) = lower_backend(
+        "struct S { f: Float } fn main() { let s = S { f: 1.5 }; let x = s.f; let a = [1.5, 2.5]; let y = a[0]; return; }",
     );
+    let f = function(&program, "main");
+    assert!(f.blocks.iter().flat_map(|b| &b.insts).any(|i| matches!(
+        i.kind,
+        BInstKind::FieldLoad {
+            field_ty: BType::Float,
+            ..
+        } | BInstKind::IndexLoad {
+            elem_ty: BType::Float,
+            ..
+        }
+    )));
 }
 
 #[test]
-fn index_access_is_rejected() {
-    // Array indexing is supported for representable arrays; an array
-    // whose element type the native subset cannot represent (here
-    // `Float`) is rejected deterministically at the binding.
-    let kinds = error_kinds("fn main() { let a = [1.5, 2.5]; a[0]; return; }");
-    assert!(!kinds.is_empty());
-    assert!(
-        kinds
-            .iter()
-            .all(|kind| *kind == BackendErrorKind::UnsupportedType)
-    );
-}
-
-#[test]
-fn member_assignment_is_rejected() {
-    let kinds = error_kinds(
+fn float_member_assignment_is_supported() {
+    let (_mir, program) = lower_backend(
         "struct S { f: Float } fn main() { let mut s = S { f: 1.5 }; s.f = 2.5; return; }",
     );
-    assert!(!kinds.is_empty());
-    assert!(
-        kinds
-            .iter()
-            .all(|kind| *kind == BackendErrorKind::UnsupportedType)
-    );
+    let f = function(&program, "main");
+    assert!(f.blocks.iter().flat_map(|b| &b.insts).any(|i| matches!(
+        i.kind,
+        BInstKind::FieldStore {
+            field_ty: BType::Float,
+            ..
+        }
+    )));
 }
 
 #[test]
@@ -742,12 +762,15 @@ fn target_parse_round_trip() {
 
 #[test]
 fn errors_carry_codes_and_spans() {
-    let errors = lower_errors("fn main() { return 1.5; }");
+    let errors = lower_errors("fn main() { return 0 .. 10; }");
     let error = &errors[0];
     assert_eq!(error.code(), "E-B03");
     assert_eq!(
         error.span(),
-        text_span("fn main() { return 1.5; }", "fn main() { return 1.5; }")
+        text_span(
+            "fn main() { return 0 .. 10; }",
+            "fn main() { return 0 .. 10; }"
+        )
     );
     assert!(error.detail().is_some());
 }
@@ -755,9 +778,9 @@ fn errors_carry_codes_and_spans() {
 #[test]
 fn independent_errors_are_all_reported() {
     // Two unsupported constructs in one program: both reported, in source
-    // order. (The char binding is in its own function so the float
+    // order. (The range binding is in its own function so the range
     // function's result-type error cannot short-circuit it.)
-    let src = "fn g() { let c = 'a'; return; } fn main() { return 1.5; }";
+    let src = "fn g() { return 0 .. 10; } fn main() { return 0 .. 10; }";
     let errors = lower_errors(src);
     let kinds = errors.iter().map(|e| e.kind()).collect::<Vec<_>>();
     assert_eq!(

@@ -99,8 +99,15 @@ pub struct RuntimeLayout {
     pub stderr_handle: u64,
     /// Scratch slot for `WriteFile`'s bytes-written count.
     pub bytes_written: u64,
-    /// Scratch buffer for decimal conversion in `rt_print_int` (32 bytes).
+    /// Scratch buffer for decimal conversion in `rt_print_int` and
+    /// `rt_print_float` output assembly (32 bytes).
     pub print_buf: u64,
+    /// Scratch words for `rt_print_float`'s exact big-integer expansion
+    /// (40 u64 words = 320 bytes; `f * 5^1074` needs 2548 bits).
+    pub dtoa_words: u64,
+    /// Scratch digits for `rt_print_float`: the exact decimal expansion
+    /// (up to 767 digits, stored one byte each).
+    pub dtoa_digits: u64,
     /// Start of the image's immutable string-data region (an absolute
     /// address, written by `rt_init`). String blobs (length prefix + UTF-8
     /// bytes) live here; the bounds let the string intrinsics validate
@@ -126,11 +133,13 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
     stderr_handle: 32,
     bytes_written: 40,
     print_buf: 48,
-    str_data_start: 80,
-    str_data_end: 88,
-    arena: 96,
-    table: 96 + HEAP_SIZE,
-    size: 96 + HEAP_SIZE + LIVE_TABLE_BYTES,
+    dtoa_words: 80,
+    dtoa_digits: 400,
+    str_data_start: 1424,
+    str_data_end: 1432,
+    arena: 1440,
+    table: 1440 + HEAP_SIZE,
+    size: 1440 + HEAP_SIZE + LIVE_TABLE_BYTES,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

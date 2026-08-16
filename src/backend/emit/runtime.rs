@@ -124,6 +124,12 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::PrintInt, |code, r| {
         emit_print_int(code, r)
     });
+    emit(code, RuntimeService::PrintFloat, |code, r| {
+        emit_print_float(code, r);
+    });
+    emit(code, RuntimeService::PrintChar, |code, r| {
+        emit_print_char(code, r)
+    });
     emit(code, RuntimeService::Exit, |code, _| emit_exit(code));
     emit(code, RuntimeService::Fail, emit_fail);
     emit(code, RuntimeService::WriteStdout, |code, _| {
@@ -668,6 +674,647 @@ fn emit_print_int(code: &mut Code, offsets: &RuntimeOffsets) {
 
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
+}
+
+/// `rt_print_char(value)` (value at `[rbp + 16]`): write the single byte
+/// of the character plus a CRLF to stdout. The char model is byte-sized
+/// (layout `(1, 1)`), so the low byte of the value word is the character.
+fn emit_print_char(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
+    code.mov_rr(Reg::Rcx, Reg::R8);
+    code.mov_r32_imm32(Reg::Rdx, 1);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
+    code.mov_r32_imm32(Reg::Rdx, 2);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_print_float(value)` (value at `[rbp + 16]`): the deterministic
+/// decimal representation of the double, then a CRLF.
+///
+/// Format (17 significant digits, round-half-even, `%g`-style):
+/// - `NaN`, `Inf`/`-Inf` for non-finite values;
+/// - fixed notation when `-4 <= E < 17` (e.g. `0.015`, `123456.25`);
+/// - otherwise scientific: `d[.dddd]e+XX` / `e-XX`, the exponent sign
+///   always present (e.g. `1e+308`, `5e-324`, `1e-5`);
+/// - trailing zeros in the fractional part are trimmed (`2.5`, `1e+17`);
+/// - negative zero prints `-0`.
+///
+/// The digits are exact: the value `f * 2^k` is expanded into the exact
+/// integer `f * 5^N` (N = `-k` for `k < 0`, `f << k` for `k >= 0`), the
+/// full decimal expansion (up to 767 digits) is extracted by repeated
+/// division by 10 into `dtoa_digits`, and the 17 significant digits are
+/// rounded half-even against the remaining digits. 17 digits guarantee a
+/// round trip through `decode_float` back to the same double.
+///
+/// Scratch: `dtoa_words` (40 u64 words) holds the big integer, built by
+/// repeated multiplication by 5 (or doubling for `k >= 0`); `dtoa_digits`
+/// holds the expansion digits, one byte each. `print_buf` is the output
+/// assembly area (the format never exceeds 24 characters).
+fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(48);
+    // Spills: [rbp-8] sign flag, [rbp-16] bits, [rbp-24] digit count,
+    // [rbp-32] decimal exponent E, [rbp-40] N (digits shifted right by
+    // N decimal places), [rbp-48] unused. Registers: r12 = words base,
+    // r13 = digits base, r14 = big-int word count, r15 = output offset.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+
+    // --- sign flag and magnitude ---
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shr_r_imm8(Reg::Rcx, 63);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rcx);
+    code.movabs(Reg::Rdx, 0x7FFF_FFFF_FFFF_FFFF);
+    code.and_rr(Reg::Rax, Reg::Rdx);
+
+    // --- non-finite values: NaN / Inf ---
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shr_r_imm8(Reg::Rcx, 52);
+    code.movabs(Reg::Rdx, 0x7FF);
+    code.and_rr(Reg::Rcx, Reg::Rdx);
+    let normal = code.label();
+    let nan = code.label();
+    let special = code.label();
+    let special_write = code.label();
+    code.cmp_r_imm32(Reg::Rcx, 0x7FF);
+    code.jcc_label(0x85, normal); // jne: finite
+    code.movabs(Reg::Rdx, 0xF_FFFF_FFFF_FFFF);
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.and_rr(Reg::Rcx, Reg::Rdx);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x85, nan); // jnz: NaN
+    // Inf at [buf .. buf+3).
+    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.mov_mem_imm8(Reg::R8, 0, b'I');
+    code.mov_mem_imm8(Reg::R8, 1, b'n');
+    code.mov_mem_imm8(Reg::R8, 2, b'f');
+    code.mov_r32_imm32(Reg::Rdx, 3);
+    code.jmp_label(special);
+    // NaN at [buf .. buf+3).
+    code.bind_label(nan);
+    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.mov_mem_imm8(Reg::R8, 0, b'N');
+    code.mov_mem_imm8(Reg::R8, 1, b'a');
+    code.mov_mem_imm8(Reg::R8, 2, b'N');
+    code.mov_r32_imm32(Reg::Rdx, 3);
+    code.bind_label(special);
+    // Prepend '-' when the sign is set (shift the three chars right).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, special_write); // jz
+    code.movzx_byte(Reg::Rax, Reg::R8, 2);
+    code.mov_mem_r8(Reg::R8, 3, Reg::Rax);
+    code.movzx_byte(Reg::Rax, Reg::R8, 1);
+    code.mov_mem_r8(Reg::R8, 2, Reg::Rax);
+    code.movzx_byte(Reg::Rax, Reg::R8, 0);
+    code.mov_mem_r8(Reg::R8, 1, Reg::Rax);
+    code.mov_mem_imm8(Reg::R8, 0, b'-');
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.bind_label(special_write);
+    code.mov_rr(Reg::Rcx, Reg::R8);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
+    code.mov_r32_imm32(Reg::Rdx, 2);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+
+    // --- finite values ---
+    // r15 = output offset into print_buf (0, or 1 with '-' at [0]).
+    code.bind_label(normal);
+    let sign_done = code.label();
+    code.xor_rr32(Reg::R15, Reg::R15);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, sign_done); // jz
+    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.mov_mem_imm8(Reg::R8, 0, b'-');
+    code.mov_r32_imm32(Reg::R15, 1);
+    code.bind_label(sign_done);
+
+    // Decompose: f = frac | 2^52 (normal) or frac (subnormal);
+    // k = exp_field - 1075 (normal) or -1074 (subnormal); value = f * 2^k.
+    // The exponent field is recomputed here (the sign handling above
+    // clobbered `rcx`, which held it after the NaN check).
+    code.lea_r_rip(Reg::R12, PatchKind::Bss(BSS.dtoa_words as u32));
+    code.lea_r_rip(Reg::R13, PatchKind::Bss(BSS.dtoa_digits as u32));
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // bits
+    code.shr_r_imm8(Reg::Rcx, 52);
+    code.movabs(Reg::Rdx, 0x7FF);
+    code.and_rr(Reg::Rcx, Reg::Rdx); // exp_field
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16); // bits
+    code.movabs(Reg::Rdx, 0xF_FFFF_FFFF_FFFF);
+    code.and_rr(Reg::Rax, Reg::Rdx); // frac
+    code.movabs(Reg::Rdx, 1);
+    code.shl_r_imm8(Reg::Rdx, 52); // 2^52
+    let subnormal = code.label();
+    let have_k = code.label();
+    code.test_rr(Reg::Rcx, Reg::Rcx); // rcx = exp_field
+    code.jcc_label(0x84, subnormal); // jz
+    code.or_rr(Reg::Rax, Reg::Rdx); // f |= 2^52
+    code.movabs(Reg::Rdx, 1075);
+    code.sub_rr(Reg::Rcx, Reg::Rdx); // k = exp - 1075
+    code.jmp_label(have_k);
+    code.bind_label(subnormal);
+    code.movabs(Reg::Rcx, (-1074i64) as u64); // k = -1074
+    code.bind_label(have_k);
+    // f in rax, k in rcx. A zero significand prints 0/-0 directly.
+    let print_zero = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, print_zero); // jz
+    code.mov_mem_r(Reg::R12, 0, Reg::Rax); // words[0] = f
+    code.mov_r32_imm32(Reg::R14, 1); // len = 1
+    // Build I: k < 0 → I = f * 5^N (N = -k, multiplier 5);
+    // k >= 0 → I = f << k (multiplier 2, count = k); N = 0.
+    let k_nonneg = code.label();
+    let mul_outer = code.label();
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x89, k_nonneg); // jns
+    code.neg_r(Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // N = -k
+    code.mov_r32_imm32(Reg::Rsi, 5);
+    code.mov_rr(Reg::Rdi, Reg::Rcx); // count
+    code.jmp_label(mul_outer);
+    code.bind_label(k_nonneg);
+    code.mov_mem_imm32(Reg::Rbp, -40, 0); // N = 0
+    code.mov_r32_imm32(Reg::Rsi, 2);
+    code.mov_rr(Reg::Rdi, Reg::Rcx); // count = k
+    // Multiply the big int (len words at r12) by rsi, rdi times.
+    let mul_inner = code.label();
+    let mul_grow = code.label();
+    let mul_no_grow = code.label();
+    let mul_done = code.label();
+    code.bind_label(mul_outer);
+    code.test_rr(Reg::Rdi, Reg::Rdi);
+    code.jcc_label(0x84, mul_done); // jz
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // carry = 0
+    code.mov_rr(Reg::R8, Reg::R12); // word pointer
+    code.mov_rr(Reg::R9, Reg::R14); // words left
+    code.bind_label(mul_inner);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, mul_grow); // jz: pass done
+    code.mov_r_mem(Reg::Rax, Reg::R8, 0);
+    code.mul_r(Reg::Rsi); // rdx:rax = word * multiplier
+    code.add_rr(Reg::Rax, Reg::Rcx); // + carry_in
+    code.bytes(&[0x48, 0x83, 0xD2, 0x00]); // adc rdx, 0: fold the carry
+    code.mov_mem_r(Reg::R8, 0, Reg::Rax);
+    code.mov_rr(Reg::Rcx, Reg::Rdx); // carry_out
+    code.add_r_imm8(Reg::R8, 8);
+    code.dec_r(Reg::R9);
+    code.jmp_label(mul_inner);
+    code.bind_label(mul_grow);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, mul_no_grow); // jz: no new word
+    code.mov_mem_r(Reg::R8, 0, Reg::Rcx); // append carry word
+    code.add_r_imm8(Reg::R14, 1);
+    code.bind_label(mul_no_grow);
+    code.dec_r(Reg::Rdi);
+    code.jmp_label(mul_outer);
+    code.bind_label(mul_done);
+
+    // --- exact decimal expansion ---
+    // Repeatedly divide the big int by 10, storing one digit (the
+    // remainder) per pass into digits at r11, until the number is zero.
+    let digit_outer = code.label();
+    let digit_inner = code.label();
+    let digit_shrink = code.label();
+    let digit_shrink_done = code.label();
+    let digits_done = code.label();
+    code.mov_rr(Reg::R11, Reg::R13); // digit write pointer
+    code.bind_label(digit_outer);
+    code.test_rr(Reg::R14, Reg::R14);
+    code.jcc_label(0x84, digits_done); // jz: number is zero
+    code.mov_rr(Reg::R8, Reg::R14);
+    code.shl_r_imm8(Reg::R8, 3);
+    code.add_rr(Reg::R8, Reg::R12);
+    code.sub_r_imm32(Reg::R8, 8); // top word pointer
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // carry = 0
+    code.mov_r32_imm32(Reg::Rcx, 10);
+    code.bind_label(digit_inner);
+    code.mov_r_mem(Reg::Rax, Reg::R8, 0);
+    code.div_r(Reg::Rcx); // rdx:rax / 10
+    code.mov_mem_r(Reg::R8, 0, Reg::Rax);
+    code.sub_r_imm32(Reg::R8, 8);
+    code.cmp_rr(Reg::R8, Reg::R12);
+    code.jcc_label(0x83, digit_inner); // jae: more words below
+    code.mov_mem_r8(Reg::R11, 0, Reg::Rdx); // digits[D_total] = digit
+    code.add_r_imm8(Reg::R11, 1);
+    // Shrink len to the highest nonzero word (0 when the number is 0).
+    code.mov_rr(Reg::R9, Reg::R14);
+    code.bind_label(digit_shrink);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, digit_shrink_done); // jz: all zero
+    code.mov_rr(Reg::Rax, Reg::R9);
+    code.shl_r_imm8(Reg::Rax, 3);
+    code.add_rr(Reg::Rax, Reg::R12);
+    code.sub_r_imm32(Reg::Rax, 8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x85, digit_shrink_done); // jnz: top word nonzero
+    code.dec_r(Reg::R9);
+    code.jmp_label(digit_shrink);
+    code.bind_label(digit_shrink_done);
+    code.mov_rr(Reg::R14, Reg::R9);
+    code.jmp_label(digit_outer);
+    code.bind_label(digits_done);
+    // D_total = r11 - r13; E = D_total - 1 - N.
+    code.mov_rr(Reg::Rax, Reg::R11);
+    code.sub_rr(Reg::Rax, Reg::R13);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.dec_r(Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // N
+    code.sub_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // E
+
+    // --- round the 17 significant digits (half-even) ---
+    // Rounding digit index = D_total - 18 (absent below zero); sticky is
+    // any nonzero digit below it; the tie checks the 17th digit's parity.
+    let no_round = code.label();
+    let round_up = code.label();
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.sub_r_imm32(Reg::Rax, 18);
+    code.jcc_label(0x88, no_round); // js: D_total < 18
+    code.mov_rr(Reg::R8, Reg::R13);
+    code.add_rr(Reg::R8, Reg::Rax); // round digit pointer
+    code.mov_rr(Reg::R9, Reg::R8);
+    code.add_r_imm8(Reg::R9, 1); // 17th digit pointer
+    let sticky_scan = code.label();
+    let sticky_set = code.label();
+    let sticky_done = code.label();
+    code.xor_rr32(Reg::R10, Reg::R10); // sticky = 0
+    code.mov_rr(Reg::Rax, Reg::R13); // scan pointer
+    code.bind_label(sticky_scan);
+    code.cmp_rr(Reg::Rax, Reg::R8);
+    code.jcc_label(0x83, sticky_done); // jae: scanned everything
+    code.cmp_mem_imm8(Reg::Rax, 0, 0);
+    code.jcc_label(0x85, sticky_set); // jnz: nonzero below
+    code.add_r_imm8(Reg::Rax, 1);
+    code.jmp_label(sticky_scan);
+    code.bind_label(sticky_set);
+    code.mov_r32_imm32(Reg::R10, 1);
+    code.bind_label(sticky_done);
+    code.movzx_byte(Reg::Rax, Reg::R8, 0); // round digit
+    code.cmp_r_imm8(Reg::Rax, 5);
+    code.jcc_label(0x87, round_up); // ja
+    code.jcc_label(0x82, no_round); // jb
+    // == 5: round up iff sticky || the 17th digit is odd.
+    code.test_rr(Reg::R10, Reg::R10);
+    code.jcc_label(0x85, round_up);
+    code.movzx_byte(Reg::Rax, Reg::R9, 0);
+    code.test_r_imm32(Reg::Rax, 1);
+    code.jcc_label(0x85, round_up); // jnz: odd
+    code.jmp_label(no_round);
+    // Increment the 17-digit significand (least significant first),
+    // propagating the carry; leaving the top is an exponent bump.
+    let inc_loop = code.label();
+    let inc_no_carry = code.label();
+    let inc_done = code.label();
+    let overflow = code.label();
+    code.bind_label(round_up);
+    code.mov_rr(Reg::Rax, Reg::R9); // start at the 17th digit
+    code.mov_r32_imm32(Reg::Rdx, 1); // carry
+    code.bind_label(inc_loop);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.add_rr(Reg::Rcx, Reg::Rdx); // sum
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.cmp_r_imm8(Reg::Rcx, 10);
+    code.jcc_label(0x82, inc_no_carry); // jb: no carry
+    code.mov_r32_imm32(Reg::Rdx, 1);
+    code.sub_r_imm32(Reg::Rcx, 10);
+    code.bind_label(inc_no_carry);
+    code.mov_mem_r8(Reg::Rax, 0, Reg::Rcx);
+    code.mov_rr(Reg::Rsi, Reg::R13);
+    code.add_rr(Reg::Rsi, Reg::R11);
+    code.sub_rr(Reg::Rsi, Reg::R13); // top ptr = r13 + D_total - 1
+    code.dec_r(Reg::Rsi);
+    code.cmp_rr(Reg::Rax, Reg::Rsi);
+    code.jcc_label(0x83, inc_done); // jae: top processed
+    code.add_r_imm8(Reg::Rax, 1);
+    code.jmp_label(inc_loop);
+    code.bind_label(inc_done);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, no_round); // jz: carried inside
+    // Carried past the top: the value is now exactly 10^(E+1); the
+    // rounded digits are all zero, so write 10^E directly.
+    code.bind_label(overflow);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    let write_pow10 = code.label();
+    code.jmp_label(write_pow10);
+
+    // --- formatting ---
+    // The output is assembled at print_buf[out ..]; r9 is the write
+    // pointer, r15 the offset, r13 the digits, D_total/E/N in spills.
+    let format_dispatch = code.label();
+    let scientific = code.label();
+    let fixed_neg = code.label();
+    code.bind_label(no_round);
+    code.bind_label(format_dispatch);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.cmp_r_imm32(Reg::Rax, (-4i32) as u32);
+    code.jcc_label(0x8C, scientific); // jl: E < -4
+    code.cmp_r_imm32(Reg::Rax, 17);
+    code.jcc_label(0x8D, scientific); // jge: E >= 17
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x88, fixed_neg); // js: -4 <= E < 0
+    // Fixed notation, E >= 0: integer digits then a trimmed fraction.
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.add_rr(Reg::R9, Reg::R15);
+    code.mov_rr(Reg::R8, Reg::R13);
+    code.add_rr(Reg::R8, Reg::R11);
+    code.sub_rr(Reg::R8, Reg::R13); // digits top ptr
+    code.dec_r(Reg::R8);
+    let int_loop = code.label();
+    let finish = code.label();
+    code.mov_rr(Reg::R10, Reg::Rax); // count = E + 1
+    code.add_r_imm8(Reg::R10, 1);
+    code.bind_label(int_loop);
+    code.movzx_byte(Reg::Rax, Reg::R8, 0);
+    code.add_r_imm8(Reg::Rax, b'0');
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R9, 1);
+    code.dec_r(Reg::R8);
+    code.dec_r(Reg::R10);
+    code.jcc_label(0x85, int_loop); // jnz
+    // Fraction: digits at indices N-1 down to N+E-16, trailing zeros
+    // trimmed; absent when the range is empty or all zero.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // N
+    code.mov_rr(Reg::Rax, Reg::R13);
+    code.add_rr(Reg::Rax, Reg::Rcx); // digits + N
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.dec_r(Reg::Rcx); // high ptr
+    code.mov_rr(Reg::Rdx, Reg::R11);
+    code.sub_r_imm32(Reg::Rdx, 17); // low ptr = r13 + D_total - 17
+    let frac_low_ok = code.label();
+    code.cmp_rr(Reg::Rdx, Reg::R13);
+    code.jcc_label(0x83, frac_low_ok);
+    code.mov_rr(Reg::Rdx, Reg::R13);
+    code.bind_label(frac_low_ok);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x82, finish); // jb: empty fraction
+    // Trim trailing zeros: digits are stored least-significant first, so
+    // the last digit to write is the LOWEST nonzero, found by scanning
+    // from the low bound upward.
+    let frac_trim = code.label();
+    let frac_found = code.label();
+    code.mov_rr(Reg::R8, Reg::Rdx); // scan from the low bound up
+    code.bind_label(frac_trim);
+    code.cmp_mem8_imm8(Reg::R8, 0, 0);
+    code.jcc_label(0x85, frac_found); // jnz: lowest nonzero
+    code.add_r_imm8(Reg::R8, 1);
+    code.cmp_rr(Reg::R8, Reg::Rcx);
+    code.jcc_label(0x86, frac_trim); // jbe: keep scanning (incl. high bound)
+    code.jmp_label(finish); // all zero: no fraction
+    code.bind_label(frac_found);
+    code.mov_rr(Reg::R11, Reg::R8); // stop ptr
+    code.mov_rr(Reg::R8, Reg::Rcx); // restart at high
+    code.mov_mem_imm8(Reg::R9, 0, b'.');
+    code.add_r_imm8(Reg::R9, 1);
+    let frac_write = code.label();
+    code.bind_label(frac_write);
+    code.movzx_byte(Reg::Rax, Reg::R8, 0);
+    code.add_r_imm8(Reg::Rax, b'0');
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R9, 1);
+    code.cmp_rr(Reg::R8, Reg::R11);
+    code.jcc_label(0x86, finish); // jbe: stop reached
+    code.dec_r(Reg::R8);
+    code.jmp_label(frac_write);
+    // Fixed notation, -4 <= E < 0: 0.00…digits.
+    code.bind_label(fixed_neg);
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.add_rr(Reg::R9, Reg::R15);
+    code.mov_mem_imm8(Reg::R9, 0, b'0');
+    code.add_r_imm8(Reg::R9, 1);
+    code.mov_mem_imm8(Reg::R9, 0, b'.');
+    code.add_r_imm8(Reg::R9, 1);
+    code.neg_r(Reg::Rax); // zeros count = -E - 1
+    code.dec_r(Reg::Rax);
+    let fneg_zero_loop = code.label();
+    let fneg_digits = code.label();
+    code.bind_label(fneg_zero_loop);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, fneg_digits); // jz
+    code.mov_mem_imm8(Reg::R9, 0, b'0');
+    code.add_r_imm8(Reg::R9, 1);
+    code.dec_r(Reg::Rax);
+    code.jmp_label(fneg_zero_loop);
+    code.bind_label(fneg_digits);
+    code.mov_rr(Reg::R8, Reg::R13);
+    code.add_rr(Reg::R8, Reg::R11);
+    code.sub_rr(Reg::R8, Reg::R13);
+    code.dec_r(Reg::R8); // high ptr
+    code.mov_rr(Reg::Rcx, Reg::R13);
+    code.add_rr(Reg::Rcx, Reg::R11);
+    code.sub_rr(Reg::Rcx, Reg::R13);
+    code.sub_r_imm32(Reg::Rcx, 17);
+    let fneg_low_ok = code.label();
+    code.cmp_rr(Reg::Rcx, Reg::R13);
+    code.jcc_label(0x83, fneg_low_ok);
+    code.mov_rr(Reg::Rcx, Reg::R13);
+    code.bind_label(fneg_low_ok);
+    // Trim trailing zeros: scan from the low bound up for the lowest
+    // nonzero digit, then write from the high bound down to it.
+    code.mov_rr(Reg::R10, Reg::Rcx); // scan from the low bound up
+    let fneg_trim = code.label();
+    let fneg_found = code.label();
+    code.bind_label(fneg_trim);
+    code.cmp_mem8_imm8(Reg::R10, 0, 0);
+    code.jcc_label(0x85, fneg_found); // jnz: lowest nonzero
+    code.add_r_imm8(Reg::R10, 1);
+    code.cmp_rr(Reg::R10, Reg::R8);
+    code.jcc_label(0x86, fneg_trim); // jbe: keep scanning (incl. high bound)
+    code.jmp_label(finish); // all zero (unreachable for f != 0)
+    code.bind_label(fneg_found);
+    code.mov_rr(Reg::R11, Reg::R10);
+    let fneg_write = code.label();
+    code.bind_label(fneg_write);
+    code.movzx_byte(Reg::Rax, Reg::R8, 0);
+    code.add_r_imm8(Reg::Rax, b'0');
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R9, 1);
+    code.cmp_rr(Reg::R8, Reg::R11);
+    code.jcc_label(0x86, finish);
+    code.dec_r(Reg::R8);
+    code.jmp_label(fneg_write);
+    // Scientific: d[.dddd]e±XX.
+    code.bind_label(scientific);
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.add_rr(Reg::R9, Reg::R15);
+    code.mov_rr(Reg::R8, Reg::R13);
+    code.add_rr(Reg::R8, Reg::R11);
+    code.sub_rr(Reg::R8, Reg::R13);
+    code.dec_r(Reg::R8); // leading digit ptr
+    code.movzx_byte(Reg::Rax, Reg::R8, 0);
+    code.add_r_imm8(Reg::Rax, b'0');
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R9, 1);
+    code.dec_r(Reg::R8);
+    code.mov_rr(Reg::Rcx, Reg::R13);
+    code.add_rr(Reg::Rcx, Reg::R11);
+    code.sub_rr(Reg::Rcx, Reg::R13);
+    code.sub_r_imm32(Reg::Rcx, 17);
+    let sci_low_ok = code.label();
+    code.cmp_rr(Reg::Rcx, Reg::R13);
+    code.jcc_label(0x83, sci_low_ok);
+    code.mov_rr(Reg::Rcx, Reg::R13);
+    code.bind_label(sci_low_ok);
+    // Trim trailing zeros: scan from the low bound up for the lowest
+    // nonzero digit, then write from the fraction top down to it.
+    code.mov_rr(Reg::R10, Reg::Rcx); // scan from the low bound up
+    let sci_trim = code.label();
+    let sci_found = code.label();
+    let sci_exp = code.label();
+    code.bind_label(sci_trim);
+    code.cmp_mem8_imm8(Reg::R10, 0, 0);
+    code.jcc_label(0x85, sci_found);
+    code.add_r_imm8(Reg::R10, 1);
+    code.cmp_rr(Reg::R10, Reg::R8);
+    code.jcc_label(0x86, sci_trim); // jbe: keep scanning (incl. high bound)
+    code.jmp_label(sci_exp); // all zero: no fraction
+    code.bind_label(sci_found);
+    code.mov_rr(Reg::R11, Reg::R10); // stop ptr (r8 is still the fraction top)
+    code.mov_mem_imm8(Reg::R9, 0, b'.');
+    code.add_r_imm8(Reg::R9, 1);
+    let sci_write = code.label();
+    code.bind_label(sci_write);
+    code.movzx_byte(Reg::Rax, Reg::R8, 0);
+    code.add_r_imm8(Reg::Rax, b'0');
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R9, 1);
+    code.cmp_rr(Reg::R8, Reg::R11);
+    code.jcc_label(0x86, sci_exp);
+    code.dec_r(Reg::R8);
+    code.jmp_label(sci_write);
+    // Exponent: 'e' + sign + unpadded digits of |E|.
+    let sci_pos = code.label();
+    let sci_exp_digits = code.label();
+    let sci_no_h = code.label();
+    let sci_ones = code.label();
+    let sci_tens_written = code.label();
+    code.bind_label(sci_exp);
+    code.mov_mem_imm8(Reg::R9, 0, b'e');
+    code.add_r_imm8(Reg::R9, 1);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x89, sci_pos); // jns: positive — write '+'
+    code.mov_mem_imm8(Reg::R9, 0, b'-');
+    code.add_r_imm8(Reg::R9, 1);
+    code.neg_r(Reg::Rax);
+    code.jmp_label(sci_exp_digits);
+    code.bind_label(sci_pos);
+    code.mov_mem_imm8(Reg::R9, 0, b'+');
+    code.add_r_imm8(Reg::R9, 1);
+    code.bind_label(sci_exp_digits);
+    code.mov_r32_imm32(Reg::Rcx, 100);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.div_r(Reg::Rcx); // rax = E/100, rdx = E%100
+    code.mov_rr(Reg::R10, Reg::Rax); // hundreds
+    code.mov_rr(Reg::R11, Reg::Rdx); // remainder
+    code.test_rr(Reg::R10, Reg::R10);
+    code.jcc_label(0x84, sci_no_h);
+    code.add_r_imm8(Reg::R10, b'0');
+    code.mov_mem_r8(Reg::R9, 0, Reg::R10);
+    code.add_r_imm8(Reg::R9, 1);
+    code.bind_label(sci_no_h);
+    code.mov_rr(Reg::Rax, Reg::R11);
+    code.mov_r32_imm32(Reg::Rcx, 10);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.div_r(Reg::Rcx); // rax = tens, rdx = ones
+    code.mov_rr(Reg::R11, Reg::Rdx);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, sci_tens_written);
+    code.test_rr(Reg::R10, Reg::R10); // hmm — r10 = hundreds (nonzero iff written)
+    code.jcc_label(0x84, sci_ones); // jz: no hundreds written
+    code.mov_mem_imm8(Reg::R9, 0, b'0');
+    code.add_r_imm8(Reg::R9, 1);
+    code.jmp_label(sci_ones);
+    code.bind_label(sci_tens_written);
+    code.add_r_imm8(Reg::Rax, b'0');
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R9, 1);
+    code.bind_label(sci_ones);
+    code.mov_rr(Reg::Rax, Reg::R11);
+    code.add_r_imm8(Reg::Rax, b'0');
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R9, 1);
+    code.jmp_label(finish);
+    // The value is exactly 10^E (a rounding overflow): 1 + zeros.
+    code.bind_label(write_pow10);
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.add_rr(Reg::R9, Reg::R15);
+    code.mov_mem_imm8(Reg::R9, 0, b'1');
+    code.add_r_imm8(Reg::R9, 1);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    let pow_sci = code.label();
+    let pow_neg = code.label();
+    code.cmp_r_imm32(Reg::Rax, 17);
+    code.jcc_label(0x8D, pow_sci); // jge
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x88, pow_neg); // js
+    let pow_zero_loop = code.label();
+    code.bind_label(pow_zero_loop);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, finish); // jz
+    code.mov_mem_imm8(Reg::R9, 0, b'0');
+    code.add_r_imm8(Reg::R9, 1);
+    code.dec_r(Reg::Rax);
+    code.jmp_label(pow_zero_loop);
+    code.bind_label(pow_neg);
+    code.mov_mem_imm8(Reg::R9, 0, b'0');
+    code.add_r_imm8(Reg::R9, 1);
+    code.mov_mem_imm8(Reg::R9, 0, b'.');
+    code.add_r_imm8(Reg::R9, 1);
+    code.neg_r(Reg::Rax);
+    code.dec_r(Reg::Rax);
+    let pow_neg_zero_loop = code.label();
+    let pow_neg_one = code.label();
+    code.bind_label(pow_neg_zero_loop);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, pow_neg_one);
+    code.mov_mem_imm8(Reg::R9, 0, b'0');
+    code.add_r_imm8(Reg::R9, 1);
+    code.dec_r(Reg::Rax);
+    code.jmp_label(pow_neg_zero_loop);
+    code.bind_label(pow_neg_one);
+    code.mov_mem_imm8(Reg::R9, 0, b'1');
+    code.add_r_imm8(Reg::R9, 1);
+    code.jmp_label(finish);
+    code.bind_label(pow_sci);
+    code.mov_mem_imm8(Reg::R9, 0, b'e');
+    code.add_r_imm8(Reg::R9, 1);
+    code.mov_mem_imm8(Reg::R9, 0, b'+');
+    code.add_r_imm8(Reg::R9, 1);
+    code.jmp_label(sci_exp_digits); // E' >= 17: |E'| is 2-3 digits
+
+    // --- write the assembled output and CRLF ---
+    code.bind_label(finish);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.print_buf as u32));
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.mov_rr(Reg::Rdx, Reg::R9);
+    code.sub_rr(Reg::Rdx, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
+    code.mov_r32_imm32(Reg::Rdx, 2);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+
+    // Zero value (including -0.0): "0" at the output offset.
+    code.bind_label(print_zero);
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.add_rr(Reg::R9, Reg::R15);
+    code.mov_mem_imm8(Reg::R9, 0, b'0');
+    code.add_r_imm8(Reg::R9, 1);
+    code.jmp_label(finish);
 }
 
 /// `rt_exit(code)` (code at `[rbp + 16]`): the leak-checked process exit.
