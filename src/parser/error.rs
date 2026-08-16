@@ -77,6 +77,10 @@ pub enum ParseErrorKind {
     ExpectedPattern,
     /// `=>` was required after a match arm's pattern.
     ExpectedFatArrow,
+    /// A data-carrying variant was declared or constructed with an empty
+    /// payload: `Variant()`. A data-carrying variant carries exactly one
+    /// payload.
+    EmptyPayload,
 }
 
 impl ParseErrorKind {
@@ -110,6 +114,7 @@ impl ParseErrorKind {
             Self::ExpectedVariant => "E-P22",
             Self::ExpectedPattern => "E-P23",
             Self::ExpectedFatArrow => "E-P24",
+            Self::EmptyPayload => "E-P25",
         }
     }
 }
@@ -145,6 +150,9 @@ impl fmt::Display for ParseErrorKind {
                 "expected a match pattern (`_`, a name, `E::V`, a boolean, or an integer)"
             }
             Self::ExpectedFatArrow => "expected '=>' after the match pattern",
+            Self::EmptyPayload => {
+                "expected a payload in the parentheses of a data-carrying variant (a variant carries exactly one payload)"
+            }
         };
         f.write_str(message)
     }

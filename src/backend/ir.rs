@@ -519,6 +519,53 @@ pub enum BInstKind {
         /// The value being stored.
         src: BOperand,
     },
+    /// Construct an enum tagged-union value (session 19): write the
+    /// discriminant (tag) word at `tag_offset` and copy the payload words
+    /// (when `payload` is present) into the payload area at
+    /// `payload_offset` of `target`'s slot. `tag_offset`, `payload_offset`,
+    /// and `payload_size` are resolved at lowering from the enum's
+    /// deterministic layout, so the emitter never re-computes layout.
+    EnumInit {
+        /// The destination slot (an `Enum` slot spanning the layout's
+        /// words).
+        target: crate::mir::LocalId,
+        /// The variant's discriminant (the tag word).
+        discriminant: u64,
+        /// The evaluated payload value, for a data-carrying construction.
+        payload: Option<BOperand>,
+        /// The byte offset of the tag word within the value.
+        tag_offset: u32,
+        /// The byte offset of the payload area within the value.
+        payload_offset: u32,
+        /// The byte size of the payload area.
+        payload_size: u32,
+    },
+    /// Load the discriminant (tag) word of the enum value in `value` into
+    /// `target` (the tag lives at `tag_offset` within the value; for the
+    /// current layout it is always the first word). Used by match lowering
+    /// to test a data-carrying variant and to guard payload extraction.
+    EnumTag {
+        /// The destination slot (a word-sized slot holding the tag).
+        target: crate::mir::LocalId,
+        /// The enum value's slot.
+        value: crate::mir::LocalId,
+        /// The byte offset of the tag word within the value.
+        tag_offset: u32,
+    },
+    /// Copy the payload area of the enum value in `value` into `target`
+    /// (the payload lives at `payload_offset` and spans `payload_size`
+    /// bytes). Used by match lowering to bind a data-carrying variant's
+    /// payload.
+    EnumPayload {
+        /// The destination slot (typed as the payload type).
+        target: crate::mir::LocalId,
+        /// The enum value's slot.
+        value: crate::mir::LocalId,
+        /// The byte offset of the payload area within the value.
+        payload_offset: u32,
+        /// The byte size of the payload area.
+        payload_size: u32,
+    },
 }
 
 /// One resolved address step of a [`BInstKind::PlaceStore`].

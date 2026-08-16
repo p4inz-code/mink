@@ -99,8 +99,9 @@ code generation.
 
 ### 1.7 Deliberately absent (later sessions)
 
-- Data-carrying variants (`enum Option { Some(Int), None }`), payload
-  storage, and sum-type layout.
+- Data-carrying variants (`enum Option { Some(Int), None }`) —
+  **implemented in Session 19**; see
+  `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.
 - Explicit discriminants (`enum E { A = 5 }`).
 - `Int`/enum conversion, enum iteration, or deriving.
 - Generics over enums.
@@ -167,8 +168,9 @@ code generation.
 
 ## 4. Conservative decisions and known limitations
 
-- **No payloads.** Variants carry no data; a future session adds
-  data-carrying variants and sum-type layout.
+- **No payloads in Session 17.** Variants carried no data; Session 19
+  added data-carrying variants and tagged-union layout (see
+  `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`).
 - **Pattern matching is variant-exhaustive.** `match` over enums (session
   18) requires every variant to be covered or a catch-all arm; a missing
   arm is `E-T24` and an unreachable one is `E-T25`. Programs can also
@@ -231,7 +233,9 @@ fn main() {
 - Existing suite (878 tests) remained green; full suite after session 17:
   **919 tests**, all passing; after session 18 (pattern matching) it is
   **963 tests** (see
-  `PATTERN_MATCHING_IMPLEMENTATION.md` §6).
+  `PATTERN_MATCHING_IMPLEMENTATION.md` §6), and after session 19
+  (data-carrying variants) it is **1007 tests** (see
+  `SUM_TYPES_IMPLEMENTATION.md` §5).
 
 ## 7. Status
 

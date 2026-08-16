@@ -44,6 +44,12 @@ use super::ty::{EnumId, EnumVariantInfo, StructFieldInfo, StructId, TypeId, Type
 /// visible.
 type PendingStructFields = Vec<(StructId, Vec<(String, Span, Ty)>)>;
 
+/// An enum whose variants' payload types are still unresolved: the enum's
+/// id plus each declared variant's name, span, and (unresolved) payload
+/// type expression. Used during variant resolution, after every enum,
+/// struct, and payload declaration is visible.
+type PendingEnumVariants = Vec<(EnumId, Vec<(String, Span, Option<Ty>)>)>;
+
 /// Runs type analysis over `ast`, consuming the semantic result and reading
 /// literal source text through `sources`.
 ///
@@ -66,6 +72,32 @@ enum CoverageKey {
     Int(i64),
     /// An enum variant, by name.
     Variant(String),
+}
+
+/// The coverage of one value class by a refutable pattern: the covered
+/// key plus, for a data-carrying variant pattern whose payload pattern is
+/// refutable, the nested coverage of the payload type. `sub: None` means
+/// the key's value class is fully covered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KeyCover {
+    /// The covered key.
+    key: CoverageKey,
+    /// Nested payload coverage for a partially covered variant; `None`
+    /// when the value class is fully covered.
+    sub: Option<Box<Coverage>>,
+}
+
+/// The recursive coverage of a scrutinee type by the refutable patterns
+/// of a `match` (session 19). `all` records that a `_`/binding arm
+/// covered every value, making every later arm unreachable; `keys` record
+/// the covered value classes (a data-carrying variant's payload coverage
+/// recurses through [`KeyCover::sub`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct Coverage {
+    /// The covered keys, in arm order.
+    keys: Vec<KeyCover>,
+    /// Whether a catch-all (`_`/binding) arm covered every value.
+    all: bool,
 }
 
 /// The operator categories the checker distinguishes; each category has
@@ -193,13 +225,16 @@ impl<'a> Checker<'a> {
     }
 
     fn run(&mut self) {
-        // Enums are registered before struct field types are resolved:
-        // a struct field may be of enum type, and field resolution needs
-        // every type name visible (module-scope order independence).
-        // Enums themselves have no field types (unit variants), so they
-        // never depend on structs.
-        self.register_enums();
-        self.register_structs();
+        // Type names are registered before any field/variant types are
+        // resolved: struct fields and enum payloads may reference structs
+        // and enums regardless of declaration order (module-scope order
+        // independence). Resolving happens only after both namespaces are
+        // fully populated.
+        self.register_enum_names();
+        self.register_struct_names();
+        self.resolve_enum_variants();
+        self.resolve_struct_fields();
+        self.validate_aggregate_layouts();
         self.pre_register();
         for item in &self.ast.items {
             self.check_item(item);
@@ -569,14 +604,36 @@ impl<'a> Checker<'a> {
                 }
                 (ty, recomputed)
             }
+            ExprKind::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => {
+                let mut any = false;
+                if let Some(payload) = payload {
+                    let (_, recomputed) = self.resolve_deferred_expr(payload);
+                    any |= recomputed;
+                }
+                if any {
+                    (
+                        self.check_enum_variant(name, variant, payload, expr.span),
+                        true,
+                    )
+                } else {
+                    (
+                        self.recorded_ty(expr.span)
+                            .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                        false,
+                    )
+                }
+            }
             ExprKind::Int
             | ExprKind::Float
             | ExprKind::Str
             | ExprKind::Char
             | ExprKind::Bool(_)
             | ExprKind::Null
-            | ExprKind::Ident(_)
-            | ExprKind::EnumVariant { .. } => (
+            | ExprKind::Ident(_) => (
                 self.recorded_ty(expr.span)
                     .unwrap_or_else(|| self.types.push(TypeKind::Error)),
                 false,
@@ -629,9 +686,12 @@ impl<'a> Checker<'a> {
     /// resolves every field type (module-scope order independence: a field
     /// type may reference any struct in the module), and validates every
     /// struct's deterministic layout.
-    fn register_structs(&mut self) {
-        // Phase 1: register names. Duplicate names are reported by semantic
-        // analysis; the first declaration's type is authoritative.
+    /// Registers every struct declaration's name into the type table
+    /// (first declaration of each name wins, mirroring semantic analysis).
+    /// Field types are resolved separately by
+    /// [`Checker::resolve_struct_fields`], after every type name is
+    /// registered.
+    fn register_struct_names(&mut self) {
         for item in &self.ast.items {
             let ItemKind::Struct(s) = &item.kind else {
                 continue;
@@ -654,8 +714,13 @@ impl<'a> Checker<'a> {
                 },
             );
         }
-        // Phase 2: resolve field types. The first declaration of each name
-        // is identified by its span (later duplicates are skipped).
+    }
+
+    /// Resolves every registered struct's field types. The first
+    /// declaration of each name is identified by its span (later
+    /// duplicates are skipped); every field type resolves against the fully
+    /// populated type namespace (module-scope order independence).
+    fn resolve_struct_fields(&mut self) {
         let mut pending: PendingStructFields = Vec::new();
         for item in &self.ast.items {
             let ItemKind::Struct(s) = &item.kind else {
@@ -688,29 +753,14 @@ impl<'a> Checker<'a> {
                 .collect::<Vec<_>>();
             self.types.set_struct_fields(struct_id, resolved);
         }
-        // Phase 3: validate every registered struct's layout. Recursive or
-        // oversized structs are reported once, at the declaration.
-        let mut layout_errors: Vec<TypeError> = Vec::new();
-        for reg in self.structs.values() {
-            if let Err(error) = layout::struct_layout(reg.struct_id, &self.types) {
-                layout_errors.push(TypeError::invalid_aggregate_layout(
-                    reg.span,
-                    layout_error_message(&error),
-                ));
-            }
-        }
-        for error in layout_errors {
-            self.push_error(error);
-        }
     }
 
-    /// Registers every enum declaration into the type table (first
-    /// declaration of each name wins, mirroring semantic analysis) and
-    /// records every variant with its deterministic discriminant
-    /// (declaration order, starting at 0).
-    fn register_enums(&mut self) {
-        // Phase 1: register names. Duplicate names are reported by semantic
-        // analysis; the first declaration's type is authoritative.
+    /// Registers every enum declaration's name into the type table (first
+    /// declaration of each name wins, mirroring semantic analysis).
+    /// Variant payload types are resolved separately by
+    /// [`Checker::resolve_enum_variants`], after every type name is
+    /// registered.
+    fn register_enum_names(&mut self) {
         for item in &self.ast.items {
             let ItemKind::Enum(e) = &item.kind else {
                 continue;
@@ -733,8 +783,19 @@ impl<'a> Checker<'a> {
                 },
             );
         }
-        // Phase 2: record variants. The first declaration of each name is
-        // identified by its span (later duplicates are skipped).
+    }
+
+    /// Resolves every enum variant's payload type and records every
+    /// variant with its deterministic discriminant (declaration order,
+    /// starting at 0). The first declaration of each name is identified by
+    /// its span (later duplicates are skipped); payload types resolve
+    /// against the fully populated type namespace (module-scope order
+    /// independence), so a payload may reference any struct or enum.
+    fn resolve_enum_variants(&mut self) {
+        // Collect the declarations to resolve first, so resolving one
+        // payload (which can push errors) never aliases the borrow of the
+        // registry or the AST.
+        let mut pending: PendingEnumVariants = Vec::new();
         for item in &self.ast.items {
             let ItemKind::Enum(e) = &item.kind else {
                 continue;
@@ -745,16 +806,88 @@ impl<'a> Checker<'a> {
             if reg.span != e.name.span {
                 continue; // duplicate declaration; the first wins
             }
-            let variants = e
-                .variants
+            pending.push((
+                reg.enum_id,
+                e.variants
+                    .iter()
+                    .map(|variant| {
+                        (
+                            variant.name.name.clone(),
+                            variant.span,
+                            variant.payload.clone(),
+                        )
+                    })
+                    .collect(),
+            ));
+        }
+        for (enum_id, variants) in pending {
+            let resolved = variants
                 .iter()
                 .enumerate()
-                .map(|(index, variant)| EnumVariantInfo {
-                    name: variant.name.name.clone(),
+                .map(|(index, (name, span, payload))| EnumVariantInfo {
+                    name: name.clone(),
                     discriminant: index as u32,
+                    payload: payload
+                        .as_ref()
+                        .map(|ty| self.resolve_variant_payload_type(ty, *span)),
                 })
                 .collect();
-            self.types.set_enum_variants(reg.enum_id, variants);
+            self.types.set_enum_variants(enum_id, resolved);
+        }
+    }
+
+    /// Resolves a data-carrying variant's declared payload type, reporting
+    /// invalid payload kinds. A payload must be a value type with a
+    /// deterministic layout: `Ptr<T>` and reference types are rejected
+    /// because they do not participate in value semantics (mirroring the
+    /// restriction on struct fields); array types are rejected because
+    /// their layout is not yet supported inside tagged unions (deferred).
+    /// A failed payload resolves to the unknown/error type so independent
+    /// problems keep being reported.
+    fn resolve_variant_payload_type(&mut self, ty: &Ty, _variant_span: Span) -> TypeId {
+        let resolved = self.resolve_type(ty);
+        if self.types.is_error(resolved) {
+            return resolved;
+        }
+        match self.types.kind(resolved) {
+            Some(
+                TypeKind::Ptr(_)
+                | TypeKind::Ref { .. }
+                | TypeKind::Array { .. }
+                | TypeKind::Fn { .. },
+            ) => {
+                self.push_error(TypeError::invalid_variant_payload(
+                    ty.span,
+                    self.types.display(resolved),
+                ));
+                self.types.push(TypeKind::Error)
+            }
+            _ => resolved,
+        }
+    }
+
+    /// Validates every registered struct's and enum's layout. Recursive or
+    /// oversized aggregates are reported once, at the declaration.
+    fn validate_aggregate_layouts(&mut self) {
+        let mut layout_errors: Vec<TypeError> = Vec::new();
+        for reg in self.structs.values() {
+            if let Err(error) = layout::struct_layout(reg.struct_id, &self.types) {
+                layout_errors.push(TypeError::invalid_aggregate_layout(
+                    reg.span,
+                    layout_error_message(&error),
+                ));
+            }
+        }
+        for reg in self.enums.values() {
+            if let Err(error) = layout::enum_layout(reg.enum_id, &self.types) {
+                layout_errors.push(TypeError::invalid_aggregate_layout(
+                    reg.span,
+                    layout_error_message(&error),
+                ));
+            }
+        }
+        for error in layout_errors {
+            self.push_error(error);
         }
     }
 
@@ -1107,13 +1240,12 @@ impl<'a> Checker<'a> {
             ));
             return;
         }
-        let mut covered: Vec<CoverageKey> = Vec::new();
-        let mut has_catch_all = false;
+        let mut coverage = Coverage::default();
         for arm in &stmt.arms {
             // Re-canonicalize per arm: an earlier refutable pattern may
             // have pinned an unresolved scrutinee to its type.
             canon = self.types.canonical(scrutinee_ty);
-            if has_catch_all {
+            if coverage.all {
                 // Every value already matches the earlier `_`/binding arm.
                 self.push_error(TypeError::unreachable_match_arm(
                     arm.pattern.span(),
@@ -1122,19 +1254,22 @@ impl<'a> Checker<'a> {
                 continue;
             }
             match &arm.pattern {
-                Pattern::Wildcard { .. } => has_catch_all = true,
+                Pattern::Wildcard { .. } => coverage.all = true,
                 Pattern::Binding(name) => {
                     // The binding copies the scrutinee's value into the
                     // arm's scope; its type is the scrutinee's type.
-                    has_catch_all = true;
+                    coverage.all = true;
                     self.unify_decl(name, canon, name.span);
                 }
                 Pattern::Bool { value, span } => {
                     let expected = self.bool_ty();
                     match self.types.unify(canon, expected) {
-                        Ok(_) => {
-                            self.record_coverage(&mut covered, CoverageKey::Bool(*value), *span)
-                        }
+                        Ok(_) => self.record_coverage_key(
+                            &mut coverage,
+                            CoverageKey::Bool(*value),
+                            None,
+                            *span,
+                        ),
                         Err((expected, actual)) => self.push_error(TypeError::mismatch(
                             *span,
                             self.display(expected),
@@ -1161,7 +1296,12 @@ impl<'a> Checker<'a> {
                                     }
                                 })
                                 .unwrap_or(0);
-                            self.record_coverage(&mut covered, CoverageKey::Int(value), *span);
+                            self.record_coverage_key(
+                                &mut coverage,
+                                CoverageKey::Int(value),
+                                None,
+                                *span,
+                            );
                         }
                         Err((expected, actual)) => self.push_error(TypeError::mismatch(
                             *span,
@@ -1171,15 +1311,68 @@ impl<'a> Checker<'a> {
                         )),
                     }
                 }
-                Pattern::EnumVariant { name, variant } => {
+                Pattern::EnumVariant {
+                    name,
+                    variant,
+                    payload,
+                } => {
                     let pattern_span = arm.pattern.span();
                     if let Some(enum_ty) = self.enum_variant_type(name, variant, pattern_span) {
                         match self.types.unify(canon, enum_ty) {
-                            Ok(_) => self.record_coverage(
-                                &mut covered,
-                                CoverageKey::Variant(variant.name.clone()),
-                                pattern_span,
-                            ),
+                            Ok(_) => {
+                                let declared = self.variant_payload(enum_ty, &variant.name);
+                                match (payload.as_deref(), declared) {
+                                    // A payload attached to a unit variant.
+                                    (Some(inner), None) => {
+                                        self.push_error(TypeError::variant_payload_arity(
+                                            pattern_span,
+                                            format!(
+                                                "variant `{}::{}` is a unit variant and cannot carry a payload pattern",
+                                                name.name, variant.name
+                                            ),
+                                        ));
+                                        // The payload pattern is still
+                                        // checked so its bindings and
+                                        // diagnostics surface.
+                                        self.check_payload_pattern(inner, canon, pattern_span);
+                                    }
+                                    // A data-carrying variant matched
+                                    // without a payload pattern.
+                                    (None, Some(_)) => {
+                                        self.push_error(TypeError::variant_payload_arity(
+                                            pattern_span,
+                                            format!(
+                                                "variant `{}::{}` carries a payload and must be matched with one: `{}::{}(pattern)`",
+                                                name.name, variant.name, name.name, variant.name
+                                            ),
+                                        ));
+                                    }
+                                    // Unit variant, no payload: fully
+                                    // covers the variant.
+                                    (None, None) => self.record_coverage_key(
+                                        &mut coverage,
+                                        CoverageKey::Variant(variant.name.clone()),
+                                        None,
+                                        pattern_span,
+                                    ),
+                                    // Data-carrying variant with a payload
+                                    // pattern: the variant is covered by
+                                    // whatever the payload pattern covers.
+                                    (Some(inner), Some(payload_ty)) => {
+                                        let sub = self.check_payload_pattern(
+                                            inner,
+                                            payload_ty,
+                                            pattern_span,
+                                        );
+                                        self.record_coverage_key(
+                                            &mut coverage,
+                                            CoverageKey::Variant(variant.name.clone()),
+                                            sub,
+                                            pattern_span,
+                                        );
+                                    }
+                                }
+                            }
                             Err((expected, actual)) => self.push_error(TypeError::mismatch(
                                 pattern_span,
                                 self.display(expected),
@@ -1199,74 +1392,317 @@ impl<'a> Checker<'a> {
         {
             return;
         }
-        match self.types.kind(canon) {
-            Some(TypeKind::Int) => {
-                if !has_catch_all {
-                    self.push_error(TypeError::non_exhaustive_match(
-                        stmt.span,
-                        "the match is not exhaustive: integer values cannot all be listed; add a `_` or binding arm",
-                    ));
+        if coverage.all {
+            return;
+        }
+        if !self.coverage_exhaustive(&coverage, canon) {
+            self.push_error(TypeError::non_exhaustive_match(
+                stmt.span,
+                self.exhaustiveness_message(&coverage, canon),
+            ));
+        }
+    }
+
+    /// Checks a data-carrying variant pattern's payload pattern against
+    /// the payload type: literal and nested-variant patterns must match the
+    /// payload type (`E-T01`), and payload bindings unify with it. Returns
+    /// the pattern's coverage of the payload type (`None` when the pattern
+    /// is irrefutable — `_` or a binding — so the variant is fully
+    /// covered).
+    fn check_payload_pattern(
+        &mut self,
+        pattern: &Pattern,
+        payload_ty: TypeId,
+        _span: Span,
+    ) -> Option<Box<Coverage>> {
+        match pattern {
+            // An irrefutable payload pattern covers every payload value.
+            Pattern::Wildcard { .. } => None,
+            Pattern::Binding(name) => {
+                self.unify_decl(name, payload_ty, name.span);
+                None
+            }
+            Pattern::Bool { value, span: pspan } => {
+                let expected = self.bool_ty();
+                match self.types.unify(payload_ty, expected) {
+                    Ok(_) => Some(Box::new(Coverage {
+                        keys: vec![KeyCover {
+                            key: CoverageKey::Bool(*value),
+                            sub: None,
+                        }],
+                        all: false,
+                    })),
+                    Err((expected, actual)) => {
+                        self.push_error(TypeError::mismatch(
+                            *pspan,
+                            self.display(expected),
+                            self.display(actual),
+                            None,
+                        ));
+                        None
+                    }
                 }
+            }
+            Pattern::Int {
+                negative,
+                literal,
+                span: pspan,
+            } => {
+                let expected = self.int_ty();
+                match self.types.unify(payload_ty, expected) {
+                    Ok(_) => {
+                        let value = self
+                            .decode_int_literal(literal)
+                            .map(|value| {
+                                if *negative {
+                                    value.wrapping_neg()
+                                } else {
+                                    value
+                                }
+                            })
+                            .unwrap_or(0);
+                        Some(Box::new(Coverage {
+                            keys: vec![KeyCover {
+                                key: CoverageKey::Int(value),
+                                sub: None,
+                            }],
+                            all: false,
+                        }))
+                    }
+                    Err((expected, actual)) => {
+                        self.push_error(TypeError::mismatch(
+                            *pspan,
+                            self.display(expected),
+                            self.display(actual),
+                            None,
+                        ));
+                        None
+                    }
+                }
+            }
+            Pattern::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => {
+                let pattern_span = pattern.span();
+                if let Some(enum_ty) = self.enum_variant_type(name, variant, pattern_span) {
+                    match self.types.unify(payload_ty, enum_ty) {
+                        Ok(_) => {
+                            let declared = self.variant_payload(enum_ty, &variant.name);
+                            match (payload.as_deref(), declared) {
+                                (Some(inner), None) => {
+                                    self.push_error(TypeError::variant_payload_arity(
+                                        pattern_span,
+                                        format!(
+                                            "variant `{}::{}` is a unit variant and cannot carry a payload pattern",
+                                            name.name, variant.name
+                                        ),
+                                    ));
+                                    self.check_payload_pattern(inner, enum_ty, pattern_span);
+                                    None
+                                }
+                                (None, Some(_)) => {
+                                    self.push_error(TypeError::variant_payload_arity(
+                                        pattern_span,
+                                        format!(
+                                            "variant `{}::{}` carries a payload and must be matched with one: `{}::{}(pattern)`",
+                                            name.name, variant.name, name.name, variant.name
+                                        ),
+                                    ));
+                                    None
+                                }
+                                (None, None) => Some(Box::new(Coverage {
+                                    keys: vec![KeyCover {
+                                        key: CoverageKey::Variant(variant.name.clone()),
+                                        sub: None,
+                                    }],
+                                    all: false,
+                                })),
+                                (Some(inner), Some(payload_ty)) => {
+                                    let sub =
+                                        self.check_payload_pattern(inner, payload_ty, pattern_span);
+                                    Some(Box::new(Coverage {
+                                        keys: vec![KeyCover {
+                                            key: CoverageKey::Variant(variant.name.clone()),
+                                            sub,
+                                        }],
+                                        all: false,
+                                    }))
+                                }
+                            }
+                        }
+                        Err((expected, actual)) => {
+                            self.push_error(TypeError::mismatch(
+                                pattern_span,
+                                self.display(expected),
+                                self.display(actual),
+                                None,
+                            ));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Records `key` as covered by an arm (with optional nested payload
+    /// coverage), rejecting a repeat: a pattern an earlier arm already
+    /// matches can never run (`E-T25`).
+    fn record_coverage_key(
+        &mut self,
+        coverage: &mut Coverage,
+        key: CoverageKey,
+        sub: Option<Box<Coverage>>,
+        span: Span,
+    ) {
+        let Some(entry) = coverage.keys.iter_mut().find(|entry| entry.key == key) else {
+            coverage.keys.push(KeyCover { key, sub });
+            return;
+        };
+        match (&entry.sub, sub) {
+            // Both patterns only partially covered the variant: merge the
+            // new payload coverage into the existing one (rejecting
+            // repeats inside).
+            (Some(_), Some(new)) => {
+                if let Some(prev) = entry.sub.as_mut() {
+                    self.merge_coverage(prev, *new, span);
+                }
+            }
+            // The variant was already fully covered: this arm can never
+            // run.
+            (None, _) => {
+                self.push_error(TypeError::unreachable_match_arm(
+                    span,
+                    "this arm can never run: an earlier arm already matches the same value",
+                ));
+            }
+            // An irrefutable payload pattern completes a partially covered
+            // variant.
+            (Some(_), None) => entry.sub = None,
+        }
+    }
+
+    /// Merges the coverage `new` (produced by one refutable pattern) into
+    /// the accumulated coverage `into`, rejecting keys `new` repeats.
+    fn merge_coverage(&mut self, into: &mut Coverage, new: Coverage, span: Span) {
+        for key in new.keys {
+            self.record_coverage_key(into, key.key, key.sub, span);
+        }
+    }
+
+    /// Whether `coverage` covers every value of type `ty`. A catch-all
+    /// covers everything; otherwise a `Bool` needs both literals, an `Int`
+    /// can never be exhausted without a catch-all, an enum needs every
+    /// variant fully covered (a partially covered variant needs its own
+    /// payload coverage exhaustive), and every other type can only be
+    /// covered by a catch-all.
+    fn coverage_exhaustive(&self, coverage: &Coverage, ty: TypeId) -> bool {
+        if coverage.all {
+            return true;
+        }
+        match self.types.kind(ty) {
+            Some(TypeKind::Bool) => {
+                let has_true = coverage
+                    .keys
+                    .iter()
+                    .any(|entry| matches!(entry.key, CoverageKey::Bool(true)));
+                let has_false = coverage
+                    .keys
+                    .iter()
+                    .any(|entry| matches!(entry.key, CoverageKey::Bool(false)));
+                has_true && has_false
+            }
+            Some(TypeKind::Int) => false,
+            Some(TypeKind::Enum(id)) => self
+                .types
+                .enum_info(*id)
+                .map(|info| {
+                    info.variants.iter().all(|variant| {
+                        let Some(entry) = coverage
+                            .keys
+                            .iter()
+                            .find(|entry| {
+                                matches!(&entry.key, CoverageKey::Variant(name) if name == &variant.name)
+                            })
+                        else {
+                            return false;
+                        };
+                        match &entry.sub {
+                            None => true,
+                            Some(sub) => match variant.payload {
+                                None => false,
+                                Some(payload_ty) => self.coverage_exhaustive(sub, payload_ty),
+                            },
+                        }
+                    })
+                })
+                .unwrap_or(true),
+            _ => false,
+        }
+    }
+
+    /// Renders the missing coverage of `coverage` for `ty` into the
+    /// non-exhaustive-match message (`E-T24`), mirroring the existing
+    /// phrasing for integer, boolean, and enum scrutinees.
+    fn exhaustiveness_message(&self, coverage: &Coverage, ty: TypeId) -> String {
+        match self.types.kind(ty) {
+            Some(TypeKind::Int) => {
+                "the match is not exhaustive: integer values cannot all be listed; add a `_` or binding arm".to_string()
             }
             Some(TypeKind::Bool) => {
-                let has_true = covered
-                    .iter()
-                    .any(|key| matches!(key, CoverageKey::Bool(true)));
-                let has_false = covered
-                    .iter()
-                    .any(|key| matches!(key, CoverageKey::Bool(false)));
-                if !has_catch_all && !(has_true && has_false) {
-                    self.push_error(TypeError::non_exhaustive_match(
-                        stmt.span,
-                        "the match is not exhaustive: a `Bool` match must cover both `true` and `false`, or add a `_` or binding arm",
-                    ));
-                }
+                "the match is not exhaustive: a `Bool` match must cover both `true` and `false`, or add a `_` or binding arm".to_string()
             }
             Some(TypeKind::Enum(id)) => {
-                let covered_names: Vec<&str> = covered
-                    .iter()
-                    .filter_map(|key| match key {
-                        CoverageKey::Variant(name) => Some(name.as_str()),
-                        _ => None,
-                    })
-                    .collect();
                 let missing = self
                     .types
                     .enum_info(*id)
                     .map(|info| {
                         info.variants
                             .iter()
-                            .filter(|variant| !covered_names.contains(&variant.name.as_str()))
-                            .map(|variant| format!("`{}`", variant.name))
+                            .filter(|variant| {
+                                let covered = coverage.keys.iter().find(|entry| {
+                                    matches!(&entry.key, CoverageKey::Variant(name) if name == &variant.name)
+                                });
+                                match covered {
+                                    None => true,
+                                    Some(entry) => match &entry.sub {
+                                        None => false,
+                                        // A partially covered variant is
+                                        // missing only when its payload
+                                        // coverage is not exhaustive.
+                                        Some(sub) => {
+                                            !variant
+                                                .payload
+                                                .map(|payload_ty| {
+                                                    self.coverage_exhaustive(sub, payload_ty)
+                                                })
+                                                .unwrap_or(false)
+                                        }
+                                    },
+                                }
+                            })
+                            .map(|variant| {
+                                if variant.payload.is_some() {
+                                    format!("`{}` (with a matching payload pattern)", variant.name)
+                                } else {
+                                    format!("`{}`", variant.name)
+                                }
+                            })
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                if !has_catch_all && !missing.is_empty() {
-                    self.push_error(TypeError::non_exhaustive_match(
-                        stmt.span,
-                        format!(
-                            "the match is not exhaustive: the variant{} {} {} not covered; add a `_` or binding arm or cover every variant",
-                            if missing.len() == 1 { "" } else { "s" },
-                            missing.join(", "),
-                            if missing.len() == 1 { "is" } else { "are" },
-                        ),
-                    ));
-                }
+                format!(
+                    "the match is not exhaustive: the variant{} {} {} not covered; add a `_` or binding arm or cover every variant",
+                    if missing.len() == 1 { "" } else { "s" },
+                    missing.join(", "),
+                    if missing.len() == 1 { "is" } else { "are" },
+                )
             }
-            _ => {}
-        }
-    }
-
-    /// Records `key` as covered by an arm, rejecting a repeat: a pattern
-    /// an earlier arm already matches can never run (`E-T25`).
-    fn record_coverage(&mut self, covered: &mut Vec<CoverageKey>, key: CoverageKey, span: Span) {
-        if covered.contains(&key) {
-            self.push_error(TypeError::unreachable_match_arm(
-                span,
-                "this arm can never run: an earlier arm already matches the same value",
-            ));
-        } else {
-            covered.push(key);
+            _ => "the match is not exhaustive: add a `_` or binding arm".to_string(),
         }
     }
 
@@ -1443,9 +1879,11 @@ impl<'a> Checker<'a> {
                 self.check_struct_literal(name, fields, expr.span)
             }
             ExprKind::ArrayLit(elems) => self.check_array_literal(elems, expr.span),
-            ExprKind::EnumVariant { name, variant } => {
-                self.check_enum_variant(name, variant, expr.span)
-            }
+            ExprKind::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => self.check_enum_variant(name, variant, payload, expr.span),
             ExprKind::Group(inner) => self.expr_type(inner),
         }
     }
@@ -1620,10 +2058,44 @@ impl<'a> Checker<'a> {
         if self.types.is_error(l) || self.types.is_error(r) {
             return self.types.push(TypeKind::Error);
         }
+        // A tagged-union enum (one with a data-carrying variant, session
+        // 19) cannot be compared with `==`/`!=`: comparing payloads is not
+        // defined in this milestone (`E-T30`). Unit-only enums keep the
+        // session-17 discriminant comparison.
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            && matches!(self.types.kind(l), Some(TypeKind::Enum(_)))
+            && matches!(self.types.kind(r), Some(TypeKind::Enum(_)))
+        {
+            let tagged = self
+                .tagged_enum_name(l)
+                .or_else(|| self.tagged_enum_name(r));
+            if let Some(name) = tagged {
+                self.push_error(TypeError::enum_equality(span, name));
+                return self.types.push(TypeKind::Error);
+            }
+        }
         match self.binary_rule(op, l, r) {
             Some(ty) => ty,
             None => self.emit_operator_error(op.symbol(), l, r, span),
         }
+    }
+
+    /// The name of `ty` if it denotes an enum with at least one
+    /// data-carrying variant (a tagged union, session 19); `None` for a
+    /// unit-only enum or any non-enum type.
+    fn tagged_enum_name(&self, ty: TypeId) -> Option<String> {
+        let enum_id = self.types.enum_id(ty)?;
+        self.types.enum_info(enum_id).and_then(|info| {
+            if info
+                .variants
+                .iter()
+                .any(|variant| variant.payload.is_some())
+            {
+                Some(info.name.clone())
+            } else {
+                None
+            }
+        })
     }
 
     /// Reports an invalid binary operand combination and returns the
@@ -2368,9 +2840,76 @@ impl<'a> Checker<'a> {
     /// `E-T22` when it names a non-enum type), and the variant must be one
     /// of its declared alternatives (`E-T23`). The result is the enum's
     /// type.
-    fn check_enum_variant(&mut self, name: &Ident, variant: &Ident, span: Span) -> TypeId {
-        self.enum_variant_type(name, variant, span)
-            .unwrap_or_else(|| self.types.push(TypeKind::Error))
+    /// Types an enum variant expression `Name::Variant` or, for a
+    /// data-carrying variant (session 19), its construction
+    /// `Name::Variant(payload)`. The result is the enum's type.
+    ///
+    /// A construction's payload must unify with the variant's declared
+    /// payload type (`E-T28`); attaching a payload to a unit variant or
+    /// omitting one from a data-carrying variant is `E-T29`. On a failed
+    /// variant path the payload is still typed so independent problems
+    /// keep being reported.
+    fn check_enum_variant(
+        &mut self,
+        name: &Ident,
+        variant: &Ident,
+        payload: &Option<Box<Expr>>,
+        span: Span,
+    ) -> TypeId {
+        let Some(enum_ty) = self.enum_variant_type(name, variant, span) else {
+            if let Some(payload) = payload {
+                self.expr_type(payload);
+            }
+            return self.types.push(TypeKind::Error);
+        };
+        let declared = self.variant_payload(enum_ty, &variant.name);
+        match (payload.as_deref(), declared) {
+            (Some(expr), Some(payload_ty)) => {
+                let ty = self.expr_type(expr);
+                if let Err((expected, actual)) = self.types.unify(payload_ty, ty) {
+                    self.push_error(TypeError::variant_payload_mismatch(
+                        expr.span,
+                        self.display(expected),
+                        self.display(actual),
+                    ));
+                }
+                enum_ty
+            }
+            (Some(expr), None) => {
+                self.expr_type(expr);
+                self.push_error(TypeError::variant_payload_arity(
+                    span,
+                    format!(
+                        "variant `{}::{}` is a unit variant and cannot carry a payload",
+                        name.name, variant.name
+                    ),
+                ));
+                enum_ty
+            }
+            (None, Some(_)) => {
+                self.push_error(TypeError::variant_payload_arity(
+                    span,
+                    format!(
+                        "variant `{}::{}` carries a payload and must be constructed with one: `{}::{}(expr)`",
+                        name.name, variant.name, name.name, variant.name
+                    ),
+                ));
+                enum_ty
+            }
+            (None, None) => enum_ty,
+        }
+    }
+
+    /// The declared payload type of the variant `variant` of the enum
+    /// type `enum_ty`, if the variant is data-carrying.
+    fn variant_payload(&self, enum_ty: TypeId, variant: &str) -> Option<TypeId> {
+        let enum_id = self.types.enum_id(enum_ty)?;
+        self.types.enum_info(enum_id).and_then(|info| {
+            info.variants
+                .iter()
+                .find(|v| v.name == variant)
+                .and_then(|v| v.payload)
+        })
     }
 
     /// Resolves `Name::Variant` to the enum's type, reporting the same

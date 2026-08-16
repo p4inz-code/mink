@@ -111,11 +111,14 @@ corruption, no segfault guessing games.
   `P { x: 1 }` literals and `p.x` access), **fixed-size arrays**
   (`[1, 2, 3]`, `a[i]`, with compile-time constant-index and runtime
   bounds checks), **enums** (`enum D { A, B }` with `D::A` variant paths,
-  nominal enum typing, and single-word discriminant values), **pattern
-  matching** (`match` over `Int`, `Bool`, and enums with literal, variant,
-  binding, and `_` wildcard patterns, compile-time exhaustiveness
-  `E-T24` and unreachable-arm `E-T25` rejection),
-  comparisons, logical and bitwise operators,
+  nominal enum typing, and single-word discriminant values), **sum
+  types** (data-carrying variants `enum Shape { Circle(Int), Nothing }`
+  with `E::V(expr)` construction, `E::V(x)` payload patterns, and
+  tagged-union layout), **pattern matching** (`match` over `Int`, `Bool`,
+  and enums with literal, variant, binding, and `_` wildcard patterns,
+  compile-time exhaustiveness `E-T24` and unreachable-arm `E-T25`
+  rejection, recursive payload coverage), comparisons, logical and
+  bitwise operators,
   `if`/`while`/`for`/`loop` control flow, direct function calls, module
   bindings, and integer results becoming process exit codes.
 - **Ownership & borrow checking** — compile-time move semantics for
@@ -189,10 +192,11 @@ Honest status, because durable engineering starts with accurate claims:
   (`E-B11`).
 - **Fixed 1 MiB heap** — exhaustion is a structured error (`E-R02`).
 - **Single-threaded runtime** — no concurrency primitives yet.
-- **Aggregate limits** — structs and arrays are values with deterministic
-  C-style layout; they cannot be returned from functions or stored at
-  module scope yet (rejected with `E-B03`). Enums are data-free (no
-  payloads, no explicit discriminants), pattern matching covers
+- **Aggregate limits** — structs, arrays, and tagged-union enums are
+  values with deterministic C-style layout; they cannot be returned from
+  functions or stored at module scope yet (rejected with `E-B03`).
+  Tagged-union enums cannot be compared with `==`/`!=` (`E-T30`); unit
+  variants carry no explicit discriminants; pattern matching covers
   `Int`/`Bool`/enum scrutinees only (no struct/array destructuring,
   ranges, or or-patterns yet), and there are no tuples or generics.
 - **Strings are byte sequences** — literals are immutable, there is no
@@ -232,8 +236,10 @@ that matters.
   ([`REFERENCES_BORROWING_IMPLEMENTATION.md`](docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md)),
   the enum foundation
   ([`ENUM_TYPES_IMPLEMENTATION.md`](docs/implementation/ENUM_TYPES_IMPLEMENTATION.md)),
-  and the pattern-matching foundation
-  ([`PATTERN_MATCHING_IMPLEMENTATION.md`](docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md)).
+  the pattern-matching foundation
+  ([`PATTERN_MATCHING_IMPLEMENTATION.md`](docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md)),
+  and the sum-types foundation
+  ([`SUM_TYPES_IMPLEMENTATION.md`](docs/implementation/SUM_TYPES_IMPLEMENTATION.md)).
 - [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md)
   — compiler architecture and pipeline.
 - [`docs/language/`](docs/language/) — language specifications; the frozen
@@ -253,7 +259,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (878, all passing)
+├── tests/      Compiler tests (1007, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

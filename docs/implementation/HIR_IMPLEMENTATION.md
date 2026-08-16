@@ -243,4 +243,7 @@ and after session 17 (data-free enums, with `HirEnum` items and the
 `EnumVariant` expression form) it is **919 tests** (see
 `OPTIMIZATION_IMPLEMENTATION.md` §7), and after session 18 (pattern
 matching, with `HirStmtKind::Match` and `HirPattern`) it is
-**963 tests** (see `PATTERN_MATCHING_IMPLEMENTATION.md` §6).
+**963 tests** (see `PATTERN_MATCHING_IMPLEMENTATION.md` §6), and after
+session 19 (data-carrying variants, with payloads carried through the
+`EnumVariant` expression and pattern forms) it is **1007 tests** (see
+`SUM_TYPES_IMPLEMENTATION.md` §5).

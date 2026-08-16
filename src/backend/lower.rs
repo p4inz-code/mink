@@ -41,7 +41,7 @@ use crate::mir::{
 use crate::runtime::layout;
 use crate::semantics::SymbolId;
 use crate::source::{SourceMap, Span};
-use crate::typecheck::{StructId, TypeId, TypeKind, layout_error_message};
+use crate::typecheck::{EnumId, StructId, TypeId, TypeKind, layout_error_message};
 
 use super::error::BackendError;
 use super::ir::{
@@ -234,9 +234,13 @@ impl<'a> Lowerer<'a> {
             },
             Some(TypeKind::Struct(id)) => self.classify_struct(ty, *id),
             Some(TypeKind::Array { .. }) => self.classify_array(ty),
-            // Enums (session 17) are single-word discriminant values: any
-            // enum type is representable, and equality compares the word.
-            Some(TypeKind::Enum(_)) => Some(BType::Enum),
+            // Enums (session 17) with only unit variants are single-word
+            // discriminant values. An enum with a data-carrying variant
+            // (session 19) is a tagged union: representable when its
+            // layout is finite and every payload type is itself
+            // representable (a failed enum records its reason for the
+            // diagnostic, mirroring `classify_struct`).
+            Some(TypeKind::Enum(id)) => self.classify_enum(ty, *id),
             // `kind` follows resolved inference chains; an unresolved
             // variable is the only `Infer` that remains. Unit is the type
             // of intrinsics that produce no value.
@@ -289,6 +293,52 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Classifies an enum type: a unit-only enum is a single-word
+    /// discriminant value; an enum with a data-carrying variant must have
+    /// a finite tagged-union layout and every payload type must itself
+    /// classify. On failure the reason is recorded for the diagnostic and
+    /// `None` is returned.
+    fn classify_enum(&mut self, ty: TypeId, id: EnumId) -> Option<BType> {
+        let info = self
+            .program
+            .types
+            .enum_info(id)
+            .expect("enum ids always resolve");
+        if info
+            .variants
+            .iter()
+            .all(|variant| variant.payload.is_none())
+        {
+            return Some(BType::Enum);
+        }
+        let reason = match layout::enum_layout(id, &self.program.types) {
+            Err(error) => Some(layout_error_message(&error)),
+            Ok(_) => {
+                let mut bad: Option<String> = None;
+                for variant in &info.variants {
+                    if let Some(payload_ty) = variant.payload {
+                        if self.classify(payload_ty).is_none() {
+                            bad = Some(format!(
+                                "its variant `{}` has an unsupported payload type `{}`",
+                                variant.name,
+                                self.display(payload_ty)
+                            ));
+                            break;
+                        }
+                    }
+                }
+                bad
+            }
+        };
+        match reason {
+            None => Some(BType::Enum),
+            Some(reason) => {
+                self.unsupported_aggregates.insert(ty, reason);
+                None
+            }
+        }
+    }
+
     /// Classifies an array type: it must have a finite layout within the
     /// runtime memory model and its element type must classify. On failure
     /// the reason is recorded and `None` is returned.
@@ -321,10 +371,22 @@ impl<'a> Lowerer<'a> {
 
     /// The number of stack words a value of `ty` (classified as
     /// `classified`) occupies: `ceil(size / 8)` for aggregates, the scalar
-    /// width otherwise.
+    /// width otherwise. A tagged-union enum (one with a data-carrying
+    /// variant, session 19) spans its layout's words; a unit-only enum is
+    /// one discriminant word.
     fn words_of(&self, ty: TypeId, classified: BType) -> u32 {
         match classified {
             BType::Struct | BType::Array => self.aggregate_words(ty),
+            BType::Enum => {
+                if let Some(id) = self.program.types.enum_id(ty) {
+                    match layout::enum_layout(id, &self.program.types) {
+                        Ok(layout) if layout.tagged => (layout.size.div_ceil(8)).max(1) as u32,
+                        _ => 1,
+                    }
+                } else {
+                    1
+                }
+            }
             _ => classified.words() as u32,
         }
     }
@@ -406,8 +468,16 @@ impl<'a> Lowerer<'a> {
         match self.classify(result) {
             // Range and aggregate values cannot be returned by the first
             // native subset: the calling convention returns one word in
-            // `rax`, which cannot carry a multi-word value.
+            // `rax`, which cannot carry a multi-word value. A tagged-union
+            // enum (session 19) is likewise multi-word.
             Some(BType::Range | BType::Struct | BType::Array) => {
+                self.errors.push(BackendError::unsupported_type(
+                    f.span,
+                    format!("cannot return a value of type `{}`", self.display(result)),
+                ));
+                None
+            }
+            Some(BType::Enum) if self.words_of(result, BType::Enum) > 1 => {
                 self.errors.push(BackendError::unsupported_type(
                     f.span,
                     format!("cannot return a value of type `{}`", self.display(result)),
@@ -657,6 +727,11 @@ impl<'a> Lowerer<'a> {
             MirRvalueKind::ArrayLit { elems } => elems
                 .iter()
                 .any(|operand| self.operand_is_unsupported(operand)),
+            MirRvalueKind::EnumInit { payload, .. } => payload
+                .as_ref()
+                .is_some_and(|operand| self.operand_is_unsupported(operand)),
+            MirRvalueKind::EnumTag { value } => self.operand_is_unsupported(value),
+            MirRvalueKind::EnumPayload { value } => self.operand_is_unsupported(value),
         }
     }
 
@@ -903,6 +978,49 @@ impl<'a> Lowerer<'a> {
                 }
                 return Ok(());
             }
+            MirRvalueKind::EnumInit {
+                discriminant,
+                payload,
+            } => {
+                // A data-carrying construction (session 19): the tag word
+                // is written and the variant's own payload bytes are
+                // copied into the payload area (the emitter never copies
+                // the shared area's full width, so it never reads past a
+                // smaller payload's slot).
+                let enum_id = self.program.types.enum_id(rvalue.ty).ok_or_else(|| {
+                    BackendError::invalid_backend_ir(
+                        rvalue.span,
+                        "an enum construction has a non-enum type",
+                    )
+                })?;
+                let layout = layout::enum_layout(enum_id, &self.program.types)
+                    .map_err(|_| self.unsupported_type_error(rvalue.span, rvalue.ty))?;
+                let variant_layout =
+                    layout.variants.get(*discriminant as usize).ok_or_else(|| {
+                        BackendError::invalid_backend_ir(
+                            rvalue.span,
+                            format!(
+                                "enum construction references unknown discriminant {discriminant}"
+                            ),
+                        )
+                    })?;
+                let payload = match payload {
+                    Some(operand) => Some(self.eval_operand(operand)?),
+                    None => None,
+                };
+                self.push(
+                    BInstKind::EnumInit {
+                        target,
+                        discriminant: u64::from(*discriminant),
+                        payload,
+                        tag_offset: layout.tag_offset as u32,
+                        payload_offset: layout.payload_offset as u32,
+                        payload_size: variant_layout.size as u32,
+                    },
+                    rvalue.span,
+                );
+                return Ok(());
+            }
             _ => {}
         }
         let kind = match &rvalue.kind {
@@ -1012,8 +1130,53 @@ impl<'a> Lowerer<'a> {
                     size,
                 }
             }
-            // Handled above (multi-instruction literal materialization).
-            MirRvalueKind::StructLit { .. } | MirRvalueKind::ArrayLit { .. } => unreachable!(),
+            MirRvalueKind::EnumTag { value } => {
+                let enum_id = self.program.types.enum_id(value.ty).ok_or_else(|| {
+                    BackendError::invalid_backend_ir(
+                        rvalue.span,
+                        "an enum-tag extraction has a non-enum value",
+                    )
+                })?;
+                let layout = layout::enum_layout(enum_id, &self.program.types)
+                    .map_err(|_| self.unsupported_type_error(rvalue.span, value.ty))?;
+                let value = self.operand_slot(value, rvalue.span)?;
+                BInstKind::EnumTag {
+                    target,
+                    value,
+                    tag_offset: layout.tag_offset as u32,
+                }
+            }
+            MirRvalueKind::EnumPayload { value } => {
+                let enum_id = self.program.types.enum_id(value.ty).ok_or_else(|| {
+                    BackendError::invalid_backend_ir(
+                        rvalue.span,
+                        "an enum-payload extraction has a non-enum value",
+                    )
+                })?;
+                let layout = layout::enum_layout(enum_id, &self.program.types)
+                    .map_err(|_| self.unsupported_type_error(rvalue.span, value.ty))?;
+                let size = self.value_byte_size(rvalue.ty).ok_or_else(|| {
+                    BackendError::unsupported_type(
+                        rvalue.span,
+                        format!(
+                            "the payload type `{}` is not supported by the native subset",
+                            self.display(rvalue.ty)
+                        ),
+                    )
+                })?;
+                let value = self.operand_slot(value, rvalue.span)?;
+                BInstKind::EnumPayload {
+                    target,
+                    value,
+                    payload_offset: layout.payload_offset as u32,
+                    payload_size: size,
+                }
+            }
+            // Handled above (multi-instruction literal materialization and
+            // tagged-union construction).
+            MirRvalueKind::StructLit { .. }
+            | MirRvalueKind::ArrayLit { .. }
+            | MirRvalueKind::EnumInit { .. } => unreachable!(),
         };
         self.push(kind, rvalue.span);
         Ok(())
@@ -1307,6 +1470,25 @@ impl<'a> Lowerer<'a> {
                 .map(|layout| layout.size as u32)
                 .unwrap_or(0),
             _ => 0,
+        }
+    }
+
+    /// The exact byte size of a value of `ty`, from its layout (structs,
+    /// arrays, and tagged-union enums) or its scalar width. Used to size
+    /// the payload copy of an [`MirRvalueKind::EnumPayload`] extraction.
+    fn value_byte_size(&mut self, ty: TypeId) -> Option<u32> {
+        match self.classify(ty)? {
+            BType::Struct | BType::Array => Some(self.aggregate_bytes(ty)),
+            BType::Enum => {
+                let id = self.program.types.enum_id(ty)?;
+                layout::enum_layout(id, &self.program.types)
+                    .ok()
+                    .map(|layout| layout.size as u32)
+            }
+            BType::Int | BType::Ptr | BType::Ref | BType::Str => Some(8),
+            BType::Bool => Some(1),
+            BType::Range => Some(16),
+            BType::Unit => Some(0),
         }
     }
 

@@ -426,6 +426,14 @@ fn rewrite_rvalue(rvalue: &mut MirRvalue, known: &[Option<MirOperand>]) -> bool 
                 changed |= rewrite_operand(elem, known);
             }
         }
+        MirRvalueKind::EnumInit { payload, .. } => {
+            if let Some(payload) = payload {
+                changed |= rewrite_operand(payload, known);
+            }
+        }
+        MirRvalueKind::EnumTag { value } | MirRvalueKind::EnumPayload { value } => {
+            changed |= rewrite_operand(value, known);
+        }
     }
     changed
 }
@@ -870,6 +878,14 @@ fn mark_rvalue_reads(rvalue: &MirRvalue, read: &mut [bool]) {
             for elem in elems {
                 mark_operand_read(elem, read);
             }
+        }
+        MirRvalueKind::EnumInit { payload, .. } => {
+            if let Some(payload) = payload {
+                mark_operand_read(payload, read);
+            }
+        }
+        MirRvalueKind::EnumTag { value } | MirRvalueKind::EnumPayload { value } => {
+            mark_operand_read(value, read);
         }
     }
 }

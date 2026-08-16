@@ -56,8 +56,11 @@ impl EnumId {
 
 /// The declared variants of an enum: each variant's name and its
 /// discriminant, in declaration order. Discriminants are assigned
-/// deterministically (declaration order, starting at 0), so an enum value
-/// is a single word holding its variant's discriminant.
+/// deterministically (declaration order, starting at 0). A unit variant's
+/// value is a single word holding its discriminant; a data-carrying
+/// variant (session 19) additionally stores a payload of its declared
+/// type, and the enum's layout is a tagged union (see
+/// `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumInfo {
     /// The enum's declared name.
@@ -73,6 +76,11 @@ pub struct EnumVariantInfo {
     pub name: String,
     /// The variant's discriminant (its position in declaration order).
     pub discriminant: u32,
+    /// The payload type for a data-carrying variant, if any; `None` for a
+    /// unit variant. Only the declared payload type is stored — the tag
+    /// and payload offsets within the enum's tagged-union layout are
+    /// computed by `crate::runtime::layout`.
+    pub payload: Option<TypeId>,
 }
 
 impl StructId {
@@ -198,9 +206,10 @@ pub enum TypeKind {
     /// A user-declared enum: a closed set of named alternatives (session
     /// 17). The enum's variants live in the table's [`EnumInfo`] list,
     /// indexed by the [`EnumId`]; types are nominal, so two declarations
-    /// are two distinct types. An enum value is a single machine word
-    /// holding the discriminant of the variant it was constructed from
-    /// (assigned in declaration order, starting at 0).
+    /// are two distinct types. A unit variant's value is a single machine
+    /// word holding its discriminant (assigned in declaration order,
+    /// starting at 0); an enum with data-carrying variants (session 19) is
+    /// laid out as a tagged union (see `crate::runtime::layout`).
     Enum(EnumId),
     /// A fixed-length array: `len` consecutive values of type `elem`
     /// (session 14). Arrays are value types with deterministic layout;
@@ -706,10 +715,12 @@ mod tests {
                 EnumVariantInfo {
                     name: "North".to_string(),
                     discriminant: 0,
+                    payload: None,
                 },
                 EnumVariantInfo {
                     name: "South".to_string(),
                     discriminant: 1,
+                    payload: None,
                 },
             ],
         );

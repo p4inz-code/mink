@@ -78,26 +78,44 @@ They should support:
 
 Enumerations should represent a closed set of named alternatives.
 
-**Implemented (session 17):** an enum is a nominal type declared
-`enum E { A, B }` whose values are named, data-free alternatives
-constructed with variant paths (`E::A`). Variants are assigned
-compiler-computed discriminants in declaration order (0, 1, …); an enum
-value occupies a single word, copies freely, and never participates in
-ownership/move analysis. Enum equality (`==`/`!=`) requires the same enum
-type and produces `Bool`; there is no ordering, arithmetic, or `Int`
-conversion. Enum names share the type namespace with struct names.
-Diagnostics: duplicate enum `E-S15`, duplicate variant `E-S16`, variant
-path on a non-enum `E-T22`, undeclared variant `E-T23`. See
-`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`.
+**Implemented (sessions 17 and 19):** an enum is a nominal type declared
+`enum E { A, B }` whose values are named alternatives constructed with
+variant paths (`E::A`) and, for data-carrying variants, variant calls
+(`E::B(expr)`). Variants are assigned compiler-computed discriminants in
+declaration order (0, 1, …). A unit-only enum value occupies a single
+word, copies freely, and never participates in ownership/move analysis;
+an enum with a data-carrying variant (Session 19) is a tagged union — a
+discriminant word plus a payload area sized for the largest variant —
+whose payloads may own heap values and therefore move on transfer.
+Enum equality (`==`/`!=`) requires the same enum type and produces
+`Bool` for unit-only enums; tagged-union equality is `E-T30`. There is no
+ordering, arithmetic, or `Int` conversion. Enum names share the type
+namespace with struct names. Diagnostics: duplicate enum `E-S15`,
+duplicate variant `E-S16`, variant path on a non-enum `E-T22`, undeclared
+variant `E-T23`, invalid payload type `E-T27`, payload mismatch `E-T28`,
+payload arity `E-T29`, tagged-union equality `E-T30`. See
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md` (Session 17) and
+`docs/implementation/SUM_TYPES_IMPLEMENTATION.md` (Session 19).
 
-**Deferred:** data-carrying (sum-type) variants, explicit discriminants,
-pattern matching, and exhaustiveness diagnostics.
+**Deferred:** explicit discriminants, enum-to-`Int` conversion, deriving,
+and generics over enums.
 
 ## 8. Sum Types
 
 MINK should provide a type-safe mechanism for representing values that may belong to one of several alternatives.
 
-This mechanism should integrate directly with pattern matching and compiler exhaustiveness analysis.
+**Implemented (session 19):** data-carrying enum variants are the
+mechanism: `enum Option { Some(Int), None }` declares a closed set of
+alternatives, exactly one of which a value holds at a time — the
+compiler-computed discriminant word selects the active variant and a
+shared payload area holds its payload. Construction is `Option::Some(5)`;
+pattern matching integrates directly with compiler exhaustiveness
+analysis (a variant is covered only when its payload's alternatives are
+covered, `E-T24`/`E-T25`); owned payloads participate in ownership/move
+analysis. See `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.
+
+**Deferred:** tuple payloads (multiple payload values), explicit
+discriminants, and tagged-union equality.
 
 ## 9. Optional Types
 

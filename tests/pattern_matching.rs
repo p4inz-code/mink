@@ -169,8 +169,16 @@ fn all_pattern_forms_parse() {
                 format!("int({negative})")
             }
             mink::ast::Pattern::Bool { value, .. } => format!("bool({value})"),
-            mink::ast::Pattern::EnumVariant { name, variant } => {
-                format!("variant({}::{})", name.name, variant.name)
+            mink::ast::Pattern::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => {
+                let mut rendered = format!("variant({}::{})", name.name, variant.name);
+                if payload.is_some() {
+                    rendered.push_str("(payload)");
+                }
+                rendered
             }
             mink::ast::Pattern::Binding(ident) => format!("binding({})", ident.name),
             mink::ast::Pattern::Wildcard { .. } => "wildcard".to_string(),
@@ -689,7 +697,14 @@ fn binding_pattern_copies_the_scrutinee() {
 /// instructions, asserting every stage is clean.
 fn lower_backend(src: &str) -> (mir::MirProgram, mink::backend::BProgram) {
     let mut sources = SourceMap::new();
-    let path = std::env::temp_dir().join(format!("mink_match_test_{}.mink", std::process::id()));
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("backend")
+        .replace("::", "_");
+    let path = std::env::temp_dir().join(format!(
+        "mink_match_test_{}_{name}.mink",
+        std::process::id()
+    ));
     std::fs::write(&path, src).unwrap();
     let report = mink::driver::check(&mut sources, &path).unwrap();
     let _ = std::fs::remove_file(&path);
@@ -736,7 +751,12 @@ fn match_lowering_is_deterministic() {
 /// Compiles `src` all the way to an image.
 fn emit_image(src: &str) -> mink::backend::EmittedImage {
     let mut sources = SourceMap::new();
-    let path = std::env::temp_dir().join(format!("mink_match_img_{}.mink", std::process::id()));
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("image")
+        .replace("::", "_");
+    let path =
+        std::env::temp_dir().join(format!("mink_match_img_{}_{name}.mink", std::process::id()));
     std::fs::write(&path, src).unwrap();
     let report = mink::driver::check(&mut sources, &path).unwrap();
     let _ = std::fs::remove_file(&path);

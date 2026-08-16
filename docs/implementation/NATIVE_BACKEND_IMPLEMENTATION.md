@@ -315,7 +315,9 @@ Full suite after session 17: **919 tests** (61 CLI + 50 lexer + 98 parser +
 end-to-end + 59 aggregate + 41 ownership + 51 references + 25 enums),
 all passing. After session 18 (pattern matching) the suite is **963 tests**
 (+44 in `tests/pattern_matching.rs`; see
-`PATTERN_MATCHING_IMPLEMENTATION.md` §6).
+`PATTERN_MATCHING_IMPLEMENTATION.md` §6), and after session 19 (sum
+types) it is **1007 tests** (+44 in `tests/sum_types.rs`; see
+`SUM_TYPES_IMPLEMENTATION.md` §5).
 The backend tests
 (`tests/backend.rs`) cover program structure and determinism,
 functions/locals/instructions, constant decoding, string decoding

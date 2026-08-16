@@ -163,7 +163,12 @@ fn variant_path_expression_parses() {
     let mut variants = Vec::new();
     for stmt in &main.body.stmts {
         if let mink::ast::StmtKind::Let(let_item) = &stmt.kind {
-            if let ExprKind::EnumVariant { name, variant } = &let_item.init.kind {
+            if let ExprKind::EnumVariant {
+                name,
+                variant,
+                payload: _,
+            } = &let_item.init.kind
+            {
                 variants.push((name.name.clone(), variant.name.clone()));
             }
         }

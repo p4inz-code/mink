@@ -426,12 +426,28 @@ impl Analyzer {
         self.analyze_expr(&stmt.scrutinee, ctx);
         for arm in &stmt.arms {
             let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
-            if let Pattern::Binding(name) = &arm.pattern {
-                // A pattern binding is immutable, like a `let` binding: it
-                // may be read but never assigned.
+            // Every pattern binding (including payload bindings of
+            // data-carrying variant patterns, session 19) is immutable,
+            // like a `let` binding: it may be read but never assigned.
+            self.bind_pattern_bindings(&arm.pattern, scope);
+            self.analyze_block(&arm.body, Ctx { scope, ..ctx });
+        }
+    }
+
+    /// Declares every binding a pattern introduces in `scope`: a top-level
+    /// `name` binding or the payload bindings of a data-carrying variant
+    /// pattern `E::V(name)` (recursively, for nested payload patterns).
+    fn bind_pattern_bindings(&mut self, pattern: &crate::ast::Pattern, scope: ScopeId) {
+        match pattern {
+            Pattern::Binding(name) => {
                 self.bind(name, SymbolKind::Let { mutable: false }, scope);
             }
-            self.analyze_block(&arm.body, Ctx { scope, ..ctx });
+            Pattern::EnumVariant { payload, .. } => {
+                if let Some(inner) = payload {
+                    self.bind_pattern_bindings(inner, scope);
+                }
+            }
+            Pattern::Wildcard { .. } | Pattern::Bool { .. } | Pattern::Int { .. } => {}
         }
     }
 
@@ -515,11 +531,15 @@ impl Analyzer {
                     self.analyze_expr(&field.value, ctx);
                 }
             }
-            ExprKind::EnumVariant { .. } => {
+            ExprKind::EnumVariant { payload, .. } => {
                 // The enum and variant names are type/variant names, never
                 // value names: they are not resolved as scope names
                 // (unknown enums and variants are reported by the type
-                // checker).
+                // checker). A data-carrying construction's payload is an
+                // ordinary expression (session 19).
+                if let Some(payload) = payload {
+                    self.analyze_expr(payload, ctx);
+                }
             }
             ExprKind::ArrayLit(elems) => {
                 for elem in elems {

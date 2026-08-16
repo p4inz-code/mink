@@ -92,6 +92,19 @@ pub enum TypeErrorKind {
     /// A `match` scrutinee has a type that cannot be matched on (only
     /// `Int`, `Bool`, and enums are matchable in this milestone).
     InvalidMatchScrutinee,
+    /// A data-carrying variant's payload type is not a supported value
+    /// type (a pointer, reference, array, or function type).
+    InvalidVariantPayload,
+    /// A data-carrying variant is constructed with a payload whose type
+    /// does not match the variant's declared payload type.
+    VariantPayloadMismatch,
+    /// A unit variant is constructed or matched with a payload, or a
+    /// data-carrying variant is constructed without one.
+    VariantPayloadArity,
+    /// Two enum values are compared with `==`/`!=`. Enum equality is not
+    /// supported (unit variants compare by discriminant; tagged-union
+    /// equality is deferred).
+    EnumEquality,
 }
 
 impl TypeErrorKind {
@@ -128,6 +141,10 @@ impl TypeErrorKind {
             Self::NonExhaustiveMatch => "E-T24",
             Self::UnreachableMatchArm => "E-T25",
             Self::InvalidMatchScrutinee => "E-T26",
+            Self::InvalidVariantPayload => "E-T27",
+            Self::VariantPayloadMismatch => "E-T28",
+            Self::VariantPayloadArity => "E-T29",
+            Self::EnumEquality => "E-T30",
         }
     }
 }
@@ -477,6 +494,63 @@ impl TypeError {
         )
     }
 
+    /// Creates an invalid-variant-payload error at `span` (`E-T27`): the
+    /// declared payload type is not a supported value type.
+    pub fn invalid_variant_payload(span: Span, actual: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::InvalidVariantPayload,
+            span,
+            format!(
+                "`{}` is not a supported variant payload type; a payload must be a value type with a deterministic layout",
+                actual.into()
+            ),
+            None,
+        )
+    }
+
+    /// Creates a variant-payload-mismatch error at `span` (`E-T28`): the
+    /// constructed payload's type does not match the variant's declared
+    /// payload type.
+    pub fn variant_payload_mismatch(
+        span: Span,
+        expected: impl Into<String>,
+        actual: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: TypeErrorKind::VariantPayloadMismatch,
+            span,
+            expected: Some(expected.into()),
+            actual: Some(actual.into()),
+            operator: None,
+            related: None,
+        }
+    }
+
+    /// Creates a variant-payload-arity error at `span` (`E-T29`): a unit
+    /// variant is constructed or matched with a payload, or a data-carrying
+    /// variant without one.
+    pub fn variant_payload_arity(span: Span, detail: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::VariantPayloadArity,
+            span,
+            detail.into(),
+            None,
+        )
+    }
+
+    /// Creates an enum-equality error at `span` (`E-T30`).
+    pub fn enum_equality(span: Span, enum_name: impl Into<String>) -> Self {
+        Self::custom(
+            TypeErrorKind::EnumEquality,
+            span,
+            format!(
+                "cannot compare values of enum type `{}` with `==`/`!=`; enum equality is not supported",
+                enum_name.into()
+            ),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -530,6 +604,9 @@ impl fmt::Display for TypeError {
             TypeErrorKind::WrongArgumentCount => {
                 format!("expected `{expected}` arguments, found `{actual}`")
             }
+            TypeErrorKind::VariantPayloadMismatch => {
+                format!("expected a payload of type `{expected}`, found `{actual}`")
+            }
             TypeErrorKind::NotIterable => format!("cannot iterate over a value of type `{actual}`"),
             // Aggregate diagnostics carry their full message in `actual`.
             TypeErrorKind::MemberAccessOnNonStruct
@@ -551,7 +628,10 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::UnknownVariant
             | TypeErrorKind::NonExhaustiveMatch
             | TypeErrorKind::UnreachableMatchArm
-            | TypeErrorKind::InvalidMatchScrutinee => actual.to_string(),
+            | TypeErrorKind::InvalidMatchScrutinee
+            | TypeErrorKind::InvalidVariantPayload
+            | TypeErrorKind::VariantPayloadArity
+            | TypeErrorKind::EnumEquality => actual.to_string(),
         };
         f.write_str(&message)
     }

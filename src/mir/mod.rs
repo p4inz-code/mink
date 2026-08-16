@@ -489,6 +489,33 @@ pub enum MirRvalueKind {
         /// The elements, in source order.
         elems: Vec<MirOperand>,
     },
+    /// An enum variant construction (session 19): `E::V(payload)`. The
+    /// rvalue's type is the enum type; the materialized tagged-union value
+    /// is stored into the rvalue's target local — the discriminant word
+    /// (tag) plus the payload words at their deterministic offsets (the
+    /// backend resolves offsets from the enum's layout). A unit variant
+    /// carries no payload operand and lowers to the discriminant constant
+    /// instead.
+    EnumInit {
+        /// The variant's discriminant.
+        discriminant: u32,
+        /// The evaluated payload value, for a data-carrying construction.
+        payload: Option<MirOperand>,
+    },
+    /// The discriminant (tag) word of an enum value (session 19): used by
+    /// match lowering to test a data-carrying variant and to guard payload
+    /// extraction. The result is an `Int`-sized word.
+    EnumTag {
+        /// The evaluated enum value.
+        value: MirOperand,
+    },
+    /// The payload words of a data-carrying enum value (session 19): used
+    /// by match lowering to bind a variant's payload. The result is a
+    /// value of the variant's payload type.
+    EnumPayload {
+        /// The evaluated enum value.
+        value: MirOperand,
+    },
 }
 
 /// An operand: the leaf of an expression. Operands are either local loads,

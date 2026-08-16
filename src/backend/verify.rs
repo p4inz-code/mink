@@ -453,6 +453,41 @@ fn verify_inst(
                 }
             }
         }
+        BInstKind::EnumInit {
+            target, payload, ..
+        } => {
+            verify_target(function, *target, inst.span, errors);
+            if let Some(payload) = payload {
+                verify_operand(function, payload, inst.span, errors);
+            }
+        }
+        BInstKind::EnumTag { target, value, .. } => {
+            verify_target(function, *target, inst.span, errors);
+            verify_enum_value(function, *value, inst.span, errors);
+        }
+        BInstKind::EnumPayload { target, value, .. } => {
+            verify_target(function, *target, inst.span, errors);
+            verify_enum_value(function, *value, inst.span, errors);
+        }
+    }
+}
+
+/// The value of an enum-tag/payload access must be an `Enum`-typed local.
+fn verify_enum_value(
+    function: &super::ir::BFunction,
+    value: LocalId,
+    span: Span,
+    errors: &mut Vec<BackendError>,
+) {
+    match function.local(value).map(|local| local.ty) {
+        Some(BType::Enum) => {}
+        _ => errors.push(error(
+            span,
+            format!(
+                "function `{}`: an enum access reads a local that is not an enum",
+                function.name
+            ),
+        )),
     }
 }
 

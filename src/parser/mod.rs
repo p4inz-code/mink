@@ -381,10 +381,11 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses an `enum Name { Variant, ... }` declaration, including a
-    /// trailing comma. Variants are bare identifiers; data-carrying
-    /// variants are rejected (a future milestone defines their syntax).
-    /// Match statements (session 18) reference variants through
-    /// `E::V` patterns in `parse_pattern`, not through the declaration.
+    /// trailing comma. A variant is either a bare identifier (a unit
+    /// variant) or an identifier followed by a parenthesized payload type
+    /// (a data-carrying variant, session 19): `Variant(Type)`. Match
+    /// statements (session 18) reference variants through `E::V` patterns
+    /// in `parse_pattern`, not through the declaration.
     fn parse_enum(&mut self) -> Result<(EnumItem, Span), ()> {
         let start = self.bump().span(); // 'enum'
         let name = self.expect_ident()?;
@@ -422,14 +423,32 @@ impl<'a> Parser<'a> {
                         self.skip_to_variant_boundary();
                     } else {
                         let _ = self.bump();
-                        let variant = EnumVariant {
-                            name: Ident {
-                                name: self.text(token.span()),
-                                span: token.span(),
-                            },
+                        let name = Ident {
+                            name: self.text(token.span()),
                             span: token.span(),
                         };
-                        variants.push(variant);
+                        let mut span = token.span();
+                        let mut payload = None;
+                        if self.current_kind() == TokenKind::LParen {
+                            match self.parse_variant_payload_type() {
+                                Ok((ty, close)) => {
+                                    span = self.join(token.span(), close);
+                                    payload = Some(ty);
+                                }
+                                Err(()) => {
+                                    // An error is already recorded; the
+                                    // cursor has been recovered to a variant
+                                    // boundary (`,`, `}`, `Eof`) or past the
+                                    // offending `)`, so the boundary handling
+                                    // below proceeds normally.
+                                }
+                            }
+                        }
+                        variants.push(EnumVariant {
+                            name,
+                            payload,
+                            span,
+                        });
                     }
                     match self.current_kind() {
                         TokenKind::Comma => {
@@ -466,6 +485,63 @@ impl<'a> Parser<'a> {
             },
             span,
         ))
+    }
+
+    /// Parses the parenthesized payload type of a data-carrying variant
+    /// declaration, after the variant name. The `(` has not yet been
+    /// consumed. Returns the parsed type and the closing `)` span, or `Err`
+    /// after recording an error and recovering the cursor to a variant
+    /// boundary (`,`, `}`, `Eof`) or past the offending `)`.
+    fn parse_variant_payload_type(&mut self) -> Result<(Ty, Span), ()> {
+        let open = self.bump().span(); // '('
+        self.open_delims.push((TokenKind::LParen, open));
+        // `Variant()` is not a data-carrying variant: a payload is
+        // required (E-P25).
+        if self.current_kind() == TokenKind::RParen {
+            let bad = self.current();
+            self.record_error(ParseErrorKind::EmptyPayload, bad.span());
+            let _ = self.bump();
+            self.open_delims.pop();
+            return Err(());
+        }
+        let ty = match self.parse_type() {
+            Ok(ty) => ty,
+            Err(()) => {
+                // The type failed to parse (an error is already recorded);
+                // recover to `)` or a variant boundary.
+                self.recover_variant_payload();
+                return Err(());
+            }
+        };
+        if self.current_kind() != TokenKind::RParen {
+            let bad = self.current();
+            self.record_error(ParseErrorKind::ExpectedRParen, bad.span());
+            self.recover_variant_payload();
+            return Err(());
+        }
+        let close = self.bump().span();
+        self.open_delims.pop();
+        Ok((ty, close))
+    }
+
+    /// Recovers from a malformed variant payload: skips to the closing `)`
+    /// (consuming it) or, failing that, to a variant boundary. A `,` is not
+    /// a boundary here — it sits inside the payload's parentheses (an extra
+    /// payload argument such as `V(Int, Int)`), so it is skipped with the
+    /// rest of the malformed payload rather than being mistaken for the
+    /// variant separator. Also pops the payload's `(` from the
+    /// open-delimiter stack.
+    fn recover_variant_payload(&mut self) {
+        while !matches!(
+            self.current_kind(),
+            TokenKind::RParen | TokenKind::RBrace | TokenKind::Eof
+        ) {
+            let _ = self.bump();
+        }
+        if self.current_kind() == TokenKind::RParen {
+            let _ = self.bump();
+        }
+        self.open_delims.pop();
     }
 
     /// Skips tokens up to (but not consuming) the next variant boundary:
@@ -1125,9 +1201,42 @@ impl<'a> Parser<'a> {
                         name: self.text(token.span()),
                         span: token.span(),
                     };
+                    // A following `(` makes the pattern a data-carrying
+                    // variant pattern (session 19): `E::V(pattern)`. An
+                    // empty payload `E::V()` is `E-P25`.
+                    let mut payload = None;
+                    if self.current_kind() == TokenKind::LParen {
+                        let open = self.bump().span();
+                        self.open_delims.push((TokenKind::LParen, open));
+                        if self.current_kind() == TokenKind::RParen {
+                            let bad = self.current();
+                            self.record_error(ParseErrorKind::EmptyPayload, bad.span());
+                            let _ = self.bump();
+                            self.open_delims.pop();
+                        } else {
+                            match self.parse_pattern() {
+                                Ok(inner) => {
+                                    if self.current_kind() != TokenKind::RParen {
+                                        let bad = self.current();
+                                        self.record_error(
+                                            ParseErrorKind::ExpectedRParen,
+                                            bad.span(),
+                                        );
+                                        self.recover_pattern_payload();
+                                    } else {
+                                        let _ = self.bump();
+                                        self.open_delims.pop();
+                                        payload = Some(Box::new(inner));
+                                    }
+                                }
+                                Err(()) => self.recover_pattern_payload(),
+                            }
+                        }
+                    }
                     Ok(Pattern::EnumVariant {
                         name: ident,
                         variant,
+                        payload,
                     })
                 } else {
                     Ok(Pattern::Binding(ident))
@@ -1174,6 +1283,22 @@ impl<'a> Parser<'a> {
                 Err(())
             }
         }
+    }
+
+    /// Recovers from a malformed pattern payload: skips to the closing `)`
+    /// (consuming it) or, failing that, to a match-arm boundary. Also pops
+    /// the payload's `(` from the open-delimiter stack.
+    fn recover_pattern_payload(&mut self) {
+        while !matches!(
+            self.current_kind(),
+            TokenKind::RParen | TokenKind::Comma | TokenKind::RBrace | TokenKind::Eof
+        ) {
+            let _ = self.bump();
+        }
+        if self.current_kind() == TokenKind::RParen {
+            let _ = self.bump();
+        }
+        self.open_delims.pop();
     }
 
     /// Skips tokens up to (but not consuming) the next match-arm boundary:
@@ -1757,9 +1882,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses an enum variant reference `Name::Variant` after the enum name
-    /// token. The variant must be a bare identifier; a missing variant is
-    /// `E-P22`.
+    /// Parses an enum variant reference or construction
+    /// `Name::Variant` after the enum name token. The variant must be a
+    /// bare identifier; a missing variant is `E-P22`. A following `(` makes
+    /// the expression a data-carrying construction (session 19):
+    /// `Name::Variant(payload)`; the payload is parsed here (not as a call)
+    /// because `E::V` is unambiguously a variant path, so `E::V(x)` can
+    /// never be a function call. An empty payload `Variant()` is `E-P25`.
     fn parse_enum_variant(&mut self, name: Ident) -> Result<Expr, ()> {
         let _ = self.bump(); // '::'
         if self.current_kind() != TokenKind::Ident {
@@ -1772,14 +1901,71 @@ impl<'a> Parser<'a> {
             name: self.text(token.span()),
             span: token.span(),
         };
-        let span = self.join(name.span, variant.span);
+        let mut span = self.join(name.span, variant.span);
+        let mut payload = None;
+        if self.current_kind() == TokenKind::LParen {
+            let open = self.bump().span();
+            self.open_delims.push((TokenKind::LParen, open));
+            // `E::V()` carries no payload (E-P25).
+            if self.current_kind() == TokenKind::RParen {
+                let bad = self.current();
+                self.record_error(ParseErrorKind::EmptyPayload, bad.span());
+                let _ = self.bump();
+                self.open_delims.pop();
+            } else {
+                let expr = match self.parse_expression() {
+                    Ok(expr) => expr,
+                    Err(()) => {
+                        // An error is already recorded; recover to `)` or a
+                        // statement boundary so a stray `;`/`}` does not
+                        // swallow the enclosing block.
+                        self.recover_construction_payload();
+                        return Ok(Expr {
+                            kind: ExprKind::EnumVariant {
+                                name: Box::new(name),
+                                variant: Box::new(variant),
+                                payload,
+                            },
+                            span,
+                        });
+                    }
+                };
+                if self.current_kind() != TokenKind::RParen {
+                    let bad = self.current();
+                    self.record_error(ParseErrorKind::ExpectedRParen, bad.span());
+                    self.recover_construction_payload();
+                } else {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    span = self.join(name.span, close);
+                    payload = Some(Box::new(expr));
+                }
+            }
+        }
         Ok(Expr {
             kind: ExprKind::EnumVariant {
                 name: Box::new(name),
                 variant: Box::new(variant),
+                payload,
             },
             span,
         })
+    }
+
+    /// Recovers from a malformed construction payload: skips to the closing
+    /// `)` (consuming it) or, failing that, to a statement boundary. Also
+    /// pops the payload's `(` from the open-delimiter stack.
+    fn recover_construction_payload(&mut self) {
+        while !matches!(
+            self.current_kind(),
+            TokenKind::RParen | TokenKind::Semi | TokenKind::RBrace | TokenKind::Eof
+        ) {
+            let _ = self.bump();
+        }
+        if self.current_kind() == TokenKind::RParen {
+            let _ = self.bump();
+        }
+        self.open_delims.pop();
     }
 
     /// Parses a struct literal `Name { field: value, ... }` after the name

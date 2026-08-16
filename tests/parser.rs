@@ -772,7 +772,12 @@ fn enum_variant_paths_parse_as_expressions() {
     // `E::V` is the variant-construction expression; the enum and variant
     // names are kept as separate identifiers.
     let e = expr("Color::Red");
-    let ExprKind::EnumVariant { name, variant } = &e.kind else {
+    let ExprKind::EnumVariant {
+        name,
+        variant,
+        payload: _,
+    } = &e.kind
+    else {
         panic!("expected an enum-variant expression")
     };
     assert_eq!(name.name, "Color");
@@ -1582,9 +1587,16 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
                 walk_expr(elem, text_len, src);
             }
         }
-        ExprKind::EnumVariant { name, variant } => {
+        ExprKind::EnumVariant {
+            name,
+            variant,
+            payload,
+        } => {
             walk_ident(name, text_len, src);
             walk_ident(variant, text_len, src);
+            if let Some(payload) = payload {
+                walk_expr(payload, text_len, src);
+            }
         }
         ExprKind::Group(inner) => walk_expr(inner, text_len, src),
     }

@@ -338,10 +338,44 @@ Pattern    := IntLit | '-' IntLit | BoolLit | Ident '::' Ident | Ident
 
 The session-18 lexer needed no changes (`=>`, `,`, `{`, `}` already
 existed). Exclusions from §2 and §9 that remain (tuples, `type` aliases,
-generics, parameter/return annotations, data-carrying variants) are
-unchanged.
+generics, parameter/return annotations) are unchanged.
 
-## 14. Status
+## 14. Session-19 Additions: Data-Carrying Variants
+
+**Session:** 19 — Data-carrying enum variants (sum types)
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18 additions above remain authoritative; the new
+productions are:
+
+```
+Variant    := Ident | Ident '(' Type ')'
+
+Primary    := ... | EnumVariantPath | EnumVariantCall
+EnumVariantCall := Ident '::' Ident '(' Expr ')'
+
+Pattern    := ... | Ident '::' Ident '(' Pattern ')'
+```
+
+- **Variant declarations** may carry exactly one payload type:
+  `enum Shape { Circle(Int), Nothing }`. `Variant()` with no payload is
+  `E-P25` (empty payload); `Variant(A, B)` with more than one payload is
+  a parse error (the `,` is `E-P14`, expected `)`). Unit and
+  data-carrying variants mix freely, and the trailing-comma rule is
+  unchanged.
+- **Construction** is the variant path followed by a parenthesized
+  payload expression: `E::V(expr)`. `E::V()` is `E-P25`; more than one
+  argument is a parse error. The parenthesized form is a construction,
+  not a call — a variant is never callable as a function.
+- **Payload patterns** are the variant path followed by a parenthesized
+  payload pattern: `E::V(x)`, `E::V(_)`, `E::V(5)`, `E::V(E2::X)`, and
+  nested combinations. `E::V()` is `E-P25`.
+
+The session-19 lexer needed no changes (`(`, `)`, `,` already existed).
+Exclusions from §2 and §9 that remain (tuples, `type` aliases, generics,
+parameter/return annotations) are unchanged.
+
+## 15. Status
 
 This grammar is frozen for the constructs it covers. Statements and
 declarations outside it are rejected by the parser with stable diagnostics

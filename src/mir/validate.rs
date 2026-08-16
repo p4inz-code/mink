@@ -214,6 +214,14 @@ fn check_rvalue(
                 check_operand(elem, local_count, errors, type_count);
             }
         }
+        MirRvalueKind::EnumInit { payload, .. } => {
+            if let Some(payload) = payload {
+                check_operand(payload, local_count, errors, type_count);
+            }
+        }
+        MirRvalueKind::EnumTag { value } | MirRvalueKind::EnumPayload { value } => {
+            check_operand(value, local_count, errors, type_count);
+        }
     }
 }
 

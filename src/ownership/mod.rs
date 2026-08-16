@@ -117,6 +117,18 @@ enum State {
     /// scope; reading an Owned array's element in a transfer position
     /// moves the whole array).
     Array(BindingState),
+    /// An enum value (session 19): the payload's state, tracked only when
+    /// the enum's payload type may own (a `Str`, a reference, or an
+    /// aggregate containing them). A unit-only enum is Copy and is never
+    /// tracked. Matching a data-carrying variant with a payload binding
+    /// transfers the payload out of the enum (the binding dies).
+    Enum {
+        /// The payload's liveness.
+        state: BindingState,
+        /// The reference-typed borrows carried by the payload (a struct
+        /// payload's reference fields), released when the enum dies.
+        ref_borrows: Vec<(String, BorrowView)>,
+    },
 }
 
 /// The evaluated value of an expression: its provenance plus, for struct
@@ -306,6 +318,9 @@ enum Shape {
     Struct,
     /// An array whose element type may own.
     Array,
+    /// An enum with a data-carrying variant whose payload type may own
+    /// (session 19): the payload moves with the value.
+    Enum,
     /// Nothing is tracked: copying is always safe.
     Copy,
 }
@@ -480,6 +495,15 @@ impl<'a> Analyzer<'a> {
                 self.bindings
                     .insert(symbol, State::Array(BindingState::Live(Provenance::Owned)));
             }
+            Shape::Enum => {
+                self.bindings.insert(
+                    symbol,
+                    State::Enum {
+                        state: BindingState::Live(Provenance::Owned),
+                        ref_borrows: Vec::new(),
+                    },
+                );
+            }
             Shape::Copy => {}
         }
         self.register_scope(symbol);
@@ -581,6 +605,25 @@ impl<'a> Analyzer<'a> {
                 self.bindings
                     .insert(symbol, State::Array(BindingState::Live(value.provenance)));
             }
+            Shape::Enum => {
+                // The payload's borrows (a struct payload's reference
+                // fields) transfer with the value; fresh borrows are
+                // counted so they are released when the enum dies.
+                for (_, view) in &value.ref_borrows {
+                    if let Some(source) = view.source {
+                        if !view.counted {
+                            self.borrow_root(source, view.mutable);
+                        }
+                    }
+                }
+                self.bindings.insert(
+                    symbol,
+                    State::Enum {
+                        state: BindingState::Live(value.provenance),
+                        ref_borrows: value.ref_borrows.clone(),
+                    },
+                );
+            }
             Shape::Copy => {}
         }
         self.register_scope(symbol);
@@ -600,6 +643,10 @@ impl<'a> Analyzer<'a> {
             self.bindings.get(&source),
             Some(State::Str(BindingState::Dead))
                 | Some(State::Array(BindingState::Dead))
+                | Some(State::Enum {
+                    state: BindingState::Dead,
+                    ..
+                })
                 | Some(State::Ref { dead: true, .. })
                 | Some(State::Struct { dead: true, .. })
         ) {
@@ -687,6 +734,12 @@ impl<'a> Analyzer<'a> {
                     .filter_map(|view| view.source.map(|source| (source, view.mutable)))
                     .collect(),
             ),
+            Some(State::Enum { ref_borrows, .. }) => Some(
+                ref_borrows
+                    .iter()
+                    .filter_map(|(_, view)| view.source.map(|source| (source, view.mutable)))
+                    .collect(),
+            ),
             _ => None,
         };
         if let Some(borrows) = borrows {
@@ -750,20 +803,96 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Walks a `match` statement: the scrutinee is observed (matchable
-    /// types — `Int`, `Bool`, enums — are scalars that never move), and
-    /// each arm's body is walked as its own block scope. A pattern binding
-    /// copies the scrutinee value, so it binds as a copy; arms inherit the
-    /// enclosing loop/function context (their bodies may `break`,
-    /// `continue`, or `return`).
+    /// types — `Int`, `Bool`, and unit-only enums — never move), and each
+    /// arm's body is walked as its own block scope. A top-level pattern
+    /// binding copies the scrutinee value, so it binds as a copy; a
+    /// data-carrying variant pattern (session 19) binds the payload by
+    /// value — an Owned payload moves out of the scrutinee into the
+    /// binding, leaving the scrutinee's payload consumed on every arm that
+    /// binds one. Arms inherit the enclosing loop/function context (their
+    /// bodies may `break`, `continue`, or `return`).
     fn walk_match(&mut self, stmt: &crate::ast::MatchStmt) {
-        self.eval_expr(&stmt.scrutinee, Mode::Observe);
+        let scrutinee_value = self.eval_expr(&stmt.scrutinee, Mode::Observe);
+        let mut moved_payload = false;
         for arm in &stmt.arms {
-            if let crate::ast::Pattern::Binding(name) = &arm.pattern {
-                // A scalar copy: no ownership state is tracked, but the
-                // binding is registered so its scope release is correct.
-                self.bind(name.span, &EvalValue::copy());
+            match &arm.pattern {
+                crate::ast::Pattern::Binding(name) => {
+                    // A scalar copy: no ownership state is tracked, but the
+                    // binding is registered so its scope release is
+                    // correct.
+                    self.bind(name.span, &EvalValue::copy());
+                }
+                crate::ast::Pattern::EnumVariant {
+                    payload: Some(inner),
+                    ..
+                } => {
+                    let provenance = self.payload_provenance(&stmt.scrutinee, &scrutinee_value);
+                    if self.payload_binding_transfers(inner, provenance) {
+                        moved_payload = true;
+                    }
+                    self.bind_payload_pattern(inner, provenance);
+                }
+                _ => {}
             }
             self.walk_block(&arm.body);
+        }
+        if moved_payload {
+            // The payload moved out of the scrutinee on some arm: the
+            // enum's payload is consumed (a use of the scrutinee after the
+            // match is a use of a moved value).
+            self.mark_root_dead(&stmt.scrutinee);
+        }
+    }
+
+    /// The provenance of a matched enum's payload: the tracked state of
+    /// the scrutinee's binding when it is a tracked enum local, otherwise
+    /// the fallback provenance the scrutinee evaluation produced.
+    fn payload_provenance(&self, scrutinee: &Expr, fallback: &EvalValue) -> Provenance {
+        let Some(root) = self.root_ident(scrutinee) else {
+            return fallback.provenance;
+        };
+        let Some(symbol) = self.semantic.resolve(root.span) else {
+            return fallback.provenance;
+        };
+        match self.bindings.get(&symbol) {
+            Some(State::Enum {
+                state: BindingState::Live(provenance),
+                ..
+            }) => *provenance,
+            _ => fallback.provenance,
+        }
+    }
+
+    /// Whether a payload pattern binds a value (a `name` binding or a
+    /// nested variant's payload binding) whose payload provenance is
+    /// Owned, so the payload moves out of the scrutinee.
+    fn payload_binding_transfers(
+        &self,
+        pattern: &crate::ast::Pattern,
+        provenance: Provenance,
+    ) -> bool {
+        match pattern {
+            crate::ast::Pattern::Binding(_) => provenance == Provenance::Owned,
+            crate::ast::Pattern::EnumVariant {
+                payload: Some(inner),
+                ..
+            } => self.payload_binding_transfers(inner, provenance),
+            _ => false,
+        }
+    }
+
+    /// Binds every payload pattern binding (`E::V(x)` → `x`) with the
+    /// payload's provenance, recursively for nested variant patterns.
+    fn bind_payload_pattern(&mut self, pattern: &crate::ast::Pattern, provenance: Provenance) {
+        match pattern {
+            crate::ast::Pattern::Binding(name) => {
+                self.bind(name.span, &EvalValue::with_provenance(provenance));
+            }
+            crate::ast::Pattern::EnumVariant {
+                payload: Some(inner),
+                ..
+            } => self.bind_payload_pattern(inner, provenance),
+            _ => {}
         }
     }
 
@@ -1019,10 +1148,23 @@ impl<'a> Analyzer<'a> {
                 }
                 EvalValue::struct_value(provenances, ref_borrows)
             }
-            // An enum variant reference (session 17) is a discriminant
-            // constant: enums are Copy (unit variants carry no heap
-            // storage), so every use is an independent immutable value.
-            ExprKind::EnumVariant { .. } => EvalValue::immutable(),
+            // A unit variant reference is an immutable discriminant
+            // constant (session 17). A data-carrying construction (session
+            // 19) transfers its payload into the value: the enum's
+            // provenance — and any reference-typed payload borrows —
+            // follow the payload's.
+            ExprKind::EnumVariant { payload, .. } => match payload {
+                None => EvalValue::immutable(),
+                Some(payload) => {
+                    let value = self.eval_expr(payload, Mode::Transfer);
+                    EvalValue {
+                        provenance: value.provenance,
+                        fields: None,
+                        view: None,
+                        ref_borrows: value.ref_borrows,
+                    }
+                }
+            },
             ExprKind::ArrayLit(elems) => {
                 let mut owned = false;
                 for elem in elems {
@@ -1201,6 +1343,73 @@ impl<'a> Analyzer<'a> {
                     EvalValue::owned()
                 }
             },
+            // An enum whose payload may own (session 19) moves like a
+            // struct: an Owned payload transfers with the value; an
+            // Immutable payload copies; a Dead payload is a use-after-move.
+            Some(State::Enum { state, ref_borrows }) => match state {
+                BindingState::Dead => {
+                    self.errors
+                        .push(SemanticError::use_of_moved(ident.name.clone(), ident.span));
+                    EvalValue::owned()
+                }
+                BindingState::Live(Provenance::Immutable) => {
+                    // Copy: shared payload borrows are re-counted (each
+                    // copy adds a live borrow); the binding keeps its own.
+                    let mut carried = Vec::new();
+                    for (name, view) in &ref_borrows {
+                        if !view.mutable {
+                            if let Some(source) = view.source {
+                                self.borrow_root(source, false);
+                            }
+                        }
+                        carried.push((name.clone(), *view));
+                    }
+                    EvalValue {
+                        provenance: Provenance::Immutable,
+                        fields: None,
+                        view: None,
+                        ref_borrows: carried,
+                    }
+                }
+                BindingState::Live(Provenance::Owned) => {
+                    if mode == Mode::Transfer {
+                        if self.is_borrowed(symbol) {
+                            self.errors.push(SemanticError::borrow_conflict(
+                                ident.name.clone(),
+                                ident.span,
+                                format!("cannot move `{}`: it is borrowed", ident.name),
+                            ));
+                            return EvalValue::owned();
+                        }
+                        // The whole enum moves: its payload borrows
+                        // transfer to the value.
+                        let carried: Vec<(String, BorrowView)> = ref_borrows
+                            .iter()
+                            .map(|(name, view)| (name.clone(), *view))
+                            .collect();
+                        self.bindings.insert(
+                            symbol,
+                            State::Enum {
+                                state: BindingState::Dead,
+                                ref_borrows: Vec::new(),
+                            },
+                        );
+                        EvalValue {
+                            provenance: Provenance::Owned,
+                            fields: None,
+                            view: None,
+                            ref_borrows: carried,
+                        }
+                    } else {
+                        EvalValue {
+                            provenance: Provenance::Owned,
+                            fields: None,
+                            view: None,
+                            ref_borrows: Vec::new(),
+                        }
+                    }
+                }
+            },
             None => EvalValue::copy(),
         }
     }
@@ -1238,6 +1447,10 @@ impl<'a> Analyzer<'a> {
             self.bindings.get(&symbol),
             Some(State::Str(BindingState::Dead))
                 | Some(State::Array(BindingState::Dead))
+                | Some(State::Enum {
+                    state: BindingState::Dead,
+                    ..
+                })
                 | Some(State::Ref { dead: true, .. })
                 | Some(State::Struct { dead: true, .. })
         ) {
@@ -1468,6 +1681,10 @@ impl<'a> Analyzer<'a> {
         match self.bindings.get_mut(&symbol) {
             Some(State::Str(state)) => *state = BindingState::Dead,
             Some(State::Array(state)) => *state = BindingState::Dead,
+            Some(State::Enum { state, ref_borrows }) => {
+                *state = BindingState::Dead;
+                ref_borrows.clear();
+            }
             Some(State::Ref {
                 source,
                 dead,
@@ -1936,6 +2153,16 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Some(TypeKind::Array { elem, .. }) if self.may_own(*elem) => Shape::Array,
+            // An enum with a data-carrying variant whose payload may own is
+            // tracked (session 19); a unit-only or copy-payload enum is
+            // Copy.
+            Some(TypeKind::Enum(_)) => {
+                if self.may_own(ty) {
+                    Shape::Enum
+                } else {
+                    Shape::Copy
+                }
+            }
             _ => Shape::Copy,
         }
     }
@@ -2003,6 +2230,13 @@ impl<'a> Analyzer<'a> {
                 .types()
                 .struct_info(*id)
                 .is_some_and(|info| info.fields.iter().any(|field| self.may_own(field.ty))),
+            // An enum may own when any data-carrying variant's payload type
+            // may own (session 19).
+            Some(TypeKind::Enum(id)) => self.types.types().enum_info(*id).is_some_and(|info| {
+                info.variants
+                    .iter()
+                    .any(|variant| variant.payload.is_some_and(|payload| self.may_own(payload)))
+            }),
             _ => false,
         }
     }

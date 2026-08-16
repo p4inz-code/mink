@@ -287,11 +287,16 @@ pub enum HirPattern {
     /// `name`: matches any value and binds it in the arm's scope.
     Binding(HirIdent),
     /// `EnumName::Variant`: matches the enum value with that discriminant.
+    /// For a data-carrying variant (session 19) the pattern is
+    /// `EnumName::Variant(pattern)` and `payload` holds the inner pattern,
+    /// which binds the variant's payload in the arm's scope.
     EnumVariant {
         /// The enum type name.
         name: Box<HirName>,
         /// The variant name.
         variant: Box<HirName>,
+        /// The payload pattern, for a data-carrying variant pattern.
+        payload: Option<Box<HirPattern>>,
         /// Span of the whole pattern.
         span: Span,
     },
@@ -471,15 +476,19 @@ pub enum HirExprKind {
     },
     /// An array literal: `[elem, ...]`.
     ArrayLit(Vec<HirExpr>),
-    /// An enum variant reference (session 17): `EnumName::Variant`. The
-    /// expression's type is the enum type; the value is the variant's
-    /// discriminant, resolved by MIR lowering from the type table. The
-    /// names are boxed so the node stays as small as the existing
-    /// aggregate nodes (mirroring the AST).
+    /// An enum variant reference or construction: `EnumName::Variant`. The
+    /// expression's type is the enum type. For a unit variant the value is
+    /// its discriminant, resolved by MIR lowering from the type table; for
+    /// a data-carrying variant (session 19) `payload` holds the
+    /// construction's payload expression. The names are boxed so the node
+    /// stays as small as the existing aggregate nodes (mirroring the
+    /// AST).
     EnumVariant {
         /// The enum type name (a type name, not a symbol).
         name: Box<HirName>,
         /// The variant name.
         variant: Box<HirName>,
+        /// The payload expression, for a data-carrying construction.
+        payload: Option<Box<HirExpr>>,
     },
 }

@@ -101,11 +101,11 @@ pub struct StructItem {
 /// An `enum` declaration: `enum Name { Variant, ... }` (session 17).
 ///
 /// Enums are the second user-defined type form: a closed set of named
-/// alternatives (unit variants). A variant reference `Name::Variant` is a
-/// value of the enum type; each variant carries a deterministic
-/// discriminant assigned in declaration order, so the value is a single
-/// machine word. Data-carrying (tagged-union) variants and `match`
-/// pattern matching are deferred to the pattern-matching milestone — see
+/// alternatives. A variant is either a unit variant (a bare name, value
+/// `Name::Variant`) or a data-carrying variant (session 19) carrying a
+/// single payload: `Variant(Type)`. The value of a unit variant is its
+/// discriminant alone; a data-carrying variant's value additionally holds
+/// its payload, and the type's layout is a tagged union — see
 /// `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumItem {
@@ -117,12 +117,17 @@ pub struct EnumItem {
     pub span: Span,
 }
 
-/// One declared variant of an [`EnumItem`]: a bare name.
+/// One declared variant of an [`EnumItem`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumVariant {
     /// The variant's name.
     pub name: Ident,
-    /// Span covering the variant (its identifier).
+    /// The variant's payload type, if it is a data-carrying variant
+    /// (`Variant(Type)`); `None` for a unit variant. The declared type is
+    /// validated (named, non-array, non-reference) by type analysis.
+    pub payload: Option<Ty>,
+    /// Span covering the variant (its identifier and, for data-carrying
+    /// variants, the parenthesized payload type).
     pub span: Span,
 }
 
@@ -338,12 +343,17 @@ pub enum Pattern {
     /// scope.
     Binding(Ident),
     /// `EnumName::Variant`: matches the enum value whose discriminant is
-    /// `Variant`'s position in `EnumName`'s variant list.
+    /// `Variant`'s position in `EnumName`'s variant list. For a
+    /// data-carrying variant (session 19) the pattern is
+    /// `EnumName::Variant(pattern)` and `payload` holds the inner pattern,
+    /// which binds the variant's payload in the arm's scope.
     EnumVariant {
         /// The enum type name.
         name: Ident,
         /// The variant name.
         variant: Ident,
+        /// The payload pattern for a data-carrying variant, if any.
+        payload: Option<Box<Pattern>>,
     },
     /// `true` or `false`: matches a boolean value.
     Bool {
@@ -371,7 +381,7 @@ impl Pattern {
         match self {
             Self::Wildcard { span } => *span,
             Self::Binding(ident) => ident.span,
-            Self::EnumVariant { name, variant } => {
+            Self::EnumVariant { name, variant, .. } => {
                 let start = name.span.start().min(variant.span.start());
                 let end = name.span.end().max(variant.span.end());
                 Span::new(name.span.file(), start..end)
@@ -517,17 +527,22 @@ pub enum ExprKind {
     /// An array literal: `[elem, ...]` (session 14). The element type is
     /// inferred from the elements; the array's length is the element count.
     ArrayLit(Vec<Expr>),
-    /// An enum variant reference (session 17): `EnumName::Variant`. The
-    /// enum name resolves in the type namespace; the variant names one of
-    /// its declared alternatives. The expression's type is the enum type.
-    /// The names are boxed so the node stays as small as the existing
-    /// aggregate nodes (a nested `Group` chain can be hundreds deep, and
-    /// every parser frame holds one `Expr` by value).
+    /// An enum variant reference or construction (session 17):
+    /// `EnumName::Variant`. The enum name resolves in the type namespace;
+    /// the variant names one of its declared alternatives. The expression's
+    /// type is the enum type. For a data-carrying variant (session 19) the
+    /// construction `EnumName::Variant(expr)` carries the payload
+    /// expression; `payload` is `None` for unit variants. The names are
+    /// boxed so the node stays as small as the existing aggregate nodes (a
+    /// nested `Group` chain can be hundreds deep, and every parser frame
+    /// holds one `Expr` by value).
     EnumVariant {
         /// The enum type name.
         name: Box<Ident>,
         /// The variant name.
         variant: Box<Ident>,
+        /// The payload expression for a data-carrying construction, if any.
+        payload: Option<Box<Expr>>,
     },
     /// A parenthesized expression: `(inner)`. Kept as a node so tooling can
     /// distinguish explicit grouping from parser-imposed association.

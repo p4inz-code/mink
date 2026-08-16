@@ -1383,6 +1383,50 @@ fn emit_inst(
             store_into(code, slots, *src, Reg::Rcx, *size);
             let _ = elem_ty;
         }
+        BInstKind::EnumInit {
+            target,
+            discriminant,
+            payload,
+            tag_offset,
+            payload_offset,
+            payload_size,
+        } => {
+            // A tagged-union construction (session 19): the discriminant
+            // (tag) word is written at its offset, then the variant's own
+            // payload bytes are copied into the payload area.
+            let word0 = slots[target.raw() as usize].0;
+            code.movabs_rax(*discriminant as i64);
+            code.mov_rbp_rax(word0 - *tag_offset as i32);
+            if let Some(payload) = payload {
+                let dst = word0 - *payload_offset as i32;
+                code.lea_r_mem(Reg::Rcx, Reg::Rbp, dst);
+                store_into(code, slots, *payload, Reg::Rcx, *payload_size);
+            }
+        }
+        BInstKind::EnumTag {
+            target,
+            value,
+            tag_offset,
+        } => {
+            // The tag is the discriminant word at its offset within the
+            // enum value (for the current layout, the first word).
+            let value_word0 = slots[value.raw() as usize].0;
+            code.mov_rax_rbp(value_word0 - *tag_offset as i32);
+            code.mov_rbp_rax(slots[target.raw() as usize].0);
+        }
+        BInstKind::EnumPayload {
+            target,
+            value,
+            payload_offset,
+            payload_size,
+        } => {
+            // The payload area starts `payload_offset` bytes below the
+            // value's first word; `payload_size` bytes are copied exactly
+            // (the payload's own size, never the shared area's full width).
+            let value_word0 = slots[value.raw() as usize].0;
+            code.lea_r_mem(Reg::Rcx, Reg::Rbp, value_word0 - *payload_offset as i32);
+            copy_into_slot(code, slots, *target, Reg::Rcx, *payload_size);
+        }
     }
 }
 

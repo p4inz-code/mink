@@ -272,13 +272,25 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_match_arm(&mut self, arm: &MatchArm) -> HirMatchArm {
-        let pattern = match &arm.pattern {
+        HirMatchArm {
+            pattern: self.lower_pattern(&arm.pattern),
+            body: self.lower_block(&arm.body),
+            span: arm.span,
+        }
+    }
+
+    /// Lowers a match pattern, resolving pattern bindings through the
+    /// declaration index like any other binding. A data-carrying variant
+    /// pattern's payload pattern is lowered recursively.
+    fn lower_pattern(&mut self, pattern: &Pattern) -> HirPattern {
+        match pattern {
             Pattern::Wildcard { span } => HirPattern::Wildcard { span: *span },
-            // A pattern binding is a declaration of the arm's scope; it
-            // resolves through the declaration index like any other
-            // binding and carries its (canonical) type.
             Pattern::Binding(ident) => HirPattern::Binding(self.lower_decl_ident(ident)),
-            Pattern::EnumVariant { name, variant } => HirPattern::EnumVariant {
+            Pattern::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => HirPattern::EnumVariant {
                 name: Box::new(HirName {
                     name: name.name.clone(),
                     span: name.span,
@@ -287,7 +299,10 @@ impl<'a> Lowerer<'a> {
                     name: variant.name.clone(),
                     span: variant.span,
                 }),
-                span: arm.pattern.span(),
+                payload: payload
+                    .as_ref()
+                    .map(|inner| Box::new(self.lower_pattern(inner))),
+                span: pattern.span(),
             },
             Pattern::Bool { value, span } => HirPattern::Bool {
                 value: *value,
@@ -302,11 +317,6 @@ impl<'a> Lowerer<'a> {
                 literal_span: literal.span,
                 span: *span,
             },
-        };
-        HirMatchArm {
-            pattern,
-            body: self.lower_block(&arm.body),
-            span: arm.span,
         }
     }
 
@@ -402,7 +412,11 @@ impl<'a> Lowerer<'a> {
             ExprKind::ArrayLit(elems) => {
                 HirExprKind::ArrayLit(elems.iter().map(|elem| self.lower_expr(elem)).collect())
             }
-            ExprKind::EnumVariant { name, variant } => HirExprKind::EnumVariant {
+            ExprKind::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => HirExprKind::EnumVariant {
                 name: Box::new(HirName {
                     name: name.name.clone(),
                     span: name.span,
@@ -411,6 +425,9 @@ impl<'a> Lowerer<'a> {
                     name: variant.name.clone(),
                     span: variant.span,
                 }),
+                payload: payload
+                    .as_ref()
+                    .map(|inner| Box::new(self.lower_expr(inner))),
             },
             ExprKind::Group(inner) => {
                 // Syntax-only grouping: lower the inner expression and keep

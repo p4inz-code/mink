@@ -33,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{AssignOp, BinaryOp, UnaryOp};
 use crate::hir::{
     HirBlock, HirConst, HirElseBranch, HirExpr, HirExprKind, HirFn, HirIdent, HirIf, HirItemKind,
-    HirLet, HirMatch, HirPattern, HirProgram, HirStmt, HirStmtKind,
+    HirLet, HirMatch, HirName, HirPattern, HirProgram, HirStmt, HirStmtKind,
 };
 use crate::semantics::SymbolId;
 use crate::source::{SourceId, Span};
@@ -374,27 +374,49 @@ impl<'a> StmtEval<'a> {
                 let elems = elems.iter().map(|elem| self.eval_operand(elem)).collect();
                 self.temp_rvalue(expr, MirRvalueKind::ArrayLit { elems })
             }
-            HirExprKind::EnumVariant { name, variant } => {
-                // The variant's discriminant is compiler-computed from the
-                // enum's variant table (declaration order, starting at 0),
-                // so the constant carries it directly instead of decoding
-                // source text.
-                let discriminant = self
-                    .enum_variant_discriminant(&name.name, &variant.name)
-                    .unwrap_or(0);
-                let constant = MirConstant {
-                    kind: MirConstantKind::Enum {
-                        variant: discriminant,
-                    },
-                    span: expr.span,
-                    ty: expr.ty,
-                };
-                MirOperand {
-                    kind: MirOperandKind::Constant(constant),
-                    span: expr.span,
-                    ty: expr.ty,
+            HirExprKind::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => match payload {
+                // A unit variant reference: the discriminant is
+                // compiler-computed from the enum's variant table
+                // (declaration order, starting at 0), so the constant
+                // carries it directly instead of decoding source text.
+                None => {
+                    let discriminant = self
+                        .enum_variant_discriminant(&name.name, &variant.name)
+                        .unwrap_or(0);
+                    let constant = MirConstant {
+                        kind: MirConstantKind::Enum {
+                            variant: discriminant,
+                        },
+                        span: expr.span,
+                        ty: expr.ty,
+                    };
+                    MirOperand {
+                        kind: MirOperandKind::Constant(constant),
+                        span: expr.span,
+                        ty: expr.ty,
+                    }
                 }
-            }
+                // A data-carrying construction (session 19): the payload is
+                // evaluated and the tagged-union value is materialized by
+                // the backend.
+                Some(payload) => {
+                    let discriminant = self
+                        .enum_variant_discriminant(&name.name, &variant.name)
+                        .unwrap_or(0);
+                    let payload = self.eval_operand(payload);
+                    self.temp_rvalue(
+                        expr,
+                        MirRvalueKind::EnumInit {
+                            discriminant,
+                            payload: Some(payload),
+                        },
+                    )
+                }
+            },
             HirExprKind::Assign { .. } => self.eval_assign(expr),
         }
     }
@@ -1558,6 +1580,45 @@ impl<'a> FnBuilder<'a> {
                         span: arm.span,
                     });
                 }
+                HirPattern::EnumVariant {
+                    name,
+                    variant,
+                    payload: Some(inner),
+                    ..
+                } => {
+                    // A data-carrying variant pattern (session 19): the
+                    // outer test compares the value's discriminant word;
+                    // on success the payload is extracted into a fresh
+                    // temporary and the inner payload pattern is matched —
+                    // and its bindings extracted — through a chain of test
+                    // blocks (see [`Self::lower_payload_chain`]).
+                    let next = if is_last {
+                        *unreachable.get_or_insert_with(|| self.alloc_block())
+                    } else {
+                        self.alloc_block()
+                    };
+                    let cond = self.tag_test(name, variant, &scrutinee, arm.span);
+                    let sub_test = self.alloc_block();
+                    self.terminate(MirTerminator::Branch {
+                        cond,
+                        then_block: sub_test,
+                        else_block: next,
+                        span: arm.span,
+                    });
+                    self.start_block(sub_test, arm.span);
+                    let payload_ty = self
+                        .payload_type_of(scrutinee.ty, &name.name, &variant.name)
+                        .unwrap_or(scrutinee.ty);
+                    let payload = self.emit_temp_rvalue(
+                        payload_ty,
+                        arm.span,
+                        MirRvalueKind::EnumPayload {
+                            value: scrutinee.clone(),
+                        },
+                    );
+                    self.lower_payload_chain(inner, &payload, body_block, next, arm.span);
+                    test = next;
+                }
                 _ => {
                     let cond = self.pattern_test(&arm.pattern, &scrutinee, arm.span);
                     let next = if is_last {
@@ -1587,6 +1648,173 @@ impl<'a> FnBuilder<'a> {
         if let Some(after) = after {
             self.start_block(after, span);
         }
+    }
+
+    /// Lowers a data-carrying variant pattern's payload pattern (session
+    /// 19) against the payload value `value`, building the chain of test
+    /// blocks from `value` to `body_block` (the `else` path of every test
+    /// falls to `next`). The caller has already extracted `value` from the
+    /// enum (an [`MirRvalueKind::EnumPayload`] rvalue); nested variant
+    /// patterns emit their own discriminant test (`[`Self::tag_test`])
+    /// against the payload value through recursion.
+    ///
+    /// - `_` matches any payload and jumps straight into the body;
+    /// - a binding declares a fresh local, copies the payload value into
+    ///   it, and jumps into the body;
+    /// - a nested variant pattern tests the payload value's discriminant
+    ///   and recursively matches the nested payload;
+    /// - a boolean/integer pattern tests the payload value against its
+    ///   literal.
+    fn lower_payload_chain(
+        &mut self,
+        pattern: &HirPattern,
+        value: &MirOperand,
+        body_block: BlockId,
+        next: BlockId,
+        span: Span,
+    ) {
+        match pattern {
+            HirPattern::Binding(ident) => {
+                let local = self.eval.declare_local(
+                    ident.name.clone(),
+                    Some(ident.symbol),
+                    ident.ty,
+                    false,
+                    ident.span,
+                );
+                self.eval.symbols.insert(ident.symbol, local);
+                self.eval.emit(MirStmt {
+                    kind: MirStmtKind::Assign {
+                        target: MirTarget {
+                            kind: MirTargetKind::Local(local),
+                            span: ident.span,
+                            ty: ident.ty,
+                        },
+                        rvalue: use_rvalue(value.clone(), ident.span, ident.ty),
+                    },
+                    span: ident.span,
+                });
+                self.terminate(MirTerminator::Jump {
+                    target: body_block,
+                    span,
+                });
+            }
+            HirPattern::Wildcard { .. } => {
+                self.terminate(MirTerminator::Jump {
+                    target: body_block,
+                    span,
+                });
+            }
+            HirPattern::EnumVariant {
+                name,
+                variant,
+                payload,
+                span: _,
+            } => {
+                let cond = self.tag_test(name, variant, value, span);
+                match payload {
+                    Some(inner) => {
+                        // The nested payload is extracted in a fresh test
+                        // block and matched recursively.
+                        let sub_test = self.alloc_block();
+                        self.terminate(MirTerminator::Branch {
+                            cond,
+                            then_block: sub_test,
+                            else_block: next,
+                            span,
+                        });
+                        self.start_block(sub_test, span);
+                        let payload_ty = self
+                            .payload_type_of(value.ty, &name.name, &variant.name)
+                            .unwrap_or(value.ty);
+                        let payload = self.emit_temp_rvalue(
+                            payload_ty,
+                            span,
+                            MirRvalueKind::EnumPayload {
+                                value: value.clone(),
+                            },
+                        );
+                        self.lower_payload_chain(inner, &payload, body_block, next, span);
+                    }
+                    None => {
+                        self.terminate(MirTerminator::Branch {
+                            cond,
+                            then_block: body_block,
+                            else_block: next,
+                            span,
+                        });
+                    }
+                }
+            }
+            HirPattern::Bool { .. } | HirPattern::Int { .. } => {
+                let cond = self.pattern_test(pattern, value, span);
+                self.terminate(MirTerminator::Branch {
+                    cond,
+                    then_block: body_block,
+                    else_block: next,
+                    span,
+                });
+            }
+        }
+    }
+
+    /// Emits the discriminant test for a variant pattern against the enum
+    /// value `value` and returns the `Bool` condition operand: the value's
+    /// discriminant word (extracted through an [`MirRvalueKind::EnumTag`]
+    /// rvalue) compared with `==` against the variant's discriminant
+    /// constant.
+    fn tag_test(
+        &mut self,
+        name: &HirName,
+        variant: &HirName,
+        value: &MirOperand,
+        span: Span,
+    ) -> MirOperand {
+        let bool_ty = self.eval.bool_ty();
+        let discriminant = self
+            .eval
+            .enum_variant_discriminant(&name.name, &variant.name)
+            .unwrap_or(0);
+        let tag = self.emit_temp_rvalue(
+            value.ty,
+            span,
+            MirRvalueKind::EnumTag {
+                value: value.clone(),
+            },
+        );
+        let constant = MirOperand {
+            kind: MirOperandKind::Constant(MirConstant {
+                kind: MirConstantKind::Enum {
+                    variant: discriminant,
+                },
+                span,
+                ty: value.ty,
+            }),
+            span,
+            ty: value.ty,
+        };
+        self.emit_temp_rvalue(
+            bool_ty,
+            span,
+            MirRvalueKind::Binary {
+                op: BinaryOp::Eq,
+                lhs: tag,
+                rhs: constant,
+            },
+        )
+    }
+
+    /// The declared payload type of the variant `variant` of the enum type
+    /// `enum_ty`, if the variant is data-carrying.
+    fn payload_type_of(&self, enum_ty: TypeId, enum_name: &str, variant: &str) -> Option<TypeId> {
+        let _ = enum_name;
+        let enum_id = self.eval.table.enum_id(enum_ty)?;
+        self.eval
+            .table
+            .enum_info(enum_id)?
+            .variants
+            .iter()
+            .find_map(|v| if v.name == variant { v.payload } else { None })
     }
 
     /// Emits the equality test for a refutable pattern against the

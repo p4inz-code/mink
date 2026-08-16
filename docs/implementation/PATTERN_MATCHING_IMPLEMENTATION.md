@@ -12,7 +12,9 @@ execution. It builds directly on the enum foundation of Session 17
 (`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`) and the type-system
 foundation of Sessions 06–07, and deliberately does **not** introduce match
 expressions (a `match` producing a value), struct/array destructuring,
-ranges or or-patterns, guards, or data-carrying variant patterns.
+ranges or or-patterns, or guards. (Data-carrying variant patterns —
+`E::V(x)` — landed in Session 19; see
+`docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.)
 
 ## 1. Frozen Session 18 rules
 
@@ -207,8 +209,10 @@ lowering as ordinary CFG — no new validation rules were needed.
   `x if cond =>` are all rejected (the first is a parse error; ranges and
   guards have no syntax this session).
 - **Bindings are whole-value copies.** There is no `name @`-style
-  sub-pattern binding and no way to bind inside a variant payload (there
-  are no payloads).
+  sub-pattern binding. (Session 18 matched payload-free enums only;
+  Session 19 added payload patterns `E::V(x)` with payload extraction and
+  recursive sub-coverage — see
+  `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.)
 - **No match on references.** `match r` where `r: &Int` is `E-T26`;
   matching through a deref (`match *r`) works and matches the pointed-to
   scalar.

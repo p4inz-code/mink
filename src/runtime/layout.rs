@@ -41,7 +41,18 @@
 //!   never be stored by this runtime, so its type is rejected deterministically.
 
 use super::abi::{ALLOC_ALIGNMENT, WORD_SIZE};
-use crate::typecheck::{StructId, TypeId, TypeKind, TypeTable};
+use crate::typecheck::{EnumId, StructId, TypeId, TypeKind, TypeTable};
+
+/// One entry on the by-value recursion path of a layout computation.
+///
+/// Struct and enum ids live in separate namespaces, so the path carries the
+/// kind of each aggregate to tell `struct P` apart from `enum P` (both can
+/// be raw id 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathEntry {
+    Struct(StructId),
+    Enum(EnumId),
+}
 
 /// The layout classes the current memory model distinguishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -194,8 +205,57 @@ pub struct ArrayLayout {
     pub len: u64,
 }
 
+/// The byte layout of one variant's payload within an enum's tagged-union
+/// layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariantPayloadLayout {
+    /// The variant's discriminant (its position in declaration order).
+    pub discriminant: u32,
+    /// The payload byte size (0 for a unit variant).
+    pub size: u64,
+    /// The payload alignment (1 for a unit variant).
+    pub align: u64,
+}
+
+/// The deterministic byte layout of an enum value (session 19).
+///
+/// An enum with **only unit variants** keeps the session-17 layout: a
+/// single word holding the discriminant (`tagged == false`). An enum with
+/// **any data-carrying variant** is a tagged union (`tagged == true`): a
+/// discriminant word at `tag_offset` followed by a payload area at
+/// `payload_offset` that is shared by every variant (each variant stores
+/// its payload at the same offset; only the discriminant distinguishes
+/// them). The payload area is sized and aligned for the largest variant
+/// payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumLayout {
+    /// The enum's byte size (rounded up to its alignment).
+    pub size: u64,
+    /// The enum's alignment.
+    pub align: u64,
+    /// Whether the enum has any data-carrying variant (a tagged union).
+    /// A unit-only enum is a single word holding its discriminant.
+    pub tagged: bool,
+    /// The byte offset of the discriminant word within the value. For a
+    /// unit-only enum the value *is* the discriminant, so this is 0.
+    pub tag_offset: u64,
+    /// The byte offset of the payload area within the value; 0 for a
+    /// unit-only enum.
+    pub payload_offset: u64,
+    /// The byte size of the payload area (the largest variant payload
+    /// rounded up to its alignment); 0 for a unit-only enum.
+    pub payload_size: u64,
+    /// The alignment of the payload area; 1 for a unit-only enum.
+    pub payload_align: u64,
+    /// The payload layout of every variant, in declaration order.
+    pub variants: Vec<VariantPayloadLayout>,
+}
+
 /// The byte size and alignment of a scalar type. Aggregate and function
 /// types return `None` (they are handled by the recursive layout walker).
+/// An enum is scalar only when every variant is a unit variant (its value
+/// is the discriminant word); an enum with a data-carrying variant is an
+/// aggregate handled by the recursive walker.
 fn scalar_layout(kind: &TypeKind) -> Option<(u64, u64)> {
     match kind {
         TypeKind::Int
@@ -203,8 +263,7 @@ fn scalar_layout(kind: &TypeKind) -> Option<(u64, u64)> {
         | TypeKind::Str
         | TypeKind::Null
         | TypeKind::Ptr(_)
-        | TypeKind::Ref { .. }
-        | TypeKind::Enum(_) => Some((WORD_SIZE, WORD_SIZE)),
+        | TypeKind::Ref { .. } => Some((WORD_SIZE, WORD_SIZE)),
         TypeKind::Bool | TypeKind::Char => Some((1, 1)),
         TypeKind::Range(_) => Some((2 * WORD_SIZE, WORD_SIZE)),
         // Error and unresolved-inference types never reach a layout in a
@@ -213,7 +272,9 @@ fn scalar_layout(kind: &TypeKind) -> Option<(u64, u64)> {
         // independent problems instead of stopping.
         TypeKind::Error | TypeKind::Infer(_) => Some((0, 1)),
         TypeKind::Unit => Some((0, 1)),
-        TypeKind::Struct(_) | TypeKind::Array { .. } | TypeKind::Fn { .. } => None,
+        TypeKind::Enum(_) | TypeKind::Struct(_) | TypeKind::Array { .. } | TypeKind::Fn { .. } => {
+            None
+        }
     }
 }
 
@@ -234,7 +295,7 @@ pub fn struct_layout(id: StructId, types: &TypeTable) -> Result<StructLayout, La
         });
     }
     let mut path = Vec::new();
-    path.push(id.raw());
+    path.push(PathEntry::Struct(id));
     let mut fields = Vec::with_capacity(info.fields.len());
     let mut offset = 0u64;
     let mut max_align = 1u64;
@@ -308,10 +369,125 @@ pub fn array_layout(array: TypeId, types: &TypeTable) -> Result<ArrayLayout, Lay
     })
 }
 
+/// Computes the deterministic byte layout of the enum registered under
+/// `id`, resolving payload types through `types`.
+///
+/// Returns the layout, or a structured [`LayoutError`] when a payload type
+/// is recursive/oversized or the size computation overflows. A unit-only
+/// enum is a single discriminant word; an enum with any data-carrying
+/// variant is a tagged union: the discriminant word followed by a payload
+/// area sized for the largest variant payload (see [`EnumLayout`]). The
+/// result is deterministic: discriminants and payloads follow declaration
+/// order and the C-style alignment rules, so identical declarations always
+/// yield identical layouts.
+pub fn enum_layout(id: EnumId, types: &TypeTable) -> Result<EnumLayout, LayoutError> {
+    let mut path = Vec::new();
+    path.push(PathEntry::Enum(id));
+    enum_layout_inner(id, types, &mut path)
+}
+
+/// The tagged-union computation behind [`enum_layout`], sharing the
+/// caller's by-value recursion path so mutually recursive payloads are
+/// detected (the caller has already pushed this enum's id).
+fn enum_layout_inner(
+    id: EnumId,
+    types: &TypeTable,
+    path: &mut Vec<PathEntry>,
+) -> Result<EnumLayout, LayoutError> {
+    let info = types
+        .enum_info(id)
+        .expect("enum ids always resolve in the owning table");
+    let mut variants = Vec::with_capacity(info.variants.len());
+    let mut max_payload_size = 0u64;
+    let mut max_payload_align = 1u64;
+    let mut any_payload = false;
+    for variant in &info.variants {
+        let Some(payload_ty) = variant.payload else {
+            variants.push(VariantPayloadLayout {
+                discriminant: variant.discriminant,
+                size: 0,
+                align: 1,
+            });
+            continue;
+        };
+        any_payload = true;
+        let (size, align) = layout_of(types, payload_ty, path, &info.name)?;
+        variants.push(VariantPayloadLayout {
+            discriminant: variant.discriminant,
+            size,
+            align,
+        });
+        max_payload_size = max_payload_size.max(size);
+        max_payload_align = max_payload_align.max(align);
+    }
+    if !any_payload {
+        // Session-17 layout: the value is the discriminant word.
+        return Ok(EnumLayout {
+            size: WORD_SIZE,
+            align: WORD_SIZE,
+            tagged: false,
+            tag_offset: 0,
+            payload_offset: 0,
+            payload_size: 0,
+            payload_align: 1,
+            variants,
+        });
+    }
+    // Tagged-union layout: the discriminant word, then the payload area
+    // (shared by every variant), aligned to the largest payload alignment.
+    let payload_offset =
+        round_up(WORD_SIZE, max_payload_align).ok_or_else(|| LayoutError::Overflow {
+            name: info.name.clone(),
+        })?;
+    let payload_size =
+        round_up(max_payload_size, max_payload_align).ok_or_else(|| LayoutError::Overflow {
+            name: info.name.clone(),
+        })?;
+    let size = payload_offset
+        .checked_add(payload_size)
+        .ok_or_else(|| LayoutError::Overflow {
+            name: info.name.clone(),
+        })?;
+    if size > MAX_AGGREGATE_BYTES {
+        return Err(LayoutError::TooLarge {
+            name: info.name.clone(),
+        });
+    }
+    Ok(EnumLayout {
+        size,
+        align: WORD_SIZE.max(max_payload_align),
+        tagged: true,
+        tag_offset: 0,
+        payload_offset,
+        payload_size,
+        payload_align: max_payload_align,
+        variants,
+    })
+}
+
 /// The scalar size/alignment of `ty`'s canonical kind, if `ty` is a scalar
 /// type (aggregates return `None`).
+///
+/// An enum is scalar only when every variant is a unit variant (its value
+/// is the discriminant word, session 17); an enum with a data-carrying
+/// variant (session 19) is a tagged union, an aggregate handled by
+/// [`enum_layout`].
 pub fn scalar_size_align(types: &TypeTable, ty: TypeId) -> Option<(u64, u64)> {
-    scalar_layout(types.kind(ty)?)
+    match types.kind(ty)? {
+        TypeKind::Enum(id) => {
+            let info = types.enum_info(*id)?;
+            if info
+                .variants
+                .iter()
+                .all(|variant| variant.payload.is_none())
+            {
+                Some((WORD_SIZE, WORD_SIZE))
+            } else {
+                None
+            }
+        }
+        other => scalar_layout(other),
+    }
 }
 
 /// Rounds `value` up to `alignment` (checked).
@@ -327,7 +503,7 @@ fn round_up(value: u64, alignment: u64) -> Option<u64> {
 fn layout_of(
     types: &TypeTable,
     ty: TypeId,
-    path: &mut Vec<u32>,
+    path: &mut Vec<PathEntry>,
     owner: &str,
 ) -> Result<(u64, u64), LayoutError> {
     match types.kind(ty).cloned() {
@@ -340,12 +516,12 @@ fn layout_of(
                     name: info.name.clone(),
                 });
             }
-            if path.contains(&id.raw()) {
+            if path.contains(&PathEntry::Struct(id)) {
                 return Err(LayoutError::Recursive {
                     name: info.name.clone(),
                 });
             }
-            path.push(id.raw());
+            path.push(PathEntry::Struct(id));
             let mut offset = 0u64;
             let mut max_align = 1u64;
             for field in &info.fields {
@@ -381,6 +557,30 @@ fn layout_of(
                 return Err(LayoutError::TooLarge { name });
             }
             Ok((size, elem_align))
+        }
+        Some(TypeKind::Enum(id)) => {
+            let info = types.enum_info(id).ok_or_else(|| LayoutError::Overflow {
+                name: owner.to_string(),
+            })?;
+            // A unit-only enum is a single discriminant word; an enum with
+            // a data-carrying variant is a tagged union (recursion through
+            // the payload is detected by the path tracking).
+            if info
+                .variants
+                .iter()
+                .all(|variant| variant.payload.is_none())
+            {
+                return Ok((WORD_SIZE, WORD_SIZE));
+            }
+            if path.contains(&PathEntry::Enum(id)) {
+                return Err(LayoutError::Recursive {
+                    name: info.name.clone(),
+                });
+            }
+            path.push(PathEntry::Enum(id));
+            let layout = enum_layout_inner(id, types, path)?;
+            path.pop();
+            Ok((layout.size, layout.align))
         }
         Some(other) => scalar_layout(&other).ok_or_else(|| LayoutError::Overflow {
             name: types.display(ty),

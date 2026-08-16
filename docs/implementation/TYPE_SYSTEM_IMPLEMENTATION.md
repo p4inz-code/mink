@@ -104,7 +104,10 @@ user-declared **structs** (nominal types, one per declaration) and
 **arrays** (`Array<T, N>`, structural/canonical) — see
 `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`. Session 17 added
 user-declared **enums** (nominal types with data-free variants) — see
-`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`.
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md` — and Session 19 added
+**data-carrying variants** (sum types: payload construction, payload
+patterns, tagged-union layout) — see
+`docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.
 
 Type identity is the interned [`TypeId`]; equality is canonical identity
 through [`TypeTable::canonical`] and [`TypeTable::unify`]. Compatibility is
@@ -608,7 +611,9 @@ As before:
 Total suite after session 17: **919 tests** (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown), all passing.
 After session 18 (pattern matching, `E-T24`…`E-T26`) it is **963 tests**
-(see `PATTERN_MATCHING_IMPLEMENTATION.md` §6).
+(see `PATTERN_MATCHING_IMPLEMENTATION.md` §6), and after session 19
+(data-carrying enum variants, `E-T27`…`E-T30`, tagged-union layout) it is
+**1007 tests** (see `SUM_TYPES_IMPLEMENTATION.md` §5).
 
 ## 26. Later Milestones
 
@@ -616,9 +621,13 @@ The type-system foundation (sessions 06–07) deliberately stops before
 advanced features. Cleanly deferred to later milestones:
 
 - implicit conversions and numeric promotion rules;
-- data-carrying enum variants (data-free enums are implemented — session
-  17, see `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`; pattern
-  matching over them is implemented — session 18, see
+- tuple payloads (a data-carrying variant holds exactly one payload) and
+  tagged-union equality (data-carrying enum variants are implemented —
+  session 19, see
+  `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`; data-free enums are
+  implemented — session 17, see
+  `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`; pattern matching
+  over them is implemented — session 18, see
   `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`); tuples;
   generic user-defined types; advanced member/index forms (e.g. indexing
   `Str` and other built-ins);

@@ -372,10 +372,12 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   **arrays** (`[T; N]`, structural) with deterministic C-style layout;
   member access (`p.x`), indexing (`a[i]`), struct/array literals, and
   place mutation are implemented. Session 17 added user-declared
-  **enums** (nominal types with named, data-free variants; see the enum
-  rules below). Still absent: tuples, data-carrying variants, generics,
-  optional/result types, … — they arrive with later milestones per
-  `docs/language/TYPE_SYSTEM.md`.
+  **enums** (nominal types with named variants; see the enum rules
+  below), and Session 19 added **data-carrying variants** (sum types:
+  `enum Option { Some(Int), None }`, constructed `Option::Some(5)`,
+  matched with payload patterns, and laid out as tagged unions). Still
+  absent: tuples, generics, optional/result types, … — they arrive with
+  later milestones per `docs/language/TYPE_SYSTEM.md`.
 - **Literals.** Integer, floating-point, string, character, boolean, and
   `null` literals have the corresponding types above.
 - **No implicit conversions.** MINK defines no implicit numeric
@@ -433,18 +435,36 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   positive integer literal length (`E-T16`). Recursive/empty/oversized
   aggregate layout is rejected (`E-T18`). Member/index assignment requires
   a mutable base and a value matching the field/element type.
-- **Enum types (session 17).** An enum (`enum E { A, B }`) is a nominal
-  type whose values are named alternatives constructed with variant paths
-  (`E::A`). Variants carry no data and no explicit discriminants; the
-  discriminant is assigned in declaration order (0, 1, …) and an enum
-  value occupies one word, so enums copy freely and are never subject to
-  move/ownership rules. Enum equality (`==`/`!=`) requires the same enum
-  type (`E::A == F::A` is `E-T02`); there is no ordering or conversion to
-  `Int`. Variant paths on non-enum types are `E-T22`; undeclared variants
-  are `E-T23`. Enum names share the type namespace with struct names
+- **Enum types (sessions 17 and 19).** An enum (`enum E { A, B }`) is a
+  nominal type whose values are named alternatives constructed with
+  variant paths (`E::A`) or, for data-carrying variants, variant calls
+  (`E::B(expr)`). Variants carry no explicit discriminants; the
+  discriminant is assigned in declaration order (0, 1, …). A **unit-only**
+  enum value occupies one word, copies freely, and is never subject to
+  move/ownership rules; an enum **with a data-carrying variant** is a
+  tagged union (discriminant word + payload area, Session 19) whose
+  payloads may own heap values and therefore move. Enum equality
+  (`==`/`!=`) requires the same enum type (`E::A == F::A` is `E-T02`);
+  equality of tagged-union enums is `E-T30`, unit-only enums keep
+  discriminant equality. There is no ordering or conversion to `Int`.
+  Variant paths on non-enum types are `E-T22`; undeclared variants are
+  `E-T23`. Enum names share the type namespace with struct names
   (duplicates are `E-S08`/`E-S15`); duplicate variants within one enum
   are `E-S16`. Enums compose with structs, arrays, parameters, returns,
   and bindings.
+- **Data-carrying variants (session 19).** A variant declares exactly one
+  payload type (`enum Shape { Circle(Int), Nothing }`); the payload must
+  be a value type with a deterministic layout (pointers, references,
+  arrays, and function types are `E-T27` invalid variant payloads).
+  `E::V(expr)` constructs the value (payload mismatch is `E-T28`;
+  arity mistakes are `E-T29`; `E::V()` is the parse error `E-P25`).
+  Payload patterns (`E::V(x)`, `E::V(_)`, `E::V(5)`, `E::V(E2::X)`)
+  bind or test the extracted payload; exhaustiveness is recursive, so
+  covering a variant requires covering its payload's alternatives too
+  (`E-T24`/`E-T25` apply to payload sub-coverage as well). Matching an
+  owned payload moves it out of the scrutinee; constructing with an owned
+  payload transfers it (`E-S10` applies to both). See
+  [`SUM_TYPES_IMPLEMENTATION.md`](../implementation/SUM_TYPES_IMPLEMENTATION.md).
 - **Pattern matching (session 18).** A `match e { pat => { .. }, .. }`
   statement dispatches on a scrutinee of `Int`, `Bool`, or enum type.
   Patterns are integer literals (including negatives), boolean literals,
@@ -459,12 +479,12 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   copy of the scrutinee (`let x = e;` semantics) in its own scope, and
   `_` binds nothing. See
   [`PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/PATTERN_MATCHING_IMPLEMENTATION.md).
-- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T26`
+- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T30`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
-  count, not iterable, the session-14 aggregate rules, the session-17
-  enum rules, and the session-18 match rules above). They carry the exact
-  offending span, rendered expected/actual types where useful, and a
-  related span for assignments.
+  count, not iterable, the session-14 aggregate rules, the session-17/19
+  enum rules, the session-18 match rules, and the session-19 sum-type
+  rules above). They carry the exact offending span, rendered
+  expected/actual types where useful, and a related span for assignments.
 - **Cascade control.** An unknown/error type absorbs failed sub-expressions
   so one root error (an unresolved name, an invalid operator) never
   cascades into misleading secondary diagnostics; independent errors are

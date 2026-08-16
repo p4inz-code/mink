@@ -265,7 +265,8 @@ All errors carry exact source spans and structured messages.
   15 + 75 reference/borrowing tests from Session 16 + 41 tests from
   Session 17: 25 enums + 3 parser + 3 semantics + 7 typecheck + 2
   backend + 1 lib unit), and **963 tests** after Session 18 (pattern
-  matching, +44 in `tests/pattern_matching.rs`). See
+  matching, +44 in `tests/pattern_matching.rs`), and **1007 tests** after
+  Session 19 (sum types, +44 in `tests/sum_types.rs`). See
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
   per-file breakdown.
 

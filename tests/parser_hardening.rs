@@ -1339,9 +1339,16 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
                 walk_expr(elem, text_len, src);
             }
         }
-        ExprKind::EnumVariant { name, variant } => {
+        ExprKind::EnumVariant {
+            name,
+            variant,
+            payload,
+        } => {
             walk_ident(name, text_len, src);
             walk_ident(variant, text_len, src);
+            if let Some(payload) = payload {
+                walk_expr(payload, text_len, src);
+            }
         }
         ExprKind::Group(inner) => walk_expr(inner, text_len, src),
     }

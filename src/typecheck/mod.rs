@@ -30,7 +30,10 @@ use crate::semantics::{SemanticResult, SymbolId};
 use crate::source::{SourceMap, Span};
 
 pub use error::{TypeError, TypeErrorKind};
-pub use ty::{StructFieldInfo, StructId, StructInfo, TypeId, TypeKind, TypeTable};
+pub use ty::{
+    EnumId, EnumInfo, EnumVariantInfo, StructFieldInfo, StructId, StructInfo, TypeId, TypeKind,
+    TypeTable,
+};
 
 /// The human-readable reason a layout could not be computed (shared with
 /// the backend lowering, which validates aggregate layouts against the
