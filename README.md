@@ -197,11 +197,11 @@ Honest status, because durable engineering starts with accurate claims:
 - **Aggregate limits** — structs, arrays, and tagged-union enums are
   values with deterministic C-style layout; they can be returned from
   functions and stored at module scope through a caller-allocated return
-  slot and constant-evaluated data images (session 22). `main` still
-  cannot return an aggregate (its result is the exit code, `E-B09`), and
-  a packed run of boolean fields immediately followed by an integer field
-  is a known layout limitation. Tagged-union enums cannot be compared
-  with `==`/`!=` (`E-T30`); there
+  slot and constant-evaluated data images (session 22), and booleans
+  packed at any byte offset coexist correctly with the integer fields
+  that follow them (session 23). `main` still cannot return an aggregate
+  (its result is the exit code, `E-B09`). Tagged-union enums cannot be
+  compared with `==`/`!=` (`E-T30`); there
   is no enum-to-`Int` conversion; pattern matching covers
   `Int`/`Bool`/enum scrutinees only (no struct/array destructuring,
   ranges, or or-patterns yet), and there are no tuples or generics.
@@ -269,7 +269,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1048, all passing)
+├── tests/      Compiler tests (1121, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

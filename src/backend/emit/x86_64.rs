@@ -84,8 +84,10 @@ pub(crate) enum Reg {
 /// aggregate: byte 0 of the value); word 1 is the second word for the
 /// two-word types (`Range`, a 16-byte struct), and `0` otherwise.
 /// Aggregate values occupy `local.words` consecutive words *below* word 0
-/// (byte `k` of the value lives at `word0 - k`), so the value's byte
-/// layout is preserved in the slot.
+/// in chunk order: byte `b` of a value lives at `word0 - 8*(b/8) +
+/// (b%8)`, so each 8-byte chunk sits at `[word0 - 8k, word0 - 8k + 7]`
+/// in normal byte order and sub-word pieces (booleans) stay inside their
+/// own chunk instead of colliding with the qword below it.
 type Slots = Vec<(i32, i32)>;
 
 /// Computes each local's stack-slot offsets from `rbp`, plus the total
@@ -1127,10 +1129,10 @@ fn emit_inst(
             static_index,
         } => {
             // The data region holds the value in normal byte order (byte
-            // `b` at `base + b`); the slot's downward image (byte `b` at
-            // `word0 - b`) is filled with the matching byte-exact copy, so
-            // sub-word values (boolean tails, sub-word element arrays)
-            // keep their byte layout.
+            // `b` at `base + b`); the slot's chunked image (byte `b` at
+            // `word0 - 8*(b/8) + (b%8)`) is filled with the matching
+            // byte-exact copy, so sub-word values (boolean tails,
+            // sub-word element arrays) land at their chunk positions.
             code.lea_r_rip(Reg::Rcx, PatchKind::Static(*static_index));
             let size = statics[*static_index].size;
             copy_static_into_slot(code, slots, *target, Reg::Rcx, size);
@@ -1143,7 +1145,7 @@ fn emit_inst(
                 eval_rax(code, slots, *src);
                 code.mov_rip_rax(*static_index);
             } else {
-                // A multi-word aggregate binding: copy the slot's downward
+                // A multi-word aggregate binding: copy the slot's chunked
                 // image into the data region's normal byte order with the
                 // byte-exact store used for every value move.
                 code.lea_r_rip(Reg::Rcx, PatchKind::Static(*static_index));
@@ -1331,9 +1333,17 @@ fn emit_inst(
             size,
         } => {
             let base_word0 = slots[base.raw() as usize].0;
-            // The field starts `byte_offset` bytes below the value's first
-            // word (the value image grows downward in the slot).
-            code.lea_r_mem(Reg::Rcx, Reg::Rbp, base_word0 - *byte_offset as i32);
+            // The field's first byte is at its value-byte offset: within
+            // its 8-byte chunk in normal order, chunks stacked downward
+            // (byte `b` at `word0 - 8*(b/8) + (b%8)`), so a sub-word field
+            // at offsets 1..7 sits at the top of the first chunk instead
+            // of colliding with the qword below it.
+            let offset = *byte_offset as i32;
+            code.lea_r_mem(
+                Reg::Rcx,
+                Reg::Rbp,
+                base_word0 - (offset - offset % 8) + offset % 8,
+            );
             copy_into_slot(code, slots, *target, Reg::Rcx, *size);
             let _ = field_ty;
         }
@@ -1345,7 +1355,12 @@ fn emit_inst(
             src,
         } => {
             let base_word0 = slots[base.raw() as usize].0;
-            code.lea_r_mem(Reg::Rcx, Reg::Rbp, base_word0 - *byte_offset as i32);
+            let offset = *byte_offset as i32;
+            code.lea_r_mem(
+                Reg::Rcx,
+                Reg::Rbp,
+                base_word0 - (offset - offset % 8) + offset % 8,
+            );
             store_into(code, slots, *src, Reg::Rcx, *size);
             let _ = field_ty;
         }
@@ -1365,10 +1380,18 @@ fn emit_inst(
             eval_rax(code, slots, *index);
             code.cmp_r_imm32(Reg::Rax, *len as u32);
             code.jcc(0x83, PatchKind::Label(fail_label)); // jae
-            // rax = index * stride; element address = base - rax.
+            // rax = index * stride; the element address is the value-byte
+            // offset `rax` within the chunked image: `word0 - rax +
+            // 2*(rax % 8)`. Full-word strides leave `rax % 8 == 0`, so
+            // the correction is a no-op for them; sub-word elements
+            // (booleans) land at their chunk positions instead of
+            // colliding with the qword below.
             code.imul_rax_imm32(*stride);
             code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
             code.sub_rr(Reg::Rcx, Reg::Rax);
+            code.and_r_imm8(Reg::Rax, 7);
+            code.add_rr(Reg::Rcx, Reg::Rax);
+            code.add_rr(Reg::Rcx, Reg::Rax);
             copy_into_slot(code, slots, *target, Reg::Rcx, *stride);
             let _ = elem_ty;
         }
@@ -1386,6 +1409,9 @@ fn emit_inst(
             code.imul_rax_imm32(*stride);
             code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
             code.sub_rr(Reg::Rcx, Reg::Rax);
+            code.and_r_imm8(Reg::Rax, 7);
+            code.add_rr(Reg::Rcx, Reg::Rax);
+            code.add_rr(Reg::Rcx, Reg::Rax);
             store_into(code, slots, *src, Reg::Rcx, *stride);
             let _ = elem_ty;
         }
@@ -1396,15 +1422,19 @@ fn emit_inst(
             src,
         } => {
             // Walk the place chain from the root's first word. Field
-            // steps subtract their static byte offset; index steps are
-            // bounds-checked (`E-R10`) and subtract `index * stride`.
-            // The fail path is the function's shared `E-R10` block, so
-            // valid chains never fall into it.
+            // steps move to the field's chunk position; index steps are
+            // bounds-checked (`E-R10`) and move to the element's chunk
+            // position (`word0 - off + 2*(off % 8)` for `off =
+            // index * stride`, a no-op for full-word strides). The fail
+            // path is the function's shared `E-R10` block, so valid
+            // chains never fall into it.
             code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
             for step in steps {
                 match step {
                     PlaceAddrStep::Field { byte_offset } => {
-                        code.sub_r_imm32(Reg::Rcx, *byte_offset);
+                        let offset = *byte_offset as i32;
+                        code.sub_r_imm32(Reg::Rcx, (offset - offset % 8) as u32);
+                        code.add_r_imm8(Reg::Rcx, (offset % 8) as u8);
                     }
                     PlaceAddrStep::Index { index, stride, len } => {
                         eval_rax(code, slots, *index);
@@ -1412,6 +1442,9 @@ fn emit_inst(
                         code.jcc(0x83, PatchKind::Label(fail_label)); // jae
                         code.imul_rax_imm32(*stride);
                         code.sub_rr(Reg::Rcx, Reg::Rax);
+                        code.and_r_imm8(Reg::Rax, 7);
+                        code.add_rr(Reg::Rcx, Reg::Rax);
+                        code.add_rr(Reg::Rcx, Reg::Rax);
                     }
                 }
             }
@@ -1432,7 +1465,9 @@ fn emit_inst(
             for step in steps {
                 match step {
                     PlaceAddrStep::Field { byte_offset } => {
-                        code.sub_r_imm32(Reg::Rcx, *byte_offset);
+                        let offset = *byte_offset as i32;
+                        code.sub_r_imm32(Reg::Rcx, (offset - offset % 8) as u32);
+                        code.add_r_imm8(Reg::Rcx, (offset % 8) as u8);
                     }
                     PlaceAddrStep::Index { index, stride, len } => {
                         eval_rax(code, slots, *index);
@@ -1440,6 +1475,9 @@ fn emit_inst(
                         code.jcc(0x83, PatchKind::Label(fail_label)); // jae
                         code.imul_rax_imm32(*stride);
                         code.sub_rr(Reg::Rcx, Reg::Rax);
+                        code.and_r_imm8(Reg::Rax, 7);
+                        code.add_rr(Reg::Rcx, Reg::Rax);
+                        code.add_rr(Reg::Rcx, Reg::Rax);
                     }
                 }
             }
@@ -1509,8 +1547,10 @@ fn emit_inst(
             payload_size,
         } => {
             // The payload area starts `payload_offset` bytes below the
-            // value's first word; `payload_size` bytes are copied exactly
-            // (the payload's own size, never the shared area's full width).
+            // value's first word (for the current layout the payload
+            // offset is always 8, the start of the second chunk);
+            // `payload_size` bytes are copied exactly (the payload's own
+            // size, never the shared area's full width).
             let value_word0 = slots[value.raw() as usize].0;
             code.lea_r_mem(Reg::Rcx, Reg::Rbp, value_word0 - *payload_offset as i32);
             copy_into_slot(code, slots, *target, Reg::Rcx, *payload_size);
@@ -1519,12 +1559,13 @@ fn emit_inst(
 }
 
 /// Copies `size` bytes from the memory at `src` (a register holding the
-/// source address) into the destination local's slot image, preserving
-/// the byte layout: aggregate value bytes run *downward* from the region's
-/// first byte (byte `b` at `start - b`, matching the slot convention where
-/// byte `b` of a value lives at `word0 - b`). Word-sized runs move full
-/// 8-byte words; the remainder is moved byte by byte so fields that are
-/// not word-aligned (booleans, nested all-bool structs) are copied exactly.
+/// source address of the value's first byte) into the destination local's
+/// slot image, preserving the byte layout: aggregate value bytes sit in
+/// normal byte order within each 8-byte chunk, and chunks are stacked
+/// downward (byte `b` of a value lives at `word0 - 8*(b/8) + (b%8)`).
+/// Word-sized runs move full 8-byte words; the remainder is moved byte by
+/// byte so fields that are not word-aligned (booleans, nested all-bool
+/// structs) keep their chunk positions exactly.
 fn copy_into_slot(code: &mut Code, slots: &Slots, dst: crate::mir::LocalId, src: Reg, size: u32) {
     let word0 = slots[dst.raw() as usize].0;
     let words = size / 8;
@@ -1534,17 +1575,19 @@ fn copy_into_slot(code: &mut Code, slots: &Slots, dst: crate::mir::LocalId, src:
         code.mov_mem_r(Reg::Rbp, word0 - k, Reg::Rax);
     }
     for k in 0..(size % 8) {
-        let byte = (words * 8 + k) as i32;
-        code.movzx_byte(Reg::Rax, src, -byte);
-        code.mov_mem_r8(Reg::Rbp, word0 - byte, Reg::Rax);
+        // The remainder bytes sit at the start of the piece's last chunk,
+        // in normal byte order (the same relative positions in both the
+        // source region and the destination slot).
+        code.movzx_byte(Reg::Rax, src, -8 * words as i32 + k as i32);
+        code.mov_mem_r8(Reg::Rbp, word0 - 8 * words as i32 + k as i32, Reg::Rax);
     }
 }
 
 /// Copies `size` bytes from a static data region (normal byte order:
-/// byte `b` at `[base + b]`) into the destination local's downward slot
-/// image (byte `b` at `[word0 - b]`). Full words move as qwords; the
-/// sub-word remainder moves byte by byte, so sub-word values (booleans,
-/// sub-word element arrays) keep their byte layout.
+/// byte `b` at `[base + b]`) into the destination local's slot image
+/// (byte `b` at `[word0 - 8*(b/8) + (b%8)]`). Full words move as qwords;
+/// the sub-word remainder moves byte by byte, so sub-word values
+/// (booleans, sub-word element arrays) land at their chunk positions.
 fn copy_static_into_slot(
     code: &mut Code,
     slots: &Slots,
@@ -1560,9 +1603,12 @@ fn copy_static_into_slot(
         code.mov_mem_r(Reg::Rbp, word0 - k, Reg::Rax);
     }
     for k in 0..(size % 8) {
+        // The remainder bytes sit at the start of the piece's last chunk,
+        // so the data byte at `base + words*8 + k` lands at the slot's
+        // corresponding chunk position.
         let byte = (words * 8 + k) as i32;
         code.movzx_byte(Reg::Rax, src, byte);
-        code.mov_mem_r8(Reg::Rbp, word0 - byte, Reg::Rax);
+        code.mov_mem_r8(Reg::Rbp, word0 - 8 * words as i32 + k as i32, Reg::Rax);
     }
 }
 
@@ -1585,15 +1631,15 @@ fn store_slot_to_static(
     }
     for k in 0..(size % 8) {
         let byte = (words * 8 + k) as i32;
-        code.movzx_byte(Reg::Rax, Reg::Rbp, word0 - byte);
+        code.movzx_byte(Reg::Rax, Reg::Rbp, word0 - 8 * words as i32 + k as i32);
         code.mov_mem_r8(dst, byte, Reg::Rax);
     }
 }
 
 /// Stores `src` into the memory at `dst` (a register holding the
-/// destination address — the first byte of a field or element region,
-/// whose bytes also run downward): `size` bytes copied from the source
-/// local's slot image, or a single byte/word for a scalar constant.
+/// destination address — the first byte of a field, element, or payload
+/// region, whose bytes sit in chunk order): `size` bytes copied from the
+/// source local's slot image, or a single byte/word for a scalar constant.
 fn store_into(code: &mut Code, slots: &Slots, src: BOperand, dst: Reg, size: u32) {
     match src {
         BOperand::Const(value) => {
@@ -1615,9 +1661,8 @@ fn store_into(code: &mut Code, slots: &Slots, src: BOperand, dst: Reg, size: u32
                 code.mov_mem_r(dst, -k, Reg::Rax);
             }
             for k in 0..(size % 8) {
-                let byte = (words * 8 + k) as i32;
-                code.movzx_byte(Reg::Rax, Reg::Rbp, word0 - byte);
-                code.mov_mem_r8(dst, -byte, Reg::Rax);
+                code.movzx_byte(Reg::Rax, Reg::Rbp, word0 - 8 * words as i32 + k as i32);
+                code.mov_mem_r8(dst, -8 * words as i32 + k as i32, Reg::Rax);
             }
         }
     }

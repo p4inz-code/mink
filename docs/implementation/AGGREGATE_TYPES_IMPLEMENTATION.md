@@ -75,8 +75,8 @@ fn main() {
 - **Array literals** infer their length from the element count:
   `[e1, e2, e3]`. Elements must all have one common type.
 - Aggregate **returns** (a function whose result is a struct/array) and
-  aggregate **module statics** are rejected deterministically this session
-  (see §6); passing aggregates **into** functions is supported.
+  aggregate **module statics** are supported since session 22; passing
+  aggregates **into** functions is supported.
 
 ## 3. Type system changes
 
@@ -140,12 +140,19 @@ Aggregate rules:
   checked (`LayoutError::Overflow` never panics).
 
 **Value image in a slot.** A scalar value occupies its slot's first words.
-An aggregate value's bytes run **downward** from the slot's first word:
-byte `b` of the value lives at `word0 - b` (word `k` at `word0 - 8k`).
-This keeps unaligned fields (a `Bool` at byte offset 3) addressable from
-the slot base with one `lea`, and is the convention the emitter's copy
-helpers and bounds-checked addressing all share. Struct/array slots are
-allocated with `ceil(size / 8)` words.
+An aggregate value's bytes sit in the **chunked** convention (session
+23): byte `b` of the value lives at `word0 - 8*(b/8) + (b%8)` — normal
+byte order within each 8-byte chunk, chunks stacked downward, so full
+words occupy `[word0 - 8k, word0 - 8k + 7]` and sub-word pieces
+(booleans, sub-word elements, tails) stay inside their own chunk. This
+keeps unaligned fields (a `Bool` at byte offset 3) addressable from the
+slot base with one `lea`, and is the convention the emitter's copy
+helpers and bounds-checked addressing all share. (Session 14–22 placed
+sub-word pieces *mirrored* at `word0 - b`; that put a boolean at offsets
+1–7 inside the qword of a following integer field, silently clobbering
+both — fixed in session 23.) Slots are sized conservatively with at
+least `ceil(size / 8)` words plus guard slack, so a slot's bytes never
+overlap the next slot.
 
 ## 5. Pipeline
 
@@ -273,9 +280,13 @@ All errors carry exact source spans and structured messages.
   Session 19 (sum types, +44 in `tests/sum_types.rs`), **1039 tests**
   after Session 20 (explicit discriminants, +32 in
   `tests/discriminants.rs`), **1048 tests** after the Session 21 deep
-  audit, and **1096 tests** after Session 22 (aggregate returns and
-  module-scope aggregate statics, +48 in `tests/aggregate_returns.rs`,
-  including sub-word guard-word regressions). See
+  audit, **1100 tests** after Session 22 (aggregate returns and
+  module-scope aggregate statics, +52 in `tests/aggregate_returns.rs`,
+  including sub-word guard-word regressions), and **1121 tests** after
+  Session 23 (the sub-word layout fix, +21 in `tests/bool_packing.rs`:
+  packed booleans at offsets 1–7 and beyond coexisting with following
+  integer fields through stores, place chains, whole-value copies,
+  statics, parameters, returns, references, and enum payloads). See
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
   per-file breakdown.
 
@@ -285,10 +296,6 @@ All errors carry exact source spans and structured messages.
   code, so struct, array, and tagged-union results are rejected with
   `E-B09` (other functions return aggregates through a caller-allocated
   return slot, session 22).
-- A struct that packs booleans into byte offsets 1–7 immediately before
-  an integer field reads those booleans as `false` (the integer chunk's
-  qword covers the booleans' downward tail bytes); word-aligned boolean
-  placements (offsets 0 and 8-aligned) are correct.
 - Arrays are fixed-size values; no resizing, no slices, no iteration
   beyond manual index loops.
 - The 1 MiB heap bound is also the maximum single aggregate value size.

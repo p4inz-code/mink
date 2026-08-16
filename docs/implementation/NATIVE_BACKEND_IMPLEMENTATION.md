@@ -143,19 +143,24 @@ runtime bounds checks (`E-R10`) on every index step.
 Aggregate layout is resolved during lowering through the same
 `struct_layout`/`array_layout` engine the type checker used, so backend
 and typechecker cannot disagree about offsets. Aggregate values in stack
-slots follow the downward value-image convention: full-word chunks fill
-qwords upward from `slot_word0 - 8k`, while sub-word chunks (booleans,
-sub-word element arrays, tails) run byte-wise downward from `word0`;
-copies and argument marshalling are word-wise with byte-wise unaligned
-tails. Every slot reserves guard words so the next slot's first qword can
-never overwrite a sub-word value's tail bytes (sub-word element arrays
-and boolean tails get one extra word when their byte size has a tail of
-two or more). Aggregate **returns** (through a caller-allocated return
-slot) and aggregate **module statics** (constant-evaluated value images
-in the data section) are supported since session 22; only `main` may not
-return an aggregate (`E-B09`), and aggregate **arguments** are supported.
-Module-binding data regions hold values in normal byte order; loads and
-stores bridge the two conventions byte-exactly.
+slots follow the **chunked value-image convention** (session 23): byte
+`b` of a value lives at `slot_word0 - 8*(b/8) + (b%8)` — normal byte
+order within each 8-byte chunk, chunks stacked downward, so full-word
+fields occupy qwords `[slot_word0 - 8k, slot_word0 - 8k + 7]` and
+sub-word pieces (booleans, sub-word element arrays, tails) stay inside
+their own chunk. (A sub-word piece used to be placed *mirrored* at
+`word0 - b`, which for offsets 1–7 landed inside the following integer
+field's qword and silently clobbered it — the bool-packing defect fixed
+in session 23.) Copies and argument marshalling are word-wise with
+byte-wise unaligned tails. Every slot reserves conservative guard words
+so the next slot's first qword can never overwrite a sub-word value's
+bytes. Aggregate **returns** (through a caller-allocated return slot) and
+aggregate **module statics** (constant-evaluated value images in the
+data section) are supported since session 22; only `main` may not return
+an aggregate (`E-B09`), and aggregate **arguments** are supported.
+Module-binding data regions hold values in normal byte order (byte `b`
+at `base + b`); loads and stores bridge the two conventions
+byte-exactly.
 
 **Rejected constructs** (structured errors, never miscompilation):
 
@@ -301,10 +306,10 @@ documented in `src/runtime/abi.rs`:
   `TypeKind::Ptr<T>` exists in the type system but only `Ptr<Int>` is
   instantiable today. Structs, arrays, and tagged-union enums are
   supported as values (member/index access, place mutation, arguments,
-  returns, module statics). A struct that packs boolean fields into byte
-  offsets 1–7 immediately followed by an integer field is a known layout
-  limitation: the integer chunk's qword covers the booleans' downward
-  tail bytes, so those booleans read back as `false`.
+  returns, module statics). Since session 23, booleans packed at any byte
+  offset coexist correctly with the integer fields that follow them (the
+  chunked slot image keeps sub-word pieces inside their own 8-byte
+  chunk).
 - No debug info, no symbol tables beyond what the PE format requires, and
   no optimizations in the backend itself (the MIR pipeline already
   optimized the input).
@@ -333,7 +338,10 @@ it is **1007 tests** (+44 in `tests/sum_types.rs`; see
 discriminants) it is **1039 tests** (+32 in `tests/discriminants.rs`; see
 `DISCRIMINANTS_IMPLEMENTATION.md` §5), and after the Session 21 deep
 audit it is **1048 tests** (+7 in `tests/references.rs`, +2 in
-`tests/ownership.rs`).
+`tests/ownership.rs`). After session 22 (aggregate returns and
+module-scope aggregate statics) it is **1100 tests** (+52 in
+`tests/aggregate_returns.rs`), and after session 23 (the sub-word
+layout fix, `tests/bool_packing.rs`) it is **1121 tests** (+21).
 The backend tests
 (`tests/backend.rs`) cover program structure and determinism,
 functions/locals/instructions, constant decoding, string decoding

@@ -930,11 +930,13 @@ fn native_module_binding_bounds_check_still_traps() {
 // Sub-word aggregate values (regression: slot guard words)
 // ---------------------------------------------------------------------------
 // A value whose bytes include a sub-word tail (booleans, sub-word element
-// arrays) runs *downward* from its slot's first word; without a guard word
-// the next slot's first qword silently overwrote those tail bytes, so
-// bool reads at byte offset >= 1 returned 0. Every path is covered here:
-// construction, element/field access, whole-value copies, module statics,
-// parameters, and returns.
+// arrays) keeps those bytes inside their own 8-byte chunk (session 23
+// chunked slot image); slot sizing still reserves a conservative guard
+// word so the next slot's first qword can never overwrite a sub-word
+// value's bytes. Every path is covered here: construction, element/field
+// access, whole-value copies, module statics, parameters, and returns.
+// (Packed booleans immediately before an integer field are covered in
+// depth by `tests/bool_packing.rs`, session 23.)
 
 #[test]
 fn native_bool_array_elements_read_at_every_index() {
@@ -962,10 +964,9 @@ fn native_bool_array_elements_read_at_every_index() {
 #[test]
 fn native_bool_struct_fields_read_at_nonzero_offsets() {
     // Bools at offsets 0 and 16 (word-aligned, as the layout packs them
-    // next to the integer fields), read back correctly; a *packed* run of
-    // booleans at offsets 1-7 followed by an integer field remains a
-    // known limitation (the integer chunk's qword covers the downward
-    // tail bytes of the packed booleans).
+    // next to the integer fields) read back correctly; *packed* runs of
+    // booleans at offsets 1-7 followed by an integer field are covered by
+    // `tests/bool_packing.rs` (session 23).
     let exe = build(
         "struct F { a: Bool, b: Int, c: Bool, d: Int }
          fn main() {

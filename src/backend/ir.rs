@@ -502,10 +502,11 @@ pub enum BInstKind {
     },
     /// Form a reference (session 16): compute the machine address of the
     /// place rooted at `base`'s slot, walked by `steps` from the root's
-    /// first word (field steps subtract their static byte offset; index
-    /// steps are bounds-checked, `E-R10`, and subtract `index * stride`),
-    /// and store the address into `target` (a word-sized `Ref` slot). The
-    /// `E-R10` fail path is the function's shared bounds-check block.
+    /// first word (field steps move to the field's chunk position; index
+    /// steps are bounds-checked, `E-R10`, and move to the element's chunk
+    /// position), and store the address into `target` (a word-sized `Ref`
+    /// slot). The `E-R10` fail path is the function's shared
+    /// bounds-check block.
     RefAddr {
         /// The destination slot (a `Ref` slot).
         target: crate::mir::LocalId,

@@ -98,24 +98,31 @@ fn hex_digit(byte: u8, span: Span) -> Result<u8, BackendError> {
 /// The word count a slot needs so that the slot that follows it never
 /// overwrites this value's lowest bytes.
 ///
-/// Aggregate value bytes run *downward* from the slot's first word: full
-/// 8-byte chunks occupy `[word0 - 8k, word0 - 8k + 7]` and sub-word chunks
-/// (booleans, sub-word elements and tails) occupy `[word0 - b, word0]` for
-/// their lowest byte `b`. The next slot is placed `8 * words` bytes below
-/// `word0` and its first full word covers `[word0 - 8 * words, word0 -
-/// 8 * words + 7]`; for the two regions to stay disjoint the slot needs
-/// `8 * words >= bottom + 8`. Full-word-only values (integers, integer
-/// arrays) already satisfy this with `ceil(size / 8)`; sub-word tails and
-/// sub-word-element arrays need the guard word.
+/// Aggregate value bytes sit in normal byte order within each 8-byte
+/// chunk, and chunks are stacked downward from the slot's first word:
+/// byte `b` of a value lives at `word0 - 8*(b/8) + (b%8)`, so chunk `k`
+/// occupies `[word0 - 8k, word0 - 8k + 7]` and sub-word pieces (booleans,
+/// sub-word elements and tails) stay inside their own chunk. `bottom` is
+/// the lowest byte offset (below `word0`) the value can reach; the next
+/// slot is placed `8 * words` bytes below `word0` and its first full word
+/// covers `[word0 - 8 * words, word0 - 8 * words + 7]`, so the regions
+/// stay disjoint when `8 * words >= bottom + 8`. The conservative
+/// `bottom + 8` bound means a pure sub-word value (an all-bool struct, a
+/// `[Bool; N]` array) still receives one guard word of padding even
+/// though its bytes now stay within `ceil(size / 8)` chunks — harmless
+/// slack that keeps slot sizing independent of the value's contents.
 fn value_bottom_words(size: u64, bottom: u64) -> u64 {
     let _ = size;
     (bottom + 8).div_ceil(8)
 }
 
-/// The lowest byte offset (below a value's first word) a struct occupies:
-/// the maximum, over fields, of `offset + size - 1` for sub-word fields
-/// and `offset + size - 8` for full-word fields (their qword starts at
-/// `word0 - offset` and covers `[word0 - offset, word0 - offset + 7]`).
+/// The lowest byte offset (below a value's first word) a struct occupies,
+/// computed conservatively: the maximum, over fields, of `offset +
+/// size - 1` for sub-word fields and `offset + size - 8` for full-word
+/// fields (a full-word field's qword starts at `word0 - offset` and
+/// covers `[word0 - offset, word0 - offset + 7]`). This is always at
+/// least the new chunked convention's bottom (`8 * (ceil(size/8) - 1)`),
+/// so slot sizing stays valid for both.
 fn struct_bottom_offset(layout: &layout::StructLayout) -> u64 {
     layout
         .fields
@@ -132,11 +139,11 @@ fn struct_bottom_offset(layout: &layout::StructLayout) -> u64 {
         .unwrap_or(0)
 }
 
-/// The lowest byte offset (below a value's first word) an array occupies.
-/// Element `k` starts at `word0 - k * elem_size`; full-word elements fill
-/// qwords *upward* from their start (so the last element's bottom is its
-/// final qword at `elem_size - 8`), while sub-word elements run downward
-/// (so the last element's bottom is its final byte at `elem_size - 1`).
+/// The lowest byte offset (below a value's first word) an array occupies,
+/// computed conservatively (see [`struct_bottom_offset`]): element `k`
+/// starts at `word0 - k * elem_size`; a full-word element's final qword
+/// bottoms out at `elem_size - 8`, a sub-word element's final byte at
+/// `elem_size - 1`.
 fn array_bottom_offset(layout: &layout::ArrayLayout) -> u64 {
     let tail = if layout.elem_size % 8 == 0 {
         layout.elem_size - 8
@@ -147,8 +154,9 @@ fn array_bottom_offset(layout: &layout::ArrayLayout) -> u64 {
 }
 
 /// The lowest byte offset (below a value's first word) a tagged-union
-/// enum occupies: the discriminant word starts at `word0 - tag_offset`,
-/// and the payload area behaves like a struct field at `payload_offset`.
+/// enum occupies, computed conservatively: the discriminant word starts
+/// at `word0 - tag_offset`, and the payload area behaves like a struct
+/// field at `payload_offset`.
 fn enum_bottom_offset(layout: &layout::EnumLayout) -> u64 {
     let tag = layout.tag_offset; // the tag is a full word
     let payload = layout.payload_offset
