@@ -435,23 +435,27 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   positive integer literal length (`E-T16`). Recursive/empty/oversized
   aggregate layout is rejected (`E-T18`). Member/index assignment requires
   a mutable base and a value matching the field/element type.
-- **Enum types (sessions 17 and 19).** An enum (`enum E { A, B }`) is a
-  nominal type whose values are named alternatives constructed with
+- **Enum types (sessions 17, 19, and 20).** An enum (`enum E { A, B }`)
+  is a nominal type whose values are named alternatives constructed with
   variant paths (`E::A`) or, for data-carrying variants, variant calls
-  (`E::B(expr)`). Variants carry no explicit discriminants; the
-  discriminant is assigned in declaration order (0, 1, …). A **unit-only**
-  enum value occupies one word, copies freely, and is never subject to
-  move/ownership rules; an enum **with a data-carrying variant** is a
-  tagged union (discriminant word + payload area, Session 19) whose
-  payloads may own heap values and therefore move. Enum equality
-  (`==`/`!=`) requires the same enum type (`E::A == F::A` is `E-T02`);
-  equality of tagged-union enums is `E-T30`, unit-only enums keep
-  discriminant equality. There is no ordering or conversion to `Int`.
-  Variant paths on non-enum types are `E-T22`; undeclared variants are
-  `E-T23`. Enum names share the type namespace with struct names
+  (`E::B(expr)`). Variants may declare an **explicit discriminant**
+  (`A = 5`, session 20); otherwise the discriminant is the previous
+  variant's value plus one, starting at 0 — so `enum E { A = 5, B }`
+  gives `A` the tag `5` and `B` the tag `6`. Duplicate tags are `E-T31`;
+  implicit continuation past the largest 64-bit value is `E-T32`. A
+  **unit-only** enum value occupies one word, copies freely, and is never
+  subject to move/ownership rules; an enum **with a data-carrying
+  variant** is a tagged union (discriminant word + payload area, Session
+  19) whose payloads may own heap values and therefore move. Enum
+  equality (`==`/`!=`) requires the same enum type (`E::A == F::A` is
+  `E-T02`); equality of tagged-union enums is `E-T30`, unit-only enums
+  keep discriminant equality. There is no ordering or conversion to
+  `Int`. Variant paths on non-enum types are `E-T22`; undeclared variants
+  are `E-T23`. Enum names share the type namespace with struct names
   (duplicates are `E-S08`/`E-S15`); duplicate variants within one enum
   are `E-S16`. Enums compose with structs, arrays, parameters, returns,
-  and bindings.
+  and bindings. See
+  [`DISCRIMINANTS_IMPLEMENTATION.md`](../implementation/DISCRIMINANTS_IMPLEMENTATION.md).
 - **Data-carrying variants (session 19).** A variant declares exactly one
   payload type (`enum Shape { Circle(Int), Nothing }`); the payload must
   be a value type with a deterministic layout (pointers, references,
@@ -479,12 +483,13 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   copy of the scrutinee (`let x = e;` semantics) in its own scope, and
   `_` binds nothing. See
   [`PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/PATTERN_MATCHING_IMPLEMENTATION.md).
-- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T30`
+- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T32`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
-  count, not iterable, the session-14 aggregate rules, the session-17/19
-  enum rules, the session-18 match rules, and the session-19 sum-type
-  rules above). They carry the exact offending span, rendered
-  expected/actual types where useful, and a related span for assignments.
+  count, not iterable, the session-14 aggregate rules, the session-17/19/20
+  enum rules, the session-18 match rules, the session-19 sum-type rules,
+  and the session-20 discriminant rules above). They carry the exact
+  offending span, rendered expected/actual types where useful, and a
+  related span for assignments.
 - **Cascade control.** An unknown/error type absorbs failed sub-expressions
   so one root error (an unresolved name, an invalid operator) never
   cascades into misleading secondary diagnostics; independent errors are

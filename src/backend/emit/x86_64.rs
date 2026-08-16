@@ -1395,7 +1395,7 @@ fn emit_inst(
             // (tag) word is written at its offset, then the variant's own
             // payload bytes are copied into the payload area.
             let word0 = slots[target.raw() as usize].0;
-            code.movabs_rax(*discriminant as i64);
+            code.movabs_rax(*discriminant);
             code.mov_rbp_rax(word0 - *tag_offset as i32);
             if let Some(payload) = payload {
                 let dst = word0 - *payload_offset as i32;

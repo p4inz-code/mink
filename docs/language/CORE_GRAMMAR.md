@@ -375,7 +375,36 @@ The session-19 lexer needed no changes (`(`, `)`, `,` already existed).
 Exclusions from §2 and §9 that remain (tuples, `type` aliases, generics,
 parameter/return annotations) are unchanged.
 
-## 15. Status
+## 15. Session-20 Additions: Explicit Discriminants
+
+**Session:** 20 — Explicit enum discriminants
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19 additions above remain authoritative; the new
+production is:
+
+```
+Variant    := Ident ('(' Type ')')? ('=' IntLit)?
+IntLit     := Int | '-' Int
+```
+
+- **Variant declarations** may declare an explicit discriminant after the
+  variant name and any payload type: `enum E { A = 5, B, C(Int) = 10, D }`.
+  The value must be an integer literal in the language's literal forms
+  (decimal, `0x`/`0o`/`0b`, `_` separators), optionally negated
+  (`A = -1`). A missing, non-integer, or float value is `E-P19` (expected
+  an integer literal), with recovery to the next variant boundary.
+- **Discriminants are constants.** There is no `A = 5 + 1` expression
+  syntax; the arithmetic operator is a parse error.
+- **Implicit continuation** is not a syntax change: a variant without
+  `= n` gets the previous variant's value plus one (starting at 0), so
+  `enum E { A, B }` is unchanged from sessions 17/19.
+
+The session-20 lexer needed no changes (`=`, `-`, and integer literals
+already existed). Exclusions from §2 and §9 that remain (tuples, `type`
+aliases, generics, parameter/return annotations) are unchanged.
+
+## 16. Status
 
 This grammar is frozen for the constructs it covers. Statements and
 declarations outside it are rejected by the parser with stable diagnostics

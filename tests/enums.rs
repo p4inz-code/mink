@@ -358,7 +358,7 @@ fn enum_registration_records_discriminants_in_order() {
         .iter()
         .find(|i| i.name == "E")
         .unwrap();
-    let disc: Vec<u32> = e.variants.iter().map(|v| v.discriminant).collect();
+    let disc: Vec<i64> = e.variants.iter().map(|v| v.discriminant).collect();
     assert_eq!(disc, vec![0, 1, 2]);
 }
 

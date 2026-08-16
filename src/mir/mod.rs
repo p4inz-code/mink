@@ -497,8 +497,8 @@ pub enum MirRvalueKind {
     /// carries no payload operand and lowers to the discriminant constant
     /// instead.
     EnumInit {
-        /// The variant's discriminant.
-        discriminant: u32,
+        /// The variant's effective discriminant (the tag word).
+        discriminant: i64,
         /// The evaluated payload value, for a data-carrying construction.
         payload: Option<MirOperand>,
     },
@@ -572,14 +572,15 @@ pub enum MirConstantKind {
     Bool(bool),
     /// The `null` literal.
     Null,
-    /// An enum variant constant (session 17): the variant's discriminant
-    /// (assigned in declaration order, starting at 0). Unlike the other
+    /// An enum variant constant (sessions 17 and 20): the variant's
+    /// effective discriminant (an explicit `V = n` value, or the previous
+    /// variant's value plus one, starting at 0). Unlike the other
     /// constants, the value is computed by the compiler (from the enum's
     /// variant table), not decoded from source text; the constant's type
     /// is the enum type.
     Enum {
-        /// The variant's discriminant.
-        variant: u32,
+        /// The variant's effective discriminant (the tag word).
+        variant: i64,
     },
 }
 

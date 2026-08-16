@@ -995,8 +995,15 @@ impl<'a> Lowerer<'a> {
                 })?;
                 let layout = layout::enum_layout(enum_id, &self.program.types)
                     .map_err(|_| self.unsupported_type_error(rvalue.span, rvalue.ty))?;
-                let variant_layout =
-                    layout.variants.get(*discriminant as usize).ok_or_else(|| {
+                // The discriminant is the tag *value* (an explicit `V = n`
+                // discriminant or the implicit continuation), not an index
+                // into the variant list, so the payload geometry is found
+                // by matching the value.
+                let variant_layout = layout
+                    .variants
+                    .iter()
+                    .find(|v| v.discriminant == *discriminant)
+                    .ok_or_else(|| {
                         BackendError::invalid_backend_ir(
                             rvalue.span,
                             format!(
@@ -1011,7 +1018,7 @@ impl<'a> Lowerer<'a> {
                 self.push(
                     BInstKind::EnumInit {
                         target,
-                        discriminant: u64::from(*discriminant),
+                        discriminant: *discriminant,
                         payload,
                         tag_offset: layout.tag_offset as u32,
                         payload_offset: layout.payload_offset as u32,
@@ -1626,7 +1633,7 @@ impl<'a> Lowerer<'a> {
             // An enum variant constant (session 17): the discriminant is
             // already computed by the front end; the word value is the
             // discriminant itself.
-            MirConstantKind::Enum { variant } => Ok(DecodedConstant::Word(i64::from(variant))),
+            MirConstantKind::Enum { variant } => Ok(DecodedConstant::Word(variant)),
             MirConstantKind::Str => {
                 let bytes = self.decode_str(constant.span)?;
                 let index = match self.string_index.get(&bytes) {

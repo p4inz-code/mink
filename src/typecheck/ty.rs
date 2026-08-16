@@ -74,8 +74,11 @@ pub struct EnumInfo {
 pub struct EnumVariantInfo {
     /// The variant's name.
     pub name: String,
-    /// The variant's discriminant (its position in declaration order).
-    pub discriminant: u32,
+    /// The variant's effective discriminant (session 20): an explicit
+    /// `V = n` literal's wrapping 64-bit value, or the previous variant's
+    /// value plus one (declaration order, starting at 0). The value is the
+    /// tag word written by construction and tested by pattern matching.
+    pub discriminant: i64,
     /// The payload type for a data-carrying variant, if any; `None` for a
     /// unit variant. Only the declared payload type is stored — the tag
     /// and payload offsets within the enum's tagged-union layout are

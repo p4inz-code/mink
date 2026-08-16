@@ -114,7 +114,9 @@ corruption, no segfault guessing games.
   nominal enum typing, and single-word discriminant values), **sum
   types** (data-carrying variants `enum Shape { Circle(Int), Nothing }`
   with `E::V(expr)` construction, `E::V(x)` payload patterns, and
-  tagged-union layout), **pattern matching** (`match` over `Int`, `Bool`,
+  tagged-union layout), **explicit discriminants** (`enum E { A = 5, B }`
+  with implicit continuation and duplicate/overflow rejection `E-T31`/
+  `E-T32`), **pattern matching** (`match` over `Int`, `Bool`,
   and enums with literal, variant, binding, and `_` wildcard patterns,
   compile-time exhaustiveness `E-T24` and unreachable-arm `E-T25`
   rejection, recursive payload coverage), comparisons, logical and
@@ -195,8 +197,8 @@ Honest status, because durable engineering starts with accurate claims:
 - **Aggregate limits** — structs, arrays, and tagged-union enums are
   values with deterministic C-style layout; they cannot be returned from
   functions or stored at module scope yet (rejected with `E-B03`).
-  Tagged-union enums cannot be compared with `==`/`!=` (`E-T30`); unit
-  variants carry no explicit discriminants; pattern matching covers
+  Tagged-union enums cannot be compared with `==`/`!=` (`E-T30`); there
+  is no enum-to-`Int` conversion; pattern matching covers
   `Int`/`Bool`/enum scrutinees only (no struct/array destructuring,
   ranges, or or-patterns yet), and there are no tuples or generics.
 - **Strings are byte sequences** — literals are immutable, there is no
@@ -238,8 +240,10 @@ that matters.
   ([`ENUM_TYPES_IMPLEMENTATION.md`](docs/implementation/ENUM_TYPES_IMPLEMENTATION.md)),
   the pattern-matching foundation
   ([`PATTERN_MATCHING_IMPLEMENTATION.md`](docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md)),
-  and the sum-types foundation
-  ([`SUM_TYPES_IMPLEMENTATION.md`](docs/implementation/SUM_TYPES_IMPLEMENTATION.md)).
+  the sum-types foundation
+  ([`SUM_TYPES_IMPLEMENTATION.md`](docs/implementation/SUM_TYPES_IMPLEMENTATION.md)),
+  and the explicit-discriminants foundation
+  ([`DISCRIMINANTS_IMPLEMENTATION.md`](docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md)).
 - [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md)
   — compiler architecture and pipeline.
 - [`docs/language/`](docs/language/) — language specifications; the frozen
@@ -259,7 +263,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1007, all passing)
+├── tests/      Compiler tests (1039, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

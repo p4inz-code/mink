@@ -78,27 +78,30 @@ They should support:
 
 Enumerations should represent a closed set of named alternatives.
 
-**Implemented (sessions 17 and 19):** an enum is a nominal type declared
-`enum E { A, B }` whose values are named alternatives constructed with
-variant paths (`E::A`) and, for data-carrying variants, variant calls
-(`E::B(expr)`). Variants are assigned compiler-computed discriminants in
-declaration order (0, 1, …). A unit-only enum value occupies a single
-word, copies freely, and never participates in ownership/move analysis;
-an enum with a data-carrying variant (Session 19) is a tagged union — a
-discriminant word plus a payload area sized for the largest variant —
-whose payloads may own heap values and therefore move on transfer.
-Enum equality (`==`/`!=`) requires the same enum type and produces
-`Bool` for unit-only enums; tagged-union equality is `E-T30`. There is no
-ordering, arithmetic, or `Int` conversion. Enum names share the type
-namespace with struct names. Diagnostics: duplicate enum `E-S15`,
-duplicate variant `E-S16`, variant path on a non-enum `E-T22`, undeclared
-variant `E-T23`, invalid payload type `E-T27`, payload mismatch `E-T28`,
-payload arity `E-T29`, tagged-union equality `E-T30`. See
-`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md` (Session 17) and
-`docs/implementation/SUM_TYPES_IMPLEMENTATION.md` (Session 19).
+**Implemented (sessions 17, 19, and 20):** an enum is a nominal type
+declared `enum E { A, B }` whose values are named alternatives
+constructed with variant paths (`E::A`) and, for data-carrying variants,
+variant calls (`E::B(expr)`). Variants may declare an **explicit
+discriminant** (`A = 5`, Session 20); otherwise the discriminant is the
+previous variant's value plus one, starting at 0. A unit-only enum value
+occupies a single word, copies freely, and never participates in
+ownership/move analysis; an enum with a data-carrying variant (Session
+19) is a tagged union — a discriminant word plus a payload area sized for
+the largest variant — whose payloads may own heap values and therefore
+move on transfer. Enum equality (`==`/`!=`) requires the same enum type
+and produces `Bool` for unit-only enums; tagged-union equality is
+`E-T30`. There is no ordering, arithmetic, or `Int` conversion. Enum
+names share the type namespace with struct names. Diagnostics: duplicate
+enum `E-S15`, duplicate variant `E-S16`, variant path on a non-enum
+`E-T22`, undeclared variant `E-T23`, invalid payload type `E-T27`, payload
+mismatch `E-T28`, payload arity `E-T29`, tagged-union equality `E-T30`,
+duplicate discriminant `E-T31`, discriminant overflow `E-T32`. See
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md` (Session 17),
+`docs/implementation/SUM_TYPES_IMPLEMENTATION.md` (Session 19), and
+`docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md` (Session 20).
 
-**Deferred:** explicit discriminants, enum-to-`Int` conversion, deriving,
-and generics over enums.
+**Deferred:** enum-to-`Int` conversion, deriving, and generics over
+enums.
 
 ## 8. Sum Types
 
@@ -114,8 +117,9 @@ analysis (a variant is covered only when its payload's alternatives are
 covered, `E-T24`/`E-T25`); owned payloads participate in ownership/move
 analysis. See `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.
 
-**Deferred:** tuple payloads (multiple payload values), explicit
-discriminants, and tagged-union equality.
+**Deferred:** tuple payloads (multiple payload values) and tagged-union
+equality. (Explicit discriminants are implemented — session 20, see
+`docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`.)
 
 ## 9. Optional Types
 

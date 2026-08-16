@@ -209,8 +209,9 @@ pub struct ArrayLayout {
 /// layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VariantPayloadLayout {
-    /// The variant's discriminant (its position in declaration order).
-    pub discriminant: u32,
+    /// The variant's effective discriminant (session 20): the tag word
+    /// value written by construction and tested by pattern matching.
+    pub discriminant: i64,
     /// The payload byte size (0 for a unit variant).
     pub size: u64,
     /// The payload alignment (1 for a unit variant).

@@ -126,8 +126,15 @@ pub struct EnumVariant {
     /// (`Variant(Type)`); `None` for a unit variant. The declared type is
     /// validated (named, non-array, non-reference) by type analysis.
     pub payload: Option<Ty>,
-    /// Span covering the variant (its identifier and, for data-carrying
-    /// variants, the parenthesized payload type).
+    /// An explicit discriminant (session 20): `Variant = 5`. The value is
+    /// an integer literal expression (possibly negated) whose wrapping
+    /// 64-bit value becomes the variant's tag. `None` for a variant whose
+    /// discriminant is implicit (the previous variant's value plus one,
+    /// starting at 0). The literal is decoded by type analysis.
+    pub discriminant: Option<Expr>,
+    /// Span covering the variant (its identifier, the parenthesized
+    /// payload type for data-carrying variants, and any explicit
+    /// discriminant literal).
     pub span: Span,
 }
 

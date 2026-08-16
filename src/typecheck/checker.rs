@@ -44,11 +44,20 @@ use super::ty::{EnumId, EnumVariantInfo, StructFieldInfo, StructId, TypeId, Type
 /// visible.
 type PendingStructFields = Vec<(StructId, Vec<(String, Span, Ty)>)>;
 
-/// An enum whose variants' payload types are still unresolved: the enum's
-/// id plus each declared variant's name, span, and (unresolved) payload
-/// type expression. Used during variant resolution, after every enum,
-/// struct, and payload declaration is visible.
-type PendingEnumVariants = Vec<(EnumId, Vec<(String, Span, Option<Ty>)>)>;
+/// One enum variant awaiting discriminant/payload resolution: its name,
+/// declaration span, (unresolved) payload type expression, and any
+/// explicit `= literal` discriminant expression (session 20).
+struct PendingVariant {
+    name: String,
+    span: Span,
+    payload: Option<Ty>,
+    discriminant: Option<Expr>,
+}
+
+/// An enum whose variants are still unresolved: the enum's id and name
+/// plus each declared variant. Used during variant resolution, after every
+/// enum, struct, and payload declaration is visible.
+type PendingEnumVariants = Vec<(EnumId, String, Vec<PendingVariant>)>;
 
 /// Runs type analysis over `ast`, consuming the semantic result and reading
 /// literal source text through `sources`.
@@ -786,11 +795,16 @@ impl<'a> Checker<'a> {
     }
 
     /// Resolves every enum variant's payload type and records every
-    /// variant with its deterministic discriminant (declaration order,
-    /// starting at 0). The first declaration of each name is identified by
-    /// its span (later duplicates are skipped); payload types resolve
-    /// against the fully populated type namespace (module-scope order
-    /// independence), so a payload may reference any struct or enum.
+    /// variant with its effective discriminant (session 20): an explicit
+    /// `V = n` literal's wrapping 64-bit value, or the previous variant's
+    /// value plus one (starting at 0, unchanged from sessions 17/19 when no
+    /// explicit values are given). A value reused by an earlier variant is
+    /// `E-T31` (the tag word could not distinguish the variants); an
+    /// implicit continuation past `i64::MAX` is `E-T32`. The first
+    /// declaration of each name is identified by its span (later duplicates
+    /// are skipped); payload types resolve against the fully populated
+    /// type namespace (module-scope order independence), so a payload may
+    /// reference any struct or enum.
     fn resolve_enum_variants(&mut self) {
         // Collect the declarations to resolve first, so resolving one
         // payload (which can push errors) never aliases the borrow of the
@@ -808,30 +822,76 @@ impl<'a> Checker<'a> {
             }
             pending.push((
                 reg.enum_id,
+                reg.name.clone(),
                 e.variants
                     .iter()
-                    .map(|variant| {
-                        (
-                            variant.name.name.clone(),
-                            variant.span,
-                            variant.payload.clone(),
-                        )
+                    .map(|variant| PendingVariant {
+                        name: variant.name.name.clone(),
+                        span: variant.span,
+                        payload: variant.payload.clone(),
+                        discriminant: variant.discriminant.clone(),
                     })
                     .collect(),
             ));
         }
-        for (enum_id, variants) in pending {
-            let resolved = variants
-                .iter()
-                .enumerate()
-                .map(|(index, (name, span, payload))| EnumVariantInfo {
-                    name: name.clone(),
-                    discriminant: index as u32,
-                    payload: payload
+        for (enum_id, enum_name, variants) in pending {
+            let mut next: i64 = 0; // the value the next implicit variant gets
+            let mut next_ok = true; // `next` is a valid implicit value
+            let mut used: Vec<(i64, Span)> = Vec::new();
+            let mut overflow_reported = false;
+            let mut resolved = Vec::with_capacity(variants.len());
+            for variant in variants {
+                let value = match &variant.discriminant {
+                    // An explicit literal uses the same wrapping 64-bit
+                    // decode as a constant array index.
+                    Some(literal) => Some(self.constant_index(literal).unwrap_or(next)),
+                    None if next_ok => Some(next),
+                    None => None,
+                };
+                match value {
+                    Some(value) => {
+                        if let Some((_, first)) = used.iter().find(|(v, _)| *v == value) {
+                            self.push_error(TypeError::duplicate_discriminant(
+                                variant.span,
+                                &enum_name,
+                                &variant.name,
+                                value,
+                                *first,
+                            ));
+                        }
+                        used.push((value, variant.span));
+                        match value.checked_add(1) {
+                            Some(v) => {
+                                next = v;
+                                next_ok = true;
+                            }
+                            None => next_ok = false,
+                        }
+                    }
+                    // An implicit variant after an explicit `i64::MAX`
+                    // cannot continue; reported once, at the first such
+                    // variant.
+                    None if !overflow_reported => {
+                        self.push_error(TypeError::discriminant_overflow(
+                            variant.span,
+                            &enum_name,
+                            &variant.name,
+                        ));
+                        overflow_reported = true;
+                    }
+                    None => {}
+                }
+                resolved.push(EnumVariantInfo {
+                    name: variant.name,
+                    // On an erroring enum the fallback value is
+                    // meaningless; the error blocks code generation.
+                    discriminant: value.unwrap_or(next),
+                    payload: variant
+                        .payload
                         .as_ref()
-                        .map(|ty| self.resolve_variant_payload_type(ty, *span)),
-                })
-                .collect();
+                        .map(|ty| self.resolve_variant_payload_type(ty, variant.span)),
+                });
+            }
             self.types.set_enum_variants(enum_id, resolved);
         }
     }

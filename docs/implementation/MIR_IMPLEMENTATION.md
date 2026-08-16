@@ -334,7 +334,9 @@ and after session 17 (data-free enums, with the `Enum` variant constant)
 it is **919 tests** (see `OPTIMIZATION_IMPLEMENTATION.md` §7), and after
 session 18 (pattern matching, lowered to a chain of equality
 branches with binding copies) it is **963 tests** (see
-`PATTERN_MATCHING_IMPLEMENTATION.md` §6), and after session 19
+`PATTERN_MATCHING_IMPLEMENTATION.md` §6), after session 19
 (data-carrying variants, with the `EnumInit`/`EnumTag`/`EnumPayload`
 rvalues and tag-then-payload match lowering) it is **1007 tests** (see
-`SUM_TYPES_IMPLEMENTATION.md` §5).
+`SUM_TYPES_IMPLEMENTATION.md` §5), and after session 20 (explicit enum
+discriminants, with the tag constants widened to 64-bit values) it is
+**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5).

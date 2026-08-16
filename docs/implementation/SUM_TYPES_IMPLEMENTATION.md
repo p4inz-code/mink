@@ -193,8 +193,10 @@ before code generation.
 
 ## 4. Conservative decisions and known limitations
 
-- **No explicit discriminants.** Values are assigned by declaration order;
-  there is no `= n` syntax.
+- **No explicit discriminants in Session 19.** Values were assigned by
+  declaration order; Session 20 added `= n` syntax (explicit tags work on
+  data-carrying variants too) — see
+  `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`.
 - **No tagged-union equality.** `==`/`!=` on a data-carrying enum is
   `E-T30`; unit-only enums keep discriminant equality.
 - **No enum-to-`Int` conversion**, iteration, or deriving.
@@ -215,5 +217,7 @@ binding moves, copy payloads), MIR lowering (EnumInit/EnumTag/EnumPayload,
 determinism), backend lowering (multi-word locals, result rejection), and
 native execution (payload matches dispatching, extracting, printing,
 nested payloads, string payload round-trips, struct payloads, unit
-variants alongside payloads). The whole suite is deterministic and runs
-through the same quality gates as every milestone.
+variants alongside payloads). Session 20 (explicit discriminants) adds
+`tests/discriminants.rs` — see `DISCRIMINANTS_IMPLEMENTATION.md` §5. The
+whole suite is deterministic and runs through the same quality gates as
+every milestone.

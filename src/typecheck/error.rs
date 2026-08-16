@@ -105,6 +105,12 @@ pub enum TypeErrorKind {
     /// supported (unit variants compare by discriminant; tagged-union
     /// equality is deferred).
     EnumEquality,
+    /// Two variants of one enum share the same discriminant value, so the
+    /// tag word cannot distinguish them.
+    DuplicateDiscriminant,
+    /// An implicit variant discriminant would continue past the largest
+    /// 64-bit value.
+    DiscriminantOverflow,
 }
 
 impl TypeErrorKind {
@@ -145,6 +151,8 @@ impl TypeErrorKind {
             Self::VariantPayloadMismatch => "E-T28",
             Self::VariantPayloadArity => "E-T29",
             Self::EnumEquality => "E-T30",
+            Self::DuplicateDiscriminant => "E-T31",
+            Self::DiscriminantOverflow => "E-T32",
         }
     }
 }
@@ -551,6 +559,42 @@ impl TypeError {
         )
     }
 
+    /// Creates a duplicate-discriminant error at `span` (`E-T31`): two
+    /// variants of one enum share the same discriminant value, so the tag
+    /// word cannot distinguish them. `first` points at the earlier variant
+    /// that already uses the value.
+    pub fn duplicate_discriminant(
+        span: Span,
+        enum_name: &str,
+        variant: &str,
+        value: i64,
+        first: Span,
+    ) -> Self {
+        Self::custom(
+            TypeErrorKind::DuplicateDiscriminant,
+            span,
+            format!(
+                "variant `{variant}` of enum `{enum_name}` repeats the discriminant `{value}` used by an earlier variant; discriminants must be unique"
+            ),
+            Some(first),
+        )
+    }
+
+    /// Creates a discriminant-overflow error at `span` (`E-T32`): a
+    /// variant with no explicit discriminant follows a variant whose value
+    /// is already the largest 64-bit integer, so the implicit continuation
+    /// would overflow the tag word.
+    pub fn discriminant_overflow(span: Span, enum_name: &str, variant: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::DiscriminantOverflow,
+            span,
+            format!(
+                "variant `{variant}` of enum `{enum_name}` needs an implicit discriminant, but the previous discriminant is already the largest 64-bit value; add an explicit discriminant"
+            ),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -631,7 +675,9 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::InvalidMatchScrutinee
             | TypeErrorKind::InvalidVariantPayload
             | TypeErrorKind::VariantPayloadArity
-            | TypeErrorKind::EnumEquality => actual.to_string(),
+            | TypeErrorKind::EnumEquality
+            | TypeErrorKind::DuplicateDiscriminant
+            | TypeErrorKind::DiscriminantOverflow => actual.to_string(),
         };
         f.write_str(&message)
     }

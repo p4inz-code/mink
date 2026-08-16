@@ -102,7 +102,8 @@ code generation.
 - Data-carrying variants (`enum Option { Some(Int), None }`) —
   **implemented in Session 19**; see
   `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.
-- Explicit discriminants (`enum E { A = 5 }`).
+- Explicit discriminants (`enum E { A = 5 }`) — **implemented in Session
+  20**; see `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`.
 - `Int`/enum conversion, enum iteration, or deriving.
 - Generics over enums.
 
@@ -175,8 +176,9 @@ code generation.
   18) requires every variant to be covered or a catch-all arm; a missing
   arm is `E-T24` and an unreachable one is `E-T25`. Programs can also
   still test equality (`e == E::V`).
-- **No explicit discriminants.** Values are assigned by declaration
-  order; there is no `= n` syntax.
+- **No explicit discriminants in Session 17.** Values were assigned by
+  declaration order; Session 20 added `= n` syntax and implicit
+  continuation (see `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`).
 - **Empty enums are legal but useless.** `enum Empty {}` compiles (and
   its layout is still a word), but no value of that type can be
   constructed, so `E::V` paths into it are `E-T23`.
@@ -233,9 +235,11 @@ fn main() {
 - Existing suite (878 tests) remained green; full suite after session 17:
   **919 tests**, all passing; after session 18 (pattern matching) it is
   **963 tests** (see
-  `PATTERN_MATCHING_IMPLEMENTATION.md` §6), and after session 19
+  `PATTERN_MATCHING_IMPLEMENTATION.md` §6), after session 19
   (data-carrying variants) it is **1007 tests** (see
-  `SUM_TYPES_IMPLEMENTATION.md` §5).
+  `SUM_TYPES_IMPLEMENTATION.md` §5), and after session 20 (explicit
+  discriminants) it is **1039 tests** (see
+  `DISCRIMINANTS_IMPLEMENTATION.md` §5).
 
 ## 7. Status
 

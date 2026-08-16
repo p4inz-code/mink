@@ -444,9 +444,28 @@ impl<'a> Parser<'a> {
                                 }
                             }
                         }
+                        // An explicit discriminant (session 20): `V = 5`.
+                        // The literal's wrapping 64-bit value is decoded by
+                        // type analysis; the span grows to cover `= literal`.
+                        let mut discriminant = None;
+                        if self.current_kind() == TokenKind::Eq {
+                            match self.parse_variant_discriminant() {
+                                Ok((literal, end)) => {
+                                    span = self.join(span, end);
+                                    discriminant = Some(literal);
+                                }
+                                Err(()) => {
+                                    // An error is already recorded; the
+                                    // cursor has been recovered to a variant
+                                    // boundary, so the boundary handling
+                                    // below proceeds normally.
+                                }
+                            }
+                        }
                         variants.push(EnumVariant {
                             name,
                             payload,
+                            discriminant,
                             span,
                         });
                     }
@@ -522,6 +541,56 @@ impl<'a> Parser<'a> {
         let close = self.bump().span();
         self.open_delims.pop();
         Ok((ty, close))
+    }
+
+    /// Parses an explicit variant discriminant after the `=` of
+    /// `Variant = IntLit` (session 20): an integer literal, optionally
+    /// negated (`A = 5`, `A = -1`, `A = 0x10`, `A = 1_000`). Returns the
+    /// literal expression and the span covering `= literal`. A missing,
+    /// non-integer, or float value is `E-P19` (expected an integer
+    /// literal); the cursor is recovered to a variant boundary so the
+    /// variant-list loop continues cleanly.
+    fn parse_variant_discriminant(&mut self) -> Result<(Expr, Span), ()> {
+        let eq = self.bump().span(); // '='
+        let token = self.current();
+        let literal = match token.kind() {
+            TokenKind::Int => {
+                let _ = self.bump();
+                Expr {
+                    kind: ExprKind::Int,
+                    span: token.span(),
+                }
+            }
+            TokenKind::Minus => {
+                let minus = self.bump().span(); // '-'
+                let token = self.current();
+                if token.kind() != TokenKind::Int {
+                    self.record_error(ParseErrorKind::ExpectedIntegerLiteral, token.span());
+                    self.skip_to_variant_boundary();
+                    return Err(());
+                }
+                let _ = self.bump();
+                let literal = Expr {
+                    kind: ExprKind::Int,
+                    span: token.span(),
+                };
+                let span = self.join(minus, token.span());
+                Expr {
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::Neg,
+                        operand: Box::new(literal),
+                    },
+                    span,
+                }
+            }
+            _ => {
+                self.record_error(ParseErrorKind::ExpectedIntegerLiteral, token.span());
+                self.skip_to_variant_boundary();
+                return Err(());
+            }
+        };
+        let span = self.join(eq, literal.span);
+        Ok((literal, span))
     }
 
     /// Recovers from a malformed variant payload: skips to the closing `)`

@@ -421,13 +421,13 @@ impl<'a> StmtEval<'a> {
         }
     }
 
-    /// The discriminant of the variant `variant` of the enum type named
-    /// `enum_name`, looked up in the type table (which the front end
-    /// populated during type analysis). Returns `None` when the enum or
-    /// variant is unknown — only reachable on malformed input, since the
-    /// type checker rejects unknown enums and variants before HIR
-    /// lowering.
-    fn enum_variant_discriminant(&self, enum_name: &str, variant: &str) -> Option<u32> {
+    /// The effective discriminant of the variant `variant` of the enum
+    /// type named `enum_name`, looked up in the type table (which the
+    /// front end populated during type analysis). Returns `None` when the
+    /// enum or variant is unknown — only reachable on malformed input,
+    /// since the type checker rejects unknown enums and variants before
+    /// HIR lowering.
+    fn enum_variant_discriminant(&self, enum_name: &str, variant: &str) -> Option<i64> {
         self.table.enums().iter().find_map(|info| {
             if info.name != enum_name {
                 return None;

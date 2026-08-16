@@ -616,7 +616,7 @@ fn mir_fn<'p>(mir: &'p MirProgram, name: &str) -> &'p MirFn {
 
 /// Whether `f` contains an equality comparison whose right side is an enum
 /// constant with discriminant `discriminant`.
-fn compares_against_enum_discriminant(f: &MirFn, discriminant: u32) -> bool {
+fn compares_against_enum_discriminant(f: &MirFn, discriminant: i64) -> bool {
     f.blocks.iter().any(|block| {
         block.stmts.iter().any(|stmt| {
             let MirStmtKind::Assign { rvalue, .. } = &stmt.kind;

@@ -464,6 +464,12 @@ range: `E-T01` … `E-T06`.
 | E-T24| `NonExhaustiveMatch`  | `the match is not exhaustive: the variant `B` is not covered; add a `_` or binding arm or cover every variant` |
 | E-T25| `UnreachableMatchArm` | `this arm can never run: an earlier arm already matches the same value` |
 | E-T26| `InvalidMatchScrutinee` | `cannot match on a value of type `Str`; only `Int`, `Bool`, and enums are matchable` |
+| E-T27| `InvalidVariantPayload` | `` `&Int` is not a supported variant payload type; a payload must be a value type with a deterministic layout `` |
+| E-T28| `VariantPayloadMismatch` | `expected a payload of type `Int`, found `Str`` |
+| E-T29| `VariantPayloadArity` | `variant `B` of enum `E` expects a payload, found none` |
+| E-T30| `EnumEquality` | `cannot compare values of enum type `E` with `==`/`!=`; enum equality is not supported` |
+| E-T31| `DuplicateDiscriminant` | `variant `B` of enum `E` repeats the discriminant `5` used by an earlier variant; discriminants must be unique` (related span at the earlier variant) |
+| E-T32| `DiscriminantOverflow` | `variant `B` of enum `E` needs an implicit discriminant, but the previous discriminant is already the largest 64-bit value; add an explicit discriminant` |
 
 Every error carries the exact offending span; `E-T01` on assignment also
 carries the target span as a related location, which the CLI renders as
@@ -611,9 +617,11 @@ As before:
 Total suite after session 17: **919 tests** (see
 `NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the breakdown), all passing.
 After session 18 (pattern matching, `E-T24`…`E-T26`) it is **963 tests**
-(see `PATTERN_MATCHING_IMPLEMENTATION.md` §6), and after session 19
+(see `PATTERN_MATCHING_IMPLEMENTATION.md` §6), after session 19
 (data-carrying enum variants, `E-T27`…`E-T30`, tagged-union layout) it is
-**1007 tests** (see `SUM_TYPES_IMPLEMENTATION.md` §5).
+**1007 tests** (see `SUM_TYPES_IMPLEMENTATION.md` §5), and after session
+20 (explicit enum discriminants, `E-T31`…`E-T32`) it is **1039 tests**
+(see `DISCRIMINANTS_IMPLEMENTATION.md` §5).
 
 ## 26. Later Milestones
 
@@ -624,8 +632,10 @@ advanced features. Cleanly deferred to later milestones:
 - tuple payloads (a data-carrying variant holds exactly one payload) and
   tagged-union equality (data-carrying enum variants are implemented —
   session 19, see
-  `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`; data-free enums are
-  implemented — session 17, see
+  `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`; explicit
+  discriminants are implemented — session 20, see
+  `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`; data-free enums
+  are implemented — session 17, see
   `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`; pattern matching
   over them is implemented — session 18, see
   `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`); tuples;

@@ -164,10 +164,13 @@ string is `E-S11`; invalid ownership programs fail before code generation
 (see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`). Session 17 added
 data-free user enums (`enum D { A, B }`, `D::A` variant paths, nominal
 enum types, single-word discriminants) — see
-`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md` — and Session 19 added
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md` — Session 19 added
 data-carrying variants (sum types: `enum Shape { Circle(Int), Nothing }`,
 `E::V(expr)` construction, `E::V(x)` payload patterns, tagged-union
-layout) — see `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`. See
+layout) — see `docs/implementation/SUM_TYPES_IMPLEMENTATION.md` — and
+Session 20 added explicit enum discriminants (`enum E { A = 5, B }`,
+implicit continuation, duplicate `E-T31` and overflow `E-T32` rejection)
+— see `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`. See
 `README.md`
 and `docs/implementation/` for the current status and the supported
 subset. The planning documents remain the authoritative long-term

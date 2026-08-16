@@ -529,8 +529,8 @@ pub enum BInstKind {
         /// The destination slot (an `Enum` slot spanning the layout's
         /// words).
         target: crate::mir::LocalId,
-        /// The variant's discriminant (the tag word).
-        discriminant: u64,
+        /// The variant's effective discriminant (the tag word).
+        discriminant: i64,
         /// The evaluated payload value, for a data-carrying construction.
         payload: Option<BOperand>,
         /// The byte offset of the tag word within the value.
