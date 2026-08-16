@@ -322,6 +322,51 @@ fn array_whole_move_on_element_read_is_e_s10_for_later_use() {
 }
 
 #[test]
+fn dead_array_element_read_reports_once() {
+    // Audit regression: reading an element of a moved array reported the
+    // same E-S10 twice at one span (once from the base evaluation, once
+    // from the index handler's own dead check). One root error only.
+    let src = "enum E { A, V(Str) } fn main() { let a = [E::V(rt_str_alloc(2)), E::A]; let b = a; let x = a[0]; }";
+    let (_ast, _semantic, _types, ownership) = check_src(src);
+    let moved = ownership_errors(&ownership, SemanticErrorKind::UseOfMovedValue);
+    assert_eq!(
+        moved.len(),
+        1,
+        "one root error only: {:?}",
+        ownership.errors()
+    );
+}
+
+#[test]
+fn match_on_owned_enum_field_is_a_partial_move() {
+    // Audit regression: matching an owned-payload enum field used to mark
+    // the whole struct dead; it now consumes only the field, exactly like
+    // `let x = s.e;` (a sibling field stays usable, but the whole struct
+    // cannot be moved and the field cannot be re-read).
+    let sibling = "enum E { A, V(Str) } struct S { e: E, tag: Int } fn main() { let s = S { e: E::V(rt_str_alloc(2)), tag: 1 }; match s.e { E::V(x) => { rt_print_str(x); }, E::A => { } } rt_print_int(s.tag); }";
+    let (_ast, _semantic, _types, ownership) = check_src(sibling);
+    assert!(
+        ownership_errors(&ownership, SemanticErrorKind::UseOfMovedValue).is_empty(),
+        "sibling fields stay usable after a partial match move: {:?}",
+        ownership.errors()
+    );
+
+    let whole = "enum E { A, V(Str) } struct S { e: E, tag: Int } fn main() { let s = S { e: E::V(rt_str_alloc(2)), tag: 1 }; match s.e { E::V(x) => { rt_print_str(x); }, E::A => { } } let t = s; }";
+    let (_ast, _semantic, _types, ownership) = check_src(whole);
+    assert!(
+        !ownership_errors(&ownership, SemanticErrorKind::UseOfMovedValue).is_empty(),
+        "the whole struct still cannot move after a partial match move"
+    );
+
+    let reread = "enum E { A, V(Str) } struct S { e: E, tag: Int } fn main() { let s = S { e: E::V(rt_str_alloc(2)), tag: 1 }; match s.e { E::V(x) => { rt_print_str(x); }, E::A => { } } match s.e { E::V(_) => { }, E::A => { } } }";
+    let (_ast, _semantic, _types, ownership) = check_src(reread);
+    assert!(
+        !ownership_errors(&ownership, SemanticErrorKind::UseOfMovedValue).is_empty(),
+        "the consumed field cannot be matched again"
+    );
+}
+
+#[test]
 fn nested_place_transfer_kills_the_root() {
     let src = "struct Inner { v: Str } struct Outer { inner: Inner } fn main() { let mut o = Outer { inner: Inner { v: rt_str_alloc(2) } }; let x = o.inner.v; rt_print_str(o.inner.v); rt_str_free(x); }";
     let (_ast, _semantic, _types, ownership) = check_src(src);

@@ -432,6 +432,76 @@ fn assign_through_immutable_reference_is_e_t21() {
     );
 }
 
+#[test]
+fn borrow_of_unit_enum_is_e_t19() {
+    // Audit regression: enums are not reference element types (the Session
+    // 16 model covers `Int`/`Bool`/`Str`/`Ptr`/structs/arrays). Previously
+    // `&e` reached the backend and died with an internal E-B07 instead of
+    // a front-end diagnostic.
+    assert_type_error_at(
+        "enum E { A, B } fn main() { let e = E::A; let r = &e; return 0; }",
+        TypeErrorKind::InvalidBorrowTarget,
+        1,
+        51,
+    );
+}
+
+#[test]
+fn borrow_of_tagged_enum_is_e_t19() {
+    assert_type_error_at(
+        "enum E { A, B(Int) } fn main() { let e = E::B(1); let r = &e; return 0; }",
+        TypeErrorKind::InvalidBorrowTarget,
+        1,
+        59,
+    );
+}
+
+#[test]
+fn borrow_of_enum_field_is_e_t19() {
+    // Borrowing an enum-typed field is rejected the same way (its type is
+    // the enum type).
+    assert_type_error_at(
+        "enum E { A, B } struct S { e: E } fn main() { let s = S { e: E::A }; let r = &s.e; return 0; }",
+        TypeErrorKind::InvalidBorrowTarget,
+        1,
+        78,
+    );
+}
+
+#[test]
+fn deref_rooted_member_assignment_is_e_t33() {
+    // Audit regression: `(*r).x = v` used to lower to a write into a
+    // temporary copy of the dereferenced value, silently dropping the
+    // assignment. It is now rejected (E-T33) because only whole-value
+    // deref assignment (`*r = v`) is in the reference model.
+    assert_type_error_at(
+        "struct S { tag: Int } fn main() { let mut s = S { tag: 1 }; let r = &mut s; (*r).tag = 9; return 0; }",
+        TypeErrorKind::DerefRootedAssignment,
+        1,
+        77,
+    );
+}
+
+#[test]
+fn deref_rooted_element_assignment_is_e_t33() {
+    assert_type_error_at(
+        "fn main() { let mut a = [1, 2]; let r = &mut a; (*r)[0] = 9; return 0; }",
+        TypeErrorKind::DerefRootedAssignment,
+        1,
+        49,
+    );
+}
+
+#[test]
+fn deref_rooted_compound_assignment_is_e_t33() {
+    assert_type_error_at(
+        "struct S { tag: Int } fn main() { let mut s = S { tag: 1 }; let r = &mut s; (*r).tag += 1; return 0; }",
+        TypeErrorKind::DerefRootedAssignment,
+        1,
+        77,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Borrow-check errors: E-S12 / E-S13 / E-S14
 // ---------------------------------------------------------------------------
@@ -737,6 +807,27 @@ fn native_struct_field_borrow() {
     );
     let (code, stdout) = run(&exe);
     assert_eq!(stdout, "41\n42");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn native_deref_rooted_member_read() {
+    // Audit regression: reading through a deref-rooted member (`(*r).x`)
+    // is supported and copies the dereferenced value; only *assignment*
+    // through such places is rejected (E-T33).
+    let exe = build(
+        "enum E { A, B(Int) } \
+         struct S { e: E, tag: Int } \
+         fn tag_of(r) { match (*r).e { E::B(x) => { return x; }, E::A => { return 0; } } } \
+         fn main() { \
+           let s = S { e: E::B(7), tag: 1 }; \
+           let r = &s; \
+           rt_print_int(tag_of(r)); \
+           return 0; \
+         }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(stdout, "7");
     assert_eq!(code, 0);
 }
 

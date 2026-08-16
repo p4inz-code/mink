@@ -483,13 +483,14 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   copy of the scrutinee (`let x = e;` semantics) in its own scope, and
   `_` binds nothing. See
   [`PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/PATTERN_MATCHING_IMPLEMENTATION.md).
-- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T32`
+- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T33`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
   count, not iterable, the session-14 aggregate rules, the session-17/19/20
   enum rules, the session-18 match rules, the session-19 sum-type rules,
-  and the session-20 discriminant rules above). They carry the exact
-  offending span, rendered expected/actual types where useful, and a
-  related span for assignments.
+  the session-20 discriminant rules above, and the session-21 reference
+  rules: `&enum` is `E-T19`, deref-rooted member/element assignment is
+  `E-T33`). They carry the exact offending span, rendered expected/actual
+  types where useful, and a related span for assignments.
 - **Cascade control.** An unknown/error type absorbs failed sub-expressions
   so one root error (an unresolved name, an invalid operator) never
   cascades into misleading secondary diagnostics; independent errors are

@@ -248,4 +248,4 @@ session 19 (data-carrying variants, with payloads carried through the
 `EnumVariant` expression and pattern forms) it is **1007 tests** (see
 `SUM_TYPES_IMPLEMENTATION.md` §5), and after session 20 (explicit enum
 discriminants, resolved at type analysis and carried through MIR) it is
-**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5).
+**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5), and after the Session 21 deep audit it is **1048 tests** (see `REFERENCES_BORROWING_IMPLEMENTATION.md` §1.6/§1.8 and `OWNERSHIP_IMPLEMENTATION.md`).

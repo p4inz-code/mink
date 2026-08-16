@@ -634,6 +634,14 @@ impl<'a> StmtEval<'a> {
                         });
                     }
                 }
+                // A deref-rooted member target (`(*r).x = v`) is rejected
+                // by the type checker (E-T33); lowering it here would write
+                // to a temporary copy of the dereferenced value, silently
+                // dropping the assignment. Defensive gate for hand-built
+                // HIR.
+                if self.is_deref_rooted_target(base) {
+                    return Err(MirError::invalid_assignment_target(expr.span));
+                }
                 let base = self.eval_operand(base);
                 Ok(MirTarget {
                     kind: MirTargetKind::Member {
@@ -659,6 +667,12 @@ impl<'a> StmtEval<'a> {
                         });
                     }
                 }
+                // See the Member arm: deref-rooted element targets are
+                // rejected by the type checker (E-T33); defensive gate for
+                // hand-built HIR.
+                if self.is_deref_rooted_target(base) {
+                    return Err(MirError::invalid_assignment_target(expr.span));
+                }
                 let base = self.eval_operand(base);
                 Ok(MirTarget {
                     kind: MirTargetKind::Index { base, index },
@@ -676,6 +690,24 @@ impl<'a> StmtEval<'a> {
                 })
             }
             _ => Err(MirError::invalid_assignment_target(expr.span)),
+        }
+    }
+
+    /// Whether the place expression `expr` is rooted at a dereference
+    /// somewhere in its member/index chain (`(*r).x`, `(*r)[i]`,
+    /// `(*r).x.y`). Assignment through such places is not part of the
+    /// reference model (whole-value `*r = v` only); the type checker
+    /// rejects it (E-T33) and lowering must never write to the temporary
+    /// copy a deref read would produce.
+    fn is_deref_rooted_target(&self, expr: &HirExpr) -> bool {
+        match &expr.kind {
+            HirExprKind::Member { base, .. } | HirExprKind::Index { base, .. } => {
+                self.is_deref_rooted_target(base)
+            }
+            // HIR eliminates syntax-only `Group` nodes, so a deref appears
+            // directly.
+            HirExprKind::Deref { .. } => true,
+            _ => false,
         }
     }
 

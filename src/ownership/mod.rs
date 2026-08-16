@@ -839,8 +839,24 @@ impl<'a> Analyzer<'a> {
         if moved_payload {
             // The payload moved out of the scrutinee on some arm: the
             // enum's payload is consumed (a use of the scrutinee after the
-            // match is a use of a moved value).
-            self.mark_root_dead(&stmt.scrutinee);
+            // match is a use of a moved value). The consumption is at the
+            // same granularity as the transfer rules: a member chain's
+            // innermost field dies (partial move, like `let x = s.e;`),
+            // an index read moves the whole array root, and an
+            // identifier root dies whole.
+            self.mark_scrutinee_consumed(&stmt.scrutinee);
+        }
+    }
+
+    /// Marks the value consumed by an owned-payload match consumed, at
+    /// the transfer-position granularity: the innermost field of a member
+    /// chain, the whole array root of an index read, or the whole
+    /// identifier root otherwise.
+    fn mark_scrutinee_consumed(&mut self, scrutinee: &Expr) {
+        match &scrutinee.kind {
+            ExprKind::Member { base, member } => self.mark_field_moved(base, member),
+            ExprKind::Index { base, .. } => self.mark_root_dead(base),
+            _ => self.mark_root_dead(scrutinee),
         }
     }
 
@@ -1105,13 +1121,10 @@ impl<'a> Analyzer<'a> {
                     if let Some(symbol) = self.semantic.resolve(ident.span) {
                         if let Some(State::Array(state)) = self.bindings.get(&symbol).cloned() {
                             return match state {
-                                BindingState::Dead => {
-                                    self.errors.push(SemanticError::use_of_moved(
-                                        ident.name.clone(),
-                                        ident.span,
-                                    ));
-                                    EvalValue::owned()
-                                }
+                                // The base `eval_expr` above already
+                                // reported the dead array; reporting again
+                                // would duplicate the diagnostic.
+                                BindingState::Dead => EvalValue::owned(),
                                 BindingState::Live(Provenance::Immutable) => EvalValue::immutable(),
                                 BindingState::Live(Provenance::Owned) => {
                                     if mode == Mode::Transfer {

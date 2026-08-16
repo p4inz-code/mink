@@ -339,4 +339,4 @@ branches with binding copies) it is **963 tests** (see
 rvalues and tag-then-payload match lowering) it is **1007 tests** (see
 `SUM_TYPES_IMPLEMENTATION.md` §5), and after session 20 (explicit enum
 discriminants, with the tag constants widened to 64-bit values) it is
-**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5).
+**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5), and after the Session 21 deep audit it is **1048 tests** (see `REFERENCES_BORROWING_IMPLEMENTATION.md` §1.6/§1.8 and `OWNERSHIP_IMPLEMENTATION.md`).

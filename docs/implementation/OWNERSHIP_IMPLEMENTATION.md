@@ -154,10 +154,19 @@ The following rules are authoritative for this session.
   session).
 - **Arrays move whole.** Reading an element of an Owned array in a
   transfer position moves the entire array; remaining elements leak
-  (`E-R06` at exit — the existing leak check catches it).
+  (`E-R06` at exit — the existing leak check catches it). (Audit
+  hardening, Session 21: the element-read path used to push the E-S10
+  twice — once from evaluating the dead base and once from the index
+  handler's own dead-branch — for a duplicated diagnostic; the redundant
+  push was removed.)
 - **Struct field moves are partial.** Reading an Owned field moves only
   that field; the struct remains usable for its other fields, but the
   whole struct can no longer be moved until the field is reassigned.
+- **Match scrutinees move at the same granularity as transfers** (audit
+  alignment, Session 21): `match s.e { ... }` where the payload is owned
+  consumes only the field `s.e` (the rest of `s` stays usable), matching
+  the `let e = s.e;` partial-field-move rule; previously the whole root
+  was marked dead. Unit-only enums (no payloads) remain copy scrutinees.
 - A function that returns a `Str` with mixed provenance (owned and
   literal paths) has an Owned result.
 - `const` bindings are evaluated per use: reading a `const` copies its
@@ -182,7 +191,9 @@ The following rules are authoritative for this session.
   nothing and are therefore unaffected by move semantics) the suite is
   **919 tests**; after session 18 (pattern matching, whose scrutinee is
   copied per arm and whose bindings are copies, never moves) it is
-  **963 tests**.
+  **963 tests**; after the Session 21 deep audit (duplicate E-S10 removal
+  and match-scrutinee partial-move alignment, +2 in `tests/ownership.rs`)
+  the suite is **1048 tests**.
 - **Aggregate copy rule (implemented):** a struct or array is Copy iff it
   contains no Owned value — `P { name: \"a\", age: 1 }` copies freely
   (`let q = p; let r = p;` both fine), while `P { name: rt_str_alloc(3) }`

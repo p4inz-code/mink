@@ -207,8 +207,10 @@ Honest status, because durable engineering starts with accurate claims:
   (`&T` / `&mut T`), borrows (`&place` / `&mut place`), and derefs (`*r`)
   are implemented (session 16) with compile-time borrow checking, but
   lifetimes are lexical (a borrow lives until its binding dies), there is
-  no reborrowing, and disjoint-field borrows are conservatively rejected
-  (see
+  no reborrowing, disjoint-field borrows are conservatively rejected,
+  enums are not borrowable (`&enum` is `E-T19`), and only whole-value
+  deref assignment (`*r = v`) is supported — member/element assignment
+  through a deref (`(*r).x = v`) is `E-T33` (see
   [`REFERENCES_BORROWING_IMPLEMENTATION.md`](docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md)).
 - **No garbage collector** — allocation is explicit and leak-checked on exit.
 - **Limited native subset** — no floating point, characters, `null`, or
@@ -263,7 +265,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1039, all passing)
+├── tests/      Compiler tests (1048, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

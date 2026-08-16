@@ -111,6 +111,12 @@ pub enum TypeErrorKind {
     /// An implicit variant discriminant would continue past the largest
     /// 64-bit value.
     DiscriminantOverflow,
+    /// An assignment targets a member or element of a dereferenced
+    /// reference (`(*r).x = v`). Only whole-value deref assignment
+    /// (`*r = v`) is in the reference model; deref-rooted places are
+    /// deferred, so this is rejected instead of silently writing to a
+    /// temporary copy.
+    DerefRootedAssignment,
 }
 
 impl TypeErrorKind {
@@ -153,6 +159,7 @@ impl TypeErrorKind {
             Self::EnumEquality => "E-T30",
             Self::DuplicateDiscriminant => "E-T31",
             Self::DiscriminantOverflow => "E-T32",
+            Self::DerefRootedAssignment => "E-T33",
         }
     }
 }
@@ -595,6 +602,20 @@ impl TypeError {
         )
     }
 
+    /// Creates a deref-rooted-assignment error at `span` (`E-T33`): the
+    /// assignment target is a member or element of a dereferenced
+    /// reference (`(*r).x = v`), which the reference model does not
+    /// support (only whole-value `*r = v`). Rejected so the write is never
+    /// silently dropped on a temporary copy.
+    pub fn deref_rooted_assignment(span: Span) -> Self {
+        Self::custom(
+            TypeErrorKind::DerefRootedAssignment,
+            span,
+            "cannot assign through a member or element of a dereferenced reference; assign through the reference to the whole value (`*r = ...`)".to_string(),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -677,7 +698,8 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::VariantPayloadArity
             | TypeErrorKind::EnumEquality
             | TypeErrorKind::DuplicateDiscriminant
-            | TypeErrorKind::DiscriminantOverflow => actual.to_string(),
+            | TypeErrorKind::DiscriminantOverflow
+            | TypeErrorKind::DerefRootedAssignment => actual.to_string(),
         };
         f.write_str(&message)
     }

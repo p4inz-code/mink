@@ -170,8 +170,13 @@ data-carrying variants (sum types: `enum Shape { Circle(Int), Nothing }`,
 layout) — see `docs/implementation/SUM_TYPES_IMPLEMENTATION.md` — and
 Session 20 added explicit enum discriminants (`enum E { A = 5, B }`,
 implicit continuation, duplicate `E-T31` and overflow `E-T32` rejection)
-— see `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`. See
-`README.md`
+— see `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`. The Session
+21 deep audit hardened the reference model: `&enum` is rejected up front
+(`E-T19`, enums are not reference element types), deref-rooted
+member/element assignment is rejected (`E-T33`, only whole-value `*r = v`
+is in the model), a duplicated `E-S10` on dead-array element reads was
+removed, and `match` scrutinees with owned payloads now consume at
+field-transfer granularity. See `README.md`
 and `docs/implementation/` for the current status and the supported
 subset. The planning documents remain the authoritative long-term
 specification; the implementation documents record what is actually

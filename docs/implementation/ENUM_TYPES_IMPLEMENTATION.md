@@ -237,9 +237,10 @@ fn main() {
   **963 tests** (see
   `PATTERN_MATCHING_IMPLEMENTATION.md` §6), after session 19
   (data-carrying variants) it is **1007 tests** (see
-  `SUM_TYPES_IMPLEMENTATION.md` §5), and after session 20 (explicit
+  `SUM_TYPES_IMPLEMENTATION.md` §5), after session 20 (explicit
   discriminants) it is **1039 tests** (see
-  `DISCRIMINANTS_IMPLEMENTATION.md` §5).
+  `DISCRIMINANTS_IMPLEMENTATION.md` §5), and after the Session 21 deep
+  audit it is **1048 tests**.
 
 ## 7. Status
 

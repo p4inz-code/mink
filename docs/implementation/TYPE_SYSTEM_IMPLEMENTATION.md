@@ -470,6 +470,7 @@ range: `E-T01` … `E-T06`.
 | E-T30| `EnumEquality` | `cannot compare values of enum type `E` with `==`/`!=`; enum equality is not supported` |
 | E-T31| `DuplicateDiscriminant` | `variant `B` of enum `E` repeats the discriminant `5` used by an earlier variant; discriminants must be unique` (related span at the earlier variant) |
 | E-T32| `DiscriminantOverflow` | `variant `B` of enum `E` needs an implicit discriminant, but the previous discriminant is already the largest 64-bit value; add an explicit discriminant` |
+| E-T33| `DerefRootedAssignment` | `cannot assign through a member or element of a dereferenced reference; assign through the reference to the whole value (`*r = ...`)` |
 
 Every error carries the exact offending span; `E-T01` on assignment also
 carries the target span as a related location, which the CLI renders as
@@ -620,7 +621,7 @@ After session 18 (pattern matching, `E-T24`…`E-T26`) it is **963 tests**
 (see `PATTERN_MATCHING_IMPLEMENTATION.md` §6), after session 19
 (data-carrying enum variants, `E-T27`…`E-T30`, tagged-union layout) it is
 **1007 tests** (see `SUM_TYPES_IMPLEMENTATION.md` §5), and after session
-20 (explicit enum discriminants, `E-T31`…`E-T32`) it is **1039 tests**
+20 (explicit enum discriminants, `E-T31`…`E-T32`) it is **1039 tests**, and after the Session 21 deep audit (enum-borrow E-T19 rejection, deref-rooted assignment E-T33, duplicate E-S10 removal, match-field partial-move alignment; +9 regression tests in `tests/references.rs` / `tests/ownership.rs`) it is **1048 tests**.
 (see `DISCRIMINANTS_IMPLEMENTATION.md` §5).
 
 ## 26. Later Milestones

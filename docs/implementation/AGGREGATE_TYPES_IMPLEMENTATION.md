@@ -266,9 +266,10 @@ All errors carry exact source spans and structured messages.
   Session 17: 25 enums + 3 parser + 3 semantics + 7 typecheck + 2
   backend + 1 lib unit), and **963 tests** after Session 18 (pattern
   matching, +44 in `tests/pattern_matching.rs`), **1007 tests** after
-  Session 19 (sum types, +44 in `tests/sum_types.rs`), and **1039 tests**
+  Session 19 (sum types, +44 in `tests/sum_types.rs`), **1039 tests**
   after Session 20 (explicit discriminants, +32 in
-  `tests/discriminants.rs`). See
+  `tests/discriminants.rs`), and **1048 tests** after the Session 21 deep
+  audit. See
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
   per-file breakdown.
 

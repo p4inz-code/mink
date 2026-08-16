@@ -2054,6 +2054,22 @@ impl<'a> Checker<'a> {
             ));
             return self.types.push(TypeKind::Error);
         }
+        if matches!(self.types.kind(canon), Some(TypeKind::Enum(_))) {
+            // Session 16's reference model predates enums and does not
+            // include them as reference element types (the referent byte
+            // size is fixed at 8 in the backend, which would corrupt a
+            // tagged-union deref). Rejecting at the type level keeps the
+            // error a clean front-end diagnostic instead of an internal
+            // backend error (E-B07).
+            self.push_error(TypeError::invalid_borrow_target(
+                span,
+                format!(
+                    "cannot borrow a value of type `{}`: references to enums are not supported",
+                    self.display(canon)
+                ),
+            ));
+            return self.types.push(TypeKind::Error);
+        }
         if !self.is_borrowable_place(operand) {
             self.push_error(TypeError::invalid_borrow_target(
                 span,
@@ -2066,6 +2082,22 @@ impl<'a> Checker<'a> {
             mutable,
             elem: canon,
         })
+    }
+
+    /// Whether the place `expr` is rooted at a dereference somewhere in
+    /// its member/index chain (e.g. `(*r).x`, `(*r)[i]`). Reads through
+    /// such places are supported (they copy the dereferenced value), but
+    /// assignment through them is not part of the reference model (E-T33).
+    fn is_deref_rooted(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Member { base, .. } | ExprKind::Index { base, .. } => {
+                self.is_deref_rooted(base)
+            }
+            // `(*r).x`: the parser wraps the deref in a group.
+            ExprKind::Group(inner) => self.is_deref_rooted(inner),
+            ExprKind::Deref { .. } => true,
+            _ => false,
+        }
     }
 
     /// Whether `expr` is a borrowable place: an identifier, a member or
@@ -2552,6 +2584,17 @@ impl<'a> Checker<'a> {
                 self.check_value_for_target(op, target_ty, value_ty, value_span, span, target.span)
             }
             ExprKind::Member { .. } | ExprKind::Index { .. } => {
+                // A deref-rooted member/index target (`(*r).x = v`) is not
+                // part of the reference model (only whole-value `*r = v`
+                // is): lowering it would write to a temporary copy of the
+                // dereferenced value, silently dropping the assignment, so
+                // it is rejected here instead (E-T33).
+                if self.is_deref_rooted(target) {
+                    self.push_error(TypeError::deref_rooted_assignment(target.span));
+                    self.expr_types
+                        .push((target.span, self.types.push(TypeKind::Error)));
+                    return self.types.push(TypeKind::Error);
+                }
                 let target_ty = self.expr_type(target);
                 // The base binding's writability is a semantic question;
                 // skip the type check when it is immutable so the semantic

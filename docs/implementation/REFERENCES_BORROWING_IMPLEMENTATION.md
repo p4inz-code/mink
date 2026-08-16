@@ -31,6 +31,12 @@ The following rules are authoritative for this session.
   `&mut T`).
 - `T` may be `Int`, `Bool`, `Str`, `Ptr<Int>`, a struct, or an array.
   (`Float`/`Char` locals are rejected by the backend today regardless.)
+  **Enums are not reference element types**: `&e` where `e` is an enum
+  (unit-only or tagged) is E-T19 — borrows of enum values, including
+  enum-typed struct fields, are rejected in the type checker (audit
+  hardening, Session 21: previously `&e` reached the backend and failed
+  with an internal E-B07, and a tagged-union deref would have been
+  truncated to one word).
 
 ### 1.2 Borrow expressions
 
@@ -117,9 +123,10 @@ The following rules are authoritative for this session.
 
 | Code | Kind | Meaning |
 | ---- | ---- | ------- |
-| E-T19 | `InvalidBorrowTarget` | `&`/`&mut` of a non-place, of a reference, or of a deref (borrow/reborrow forms not in the model) |
+| E-T19 | `InvalidBorrowTarget` | `&`/`&mut` of a non-place, of a reference, of a deref, or of an enum value (borrow/reborrow forms not in the model) |
 | E-T20 | `DerefNonReference` | `*e` where `e` is not a reference |
 | E-T21 | `AssignThroughImmutableRef` | assignment through `&T` (only `&mut T` allows writes) |
+| E-T33 | `DerefRootedAssignment` | `(*r).x = v` / `(*r)[i] = v` / `(*r).x += v` — assignment through a member/element of a dereferenced reference (only whole-value `*r = v` is in the model) |
 | E-S12 | `BorrowConflict` | conflicting borrows; mutation/consumption while borrowed; free through a reference |
 | E-S13 | `InvalidBorrow` | `&mut` of an immutable (`let`-declared) binding |
 | E-S14 | `DanglingReference` | returning a reference to a function-local value |
@@ -131,7 +138,7 @@ The following rules are authoritative for this session.
   and type front end, still gates HIR lowering, and remains deterministic
   and source-ordered (no `HashMap` iteration order may influence any
   diagnostic).
-- The type checker rejects E-T19/E-T20/E-T21; the borrow analyzer rejects
+- The type checker rejects E-T19/E-T20/E-T21/E-T33; the borrow analyzer rejects
   E-S12/E-S13/E-S14. Invalid programs fail before code generation.
 
 ### 1.8 Deliberately absent (later sessions)
@@ -139,7 +146,11 @@ The following rules are authoritative for this session.
 - Reborrowing (`&*r`), reference-to-reference types, explicit lifetime
   annotations or inference beyond the lexical model above, disjoint-field
   exclusive borrows, refs to derefs, reference comparison/arithmetic,
-  references in module statics, `&` of literals (promotion).
+  references in module statics, `&` of literals (promotion),
+  **deref-rooted member/element assignment** (`(*r).x = v`, `(*r)[i] = v`
+  — E-T33, audit hardening: MIR used to lower these to writes into a
+  temporary copy of the dereferenced value, silently dropping the
+  assignment).
 - Drops/RAII, shared ownership, weak references — unchanged.
 
 ## 2. Design boundaries
