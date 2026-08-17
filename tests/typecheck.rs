@@ -1281,8 +1281,10 @@ fn hand_built_unusual_asts_do_not_panic() {
                     name: "p".to_string(),
                     span,
                 },
+                ty: None,
                 span,
             }],
+            return_ty: None,
             body: Block { stmts, span },
         }),
         span,
@@ -1761,6 +1763,7 @@ fn hand_built_inference_shapes_do_not_panic() {
                 span: next_span(),
             },
             params: Vec::new(),
+            return_ty: None,
             body: Block {
                 stmts,
                 span: next_span(),

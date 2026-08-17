@@ -825,6 +825,13 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident()?;
         self.expect_lparen()?;
         let params = self.parse_params()?;
+        // Optional return-type annotation: `-> Type`.
+        let return_ty = if self.current_kind() == TokenKind::Arrow {
+            let _ = self.bump(); // '->'
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
         let body = match self.parse_block_body() {
             Ok(block) => block,
             Err(()) => {
@@ -838,7 +845,15 @@ impl<'a> Parser<'a> {
             }
         };
         let span = self.join(start, body.span);
-        Ok((FnItem { name, params, body }, span))
+        Ok((
+            FnItem {
+                name,
+                params,
+                return_ty,
+                body,
+            },
+            span,
+        ))
     }
 
     fn parse_let(&mut self) -> Result<(LetItem, Span), ()> {
@@ -950,8 +965,18 @@ impl<'a> Parser<'a> {
 
     fn parse_param(&mut self) -> Result<Param, ()> {
         let name = self.expect_ident()?;
-        let span = name.span;
-        Ok(Param { name, span })
+        // Optional type annotation: `name: Type`.
+        let ty = if self.current_kind() == TokenKind::Colon {
+            let _ = self.bump(); // ':'
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        let span = match &ty {
+            Some(t) => self.join(name.span, t.span),
+            None => name.span,
+        };
+        Ok(Param { name, ty, span })
     }
 
     // ------------------------------------------------------------------

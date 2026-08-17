@@ -683,6 +683,7 @@ fn unresolved_reference_is_a_lowering_error() {
                 span: next_span(),
             },
             params: Vec::new(),
+            return_ty: None,
             body: Block {
                 stmts: vec![Stmt {
                     kind: StmtKind::Expr(unresolved.clone()),

@@ -962,6 +962,7 @@ impl<'a> Checker<'a> {
                 "Bool" => self.types.push(TypeKind::Bool),
                 "Char" => self.types.push(TypeKind::Char),
                 "Str" => self.types.push(TypeKind::Str),
+                "Null" => self.types.push(TypeKind::Null),
                 _ => {
                     if let Some(reg) = self.structs.get(&ident.name) {
                         reg.id
@@ -1105,23 +1106,45 @@ impl<'a> Checker<'a> {
     /// Gives every declared symbol a type slot before any body is analyzed,
     /// so module-scope order independence and mutual recursion work:
     /// function symbols get a real function type whose parameters and
-    /// result are inference variables; every other symbol gets a fresh
-    /// inference variable that its declaration or usage later resolves.
+    /// result are inference variables (or declared types when annotations
+    /// are present); every other symbol gets a fresh inference variable
+    /// that its declaration or usage later resolves.
     fn pre_register(&mut self) {
-        // Function name span start → declared parameter count.
-        let mut fn_arity: HashMap<u32, usize> = HashMap::new();
+        // Function name span start → (arity, param type annotations,
+        // return type annotation).  Cloned from the AST so the borrow
+        // on `self.ast` is released before the mutable loop.
+        type FnInfo = (usize, Vec<Option<Ty>>, Option<Ty>);
+        let mut fn_info: HashMap<u32, FnInfo> = HashMap::new();
         for item in &self.ast.items {
             if let ItemKind::Fn(f) = &item.kind {
-                fn_arity.insert(f.name.span.start(), f.params.len());
+                let param_tys: Vec<Option<Ty>> = f.params.iter().map(|p| p.ty.clone()).collect();
+                fn_info.insert(
+                    f.name.span.start(),
+                    (f.params.len(), param_tys, f.return_ty.clone()),
+                );
             }
         }
         for symbol in self.semantic.symbols().iter() {
             let ty = match symbol.kind {
                 SymbolKind::Fn => {
-                    let params = (0..fn_arity.get(&symbol.span.start()).copied().unwrap_or(0))
-                        .map(|_| self.types.push(TypeKind::Infer(None)))
-                        .collect::<Vec<_>>();
-                    let result = self.types.push(TypeKind::Infer(None));
+                    let (arity, param_tys, return_ty) = fn_info
+                        .get(&symbol.span.start())
+                        .cloned()
+                        .unwrap_or((0, Vec::new(), None));
+                    let params: Vec<TypeId> = (0..arity)
+                        .map(|i| {
+                            if let Some(ann) = param_tys.get(i).and_then(|t| t.as_ref()) {
+                                self.resolve_type(ann)
+                            } else {
+                                self.types.push(TypeKind::Infer(None))
+                            }
+                        })
+                        .collect();
+                    let result = if let Some(ann) = &return_ty {
+                        self.resolve_type(ann)
+                    } else {
+                        self.types.push(TypeKind::Infer(None))
+                    };
                     self.types.push(TypeKind::Fn { params, result })
                 }
                 SymbolKind::Intrinsic => self.intrinsic_type(symbol),

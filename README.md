@@ -122,7 +122,10 @@ corruption, no segfault guessing games.
   rejection, recursive payload coverage), comparisons, logical and
   bitwise operators,
   `if`/`while`/`for`/`loop` control flow, direct function calls, module
-  bindings, and integer results becoming process exit codes.
+  bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
+  with optional parameter types and return type, enforced by the type checker;
+  unannotated parameters and return types remain inferred), `Null` as a
+  named type in annotations, and integer results becoming process exit codes.
 - **Ownership & borrow checking** — compile-time move semantics for
   heap-owning values (`Str`, structs/arrays containing them): owned
   values move on transfer (use-after-move is `E-S10`), string literals
@@ -273,7 +276,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1148, all passing)
+├── tests/      Compiler tests (1209, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

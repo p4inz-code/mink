@@ -37,9 +37,9 @@ Notable exclusions:
   §11 and §12)
 - Module system (`mod`, `use`, `pub`) — module-system milestone
 - Async/await and unsafe — concurrency/unsafe milestones
-- Type annotations on parameters, bindings, and return types — type-system
-  milestone (the `:` token is used by struct field declarations since
-  session 14, §11; `->` is still not part of any production)
+- Type annotations on bindings (`let x: Type = expr;`) — type-system
+  milestone (function parameter and return type annotations arrived in
+  session 25 — §17)
 - Blocks as expressions, `if` as an expression, lambdas/closures
 - `?` (optional handling), open-ended ranges (`a..`, `..b`), and bare `..`
   operators
@@ -192,11 +192,12 @@ milestones justify them.
 ## 9. What Is Not the Grammar
 
 The following are **not** part of the frozen grammar and produce parser
-errors if used, until their milestones land: return-type annotations,
-`type`/`trait`/`impl` declarations (struct and enum declarations arrived
-in sessions 14 and 17 — see §11 and §12), `mod`/`use`/`pub`, `async
-fn`/`await`, `unsafe` blocks, closures, block expressions, `if`
-expressions, and the `?` operator.
+errors if used, until their milestones land: `type`/`trait`/`impl`
+declarations (struct and enum declarations arrived in sessions 14 and 17
+— see §11 and §12), `mod`/`use`/`pub`, `async fn`/`await`, `unsafe`
+blocks, closures, block expressions, `if` expressions, and the `?`
+operator. Return-type annotations and parameter type annotations arrived
+in session 25 (see §17).
 
 ## 10. Grammar-Freeze Changes to the Lexer
 
@@ -410,3 +411,47 @@ This grammar is frozen for the constructs it covers. Statements and
 declarations outside it are rejected by the parser with stable diagnostics
 (see `docs/implementation/PARSER_IMPLEMENTATION.md` for the error codes).
 Future sessions extend this document additively.
+
+## 17. Session-25 Additions: Function Signature Type Annotations
+
+**Session:** 25 — Function signature type annotations
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19/20 additions above remain authoritative; the new
+productions are:
+
+```
+Fn          := 'fn' Ident '(' ParamList? ')' ('->' Type)? Block
+Param       := Ident (':' Type)?
+```
+
+- **Function declarations** may now carry an optional return-type
+  annotation: `fn f() -> Int { ... }`. When present, every `return expr;`
+  in the body must produce a value of the annotated type (`E-T01` on
+  mismatch). When absent, the return type is inferred from `return`
+  expressions (existing behavior).
+- **Parameters** may now carry optional type annotations: `fn f(x: Int)
+  { ... }`. A parameter with a declared type enforces that the
+  parameter's usage matches the declared type (`E-T01` on mismatch). A
+  parameter without an annotation has its type inferred from usage
+  (existing behavior).
+- **Mixed annotations** are supported: `fn f(x: Int, y) -> Int { ... }`
+  has `x` declared as `Int`, `y` inferred, and the return type declared
+  as `Int`.
+- All type forms are accepted in annotations: `Int`, `Float`, `Bool`,
+  `Char`, `Str`, `Null`, user-declared struct and enum names, `Ptr<T>`,
+  `&T`, `&mut T`, and `[T; N]`.
+
+The session-25 lexer needed no changes (`->`, `:`, and type tokens
+already existed). Exclusions from §2 and §9 that remain (tuples, `type`
+aliases, generics, `let` binding annotations) are unchanged.
+
+## 18. Session-25 Additions: `Null` as a Named Type
+
+**Session:** 25
+
+`Null` is now recognized as a named type in type annotations (`fn f() ->
+Null { ... }`). Previously only `Int`, `Float`, `Bool`, `Char`, and `Str`
+were recognized as named types in type syntax; `Null` was accessible only
+through the `null` literal. This change is additive and does not break
+existing programs.

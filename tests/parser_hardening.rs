@@ -33,6 +33,11 @@ fn error_kinds(src: &str) -> Vec<ParseErrorKind> {
         .collect()
 }
 
+/// Parses `src` and returns `true` when it produces no parse errors.
+fn parse_ok(src: &str) -> bool {
+    parse_src(src).parse_errors().is_empty()
+}
+
 /// Parses `src` as the body of a function and returns its statements.
 fn stmts(src: &str) -> Vec<Stmt> {
     let output = parse_src(&format!("fn f() {{ {src} }}"));
@@ -884,7 +889,9 @@ fn bad_item_then_valid_items() {
 
 #[test]
 fn missing_function_body_does_not_consume_the_next_item() {
-    let output = parse_src("fn f() -> int {} fn g() {}");
+    // `fn f() -> int` without a body: the missing block is the error,
+    // recovery skips to the next `fn`.
+    let output = parse_src("fn f() -> int fn g() {}");
     assert_eq!(output.parse_errors().len(), 1);
     assert_eq!(output.ast().items().len(), 2);
     let ItemKind::Fn(func) = &output.ast().items()[1].kind else {
@@ -1425,16 +1432,28 @@ fn excluded_constructs_inside_functions_are_rejected() {
 }
 
 #[test]
-fn return_type_syntax_is_rejected() {
-    // `-> Type` after the parameter list is excluded from the frozen grammar
-    // (type-system milestone); the missing body block is reported at `->`.
-    assert_eq!(
-        error_kinds("fn f() -> int { }"),
-        vec![ParseErrorKind::ExpectedBlock]
-    );
+fn return_type_annotation_accepted() {
+    // `-> Type` after the parameter list is now part of the grammar
+    // (session 25 — function signature type annotations).
+    // Valid return types parse without error.
+    assert!(parse_ok("fn f() -> Int { }"));
+    assert!(parse_ok("fn f() -> Bool { }"));
+    assert!(parse_ok("fn f() -> Float { }"));
+    assert!(parse_ok("fn f() -> Char { }"));
+    assert!(parse_ok("fn f() -> Str { }"));
+    assert!(parse_ok("fn f() -> Null { }"));
+}
+
+#[test]
+fn malformed_return_type_is_rejected() {
+    // `->` followed by a non-type token is a parse error.
     assert_eq!(
         error_kinds("fn f() -> { }"),
-        vec![ParseErrorKind::ExpectedBlock]
+        vec![ParseErrorKind::ExpectedType]
+    );
+    assert_eq!(
+        error_kinds("fn f() -> = { }"),
+        vec![ParseErrorKind::ExpectedType]
     );
 }
 

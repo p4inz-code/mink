@@ -1273,8 +1273,10 @@ fn analyzer_tolerates_literal_assignment_target() {
                     name: "p".to_string(),
                     span,
                 },
+                ty: None,
                 span,
             }],
+            return_ty: None,
             body: Block {
                 stmts: vec![Stmt {
                     kind: StmtKind::Expr(assign),
@@ -1358,6 +1360,7 @@ fn analyzer_tolerates_group_assignment_target() {
                 span: Span::new(file_id, 0..1),
             },
             params: Vec::new(),
+            return_ty: None,
             body: Block {
                 stmts: vec![
                     x_binding,

@@ -189,27 +189,42 @@ pub enum TyKind {
     },
 }
 
-/// A `fn` function declaration: `fn name(params) { body }`.
+/// A `fn` function declaration: `fn name(params) { body }` or
+/// `fn name(params) -> Type { body }`.
+///
+/// Session 25 added optional return-type annotations: a function may
+/// declare `-> ReturnType` after its parameter list, which the type
+/// checker enforces. When absent (`None`), the return type is inferred
+/// from `return` expressions, preserving backward compatibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnItem {
     /// The function's name.
     pub name: Ident,
     /// The declared parameters.
     pub params: Vec<Param>,
+    /// An optional return-type annotation (`-> Type`). When `Some`, the
+    /// type checker enforces that every `return expr;` in the body
+    /// produces this type; when `None`, the return type is inferred.
+    pub return_ty: Option<Ty>,
     /// The function body block.
     pub body: Block,
 }
 
-/// A single function parameter.
+/// A single function parameter: `name` or `name: Type`.
 ///
-/// The frozen grammar has bare identifier parameters; type annotations are
-/// deferred to the type-system milestone (see
-/// `docs/implementation/PARSER_IMPLEMENTATION.md`).
+/// Session 25 added optional type annotations: a parameter may carry a
+/// declared type (`name: Type`) that the type checker enforces. When the
+/// annotation is absent (`None`), the parameter's type is inferred from
+/// usage, preserving backward compatibility with earlier programs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     /// The parameter's name.
     pub name: Ident,
-    /// Span of the parameter (its identifier).
+    /// An optional type annotation (`: Type`). When `Some`, the type
+    /// checker enforces that the parameter's usage matches the declared
+    /// type; when `None`, the type is inferred.
+    pub ty: Option<Ty>,
+    /// Span of the parameter (its identifier and optional annotation).
     pub span: Span,
 }
 
