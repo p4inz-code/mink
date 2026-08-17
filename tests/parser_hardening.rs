@@ -1401,8 +1401,6 @@ fn excluded_declarations_at_top_level_are_rejected() {
 #[test]
 fn excluded_constructs_inside_functions_are_rejected() {
     let excluded: &[(&str, ParseErrorKind)] = &[
-        // Type annotation on a binding.
-        ("let x: int = 5;", ParseErrorKind::ExpectedEqual),
         // match statements arrived with session 18 and are accepted; a
         // pattern without `=>` is a dedicated E-P24.
         // Closure.
@@ -1502,14 +1500,10 @@ fn excluded_keywords_are_never_silently_accepted() {
 
 #[test]
 fn combined_excluded_program_reports_every_offender() {
+    // `let x: int = 1` now parses (type annotations on bindings are
+    // accepted since session 26); only the closure remains an error.
     let src = "fn main() { let x: int = 1; let g = |a| a; }";
-    assert_eq!(
-        error_kinds(src),
-        vec![
-            ParseErrorKind::ExpectedEqual,
-            ParseErrorKind::ExpectedExpression,
-        ]
-    );
+    assert_eq!(error_kinds(src), vec![ParseErrorKind::ExpectedExpression]);
 }
 
 #[test]

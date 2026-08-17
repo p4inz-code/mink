@@ -228,22 +228,39 @@ pub struct Param {
     pub span: Span,
 }
 
-/// A `let` binding: `let [mut] name = init;`.
+/// A `let` binding: `let [mut] name [: Type] = init;`.
+///
+/// Session 26 added optional type annotations: a binding may carry a
+/// declared type (`name: Type`) that the type checker enforces. When the
+/// annotation is absent (`None`), the type is inferred from the initializer
+/// expression, preserving backward compatibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LetItem {
     /// The bound name.
     pub name: Ident,
     /// Whether the binding is mutable (`let mut`).
     pub mutable: bool,
+    /// An optional type annotation (`: Type`). When `Some`, the type
+    /// checker enforces that the initializer expression has the declared
+    /// type; when `None`, the type is inferred.
+    pub ty: Option<Ty>,
     /// The initializer expression.
     pub init: Expr,
 }
 
-/// A `const` binding: `const name = init;`.
+/// A `const` binding: `const name [: Type] = init;`.
+///
+/// Session 26 added optional type annotations, mirroring let bindings.
+/// When the annotation is present, the type checker enforces that the
+/// initializer expression matches the declared type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstItem {
     /// The bound name.
     pub name: Ident,
+    /// An optional type annotation (`: Type`). When `Some`, the type
+    /// checker enforces that the initializer expression has the declared
+    /// type; when `None`, the type is inferred.
+    pub ty: Option<Ty>,
     /// The compile-time constant expression.
     pub init: Expr,
 }

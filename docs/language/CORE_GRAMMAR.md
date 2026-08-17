@@ -37,9 +37,9 @@ Notable exclusions:
   §11 and §12)
 - Module system (`mod`, `use`, `pub`) — module-system milestone
 - Async/await and unsafe — concurrency/unsafe milestones
-- Type annotations on bindings (`let x: Type = expr;`) — type-system
-  milestone (function parameter and return type annotations arrived in
-  session 25 — §17)
+- Type annotations on bindings (`let x: Type = expr;`) arrived in
+  session 26 — §19 (function parameter and return type annotations
+  arrived in session 25 — §17)
 - Blocks as expressions, `if` as an expression, lambdas/closures
 - `?` (optional handling), open-ended ranges (`a..`, `..b`), and bare `..`
   operators
@@ -444,7 +444,7 @@ Param       := Ident (':' Type)?
 
 The session-25 lexer needed no changes (`->`, `:`, and type tokens
 already existed). Exclusions from §2 and §9 that remain (tuples, `type`
-aliases, generics, `let` binding annotations) are unchanged.
+aliases, generics) are unchanged.
 
 ## 18. Session-25 Additions: `Null` as a Named Type
 
@@ -455,3 +455,33 @@ Null { ... }`). Previously only `Int`, `Float`, `Bool`, `Char`, and `Str`
 were recognized as named types in type syntax; `Null` was accessible only
 through the `null` literal. This change is additive and does not break
 existing programs.
+
+## 19. Session-26 Additions: Let-Binding Type Annotations
+
+**Session:** 26 — Let-binding type annotations
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19/20/25 additions above remain authoritative; the new
+productions are:
+
+```
+LetBinding  := 'let' 'mut'? Ident (':' Type)? '=' Expr ';'
+ConstBinding:= 'const' Ident (':' Type)? '=' Expr ';'
+```
+
+- **Let bindings** may now carry an optional type annotation:
+  `let x: Int = 1;`. When present, the type checker enforces that the
+  initializer expression's type matches the declared type (`E-T01` on
+  mismatch). When absent (`None`), the type is inferred from the initializer
+  (existing behavior).
+- **Const bindings** may now carry an optional type annotation:
+  `const X: Int = 42;`. The enforcement is identical to let bindings.
+- **Mixed annotations** are supported: `let x: Int = 1; let y = 2;`
+  has `x` declared as `Int` and `y` inferred.
+- All type forms are accepted in annotations: `Int`, `Float`, `Bool`,
+  `Char`, `Str`, `Null`, user-declared struct and enum names, `Ptr<T>`,
+  `&T`, `&mut T`, and `[T; N]`.
+
+The session-26 lexer needed no changes (`:` and type tokens already
+existed). Exclusions from §2 and §9 that remain (tuples, `type`
+aliases, generics) are unchanged.

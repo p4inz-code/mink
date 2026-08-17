@@ -1346,6 +1346,7 @@ fn analyzer_tolerates_group_assignment_target() {
                 span,
             },
             mutable: false,
+            ty: None,
             init: Expr {
                 kind: ExprKind::Int,
                 span,

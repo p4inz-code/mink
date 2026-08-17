@@ -124,8 +124,11 @@ corruption, no segfault guessing games.
   `if`/`while`/`for`/`loop` control flow, direct function calls, module
   bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
   with optional parameter types and return type, enforced by the type checker;
-  unannotated parameters and return types remain inferred), `Null` as a
-  named type in annotations, and integer results becoming process exit codes.
+  unannotated parameters and return types remain inferred), **let/const
+  binding type annotations** (`let x: Int = 1;` with optional `: Type`,
+  enforced by the type checker; unannotated bindings remain inferred),
+  `Null` as a named type in annotations, and integer results becoming
+  process exit codes.
 - **Ownership & borrow checking** — compile-time move semantics for
   heap-owning values (`Str`, structs/arrays containing them): owned
   values move on transfer (use-after-move is `E-S10`), string literals
@@ -276,7 +279,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1209, all passing)
+├── tests/      Compiler tests (1291, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

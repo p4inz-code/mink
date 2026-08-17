@@ -868,15 +868,23 @@ impl<'a> Parser<'a> {
         Ok((
             ConstItem {
                 name: binding.name,
+                ty: binding.ty,
                 init: binding.init,
             },
             span,
         ))
     }
 
-    /// Parses `name = expr ;` shared by `let` and `const` bindings.
+    /// Parses `name [: Type] = expr ;` shared by `let` and `const` bindings.
     fn parse_binding_tail(&mut self, start: Span, mutable: bool) -> Result<(LetItem, Span), ()> {
         let name = self.expect_ident()?;
+        // Optional type annotation: `name: Type`.
+        let ty = if self.current_kind() == TokenKind::Colon {
+            let _ = self.bump(); // ':'
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
         if self.current_kind() != TokenKind::Eq {
             let token = self.current();
             self.record_error(ParseErrorKind::ExpectedEqual, token.span());
@@ -890,6 +898,7 @@ impl<'a> Parser<'a> {
             LetItem {
                 name,
                 mutable,
+                ty,
                 init,
             },
             span,

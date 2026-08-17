@@ -291,12 +291,34 @@ impl<'a> Checker<'a> {
                 ItemKind::Let(binding) => {
                     let (ty, recomputed) = self.resolve_deferred_expr(&binding.init);
                     if recomputed {
+                        if let Some(ann) = &binding.ty {
+                            let ann_ty = self.resolve_type(ann);
+                            if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                                self.push_error(TypeError::mismatch(
+                                    binding.init.span,
+                                    self.display(expected),
+                                    self.display(actual),
+                                    Some(binding.name.span),
+                                ));
+                            }
+                        }
                         self.unify_decl(&binding.name, ty, binding.init.span);
                     }
                 }
                 ItemKind::Const(binding) => {
                     let (ty, recomputed) = self.resolve_deferred_expr(&binding.init);
                     if recomputed {
+                        if let Some(ann) = &binding.ty {
+                            let ann_ty = self.resolve_type(ann);
+                            if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                                self.push_error(TypeError::mismatch(
+                                    binding.init.span,
+                                    self.display(expected),
+                                    self.display(actual),
+                                    Some(binding.name.span),
+                                ));
+                            }
+                        }
                         self.unify_decl(&binding.name, ty, binding.init.span);
                     }
                 }
@@ -330,12 +352,34 @@ impl<'a> Checker<'a> {
             StmtKind::Let(binding) => {
                 let (ty, recomputed) = self.resolve_deferred_expr(&binding.init);
                 if recomputed {
+                    if let Some(ann) = &binding.ty {
+                        let ann_ty = self.resolve_type(ann);
+                        if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                            self.push_error(TypeError::mismatch(
+                                binding.init.span,
+                                self.display(expected),
+                                self.display(actual),
+                                Some(binding.name.span),
+                            ));
+                        }
+                    }
                     self.unify_decl(&binding.name, ty, binding.init.span);
                 }
             }
             StmtKind::Const(binding) => {
                 let (ty, recomputed) = self.resolve_deferred_expr(&binding.init);
                 if recomputed {
+                    if let Some(ann) = &binding.ty {
+                        let ann_ty = self.resolve_type(ann);
+                        if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                            self.push_error(TypeError::mismatch(
+                                binding.init.span,
+                                self.display(expected),
+                                self.display(actual),
+                                Some(binding.name.span),
+                            ));
+                        }
+                    }
                     self.unify_decl(&binding.name, ty, binding.init.span);
                 }
             }
@@ -1199,10 +1243,35 @@ impl<'a> Checker<'a> {
             ItemKind::Struct(_) | ItemKind::Enum(_) => {}
             ItemKind::Let(binding) => {
                 let ty = self.expr_type(&binding.init);
+                // Session 26: when a type annotation is present, unify the
+                // initializer's type with the declared type so mismatches
+                // are reported as E-T01.
+                if let Some(ann) = &binding.ty {
+                    let ann_ty = self.resolve_type(ann);
+                    if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                        self.push_error(TypeError::mismatch(
+                            binding.init.span,
+                            self.display(expected),
+                            self.display(actual),
+                            Some(binding.name.span),
+                        ));
+                    }
+                }
                 self.unify_decl(&binding.name, ty, binding.init.span);
             }
             ItemKind::Const(binding) => {
                 let ty = self.expr_type(&binding.init);
+                if let Some(ann) = &binding.ty {
+                    let ann_ty = self.resolve_type(ann);
+                    if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                        self.push_error(TypeError::mismatch(
+                            binding.init.span,
+                            self.display(expected),
+                            self.display(actual),
+                            Some(binding.name.span),
+                        ));
+                    }
+                }
                 self.unify_decl(&binding.name, ty, binding.init.span);
             }
         }
@@ -1250,10 +1319,32 @@ impl<'a> Checker<'a> {
         match &stmt.kind {
             StmtKind::Let(binding) => {
                 let ty = self.expr_type(&binding.init);
+                if let Some(ann) = &binding.ty {
+                    let ann_ty = self.resolve_type(ann);
+                    if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                        self.push_error(TypeError::mismatch(
+                            binding.init.span,
+                            self.display(expected),
+                            self.display(actual),
+                            Some(binding.name.span),
+                        ));
+                    }
+                }
                 self.unify_decl(&binding.name, ty, binding.init.span);
             }
             StmtKind::Const(binding) => {
                 let ty = self.expr_type(&binding.init);
+                if let Some(ann) = &binding.ty {
+                    let ann_ty = self.resolve_type(ann);
+                    if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                        self.push_error(TypeError::mismatch(
+                            binding.init.span,
+                            self.display(expected),
+                            self.display(actual),
+                            Some(binding.name.span),
+                        ));
+                    }
+                }
                 self.unify_decl(&binding.name, ty, binding.init.span);
             }
             StmtKind::Return(value) => {
