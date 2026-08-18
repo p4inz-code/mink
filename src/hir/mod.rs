@@ -260,12 +260,16 @@ pub struct HirMatch {
     pub span: Span,
 }
 
-/// One lowered `match` arm: a pattern and its body block.
+/// One lowered `match` arm: a pattern, an optional guard (session 27),
+/// and its body block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirMatchArm {
     /// The pattern this arm matches.
     pub pattern: HirPattern,
-    /// The block run when the pattern matches.
+    /// The guard condition (session 27): when present, the arm runs only
+    /// if the pattern matches **and** the guard evaluates to `true`.
+    pub guard: Option<HirExpr>,
+    /// The block run when the pattern matches (and the guard passes).
     pub body: HirBlock,
     /// Span covering the whole arm.
     pub span: Span,
@@ -317,6 +321,32 @@ pub enum HirPattern {
         /// Span of the whole pattern (including any `-`).
         span: Span,
     },
+    /// An integer range pattern (session 27): `lo..=hi` or `lo..hi`. The
+    /// endpoints are integer-literal tokens (possibly negated), decoded by
+    /// the backend; `inclusive` records `..=` vs `..`.
+    Range {
+        /// Whether the lower endpoint is negated (`-5..`).
+        lo_negative: bool,
+        /// Span of the lower endpoint's literal token.
+        lo_span: Span,
+        /// Whether the upper endpoint is negated (`..-5`).
+        hi_negative: bool,
+        /// Span of the upper endpoint's literal token.
+        hi_span: Span,
+        /// Whether the upper endpoint is included (`..=` vs `..`).
+        inclusive: bool,
+        /// Span of the whole range pattern.
+        span: Span,
+    },
+    /// An or-pattern (session 27): `p1 | p2 | …`. The alternatives share
+    /// one binding per name; MIR lowering tests them in order and every
+    /// matching alternative leads to the same arm body.
+    Or {
+        /// The alternatives, in source order.
+        alternatives: Vec<HirPattern>,
+        /// Span of the whole or-pattern.
+        span: Span,
+    },
 }
 
 impl HirPattern {
@@ -328,6 +358,8 @@ impl HirPattern {
             Self::EnumVariant { span, .. } => *span,
             Self::Bool { span, .. } => *span,
             Self::Int { span, .. } => *span,
+            Self::Range { span, .. } => *span,
+            Self::Or { span, .. } => *span,
         }
     }
 }

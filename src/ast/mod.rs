@@ -352,14 +352,20 @@ pub struct MatchStmt {
     pub span: Span,
 }
 
-/// One arm of a [`MatchStmt`]: `pattern => block`.
+/// One arm of a [`MatchStmt`]: `pattern => block`, optionally guarded
+/// (`pattern if expr => block`, session 27).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchArm {
     /// The pattern this arm matches.
     pub pattern: Pattern,
-    /// The block run when the pattern matches.
+    /// The guard condition (session 27): when present, the arm runs only
+    /// if the pattern matches **and** the guard evaluates to `true`. A
+    /// guarded arm does not commit its pattern's coverage, so it never
+    /// makes a match exhaustive and never makes later arms unreachable.
+    pub guard: Option<Expr>,
+    /// The block run when the pattern matches (and the guard passes).
     pub body: Block,
-    /// Span covering the whole arm (pattern, `=>`, and block).
+    /// Span covering the whole arm (pattern, guard, `=>`, and block).
     pub span: Span,
 }
 
@@ -412,6 +418,30 @@ pub enum Pattern {
         /// Span covering the whole pattern (including any `-`).
         span: Span,
     },
+    /// An integer range pattern (session 27): `lo..=hi` (inclusive) or
+    /// `lo..hi` (exclusive), where both endpoints are integer literal
+    /// patterns (`5`, `-5`, `0x10`, …). The pattern matches an `Int` value
+    /// inside the interval.
+    Range {
+        /// The lower endpoint: an [`Pattern::Int`] (possibly negated).
+        lo: Box<Pattern>,
+        /// The upper endpoint: an [`Pattern::Int`] (possibly negated).
+        hi: Box<Pattern>,
+        /// Whether the upper endpoint is included (`..=` vs `..`).
+        inclusive: bool,
+        /// Span covering the whole range pattern.
+        span: Span,
+    },
+    /// An or-pattern (session 27): `p1 | p2 | …`, matching any value any
+    /// alternative matches. Every alternative must bind the same names
+    /// (with compatible types); a binding in one alternative is bound by
+    /// all of them.
+    Or {
+        /// The alternatives, in source order.
+        alternatives: Vec<Pattern>,
+        /// Span covering the whole or-pattern.
+        span: Span,
+    },
 }
 
 impl Pattern {
@@ -427,6 +457,8 @@ impl Pattern {
             }
             Self::Bool { span, .. } => *span,
             Self::Int { span, .. } => *span,
+            Self::Range { span, .. } => *span,
+            Self::Or { span, .. } => *span,
         }
     }
 }

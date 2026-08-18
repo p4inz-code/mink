@@ -102,6 +102,12 @@ impl<'a> Lowerer<'a> {
         for symbol in semantic.symbols().iter() {
             decls.insert(symbol.span.start(), symbol.id);
         }
+        // Or-pattern binding aliases (session 27): every occurrence of an
+        // or-pattern binding after its first resolves to the same symbol,
+        // so every alternative's binding lowers to the one logical local.
+        for (span, symbol) in semantic.binding_aliases() {
+            decls.insert(span.start(), *symbol);
+        }
         Self {
             ast,
             semantic,
@@ -274,6 +280,7 @@ impl<'a> Lowerer<'a> {
     fn lower_match_arm(&mut self, arm: &MatchArm) -> HirMatchArm {
         HirMatchArm {
             pattern: self.lower_pattern(&arm.pattern),
+            guard: arm.guard.as_ref().map(|guard| self.lower_expr(guard)),
             body: self.lower_block(&arm.body),
             span: arm.span,
         }
@@ -317,6 +324,44 @@ impl<'a> Lowerer<'a> {
                 literal_span: literal.span,
                 span: *span,
             },
+            Pattern::Range {
+                lo,
+                hi,
+                inclusive,
+                span,
+            } => {
+                // Endpoints are integer literal patterns (the parser
+                // guarantees it); extract their token spans and signs.
+                let (lo_negative, lo_span) = Self::int_endpoint(lo);
+                let (hi_negative, hi_span) = Self::int_endpoint(hi);
+                HirPattern::Range {
+                    lo_negative,
+                    lo_span,
+                    hi_negative,
+                    hi_span,
+                    inclusive: *inclusive,
+                    span: *span,
+                }
+            }
+            Pattern::Or { alternatives, span } => HirPattern::Or {
+                alternatives: alternatives
+                    .iter()
+                    .map(|alt| self.lower_pattern(alt))
+                    .collect(),
+                span: *span,
+            },
+        }
+    }
+
+    /// The `(negative, span)` of a range-pattern endpoint (an `Int`
+    /// pattern, possibly negated). The parser guarantees the endpoint is
+    /// an integer literal; the fallback is defensive.
+    fn int_endpoint(pattern: &Pattern) -> (bool, Span) {
+        match pattern {
+            Pattern::Int {
+                negative, literal, ..
+            } => (*negative, literal.span),
+            _ => (false, pattern.span()),
         }
     }
 

@@ -1641,25 +1641,44 @@ impl<'a> FnBuilder<'a> {
             let is_last = index + 1 == arm_count;
             self.start_block(test, arm.span);
             let body_block = self.alloc_block();
+            // A guard (session 27) is tested after the pattern matches, in
+            // its own block: the pattern's bindings exist in the guard's
+            // scope, and a failing guard falls through to the next arm.
+            let guard_block = if arm.guard.is_some() {
+                self.alloc_block()
+            } else {
+                body_block
+            };
+            // The else block of the arm's tests (or guard): where the next
+            // arm's test starts. An unguarded irrefutable arm is always
+            // the last arm of a valid match (every later arm is E-T25), so
+            // it needs no else block.
+            let needs_next = arm.guard.is_some()
+                || !matches!(
+                    &arm.pattern,
+                    HirPattern::Wildcard { .. } | HirPattern::Binding(_)
+                );
+            let next = if needs_next {
+                Some(if is_last {
+                    *unreachable.get_or_insert_with(|| self.alloc_block())
+                } else {
+                    self.alloc_block()
+                })
+            } else {
+                None
+            };
             match &arm.pattern {
                 HirPattern::Wildcard { .. } => {
                     self.terminate(MirTerminator::Jump {
-                        target: body_block,
+                        target: guard_block,
                         span: arm.span,
                     });
                 }
                 HirPattern::Binding(ident) => {
-                    // The binding copies the scrutinee value into a fresh
-                    // local; references inside the arm body resolve through
-                    // the symbol → local mapping.
-                    let local = self.eval.declare_local(
-                        ident.name.clone(),
-                        Some(ident.symbol),
-                        ident.ty,
-                        false,
-                        ident.span,
-                    );
-                    self.eval.symbols.insert(ident.symbol, local);
+                    // The binding copies the scrutinee value into its
+                    // local; references inside the guard and the arm body
+                    // resolve through the symbol → local mapping.
+                    let local = self.binding_local(ident);
                     self.eval.emit(MirStmt {
                         kind: MirStmtKind::Assign {
                             target: MirTarget {
@@ -1672,64 +1691,27 @@ impl<'a> FnBuilder<'a> {
                         span: ident.span,
                     });
                     self.terminate(MirTerminator::Jump {
-                        target: body_block,
+                        target: guard_block,
                         span: arm.span,
                     });
-                }
-                HirPattern::EnumVariant {
-                    name,
-                    variant,
-                    payload: Some(inner),
-                    ..
-                } => {
-                    // A data-carrying variant pattern (session 19): the
-                    // outer test compares the value's discriminant word;
-                    // on success the payload is extracted into a fresh
-                    // temporary and the inner payload pattern is matched —
-                    // and its bindings extracted — through a chain of test
-                    // blocks (see [`Self::lower_payload_chain`]).
-                    let next = if is_last {
-                        *unreachable.get_or_insert_with(|| self.alloc_block())
-                    } else {
-                        self.alloc_block()
-                    };
-                    let cond = self.tag_test(name, variant, &scrutinee, arm.span);
-                    let sub_test = self.alloc_block();
-                    self.terminate(MirTerminator::Branch {
-                        cond,
-                        then_block: sub_test,
-                        else_block: next,
-                        span: arm.span,
-                    });
-                    self.start_block(sub_test, arm.span);
-                    let payload_ty = self
-                        .payload_type_of(scrutinee.ty, &name.name, &variant.name)
-                        .unwrap_or(scrutinee.ty);
-                    let payload = self.emit_temp_rvalue(
-                        payload_ty,
-                        arm.span,
-                        MirRvalueKind::EnumPayload {
-                            value: scrutinee.clone(),
-                        },
-                    );
-                    self.lower_payload_chain(inner, &payload, body_block, next, arm.span);
-                    test = next;
                 }
                 _ => {
-                    let cond = self.pattern_test(&arm.pattern, &scrutinee, arm.span);
-                    let next = if is_last {
-                        *unreachable.get_or_insert_with(|| self.alloc_block())
-                    } else {
-                        self.alloc_block()
-                    };
-                    self.terminate(MirTerminator::Branch {
-                        cond,
-                        then_block: body_block,
-                        else_block: next,
-                        span: arm.span,
-                    });
+                    let next = next.expect("refutable patterns always allocate an else block");
+                    self.lower_pattern_chain(&arm.pattern, &scrutinee, guard_block, next, arm.span);
                     test = next;
                 }
+            }
+            if let Some(guard) = &arm.guard {
+                let next = next.expect("guarded arms always allocate an else block");
+                self.start_block(guard_block, arm.span);
+                let cond = self.eval.eval_operand(guard);
+                self.terminate(MirTerminator::Branch {
+                    cond,
+                    then_block: body_block,
+                    else_block: next,
+                    span: arm.span,
+                });
+                test = next;
             }
             self.start_block(body_block, arm.body.span);
             self.lower_block(&arm.body);
@@ -1761,24 +1743,39 @@ impl<'a> FnBuilder<'a> {
     ///   and recursively matches the nested payload;
     /// - a boolean/integer pattern tests the payload value against its
     ///   literal.
-    fn lower_payload_chain(
+    ///
+    /// Lowers any pattern against the value `value`, building the chain of
+    /// test blocks from the current block to `then` (the arm body or its
+    /// guard block, session 27); every test's `else` falls to `else_` (the
+    /// next arm's test, or the defensive unreachable block for a refutable
+    /// last arm).
+    ///
+    /// - `_` matches any value and jumps straight into `then`;
+    /// - a binding declares a fresh local (reusing the local an earlier
+    ///   or-pattern alternative already declared for the same symbol),
+    ///   copies the value into it, and jumps into `then`;
+    /// - a nested variant pattern tests the value's discriminant and
+    ///   recursively matches the nested payload;
+    /// - a boolean/integer pattern tests the value against its literal;
+    /// - a range pattern tests `lo <= v && v <= hi` (inclusive) or
+    ///   `lo <= v && v < hi` (exclusive) through ordinary binary rvalues;
+    /// - an or-pattern tests its alternatives in order, each leading to
+    ///   `then` and the last alternative's failure falling to `else_`.
+    fn lower_pattern_chain(
         &mut self,
         pattern: &HirPattern,
         value: &MirOperand,
-        body_block: BlockId,
-        next: BlockId,
+        then: BlockId,
+        else_: BlockId,
         span: Span,
     ) {
         match pattern {
             HirPattern::Binding(ident) => {
-                let local = self.eval.declare_local(
-                    ident.name.clone(),
-                    Some(ident.symbol),
-                    ident.ty,
-                    false,
-                    ident.span,
-                );
-                self.eval.symbols.insert(ident.symbol, local);
+                // Or-pattern alternatives (session 27) share one binding
+                // per symbol: the local is declared on the first
+                // alternative that binds it and reused by the rest, so the
+                // arm body always reads the same local.
+                let local = self.binding_local(ident);
                 self.eval.emit(MirStmt {
                     kind: MirStmtKind::Assign {
                         target: MirTarget {
@@ -1790,16 +1787,10 @@ impl<'a> FnBuilder<'a> {
                     },
                     span: ident.span,
                 });
-                self.terminate(MirTerminator::Jump {
-                    target: body_block,
-                    span,
-                });
+                self.terminate(MirTerminator::Jump { target: then, span });
             }
             HirPattern::Wildcard { .. } => {
-                self.terminate(MirTerminator::Jump {
-                    target: body_block,
-                    span,
-                });
+                self.terminate(MirTerminator::Jump { target: then, span });
             }
             HirPattern::EnumVariant {
                 name,
@@ -1816,7 +1807,7 @@ impl<'a> FnBuilder<'a> {
                         self.terminate(MirTerminator::Branch {
                             cond,
                             then_block: sub_test,
-                            else_block: next,
+                            else_block: else_,
                             span,
                         });
                         self.start_block(sub_test, span);
@@ -1830,13 +1821,13 @@ impl<'a> FnBuilder<'a> {
                                 value: value.clone(),
                             },
                         );
-                        self.lower_payload_chain(inner, &payload, body_block, next, span);
+                        self.lower_pattern_chain(inner, &payload, then, else_, span);
                     }
                     None => {
                         self.terminate(MirTerminator::Branch {
                             cond,
-                            then_block: body_block,
-                            else_block: next,
+                            then_block: then,
+                            else_block: else_,
                             span,
                         });
                     }
@@ -1846,11 +1837,145 @@ impl<'a> FnBuilder<'a> {
                 let cond = self.pattern_test(pattern, value, span);
                 self.terminate(MirTerminator::Branch {
                     cond,
-                    then_block: body_block,
-                    else_block: next,
+                    then_block: then,
+                    else_block: else_,
                     span,
                 });
             }
+            HirPattern::Range {
+                lo_negative,
+                lo_span,
+                hi_negative,
+                hi_span,
+                inclusive,
+                span: _,
+            } => {
+                // `lo <= v && v <= hi` (inclusive) or `lo <= v && v < hi`
+                // (exclusive): two comparisons and a conjunction through
+                // ordinary binary rvalues, so the optimizer and backend
+                // handle them like any hand-written `&&`-free comparison
+                // chain. Negative endpoints negate their literal first,
+                // exactly like negative integer-literal patterns.
+                let bool_ty = self.eval.bool_ty();
+                let lo = self.int_literal_operand(*lo_span, value.ty);
+                let lo = if *lo_negative {
+                    self.emit_temp_rvalue(
+                        value.ty,
+                        *lo_span,
+                        MirRvalueKind::Unary {
+                            op: UnaryOp::Neg,
+                            operand: lo,
+                        },
+                    )
+                } else {
+                    lo
+                };
+                let hi = self.int_literal_operand(*hi_span, value.ty);
+                let hi = if *hi_negative {
+                    self.emit_temp_rvalue(
+                        value.ty,
+                        *hi_span,
+                        MirRvalueKind::Unary {
+                            op: UnaryOp::Neg,
+                            operand: hi,
+                        },
+                    )
+                } else {
+                    hi
+                };
+                let lower = self.emit_temp_rvalue(
+                    bool_ty,
+                    span,
+                    MirRvalueKind::Binary {
+                        op: BinaryOp::Ge,
+                        lhs: value.clone(),
+                        rhs: lo,
+                    },
+                );
+                let upper_op = if *inclusive {
+                    BinaryOp::Le
+                } else {
+                    BinaryOp::Lt
+                };
+                let upper = self.emit_temp_rvalue(
+                    bool_ty,
+                    span,
+                    MirRvalueKind::Binary {
+                        op: upper_op,
+                        lhs: value.clone(),
+                        rhs: hi,
+                    },
+                );
+                let cond = self.emit_temp_rvalue(
+                    bool_ty,
+                    span,
+                    MirRvalueKind::Binary {
+                        op: BinaryOp::And,
+                        lhs: lower,
+                        rhs: upper,
+                    },
+                );
+                self.terminate(MirTerminator::Branch {
+                    cond,
+                    then_block: then,
+                    else_block: else_,
+                    span,
+                });
+            }
+            HirPattern::Or { alternatives, .. } => {
+                // Test the alternatives in order; every matching
+                // alternative leads to `then`, and the last alternative's
+                // failure falls to `else_`.
+                let count = alternatives.len();
+                let mut current_else = else_;
+                for (index, alternative) in alternatives.iter().enumerate() {
+                    if index > 0 {
+                        self.start_block(current_else, span);
+                    }
+                    let next_else = if index + 1 == count {
+                        else_
+                    } else {
+                        self.alloc_block()
+                    };
+                    self.lower_pattern_chain(alternative, value, then, next_else, span);
+                    current_else = next_else;
+                }
+            }
+        }
+    }
+
+    /// The local a pattern binding writes to: declared on the first
+    /// occurrence of its symbol and reused by every later occurrence
+    /// (or-pattern alternatives share one binding per name, session 27).
+    fn binding_local(&mut self, ident: &HirIdent) -> LocalId {
+        match self.eval.symbols.get(&ident.symbol) {
+            Some(&local) => local,
+            None => {
+                let local = self.eval.declare_local(
+                    ident.name.clone(),
+                    Some(ident.symbol),
+                    ident.ty,
+                    false,
+                    ident.span,
+                );
+                self.eval.symbols.insert(ident.symbol, local);
+                local
+            }
+        }
+    }
+
+    /// The integer-literal constant operand for a pattern endpoint's
+    /// token span; the backend decodes the literal text, matching
+    /// [`Self::pattern_test`].
+    fn int_literal_operand(&self, literal_span: Span, ty: TypeId) -> MirOperand {
+        MirOperand {
+            kind: MirOperandKind::Constant(MirConstant {
+                kind: MirConstantKind::Int,
+                span: literal_span,
+                ty,
+            }),
+            span: literal_span,
+            ty,
         }
     }
 
@@ -1987,6 +2112,12 @@ impl<'a> FnBuilder<'a> {
             }
             HirPattern::Wildcard { .. } | HirPattern::Binding(_) => {
                 unreachable!("irrefutable patterns never emit a test")
+            }
+            // Range and or patterns are lowered by
+            // [`Self::lower_pattern_chain`], never through a single
+            // equality test.
+            HirPattern::Range { .. } | HirPattern::Or { .. } => {
+                unreachable!("range and or patterns lower through lower_pattern_chain")
             }
         };
         self.emit_temp_rvalue(

@@ -117,6 +117,10 @@ pub enum TypeErrorKind {
     /// deferred, so this is rejected instead of silently writing to a
     /// temporary copy.
     DerefRootedAssignment,
+    /// An or-pattern's alternatives do not all bind the same names
+    /// (session 27): a name bound in one alternative must be bound in
+    /// every alternative, with a compatible type.
+    InvalidOrPattern,
 }
 
 impl TypeErrorKind {
@@ -160,6 +164,7 @@ impl TypeErrorKind {
             Self::DuplicateDiscriminant => "E-T31",
             Self::DiscriminantOverflow => "E-T32",
             Self::DerefRootedAssignment => "E-T33",
+            Self::InvalidOrPattern => "E-T34",
         }
     }
 }
@@ -566,6 +571,14 @@ impl TypeError {
         )
     }
 
+    /// Creates an invalid-or-pattern error at `span` (`E-T34`): the
+    /// alternatives of an or-pattern must bind exactly the same names, so
+    /// the arm binds one value per name. `detail` names the offending
+    /// name(s).
+    pub fn invalid_or_pattern(span: Span, detail: impl Into<String>) -> Self {
+        Self::custom(TypeErrorKind::InvalidOrPattern, span, detail.into(), None)
+    }
+
     /// Creates a duplicate-discriminant error at `span` (`E-T31`): two
     /// variants of one enum share the same discriminant value, so the tag
     /// word cannot distinguish them. `first` points at the earlier variant
@@ -697,6 +710,7 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::InvalidVariantPayload
             | TypeErrorKind::VariantPayloadArity
             | TypeErrorKind::EnumEquality
+            | TypeErrorKind::InvalidOrPattern
             | TypeErrorKind::DuplicateDiscriminant
             | TypeErrorKind::DiscriminantOverflow
             | TypeErrorKind::DerefRootedAssignment => actual.to_string(),

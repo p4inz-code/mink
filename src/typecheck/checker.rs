@@ -70,15 +70,13 @@ pub(crate) fn check_ast(ast: &Ast, semantic: &SemanticResult, sources: &SourceMa
     checker.finish()
 }
 
-/// One value a refutable match pattern covers, used for exhaustiveness
-/// and duplicate-arm detection. Patterns of the same key match the same
-/// value, so a repeated key is an unreachable arm.
+/// One finite value class a refutable match pattern covers, used for
+/// exhaustiveness and unreachable-arm detection. Patterns of the same key
+/// match the same value class, so a repeated key is an unreachable arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CoverageKey {
     /// The boolean literal `true` or `false`.
     Bool(bool),
-    /// An integer literal's decoded value (negative literals negated).
-    Int(i64),
     /// An enum variant, by name.
     Variant(String),
 }
@@ -97,14 +95,20 @@ struct KeyCover {
 }
 
 /// The recursive coverage of a scrutinee type by the refutable patterns
-/// of a `match` (session 19). `all` records that a `_`/binding arm
+/// of a `match` (sessions 18–27). `all` records that a `_`/binding arm
 /// covered every value, making every later arm unreachable; `keys` record
-/// the covered value classes (a data-carrying variant's payload coverage
-/// recurses through [`KeyCover::sub`]).
+/// the covered finite value classes (a data-carrying variant's payload
+/// coverage recurses through [`KeyCover::sub`]); `intervals` record the
+/// covered `Int` points and ranges (session 27) as a sorted, disjoint,
+/// merged list of inclusive `[lo, hi]` intervals.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Coverage {
     /// The covered keys, in arm order.
     keys: Vec<KeyCover>,
+    /// Covered integer intervals `(lo, hi)`, sorted by `lo`, disjoint, and
+    /// merged (adjacent intervals are merged too, since integer coverage
+    /// is contiguous). Points are `[n, n]`.
+    intervals: Vec<(i64, i64)>,
     /// Whether a catch-all (`_`/binding) arm covered every value.
     all: bool,
 }
@@ -429,6 +433,16 @@ impl<'a> Checker<'a> {
             self.check_match_patterns(stmt, scrutinee_ty);
         }
         for arm in &stmt.arms {
+            // A guard (session 27) is a boolean condition like an `if`
+            // condition: when a deferred member/index in it resolved, it
+            // is re-checked against `Bool` so a contradiction is reported
+            // instead of silently reaching the backend.
+            if let Some(guard) = &arm.guard {
+                let (guard_ty, guard_recomputed) = self.resolve_deferred_expr(guard);
+                if guard_recomputed {
+                    self.recheck_condition(guard_ty, guard.span);
+                }
+            }
             self.resolve_deferred_block(&arm.body);
         }
     }
@@ -1197,6 +1211,13 @@ impl<'a> Checker<'a> {
             self.symbol_types[symbol.id.raw() as usize] = ty;
             self.decls.insert(symbol.span.start(), symbol.id);
         }
+        // Or-pattern binding aliases (session 27): every occurrence of an
+        // or-pattern binding after its first resolves to the same symbol,
+        // so each alternative's binding occurrence is typed and unified
+        // with the one logical binding.
+        for (span, symbol) in self.semantic.binding_aliases() {
+            self.decls.insert(span.start(), *symbol);
+        }
     }
 
     /// The concrete function type of a runtime intrinsic, from its
@@ -1432,141 +1453,42 @@ impl<'a> Checker<'a> {
             canon = self.types.canonical(scrutinee_ty);
             if coverage.all {
                 // Every value already matches the earlier `_`/binding arm.
+                // The dead arm is not checked, so its own errors never
+                // cascade.
                 self.push_error(TypeError::unreachable_match_arm(
                     arm.pattern.span(),
                     "this arm can never run: an earlier `_` or binding arm already matches every value",
                 ));
                 continue;
             }
+            // A guarded arm (session 27) never commits coverage: it can
+            // still fail, so it neither makes the match exhaustive nor
+            // makes later arms unreachable. Whether guarded or not, an arm
+            // whose pattern an earlier arm already fully covers can never
+            // run (E-T25).
+            let guarded = arm.guard.is_some();
             match &arm.pattern {
-                Pattern::Wildcard { .. } => coverage.all = true,
-                Pattern::Binding(name) => {
-                    // The binding copies the scrutinee's value into the
-                    // arm's scope; its type is the scrutinee's type.
-                    coverage.all = true;
-                    self.unify_decl(name, canon, name.span);
+                Pattern::Or { alternatives, span } => {
+                    self.check_or_arm(alternatives, *span, canon, guarded, &mut coverage);
                 }
-                Pattern::Bool { value, span } => {
-                    let expected = self.bool_ty();
-                    match self.types.unify(canon, expected) {
-                        Ok(_) => self.record_coverage_key(
-                            &mut coverage,
-                            CoverageKey::Bool(*value),
-                            None,
-                            *span,
-                        ),
-                        Err((expected, actual)) => self.push_error(TypeError::mismatch(
-                            *span,
-                            self.display(expected),
-                            self.display(actual),
-                            None,
-                        )),
+                _ => {
+                    let arm_coverage =
+                        self.check_arm_pattern(&arm.pattern, canon, arm.pattern.span());
+                    if self.coverage_contains(&coverage, &arm_coverage) {
+                        self.push_error(TypeError::unreachable_match_arm(
+                            arm.pattern.span(),
+                            "this arm can never run: an earlier arm already matches the same value",
+                        ));
+                    } else if !guarded {
+                        self.merge_arm_coverage(&mut coverage, arm_coverage);
                     }
                 }
-                Pattern::Int {
-                    negative,
-                    literal,
-                    span,
-                } => {
-                    let expected = self.int_ty();
-                    match self.types.unify(canon, expected) {
-                        Ok(_) => {
-                            let value = self
-                                .decode_int_literal(literal)
-                                .map(|value| {
-                                    if *negative {
-                                        value.wrapping_neg()
-                                    } else {
-                                        value
-                                    }
-                                })
-                                .unwrap_or(0);
-                            self.record_coverage_key(
-                                &mut coverage,
-                                CoverageKey::Int(value),
-                                None,
-                                *span,
-                            );
-                        }
-                        Err((expected, actual)) => self.push_error(TypeError::mismatch(
-                            *span,
-                            self.display(expected),
-                            self.display(actual),
-                            None,
-                        )),
-                    }
-                }
-                Pattern::EnumVariant {
-                    name,
-                    variant,
-                    payload,
-                } => {
-                    let pattern_span = arm.pattern.span();
-                    if let Some(enum_ty) = self.enum_variant_type(name, variant, pattern_span) {
-                        match self.types.unify(canon, enum_ty) {
-                            Ok(_) => {
-                                let declared = self.variant_payload(enum_ty, &variant.name);
-                                match (payload.as_deref(), declared) {
-                                    // A payload attached to a unit variant.
-                                    (Some(inner), None) => {
-                                        self.push_error(TypeError::variant_payload_arity(
-                                            pattern_span,
-                                            format!(
-                                                "variant `{}::{}` is a unit variant and cannot carry a payload pattern",
-                                                name.name, variant.name
-                                            ),
-                                        ));
-                                        // The payload pattern is still
-                                        // checked so its bindings and
-                                        // diagnostics surface.
-                                        self.check_payload_pattern(inner, canon, pattern_span);
-                                    }
-                                    // A data-carrying variant matched
-                                    // without a payload pattern.
-                                    (None, Some(_)) => {
-                                        self.push_error(TypeError::variant_payload_arity(
-                                            pattern_span,
-                                            format!(
-                                                "variant `{}::{}` carries a payload and must be matched with one: `{}::{}(pattern)`",
-                                                name.name, variant.name, name.name, variant.name
-                                            ),
-                                        ));
-                                    }
-                                    // Unit variant, no payload: fully
-                                    // covers the variant.
-                                    (None, None) => self.record_coverage_key(
-                                        &mut coverage,
-                                        CoverageKey::Variant(variant.name.clone()),
-                                        None,
-                                        pattern_span,
-                                    ),
-                                    // Data-carrying variant with a payload
-                                    // pattern: the variant is covered by
-                                    // whatever the payload pattern covers.
-                                    (Some(inner), Some(payload_ty)) => {
-                                        let sub = self.check_payload_pattern(
-                                            inner,
-                                            payload_ty,
-                                            pattern_span,
-                                        );
-                                        self.record_coverage_key(
-                                            &mut coverage,
-                                            CoverageKey::Variant(variant.name.clone()),
-                                            sub,
-                                            pattern_span,
-                                        );
-                                    }
-                                }
-                            }
-                            Err((expected, actual)) => self.push_error(TypeError::mismatch(
-                                pattern_span,
-                                self.display(expected),
-                                self.display(actual),
-                                None,
-                            )),
-                        }
-                    }
-                }
+            }
+            // The guard (session 27) is a boolean condition; a non-Bool
+            // guard is E-T01. The pattern's bindings were unified above, so
+            // the guard can reference them.
+            if let Some(guard) = &arm.guard {
+                self.check_condition(guard);
             }
         }
         // Exhaustiveness: after every pattern has pinned the scrutinee,
@@ -1615,7 +1537,7 @@ impl<'a> Checker<'a> {
                             key: CoverageKey::Bool(*value),
                             sub: None,
                         }],
-                        all: false,
+                        ..Default::default()
                     })),
                     Err((expected, actual)) => {
                         self.push_error(TypeError::mismatch(
@@ -1646,13 +1568,52 @@ impl<'a> Checker<'a> {
                                 }
                             })
                             .unwrap_or(0);
-                        Some(Box::new(Coverage {
-                            keys: vec![KeyCover {
-                                key: CoverageKey::Int(value),
-                                sub: None,
-                            }],
-                            all: false,
-                        }))
+                        let mut coverage = Coverage::default();
+                        Self::insert_interval(&mut coverage, value, value);
+                        Some(Box::new(coverage))
+                    }
+                    Err((expected, actual)) => {
+                        self.push_error(TypeError::mismatch(
+                            *pspan,
+                            self.display(expected),
+                            self.display(actual),
+                            None,
+                        ));
+                        None
+                    }
+                }
+            }
+            Pattern::Range {
+                lo,
+                hi,
+                inclusive,
+                span: pspan,
+            } => {
+                let expected = self.int_ty();
+                match self.types.unify(payload_ty, expected) {
+                    Ok(_) => {
+                        let mut coverage = Coverage::default();
+                        if let (Some(lo), Some(hi)) =
+                            (self.pattern_int_value(lo), self.pattern_int_value(hi))
+                        {
+                            // Exclusive `..` excludes the upper endpoint;
+                            // an endpoint at `i64::MIN` cannot be excluded
+                            // (nothing lies below it), so the range is
+                            // empty. A `lo > hi` range is empty too; an
+                            // empty range covers nothing.
+                            let hi = if *inclusive {
+                                hi
+                            } else {
+                                match hi.checked_sub(1) {
+                                    Some(hi) => hi,
+                                    None => return Some(Box::new(coverage)),
+                                }
+                            };
+                            if lo <= hi {
+                                Self::insert_interval(&mut coverage, lo, hi);
+                            }
+                        }
+                        Some(Box::new(coverage))
                     }
                     Err((expected, actual)) => {
                         self.push_error(TypeError::mismatch(
@@ -1702,7 +1663,7 @@ impl<'a> Checker<'a> {
                                         key: CoverageKey::Variant(variant.name.clone()),
                                         sub: None,
                                     }],
-                                    all: false,
+                                    ..Default::default()
                                 })),
                                 (Some(inner), Some(payload_ty)) => {
                                     let sub =
@@ -1712,7 +1673,7 @@ impl<'a> Checker<'a> {
                                             key: CoverageKey::Variant(variant.name.clone()),
                                             sub,
                                         }],
-                                        all: false,
+                                        ..Default::default()
                                     }))
                                 }
                             }
@@ -1731,51 +1692,513 @@ impl<'a> Checker<'a> {
                     None
                 }
             }
+            // An or-pattern payload (session 27): alternatives must bind
+            // the same names (E-T34), the coverage is the union of the
+            // alternatives' coverages, and an irrefutable alternative
+            // (`_`/binding) makes the whole pattern irrefutable.
+            Pattern::Or { alternatives, span } => {
+                let mut names: Option<Vec<String>> = None;
+                let mut merged = Coverage::default();
+                for alternative in alternatives {
+                    let alternative_coverage =
+                        self.check_payload_pattern(alternative, payload_ty, *span);
+                    let alternative_names = Self::pattern_binding_names(alternative);
+                    match &names {
+                        None => names = Some(alternative_names.clone()),
+                        Some(first) => {
+                            if *first != alternative_names {
+                                self.push_error(TypeError::invalid_or_pattern(
+                                    *span,
+                                    self.or_pattern_mismatch_message(first, &alternative_names),
+                                ));
+                            }
+                        }
+                    }
+                    let sub = alternative_coverage?;
+                    self.merge_arm_coverage(&mut merged, *sub);
+                }
+                Some(Box::new(merged))
+            }
         }
     }
 
-    /// Records `key` as covered by an arm (with optional nested payload
-    /// coverage), rejecting a repeat: a pattern an earlier arm already
-    /// matches can never run (`E-T25`).
-    fn record_coverage_key(
+    /// Checks one match pattern (a whole arm's pattern or one or-pattern
+    /// alternative, session 27) against the scrutinee type, reporting its
+    /// type errors and unifying its bindings, and returns the coverage it
+    /// contributes. A `_`/binding pattern contributes catch-all coverage
+    /// (`all`); the caller decides whether the arm commits it (guarded
+    /// arms commit nothing). A pattern that does not unify with the
+    /// scrutinee contributes no coverage, so one broken pattern never
+    /// poisons exhaustiveness.
+    fn check_arm_pattern(
         &mut self,
-        coverage: &mut Coverage,
-        key: CoverageKey,
-        sub: Option<Box<Coverage>>,
-        span: Span,
-    ) {
-        let Some(entry) = coverage.keys.iter_mut().find(|entry| entry.key == key) else {
-            coverage.keys.push(KeyCover { key, sub });
-            return;
-        };
-        match (&entry.sub, sub) {
-            // Both patterns only partially covered the variant: merge the
-            // new payload coverage into the existing one (rejecting
-            // repeats inside).
-            (Some(_), Some(new)) => {
-                if let Some(prev) = entry.sub.as_mut() {
-                    self.merge_coverage(prev, *new, span);
+        pattern: &Pattern,
+        scrutinee_ty: TypeId,
+        _arm_span: Span,
+    ) -> Coverage {
+        match pattern {
+            Pattern::Wildcard { .. } => Coverage {
+                all: true,
+                ..Default::default()
+            },
+            Pattern::Binding(name) => {
+                // The binding copies the scrutinee's value into the arm's
+                // scope; its type is the scrutinee's type.
+                self.unify_decl(name, scrutinee_ty, name.span);
+                Coverage {
+                    all: true,
+                    ..Default::default()
                 }
             }
-            // The variant was already fully covered: this arm can never
-            // run.
-            (None, _) => {
-                self.push_error(TypeError::unreachable_match_arm(
-                    span,
-                    "this arm can never run: an earlier arm already matches the same value",
-                ));
+            Pattern::Bool { value, span } => {
+                let expected = self.bool_ty();
+                match self.types.unify(scrutinee_ty, expected) {
+                    Ok(_) => Coverage {
+                        keys: vec![KeyCover {
+                            key: CoverageKey::Bool(*value),
+                            sub: None,
+                        }],
+                        ..Default::default()
+                    },
+                    Err((expected, actual)) => {
+                        self.push_error(TypeError::mismatch(
+                            *span,
+                            self.display(expected),
+                            self.display(actual),
+                            None,
+                        ));
+                        Coverage::default()
+                    }
+                }
             }
-            // An irrefutable payload pattern completes a partially covered
-            // variant.
-            (Some(_), None) => entry.sub = None,
+            Pattern::Int {
+                negative,
+                literal,
+                span,
+            } => {
+                let expected = self.int_ty();
+                match self.types.unify(scrutinee_ty, expected) {
+                    Ok(_) => {
+                        let value = self
+                            .decode_int_literal(literal)
+                            .map(|value| {
+                                if *negative {
+                                    value.wrapping_neg()
+                                } else {
+                                    value
+                                }
+                            })
+                            .unwrap_or(0);
+                        let mut coverage = Coverage::default();
+                        Self::insert_interval(&mut coverage, value, value);
+                        coverage
+                    }
+                    Err((expected, actual)) => {
+                        self.push_error(TypeError::mismatch(
+                            *span,
+                            self.display(expected),
+                            self.display(actual),
+                            None,
+                        ));
+                        Coverage::default()
+                    }
+                }
+            }
+            Pattern::Range {
+                lo,
+                hi,
+                inclusive,
+                span,
+            } => {
+                let expected = self.int_ty();
+                match self.types.unify(scrutinee_ty, expected) {
+                    Ok(_) => {
+                        let mut coverage = Coverage::default();
+                        if let (Some(lo), Some(hi)) =
+                            (self.pattern_int_value(lo), self.pattern_int_value(hi))
+                        {
+                            // Exclusive `..` excludes the upper endpoint;
+                            // an endpoint at `i64::MIN` cannot be excluded
+                            // (nothing lies below it), so the range is
+                            // empty. A `lo > hi` range is empty too; an
+                            // empty range covers nothing.
+                            let hi = if *inclusive {
+                                hi
+                            } else {
+                                match hi.checked_sub(1) {
+                                    Some(hi) => hi,
+                                    None => return coverage,
+                                }
+                            };
+                            if lo <= hi {
+                                Self::insert_interval(&mut coverage, lo, hi);
+                            }
+                        }
+                        coverage
+                    }
+                    Err((expected, actual)) => {
+                        self.push_error(TypeError::mismatch(
+                            *span,
+                            self.display(expected),
+                            self.display(actual),
+                            None,
+                        ));
+                        Coverage::default()
+                    }
+                }
+            }
+            Pattern::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => {
+                let pattern_span = pattern.span();
+                if let Some(enum_ty) = self.enum_variant_type(name, variant, pattern_span) {
+                    match self.types.unify(scrutinee_ty, enum_ty) {
+                        Ok(_) => {
+                            let declared = self.variant_payload(enum_ty, &variant.name);
+                            match (payload.as_deref(), declared) {
+                                // A payload attached to a unit variant.
+                                (Some(inner), None) => {
+                                    self.push_error(TypeError::variant_payload_arity(
+                                        pattern_span,
+                                        format!(
+                                            "variant `{}::{}` is a unit variant and cannot carry a payload pattern",
+                                            name.name, variant.name
+                                        ),
+                                    ));
+                                    // The payload pattern is still
+                                    // checked so its bindings and
+                                    // diagnostics surface.
+                                    self.check_payload_pattern(inner, scrutinee_ty, pattern_span);
+                                    Coverage::default()
+                                }
+                                // A data-carrying variant matched
+                                // without a payload pattern.
+                                (None, Some(_)) => {
+                                    self.push_error(TypeError::variant_payload_arity(
+                                        pattern_span,
+                                        format!(
+                                            "variant `{}::{}` carries a payload and must be matched with one: `{}::{}(pattern)`",
+                                            name.name, variant.name, name.name, variant.name
+                                        ),
+                                    ));
+                                    Coverage::default()
+                                }
+                                // Unit variant, no payload: fully covers
+                                // the variant.
+                                (None, None) => Coverage {
+                                    keys: vec![KeyCover {
+                                        key: CoverageKey::Variant(variant.name.clone()),
+                                        sub: None,
+                                    }],
+                                    ..Default::default()
+                                },
+                                // Data-carrying variant with a payload
+                                // pattern: the variant is covered by
+                                // whatever the payload pattern covers.
+                                (Some(inner), Some(payload_ty)) => {
+                                    let sub =
+                                        self.check_payload_pattern(inner, payload_ty, pattern_span);
+                                    Coverage {
+                                        keys: vec![KeyCover {
+                                            key: CoverageKey::Variant(variant.name.clone()),
+                                            sub,
+                                        }],
+                                        ..Default::default()
+                                    }
+                                }
+                            }
+                        }
+                        Err((expected, actual)) => {
+                            self.push_error(TypeError::mismatch(
+                                pattern_span,
+                                self.display(expected),
+                                self.display(actual),
+                                None,
+                            ));
+                            Coverage::default()
+                        }
+                    }
+                } else {
+                    // The variant path failed to resolve (its own
+                    // diagnostic was reported): the pattern covers
+                    // nothing.
+                    Coverage::default()
+                }
+            }
+            // Defensive: the parser flattens top-level or-patterns, but a
+            // nested or can reach here through payload recursion.
+            Pattern::Or { alternatives, span } => {
+                let mut merged = Coverage::default();
+                for alternative in alternatives {
+                    let alt = self.check_arm_pattern(alternative, scrutinee_ty, *span);
+                    self.merge_arm_coverage(&mut merged, alt);
+                }
+                merged
+            }
         }
     }
 
-    /// Merges the coverage `new` (produced by one refutable pattern) into
-    /// the accumulated coverage `into`, rejecting keys `new` repeats.
-    fn merge_coverage(&mut self, into: &mut Coverage, new: Coverage, span: Span) {
+    /// Checks an or-pattern arm (session 27): every alternative must bind
+    /// exactly the same names (E-T34), and the arm's coverage is the union
+    /// of its live alternatives' coverage. An alternative an earlier arm —
+    /// or an earlier alternative of this arm — already fully covers can
+    /// never match; when every alternative is dead the whole arm can never
+    /// run (E-T25). Guarded or-arms commit no coverage.
+    fn check_or_arm(
+        &mut self,
+        alternatives: &[Pattern],
+        span: Span,
+        scrutinee_ty: TypeId,
+        guarded: bool,
+        coverage: &mut Coverage,
+    ) {
+        let mut names: Option<Vec<String>> = None;
+        let mut any_alive = false;
+        // Alternatives accumulate coverage for the within-arm dead check;
+        // the outer `coverage` is only committed to for unguarded arms.
+        let mut local = coverage.clone();
+        for alternative in alternatives {
+            let canon = self.types.canonical(scrutinee_ty);
+            let alt = self.check_arm_pattern(alternative, canon, span);
+            let alternative_names = Self::pattern_binding_names(alternative);
+            match &names {
+                None => names = Some(alternative_names.clone()),
+                Some(first) => {
+                    if *first != alternative_names {
+                        self.push_error(TypeError::invalid_or_pattern(
+                            span,
+                            self.or_pattern_mismatch_message(first, &alternative_names),
+                        ));
+                    }
+                }
+            }
+            if self.coverage_contains(&local, &alt) {
+                continue;
+            }
+            any_alive = true;
+            self.merge_arm_coverage(&mut local, alt);
+        }
+        if !any_alive {
+            self.push_error(TypeError::unreachable_match_arm(
+                span,
+                "this arm can never run: an earlier arm already matches every value this or-pattern could match",
+            ));
+        } else if !guarded {
+            *coverage = local;
+        }
+    }
+
+    /// Merges the coverage `new` (produced by one live pattern) into the
+    /// accumulated coverage `into`: the union of keys (merging variant
+    /// payload sub-coverage recursively), integer intervals, and the
+    /// catch-all flag. Callers have already rejected fully-covered
+    /// patterns, so the only repeats here are the expected partial
+    /// overlaps.
+    fn merge_arm_coverage(&mut self, into: &mut Coverage, new: Coverage) {
+        if new.all {
+            into.all = true;
+        }
         for key in new.keys {
-            self.record_coverage_key(into, key.key, key.sub, span);
+            match into.keys.iter_mut().find(|entry| entry.key == key.key) {
+                None => into.keys.push(key),
+                Some(entry) => match (&mut entry.sub, key.sub) {
+                    // Both partial: merge the payload coverages.
+                    (Some(prev), Some(new_sub)) => {
+                        self.merge_arm_coverage(prev, *new_sub);
+                    }
+                    // An irrefutable payload pattern completes a partially
+                    // covered variant.
+                    (Some(_), None) => entry.sub = None,
+                    // Accumulated is fully covered: a live alternative
+                    // never re-covers it (the dead check rejected it).
+                    (None, _) => {}
+                },
+            }
+        }
+        for &(lo, hi) in &new.intervals {
+            Self::insert_interval(into, lo, hi);
+        }
+    }
+
+    /// Inserts the inclusive interval `[lo, hi]` into the sorted, disjoint,
+    /// adjacent-merged integer interval list of `coverage`.
+    fn insert_interval(coverage: &mut Coverage, lo: i64, hi: i64) {
+        let mut intervals = std::mem::take(&mut coverage.intervals);
+        intervals.push((lo, hi));
+        intervals.sort_unstable();
+        let mut merged: Vec<(i64, i64)> = Vec::with_capacity(intervals.len());
+        for (lo, hi) in intervals {
+            if let Some(last) = merged.last_mut() {
+                // Adjacent intervals merge because integer coverage is
+                // contiguous (`[1, 3]` + `[4, 5]` = `[1, 5]`).
+                if lo <= last.1.saturating_add(1) {
+                    if hi > last.1 {
+                        last.1 = hi;
+                    }
+                    continue;
+                }
+            }
+            merged.push((lo, hi));
+        }
+        coverage.intervals = merged;
+    }
+
+    /// Whether every integer in `[lo, hi]` is covered by `coverage`'s
+    /// intervals: the range-pattern unreachable-arm test (session 27).
+    fn interval_covered(&self, coverage: &Coverage, lo: i64, hi: i64) -> bool {
+        let mut lo = lo;
+        for &(ilo, ihi) in &coverage.intervals {
+            if ihi < lo {
+                continue;
+            }
+            if ilo > hi {
+                break;
+            }
+            if ilo <= lo {
+                if ihi >= hi {
+                    return true;
+                }
+                lo = ihi + 1;
+            } else {
+                // A gap between the previous interval and this one.
+                return false;
+            }
+        }
+        false
+    }
+
+    /// Whether `coverage`'s intervals cover the entire `Int` domain
+    /// (`i64::MIN..=i64::MAX`), making an `Int` match exhaustive without a
+    /// catch-all (session 27).
+    fn intervals_cover_domain(&self, coverage: &Coverage) -> bool {
+        let mut covered_to = i64::MIN;
+        for (index, &(lo, hi)) in coverage.intervals.iter().enumerate() {
+            if index == 0 {
+                if lo != i64::MIN {
+                    return false;
+                }
+            } else if lo > covered_to.saturating_add(1) {
+                return false;
+            }
+            if hi > covered_to {
+                covered_to = hi;
+            }
+            if covered_to == i64::MAX {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether `acc` covers every value `cand` covers: the unreachable-arm
+    /// test. A catch-all (`all`) covers everything; a candidate with no
+    /// coverage (an empty range, a mismatched pattern) is vacuously
+    /// covered.
+    fn coverage_contains(&self, acc: &Coverage, cand: &Coverage) -> bool {
+        if cand.all {
+            return acc.all;
+        }
+        if acc.all {
+            return true;
+        }
+        for key in &cand.keys {
+            let Some(entry) = acc.keys.iter().find(|entry| entry.key == key.key) else {
+                return false;
+            };
+            match (&entry.sub, &key.sub) {
+                // Accumulated fully covers the value class: contained.
+                (None, _) => {}
+                // Accumulated is partial; the candidate covers the whole
+                // value class: not contained.
+                (Some(_), None) => return false,
+                // Both partial: the candidate's payload coverage must be
+                // contained in the accumulated payload coverage.
+                (Some(prev), Some(cand_sub)) => {
+                    if !self.coverage_contains(prev, cand_sub) {
+                        return false;
+                    }
+                }
+            }
+        }
+        for &(lo, hi) in &cand.intervals {
+            if !self.interval_covered(acc, lo, hi) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The distinct binding names a pattern introduces, sorted, for the
+    /// or-pattern consistency rule: every alternative must bind the same
+    /// names (E-T34).
+    fn pattern_binding_names(pattern: &Pattern) -> Vec<String> {
+        let mut names = Vec::new();
+        Self::collect_pattern_names(pattern, &mut names);
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Collects the binding names a pattern introduces, recursively.
+    fn collect_pattern_names(pattern: &Pattern, out: &mut Vec<String>) {
+        match pattern {
+            Pattern::Binding(name) => out.push(name.name.clone()),
+            Pattern::EnumVariant {
+                payload: Some(inner),
+                ..
+            } => Self::collect_pattern_names(inner, out),
+            Pattern::Or { alternatives, .. } => {
+                for alternative in alternatives {
+                    Self::collect_pattern_names(alternative, out);
+                }
+            }
+            Pattern::Wildcard { .. }
+            | Pattern::Bool { .. }
+            | Pattern::Int { .. }
+            | Pattern::Range { .. }
+            | Pattern::EnumVariant { payload: None, .. } => {}
+        }
+    }
+
+    /// Renders the E-T34 message for or-pattern alternatives binding
+    /// different name sets: the names present in one set but not the
+    /// other.
+    fn or_pattern_mismatch_message(&self, first: &[String], second: &[String]) -> String {
+        let mut odd: Vec<&str> = first
+            .iter()
+            .filter(|name| !second.contains(name))
+            .map(|name| name.as_str())
+            .collect();
+        odd.extend(
+            second
+                .iter()
+                .filter(|name| !first.contains(name))
+                .map(|name| name.as_str()),
+        );
+        odd.sort_unstable();
+        format!(
+            "or-pattern alternatives must bind the same names: `{}` {} not bound in every alternative",
+            odd.join("`, `"),
+            if odd.len() == 1 { "is" } else { "are" },
+        )
+    }
+
+    /// Decodes a range-pattern endpoint (an `Int` pattern, possibly
+    /// negated) to its 64-bit value.
+    fn pattern_int_value(&self, pattern: &Pattern) -> Option<i64> {
+        match pattern {
+            Pattern::Int {
+                negative, literal, ..
+            } => self.decode_int_literal(literal).map(|value| {
+                if *negative {
+                    value.wrapping_neg()
+                } else {
+                    value
+                }
+            }),
+            _ => None,
         }
     }
 
@@ -1801,7 +2224,11 @@ impl<'a> Checker<'a> {
                     .any(|entry| matches!(entry.key, CoverageKey::Bool(false)));
                 has_true && has_false
             }
-            Some(TypeKind::Int) => false,
+            // An `Int` match is exhaustive without a catch-all only when
+            // the covered intervals span the whole domain (session 27:
+            // `i64::MIN..=i64::MAX`); every partial coverage needs a
+            // catch-all.
+            Some(TypeKind::Int) => self.intervals_cover_domain(coverage),
             Some(TypeKind::Enum(id)) => self
                 .types
                 .enum_info(*id)

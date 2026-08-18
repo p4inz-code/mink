@@ -373,10 +373,15 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Indexes every declaration by its name span so bindings can be
-    /// registered and looked up during the walk.
+    /// registered and looked up during the walk, including or-pattern
+    /// binding aliases (session 27): every occurrence of an or-pattern
+    /// binding after its first resolves to the one logical binding.
     fn build_decl_spans(&mut self) {
         for symbol in self.semantic.symbols().iter() {
             self.decl_spans.insert(symbol.span.start(), symbol.id);
+        }
+        for (span, symbol) in self.semantic.binding_aliases() {
+            self.decl_spans.insert(span.start(), *symbol);
         }
     }
 
@@ -822,6 +827,26 @@ impl<'a> Analyzer<'a> {
                     // correct.
                     self.bind(name.span, &EvalValue::copy());
                 }
+                crate::ast::Pattern::Or { alternatives, .. } => {
+                    // Or-pattern alternatives share one binding per name;
+                    // a payload binding in any alternative moves the
+                    // scrutinee's payload, exactly like a plain payload
+                    // pattern (session 27).
+                    for alternative in alternatives {
+                        if let crate::ast::Pattern::EnumVariant {
+                            payload: Some(inner),
+                            ..
+                        } = alternative
+                        {
+                            let provenance =
+                                self.payload_provenance(&stmt.scrutinee, &scrutinee_value);
+                            if self.payload_binding_transfers(inner, provenance) {
+                                moved_payload = true;
+                            }
+                            self.bind_payload_pattern(inner, provenance);
+                        }
+                    }
+                }
                 crate::ast::Pattern::EnumVariant {
                     payload: Some(inner),
                     ..
@@ -833,6 +858,11 @@ impl<'a> Analyzer<'a> {
                     self.bind_payload_pattern(inner, provenance);
                 }
                 _ => {}
+            }
+            // A guard (session 27) reads the pattern's bindings in the
+            // arm's scope, before the body.
+            if let Some(guard) = &arm.guard {
+                self.eval_expr(guard, Mode::Observe);
             }
             self.walk_block(&arm.body);
         }
@@ -881,7 +911,9 @@ impl<'a> Analyzer<'a> {
 
     /// Whether a payload pattern binds a value (a `name` binding or a
     /// nested variant's payload binding) whose payload provenance is
-    /// Owned, so the payload moves out of the scrutinee.
+    /// Owned, so the payload moves out of the scrutinee. An or-pattern
+    /// alternative that binds an owned payload moves it, like any other
+    /// payload binding (session 27).
     fn payload_binding_transfers(
         &self,
         pattern: &crate::ast::Pattern,
@@ -893,12 +925,16 @@ impl<'a> Analyzer<'a> {
                 payload: Some(inner),
                 ..
             } => self.payload_binding_transfers(inner, provenance),
+            crate::ast::Pattern::Or { alternatives, .. } => alternatives
+                .iter()
+                .any(|alt| self.payload_binding_transfers(alt, provenance)),
             _ => false,
         }
     }
 
     /// Binds every payload pattern binding (`E::V(x)` → `x`) with the
-    /// payload's provenance, recursively for nested variant patterns.
+    /// payload's provenance, recursively for nested variant patterns and
+    /// or-pattern alternatives (session 27).
     fn bind_payload_pattern(&mut self, pattern: &crate::ast::Pattern, provenance: Provenance) {
         match pattern {
             crate::ast::Pattern::Binding(name) => {
@@ -908,6 +944,11 @@ impl<'a> Analyzer<'a> {
                 payload: Some(inner),
                 ..
             } => self.bind_payload_pattern(inner, provenance),
+            crate::ast::Pattern::Or { alternatives, .. } => {
+                for alternative in alternatives {
+                    self.bind_payload_pattern(alternative, provenance);
+                }
+            }
             _ => {}
         }
     }

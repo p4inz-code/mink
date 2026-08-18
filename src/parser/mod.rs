@@ -1244,9 +1244,22 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parses one match arm: `pattern => block`.
+    /// Parses one match arm: `pattern ('if' Expr)? => block` (the guard
+    /// arrived in session 27).
     fn parse_match_arm(&mut self) -> Result<MatchArm, ()> {
         let pattern = self.parse_pattern()?;
+        // A guard (session 27): `pattern if expr =>`. The guard is parsed
+        // in ordinary expression context; `=>` is not an expression token,
+        // so it terminates the guard expression naturally. The `|`
+        // ambiguity is resolved by position: `|` before `if` continues the
+        // or-pattern, `|` after `if` is part of the guard expression.
+        let mut guard = None;
+        if self.current_kind() == TokenKind::If {
+            let _ = self.bump(); // 'if'
+            if let Ok(expr) = self.parse_expression() {
+                guard = Some(expr);
+            }
+        }
         if self.current_kind() != TokenKind::FatArrow {
             let token = self.current();
             self.record_error(ParseErrorKind::ExpectedFatArrow, token.span());
@@ -1266,15 +1279,121 @@ impl<'a> Parser<'a> {
         let span = self.join(pattern.span(), body.span);
         Ok(MatchArm {
             pattern,
+            guard,
             body,
             span,
         })
     }
 
-    /// Parses a match pattern (session 18): `_`, a name (binding), an enum
-    /// variant path `E::V`, a boolean literal, or an (optionally negated)
-    /// integer literal.
+    /// Parses a match pattern (sessions 18–27): a single pattern, an
+    /// integer range (`1..=5`, `1..5`), or an or-pattern (`1 | 2 | 3`,
+    /// `E::A(x) | E::B(x)`). Alternatives are separated by `|`; each
+    /// alternative may itself be a range (`1 | 2..=5`).
     fn parse_pattern(&mut self) -> Result<Pattern, ()> {
+        let first = self.parse_pattern_atom()?;
+        // The `|` token cannot follow a pattern in any other position, so
+        // it unambiguously starts another or-pattern alternative.
+        if self.current_kind() != TokenKind::Pipe {
+            return Ok(first);
+        }
+        let start = first.span();
+        let mut alternatives = vec![first];
+        while self.current_kind() == TokenKind::Pipe {
+            let _ = self.bump(); // '|'
+            match self.parse_pattern_atom() {
+                Ok(alternative) => alternatives.push(alternative),
+                Err(()) => return Err(()),
+            }
+        }
+        let last = alternatives.last().expect("at least the first alternative");
+        let span = self.join(start, last.span());
+        Ok(Pattern::Or { alternatives, span })
+    }
+
+    /// Parses one or-pattern alternative: a single pattern, optionally
+    /// followed by a range continuation (`lo..=hi` / `lo..hi`).
+    fn parse_pattern_atom(&mut self) -> Result<Pattern, ()> {
+        let pattern = self.parse_pattern_base()?;
+        if matches!(self.current_kind(), TokenKind::DotDot | TokenKind::DotDotEq) {
+            return self.parse_range_pattern(pattern);
+        }
+        Ok(pattern)
+    }
+
+    /// Parses an integer range pattern from a parsed `lo` endpoint: the
+    /// `..`/`..=` operator, then the `hi` endpoint. Both endpoints must be
+    /// integer literal patterns (`E-P19` otherwise); a range endpoint is a
+    /// single literal, never another range (`1..2..3` is `E-P19`).
+    fn parse_range_pattern(&mut self, lo: Pattern) -> Result<Pattern, ()> {
+        if !matches!(lo, Pattern::Int { .. }) {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedIntegerLiteral, token.span());
+            return Err(());
+        }
+        let inclusive = self.current_kind() == TokenKind::DotDotEq;
+        let _ = self.bump(); // '..' or '..='
+        let hi = self.parse_range_endpoint()?;
+        if matches!(self.current_kind(), TokenKind::DotDot | TokenKind::DotDotEq) {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedIntegerLiteral, token.span());
+            return Err(());
+        }
+        let span = self.join(lo.span(), hi.span());
+        Ok(Pattern::Range {
+            lo: Box::new(lo),
+            hi: Box::new(hi),
+            inclusive,
+            span,
+        })
+    }
+
+    /// Parses one range-pattern endpoint: an integer literal, optionally
+    /// negated (`5`, `-5`). A non-literal endpoint is `E-P19` (expected an
+    /// integer literal).
+    fn parse_range_endpoint(&mut self) -> Result<Pattern, ()> {
+        let token = self.current();
+        match token.kind() {
+            TokenKind::Int => {
+                let _ = self.bump();
+                Ok(Pattern::Int {
+                    negative: false,
+                    literal: Expr {
+                        kind: ExprKind::Int,
+                        span: token.span(),
+                    },
+                    span: token.span(),
+                })
+            }
+            TokenKind::Minus => {
+                let start = self.bump().span(); // '-'
+                let token = self.current();
+                if token.kind() != TokenKind::Int {
+                    self.record_error(ParseErrorKind::ExpectedIntegerLiteral, token.span());
+                    return Err(());
+                }
+                let _ = self.bump();
+                let span = self.join(start, token.span());
+                Ok(Pattern::Int {
+                    negative: true,
+                    literal: Expr {
+                        kind: ExprKind::Int,
+                        span: token.span(),
+                    },
+                    span,
+                })
+            }
+            _ => {
+                self.record_error(ParseErrorKind::ExpectedIntegerLiteral, token.span());
+                Err(())
+            }
+        }
+    }
+
+    /// Parses a single (non-or, non-range) match pattern (session 18):
+    /// `_`, a name (binding), an enum variant path `E::V` (with an
+    /// optional payload pattern), a boolean literal, or an (optionally
+    /// negated) integer literal.
+    fn parse_pattern_base(&mut self) -> Result<Pattern, ()> {
         let token = self.current();
         match token.kind() {
             // `_` is a reserved-word-like wildcard; the lexer produces it

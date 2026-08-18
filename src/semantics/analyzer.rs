@@ -46,6 +46,7 @@ pub(crate) fn analyze_ast(ast: &Ast) -> SemanticResult {
         analyzer.symbols,
         analyzer.scopes,
         analyzer.resolutions,
+        analyzer.binding_aliases,
         analyzer.errors,
     )
 }
@@ -96,6 +97,11 @@ struct Analyzer {
     /// Resolved name references: identifier span → resolved symbol.
     /// Inserted in source order; `SemanticResult` sorts and indexes them.
     resolutions: Vec<(Span, SymbolId)>,
+    /// Or-pattern binding aliases (session 27): span → symbol for every
+    /// occurrence of an or-pattern binding after its first. The type
+    /// checker, HIR, and ownership passes index these so every occurrence
+    /// of one logical binding resolves to the same symbol.
+    binding_aliases: Vec<(Span, SymbolId)>,
     /// Semantic errors, in the order they were found.
     errors: Vec<SemanticError>,
     /// The registered type declarations (type namespace): name → decl.
@@ -109,6 +115,7 @@ impl Analyzer {
             symbols: SymbolTable::new(),
             scopes: ScopeTable::new(),
             resolutions: Vec::new(),
+            binding_aliases: Vec::new(),
             errors: Vec::new(),
             types: HashMap::new(),
         }
@@ -137,17 +144,23 @@ impl Analyzer {
         }
         for item in &ast.items {
             match &item.kind {
-                ItemKind::Fn(f) => self.bind(&f.name, SymbolKind::Fn, module),
+                ItemKind::Fn(f) => {
+                    let _ = self.bind(&f.name, SymbolKind::Fn, module);
+                }
                 ItemKind::Struct(s) => self.register_struct(s),
                 ItemKind::Enum(e) => self.register_enum(e),
-                ItemKind::Let(binding) => self.bind(
-                    &binding.name,
-                    SymbolKind::Let {
-                        mutable: binding.mutable,
-                    },
-                    module,
-                ),
-                ItemKind::Const(binding) => self.bind(&binding.name, SymbolKind::Const, module),
+                ItemKind::Let(binding) => {
+                    let _ = self.bind(
+                        &binding.name,
+                        SymbolKind::Let {
+                            mutable: binding.mutable,
+                        },
+                        module,
+                    );
+                }
+                ItemKind::Const(binding) => {
+                    let _ = self.bind(&binding.name, SymbolKind::Const, module);
+                }
             }
         }
         module
@@ -290,7 +303,11 @@ impl Analyzer {
     /// scope already declares it. On a duplicate, the original declaration
     /// wins and no new symbol is registered, so later references resolve
     /// deterministically without cascading errors.
-    fn bind(&mut self, name: &Ident, kind: SymbolKind, scope: ScopeId) {
+    ///
+    /// Returns the new symbol's id, or `None` when the name was already
+    /// declared (the original wins). Or-pattern binding deduplication uses
+    /// the return value to alias later occurrences to the first one.
+    fn bind(&mut self, name: &Ident, kind: SymbolKind, scope: ScopeId) -> Option<SymbolId> {
         let existing = self.scopes.get(scope).and_then(|s| s.lookup(&name.name));
         match existing {
             Some(first) => {
@@ -304,12 +321,14 @@ impl Analyzer {
                     name.span,
                     original,
                 ));
+                None
             }
             None => {
                 let id = self.symbols.push(kind, name.name.clone(), name.span, scope);
                 if let Some(scope_ref) = self.scopes.get_mut(scope) {
                     scope_ref.bind(name.name.clone(), id);
                 }
+                Some(id)
             }
         }
     }
@@ -427,27 +446,72 @@ impl Analyzer {
         for arm in &stmt.arms {
             let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
             // Every pattern binding (including payload bindings of
-            // data-carrying variant patterns, session 19) is immutable,
-            // like a `let` binding: it may be read but never assigned.
+            // data-carrying variant patterns, session 19, and or-pattern
+            // bindings, session 27) is immutable, like a `let` binding: it
+            // may be read but never assigned.
             self.bind_pattern_bindings(&arm.pattern, scope);
+            // A guard (session 27) is analyzed in the arm's scope: the
+            // pattern's bindings are visible to it, exactly as in the
+            // body.
+            if let Some(guard) = &arm.guard {
+                self.analyze_expr(guard, Ctx { scope, ..ctx });
+            }
             self.analyze_block(&arm.body, Ctx { scope, ..ctx });
         }
     }
 
     /// Declares every binding a pattern introduces in `scope`: a top-level
-    /// `name` binding or the payload bindings of a data-carrying variant
-    /// pattern `E::V(name)` (recursively, for nested payload patterns).
+    /// `name` binding, the payload bindings of a data-carrying variant
+    /// pattern `E::V(name)` (recursively, for nested payload patterns),
+    /// and or-pattern bindings (session 27).
+    ///
+    /// An or-pattern's alternatives share one binding per distinct name:
+    /// each name is declared exactly once (at its first occurrence), and
+    /// every later occurrence of the same name in the same pattern is
+    /// recorded as a *binding alias* — a span→symbol resolution that lets
+    /// the type checker and later stages treat all occurrences as the one
+    /// logical binding.
     fn bind_pattern_bindings(&mut self, pattern: &crate::ast::Pattern, scope: ScopeId) {
-        match pattern {
-            Pattern::Binding(name) => {
-                self.bind(name, SymbolKind::Let { mutable: false }, scope);
+        let mut occurrences: Vec<&Ident> = Vec::new();
+        Self::collect_pattern_bindings(pattern, &mut occurrences);
+        let mut seen: Vec<&Ident> = Vec::new();
+        for name in occurrences {
+            if let Some(_first) = seen.iter().find(|first| first.name == name.name) {
+                // A later occurrence of an or-pattern binding resolves to
+                // the first occurrence's symbol (its alternatives share
+                // one binding).
+                if let Some(symbol) = self.scopes.get(scope).and_then(|s| s.lookup(&name.name)) {
+                    self.binding_aliases.push((name.span, symbol));
+                }
+                continue;
             }
-            Pattern::EnumVariant { payload, .. } => {
-                if let Some(inner) = payload {
-                    self.bind_pattern_bindings(inner, scope);
+            seen.push(name);
+            self.bind(name, SymbolKind::Let { mutable: false }, scope);
+        }
+    }
+
+    /// Collects every binding identifier a pattern introduces, in source
+    /// order: a top-level `name` binding, payload bindings of
+    /// data-carrying variant patterns (recursively), and the bindings of
+    /// every or-pattern alternative (recursively). Range patterns bind
+    /// nothing.
+    fn collect_pattern_bindings<'a>(pattern: &'a Pattern, out: &mut Vec<&'a Ident>) {
+        match pattern {
+            Pattern::Binding(name) => out.push(name),
+            Pattern::EnumVariant {
+                payload: Some(inner),
+                ..
+            } => Self::collect_pattern_bindings(inner, out),
+            Pattern::Or { alternatives, .. } => {
+                for alternative in alternatives {
+                    Self::collect_pattern_bindings(alternative, out);
                 }
             }
-            Pattern::Wildcard { .. } | Pattern::Bool { .. } | Pattern::Int { .. } => {}
+            Pattern::Wildcard { .. }
+            | Pattern::Bool { .. }
+            | Pattern::Int { .. }
+            | Pattern::Range { .. }
+            | Pattern::EnumVariant { payload: None, .. } => {}
         }
     }
 

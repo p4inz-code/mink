@@ -119,7 +119,11 @@ corruption, no segfault guessing games.
   `E-T32`), **pattern matching** (`match` over `Int`, `Bool`,
   and enums with literal, variant, binding, and `_` wildcard patterns,
   compile-time exhaustiveness `E-T24` and unreachable-arm `E-T25`
-  rejection, recursive payload coverage), comparisons, logical and
+  rejection, recursive payload coverage, **richer patterns**
+  (or-patterns `1 | 2 | 3` and `E::A(x) | E::B(x)` with shared
+  bindings `E-T34`, integer range patterns `1..=5`/`1..5` with
+  interval-based exhaustiveness, and guarded arms `pat if cond =>`
+  whose guards read the pattern's bindings), comparisons, logical and
   bitwise operators,
   `if`/`while`/`for`/`loop` control flow, direct function calls, module
   bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
@@ -210,10 +214,11 @@ Honest status, because durable engineering starts with accurate claims:
   decimal printing; `rt_print_char`). `main` still cannot return an
   aggregate or a `Float`/`Char`/`Null` (its result is the exit code,
   `E-B09`). Tagged-union enums cannot be
-  compared with `==`/`!=` (`E-T30`); there
+  compared with `==`/`!=` (  `E-T30`); there
   is no enum-to-`Int` conversion; pattern matching covers
-  `Int`/`Bool`/enum scrutinees only (no struct/array destructuring,
-  ranges, or or-patterns yet), and there are no tuples or generics.
+  `Int`/`Bool`/enum scrutinees only (no struct/array destructuring
+  yet, though or-patterns, ranges, and guards landed in session 27),
+  and there are no tuples or generics.
 - **Strings are byte sequences** — literals are immutable, there is no
   concatenation, and UTF-8 well-formedness is not validated at runtime.
 - **Borrowing is lexical, not non-lexical** — explicit references
@@ -258,8 +263,10 @@ that matters.
   ([`PATTERN_MATCHING_IMPLEMENTATION.md`](docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md)),
   the sum-types foundation
   ([`SUM_TYPES_IMPLEMENTATION.md`](docs/implementation/SUM_TYPES_IMPLEMENTATION.md)),
-  and the explicit-discriminants foundation
-  ([`DISCRIMINANTS_IMPLEMENTATION.md`](docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md)).
+  the explicit-discriminants foundation
+  ([`DISCRIMINANTS_IMPLEMENTATION.md`](docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md)),
+  and the richer-patterns (or/range/guard) foundation
+  ([`RICHER_PATTERNS_IMPLEMENTATION.md`](docs/implementation/RICHER_PATTERNS_IMPLEMENTATION.md)).
 - [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md)
   — compiler architecture and pipeline.
 - [`docs/language/`](docs/language/) — language specifications; the frozen
@@ -279,7 +286,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1291, all passing)
+├── tests/      Compiler tests (1380, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

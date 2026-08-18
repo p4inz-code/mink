@@ -485,3 +485,44 @@ ConstBinding:= 'const' Ident (':' Type)? '=' Expr ';'
 The session-26 lexer needed no changes (`:` and type tokens already
 existed). Exclusions from §2 and §9 that remain (tuples, `type`
 aliases, generics) are unchanged.
+
+## 20. Session-27 Additions: Or-Patterns, Range Patterns, and Guards
+
+**Session:** 27 — Richer match patterns
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19/20/25/26 additions above remain authoritative; the
+new productions are:
+
+```
+MatchArm  := Pattern ('if' Expr)? '=>' Block
+Pattern   := OrPattern
+OrPattern := AltPattern ('|' AltPattern)*
+AltPattern:= IntLit | '-' IntLit | IntLit '..' IntLit | IntLit '..=' IntLit
+           | '-' IntLit '..' IntLit | '-' IntLit '..=' IntLit
+           | BoolLit | Ident '::' Ident | Ident '::' Ident '(' Pattern ')'
+           | Ident
+```
+
+- **Or-patterns** combine alternatives with `|`, matching if any
+  alternative matches: `1 | 2 | 3`, `E::A(x) | E::B(x)`, `E::A | E::B`,
+  and mixed forms. Every alternative must bind the same set of names with
+  the same types (`E-T34` on mismatch); the binding is shared across the
+  alternatives, so the alternatives' bodies see one binding per name.
+- **Range patterns** match an integer within an inclusive (`1..=5`) or
+  exclusive (`1..5`) range: `1..=5`, `-3..=2`, `1..10`, `-10..-1`.
+  Endpoints must be integer literals (optionally negated); anything else
+  is `E-P19` (expected an integer literal). A range is only well-typed on
+  an `Int` scrutinee; an exclusive range whose endpoints are equal
+  (`1..1`) or inverted (`5..1`) covers nothing and is reported as
+  unreachable (`E-T25`) when it is the only pattern covering its space.
+- **Guards** are an optional `if Expr` after the pattern, before `=>`:
+  `x if x > 3 => { .. }`. The guard is evaluated after the pattern
+  matches and before the arm body, with the pattern's bindings in scope.
+  The guard must be a `Bool` expression (`E-T09` on mismatch); a guarded
+  arm commits no coverage, so a guarded arm never contributes to
+  exhaustiveness (`E-T25` reports the uncovered space).
+
+The session-27 lexer needed no changes (`|`, `..`, `..=`, and `if`
+already existed). Exclusions from §2 and §9 that remain (tuples, `type`
+aliases, generics) are unchanged.

@@ -64,6 +64,12 @@ pub struct SemanticResult {
     /// Resolved references, sorted by span start for deterministic iteration
     /// and binary-search lookup.
     resolutions: Vec<(Span, SymbolId)>,
+    /// Or-pattern binding aliases (session 27): span → symbol for every
+    /// occurrence of an or-pattern binding after its first. These are the
+    /// one place a non-first occurrence of one logical binding is recorded,
+    /// so later stages can type and lower every occurrence. Sorted by span
+    /// start like `resolutions`.
+    binding_aliases: Vec<(Span, SymbolId)>,
     errors: Vec<SemanticError>,
 }
 
@@ -77,14 +83,17 @@ impl SemanticResult {
         symbols: SymbolTable,
         scopes: ScopeTable,
         mut resolutions: Vec<(Span, SymbolId)>,
+        mut binding_aliases: Vec<(Span, SymbolId)>,
         mut errors: Vec<SemanticError>,
     ) -> Self {
         resolutions.sort_by_key(|(span, _)| span.start());
+        binding_aliases.sort_by_key(|(span, _)| span.start());
         errors.sort_by_key(|error| error.span().start());
         Self {
             symbols,
             scopes,
             resolutions,
+            binding_aliases,
             errors,
         }
     }
@@ -115,6 +124,14 @@ impl SemanticResult {
     /// appear here.
     pub fn resolutions(&self) -> &[(Span, SymbolId)] {
         &self.resolutions
+    }
+
+    /// Or-pattern binding aliases, in span order: `(occurrence span,
+    /// resolved symbol id)` for every occurrence of an or-pattern binding
+    /// after its first. The first occurrence is an ordinary symbol (see
+    /// [`Self::symbols`]); these aliases resolve the rest.
+    pub fn binding_aliases(&self) -> &[(Span, SymbolId)] {
+        &self.binding_aliases
     }
 
     /// The symbol the identifier at `span` resolves to, if any.

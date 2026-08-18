@@ -182,6 +182,10 @@ fn all_pattern_forms_parse() {
             }
             mink::ast::Pattern::Binding(ident) => format!("binding({})", ident.name),
             mink::ast::Pattern::Wildcard { .. } => "wildcard".to_string(),
+            mink::ast::Pattern::Range { .. } => "range".to_string(),
+            mink::ast::Pattern::Or { alternatives, .. } => {
+                format!("or({})", alternatives.len())
+            }
         })
         .collect();
     assert_eq!(

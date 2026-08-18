@@ -481,15 +481,24 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   need no exhaustiveness proof (`_` or a final catch-all is the way to
   write them). Arms bind patterns: an identifier pattern introduces a
   copy of the scrutinee (`let x = e;` semantics) in its own scope, and
-  `_` binds nothing. See
-  [`PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/PATTERN_MATCHING_IMPLEMENTATION.md).
-- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T33`
+  `_` binds nothing. **Session 27** adds or-patterns (`1 | 2 | 3`,
+  `E::A(x) | E::B(x)` — alternatives bind the same names/types and share
+  one binding, `E-T34` on mismatch), integer range patterns (`1..=5`
+  inclusive, `1..5` exclusive, negated endpoints allowed; interval-based
+  exhaustiveness makes uncovered gaps precise `E-T25`s), and guards
+  (`pat if cond =>` — the `Bool` guard runs after the pattern matches,
+  reads the pattern's bindings, and commits no coverage). See
+  [`PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/PATTERN_MATCHING_IMPLEMENTATION.md)
+  and
+  [`RICHER_PATTERNS_IMPLEMENTATION.md`](../implementation/RICHER_PATTERNS_IMPLEMENTATION.md).
+- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T34`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
   count, not iterable, the session-14 aggregate rules, the session-17/19/20
   enum rules, the session-18 match rules, the session-19 sum-type rules,
-  the session-20 discriminant rules above, and the session-21 reference
+  the session-20 discriminant rules above, the session-21 reference
   rules: `&enum` is `E-T19`, deref-rooted member/element assignment is
-  `E-T33`). They carry the exact offending span, rendered expected/actual
+  `E-T33`, and session-27 or-pattern binding consistency is `E-T34`).
+  They carry the exact offending span, rendered expected/actual
   types where useful, and a related span for assignments.
 - **Cascade control.** An unknown/error type absorbs failed sub-expressions
   so one root error (an unresolved name, an invalid operator) never

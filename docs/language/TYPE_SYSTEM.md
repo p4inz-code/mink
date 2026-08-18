@@ -241,6 +241,22 @@ It should support:
 
 The compiler should detect non-exhaustive matches when exhaustive analysis is possible.
 
+**Implemented (sessions 18, 19, and 27):** `match` dispatches on `Int`,
+`Bool`, and enum scrutinees with literal, binding, wildcard, variant, and
+payload patterns (sessions 18/19). Session 27 adds **or-patterns**
+(`1 | 2 | 3`, `E::A(x) | E::B(x)` — alternatives must bind the same
+names with the same types, `E-T34` on mismatch, and share one binding),
+**range patterns** (`1..=5` inclusive, `1..5` exclusive, with negated
+endpoints; well-typed only on `Int` scrutinees, and coverage is tracked
+as integer intervals so partial `Int` coverage is reported precisely by
+`E-T25`), and **guards** (`pat if expr =>`; the guard must be `Bool`,
+`E-T09` on mismatch, is evaluated after the pattern matches with the
+pattern's bindings in scope, and a guarded arm commits no coverage — the
+uncovered space is still reported). See
+`docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md` (Session 18),
+`docs/implementation/SUM_TYPES_IMPLEMENTATION.md` (Session 19), and
+`docs/implementation/RICHER_PATTERNS_IMPLEMENTATION.md` (Session 27).
+
 ## 21. Type Safety and Runtime Checks
 
 MINK should reject statically provable invalid operations at compile time.
