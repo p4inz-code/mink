@@ -369,6 +369,9 @@ impl HirPattern {
 pub struct HirBlock {
     /// The statements, in source order.
     pub stmts: Vec<HirStmt>,
+    /// The optional trailing expression (session 28). When `Some`, this
+    /// expression is the block's value.
+    pub result: Option<HirExpr>,
     /// Span covering the whole block including its braces.
     pub span: Span,
 }
@@ -391,6 +394,8 @@ pub struct HirIf {
 pub enum HirElseBranch {
     /// An `else if` chain: the nested statement's own `else` is inside it.
     If(Box<HirIf>),
+    /// An `else if` expression chain (session 28).
+    IfExpr(Box<HirIf>),
     /// A plain `else { ... }` block.
     Block(HirBlock),
 }
@@ -523,4 +528,18 @@ pub enum HirExprKind {
         /// The payload expression, for a data-carrying construction.
         payload: Option<Box<HirExpr>>,
     },
+    /// An `if` expression (session 28): evaluates `cond`, then evaluates
+    /// and returns the value of the `then_block` or `else_branch`.
+    IfExpr {
+        /// The condition.
+        cond: Box<HirExpr>,
+        /// The then block (must have a trailing expression).
+        then_block: Box<HirBlock>,
+        /// The else branch: another `if` expression or a block.
+        else_branch: Box<HirElseBranch>,
+        /// Span.
+        span: Span,
+    },
+    /// A block expression (session 28): `{ stmts; expr }`.
+    Block(Box<HirBlock>),
 }

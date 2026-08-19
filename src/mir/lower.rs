@@ -423,6 +423,19 @@ impl<'a> StmtEval<'a> {
                     )
                 }
             },
+            HirExprKind::Block(block) => {
+                // Evaluate the trailing expression; block statements in
+                // operand position are evaluated for their side effects.
+                match &block.result {
+                    Some(result_expr) => self.eval_operand(result_expr),
+                    None => self.literal_operand(expr),
+                }
+            }
+            HirExprKind::IfExpr { .. } => {
+                // If-expressions should have been lowered to if-statements
+                // at the HIR level.  Return a defensive dummy operand.
+                self.literal_operand(expr)
+            }
             HirExprKind::Assign { .. } => self.eval_assign(expr),
         }
     }
@@ -1294,6 +1307,76 @@ impl<'a> FnBuilder<'a> {
             binding.span,
         );
         self.eval.symbols.insert(binding.name.symbol, local);
+        // If the initializer is an if-expression, lower it with branching.
+        if let HirExprKind::IfExpr {
+            cond,
+            then_block,
+            else_branch,
+            span,
+        } = &binding.init.kind
+        {
+            self.lower_if_expr_binding(local, cond, then_block, else_branch, binding.ty, *span);
+            return;
+        }
+        // If the initializer is a block expression, lower statements
+        // then the trailing expression.
+        if let HirExprKind::Block(block) = &binding.init.kind {
+            for stmt in &block.stmts {
+                self.lower_stmt(stmt);
+            }
+            if let Some(result_expr) = &block.result {
+                if let HirExprKind::IfExpr {
+                    cond,
+                    then_block,
+                    else_branch,
+                    span,
+                } = &result_expr.kind
+                {
+                    self.lower_if_expr_binding(
+                        local,
+                        cond,
+                        then_block,
+                        else_branch,
+                        binding.ty,
+                        *span,
+                    );
+                    return;
+                }
+                let value = self.eval.eval_operand(result_expr);
+                let target = MirTarget {
+                    kind: MirTargetKind::Local(local),
+                    span: binding.span,
+                    ty: binding.ty,
+                };
+                self.emit_stmt(MirStmt {
+                    kind: MirStmtKind::Assign {
+                        target,
+                        rvalue: use_rvalue(value, binding.span, binding.ty),
+                    },
+                    span: binding.span,
+                });
+                return;
+            }
+            // Block with no trailing expression: assign a zero constant.
+            let value = self.eval.literal_operand(&HirExpr {
+                kind: HirExprKind::Bool(false),
+                span: binding.span,
+                ty: binding.ty,
+            });
+            let target = MirTarget {
+                kind: MirTargetKind::Local(local),
+                span: binding.span,
+                ty: binding.ty,
+            };
+            self.emit_stmt(MirStmt {
+                kind: MirStmtKind::Assign {
+                    target,
+                    rvalue: use_rvalue(value, binding.span, binding.ty),
+                },
+                span: binding.span,
+            });
+            return;
+        }
         let value = self.eval.eval_operand(&binding.init);
         let target = MirTarget {
             kind: MirTargetKind::Local(local),
@@ -1333,6 +1416,111 @@ impl<'a> FnBuilder<'a> {
             },
             span: binding.span,
         });
+    }
+
+    /// Evaluates a result expression into a target local, handling
+    /// if-expressions recursively.
+    fn eval_result_to_local(
+        &mut self,
+        expr: &HirExpr,
+        target_local: LocalId,
+        ty: TypeId,
+        span: crate::source::Span,
+    ) {
+        match &expr.kind {
+            HirExprKind::IfExpr {
+                cond,
+                then_block,
+                else_branch,
+                span: s,
+            } => {
+                self.lower_if_expr_binding(target_local, cond, then_block, else_branch, ty, *s);
+            }
+            HirExprKind::Block(block) => {
+                for stmt in &block.stmts {
+                    self.lower_stmt(stmt);
+                }
+                if let Some(result) = &block.result {
+                    self.eval_result_to_local(result, target_local, ty, span);
+                }
+            }
+            _ => {
+                let val = self.eval.eval_operand(expr);
+                self.emit_stmt(MirStmt {
+                    kind: MirStmtKind::Assign {
+                        target: MirTarget {
+                            kind: MirTargetKind::Local(target_local),
+                            span,
+                            ty,
+                        },
+                        rvalue: use_rvalue(val, span, ty),
+                    },
+                    span,
+                });
+            }
+        }
+    }
+
+    /// Lowers an if-expression binding: branches to then/else blocks,
+    /// evaluates each block's result, and assigns to the target local.
+    fn lower_if_expr_binding(
+        &mut self,
+        target_local: LocalId,
+        cond: &HirExpr,
+        then_block: &crate::hir::HirBlock,
+        else_branch: &crate::hir::HirElseBranch,
+        ty: TypeId,
+        span: crate::source::Span,
+    ) {
+        use crate::hir::HirElseBranch;
+        let cond_op = self.eval.eval_operand(cond);
+        let then_id = self.alloc_block();
+        let else_id = self.alloc_block();
+        let after_id = self.alloc_block();
+        self.terminate(MirTerminator::Branch {
+            cond: cond_op,
+            then_block: then_id,
+            else_block: else_id,
+            span,
+        });
+        // Then block.
+        self.start_block(then_id, then_block.span);
+        for stmt in &then_block.stmts {
+            self.lower_stmt(stmt);
+        }
+        if let Some(result_expr) = &then_block.result {
+            self.eval_result_to_local(result_expr, target_local, ty, span);
+        }
+        self.jump_to(after_id, span);
+        // Else block.
+        self.start_block(else_id, span);
+        match else_branch {
+            HirElseBranch::Block(block) => {
+                for stmt in &block.stmts {
+                    self.lower_stmt(stmt);
+                }
+                if let Some(result_expr) = &block.result {
+                    self.eval_result_to_local(result_expr, target_local, ty, span);
+                }
+            }
+            HirElseBranch::If(nested) => {
+                self.lower_if(nested);
+            }
+            HirElseBranch::IfExpr(inner) => {
+                if let Some(ref eb) = inner.else_branch {
+                    self.lower_if_expr_binding(
+                        target_local,
+                        &inner.cond,
+                        &inner.then_block,
+                        eb,
+                        ty,
+                        span,
+                    );
+                }
+            }
+        }
+        self.jump_to(after_id, span);
+        self.start_block(after_id, span);
     }
 
     /// Lowers an `if`/`else if`/`else` statement into a conditional branch
@@ -1384,6 +1572,11 @@ impl<'a> FnBuilder<'a> {
             Some(HirElseBranch::If(nested)) => {
                 // The nested else-if joins the same continuation block.
                 self.lower_if_into(nested, after);
+            }
+            Some(HirElseBranch::IfExpr(_inner)) => {
+                // If-expression in else of statement if: lower the then
+                // block of the expression (defensive: should be desugared).
+                self.finish_into(after, stmt.span);
             }
         }
     }

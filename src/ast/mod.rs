@@ -274,11 +274,22 @@ pub struct Ident {
     pub span: Span,
 }
 
-/// A `{ ... }` block: an ordered list of statements.
+/// A `{ ... }` block: an ordered list of statements, optionally ending
+/// with an expression that determines the block's value.
+///
+/// Session 28 introduced block expressions: when the block's last item
+/// is an expression **not** followed by `;`, that expression becomes the
+/// block's trailing expression and determines its type. An empty block
+/// or a block whose last item ends with `;` has no trailing expression
+/// and evaluates to `Unit`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     /// The statements, in source order.
     pub stmts: Vec<Stmt>,
+    /// The optional trailing expression (session 28). When `Some`, this
+    /// expression is the block's value and its type determines the
+    /// block's type. When `None`, the block evaluates to `Unit`.
+    pub result: Option<Expr>,
     /// Span covering the whole block including its braces.
     pub span: Span,
 }
@@ -479,11 +490,13 @@ pub struct IfStmt {
     pub span: Span,
 }
 
-/// The `else` branch of an [`IfStmt`].
+/// The `else` branch of an [`IfStmt`] or [`IfExpr`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ElseBranch {
     /// An `else if` chain: the nested statement's own `else` is inside it.
     If(Box<IfStmt>),
+    /// An `else if` expression chain (session 28).
+    IfExpr(Box<IfExpr>),
     /// A plain `else { ... }` block.
     Block(Block),
 }
@@ -618,6 +631,32 @@ pub enum ExprKind {
     /// A parenthesized expression: `(inner)`. Kept as a node so tooling can
     /// distinguish explicit grouping from parser-imposed association.
     Group(Box<Expr>),
+    /// An `if` expression (session 28): `if cond { then } else { else }`.
+    /// Both branches must be expression blocks that produce a value of the
+    /// same type; the `else` branch is required. The expression evaluates
+    /// to the value of the taken branch.
+    IfExpr(Box<IfExpr>),
+    /// A block expression (session 28): `{ stmts; expr }`. The block's
+    /// trailing expression determines the value.
+    Block(Box<Block>),
+}
+
+/// An `if` expression (session 28): evaluates `cond`, then evaluates
+/// and returns the value of the `then_block` when true, or the
+/// `else_branch` when false. The `else` is required because both
+/// branches must produce a value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IfExpr {
+    /// The condition expression.
+    pub cond: Box<Expr>,
+    /// The block evaluated when the condition is true; must have a
+    /// trailing expression.
+    pub then_block: Block,
+    /// The `else` branch: either another `if` expression or a block.
+    /// Required for if-expressions.
+    pub else_branch: ElseBranch,
+    /// Span covering the whole expression from `if` through the else branch.
+    pub span: Span,
 }
 
 /// One field initializer of a struct literal: `name: value`.

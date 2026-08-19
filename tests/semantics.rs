@@ -133,6 +133,10 @@ fn if_idents<'a>(stmt: &'a IfStmt, out: &mut Vec<(&'a str, Span, bool)>) {
     block_idents(&stmt.then_block, out);
     match &stmt.else_branch {
         Some(ElseBranch::If(nested)) => if_idents(nested, out),
+        Some(ElseBranch::IfExpr(inner)) => {
+            expr_idents(&inner.cond, out);
+            block_idents(&inner.then_block, out);
+        }
         Some(ElseBranch::Block(block)) => block_idents(block, out),
         None => {}
     }
@@ -187,6 +191,17 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
         // names: they are not collected as identifiers.
         ExprKind::EnumVariant { .. } => {}
         ExprKind::Group(inner) => expr_idents(inner, out),
+        ExprKind::IfExpr(inner) => {
+            expr_idents(&inner.cond, out);
+        }
+        ExprKind::Block(block) => {
+            for stmt in &block.stmts {
+                stmt_idents(stmt, out);
+            }
+            if let Some(result) = &block.result {
+                expr_idents(result, out);
+            }
+        }
     }
 }
 
@@ -1278,6 +1293,7 @@ fn analyzer_tolerates_literal_assignment_target() {
             }],
             return_ty: None,
             body: Block {
+                result: None,
                 stmts: vec![Stmt {
                     kind: StmtKind::Expr(assign),
                     span,
@@ -1363,6 +1379,7 @@ fn analyzer_tolerates_group_assignment_target() {
             params: Vec::new(),
             return_ty: None,
             body: Block {
+                result: None,
                 stmts: vec![
                     x_binding,
                     Stmt {

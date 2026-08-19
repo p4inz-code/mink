@@ -283,10 +283,12 @@ fn stray_closer_inside_a_statement_is_a_statement_error() {
 
 #[test]
 fn unexpected_opener_in_expr_position_is_rejected() {
-    // A block `{` is not an expression in the frozen grammar.
-    assert_eq!(
-        error_kinds("fn f() { let x = { 1 }; }"),
-        vec![ParseErrorKind::ExpectedExpression]
+    // Block expressions `{ 1 }` are now valid (session 28).
+    // `{ 1 }` parses as a block expression returning 1.
+    let errors = error_kinds("fn f() { let x = { 1 }; }");
+    assert!(
+        errors.is_empty(),
+        "expected no errors for block expression, got {errors:?}"
     );
 }
 
@@ -929,16 +931,15 @@ fn missing_semicolon_absorbs_the_following_tokens_but_stays_bounded() {
 #[test]
 fn recovery_stress_corpus() {
     let cases: &[(&str, Vec<ParseErrorKind>)] = &[
-        // A `{` in iterable position: one error, the group is skipped whole.
+        // A `{` in iterable position: now parsed as a block expression,
+        // so the for body is missing.
         (
             "fn f() { for i in { break; } }",
-            vec![ParseErrorKind::ExpectedExpression],
+            vec![ParseErrorKind::ExpectedBlock],
         ),
-        // A `{` in condition position: one error, the group is skipped whole.
-        (
-            "fn f() { while { } }",
-            vec![ParseErrorKind::ExpectedExpression],
-        ),
+        // A `{` in condition position: now parsed as a block expression,
+        // so the while body is missing.
+        ("fn f() { while { } }", vec![ParseErrorKind::ExpectedBlock]),
         // Missing comma between params: `b` absorbed, `c` still parses.
         ("fn f(a b, c) {}", vec![ParseErrorKind::ExpectedComma]),
         // A `}` inside the parameter list: the param list aborts at the
@@ -1289,6 +1290,10 @@ fn walk_if_stmt(if_stmt: &IfStmt, text_len: u32, src: &str) {
     if let Some(branch) = &if_stmt.else_branch {
         match branch {
             ElseBranch::If(nested) => walk_if_stmt(nested, text_len, src),
+            ElseBranch::IfExpr(inner) => {
+                walk_expr(&inner.cond, text_len, src);
+                walk_block(&inner.then_block, text_len, src);
+            }
             ElseBranch::Block(block) => walk_block(block, text_len, src),
         }
     }
@@ -1358,6 +1363,18 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
             }
         }
         ExprKind::Group(inner) => walk_expr(inner, text_len, src),
+        ExprKind::IfExpr(inner) => {
+            walk_expr(&inner.cond, text_len, src);
+            walk_block(&inner.then_block, text_len, src);
+        }
+        ExprKind::Block(block) => {
+            for stmt in &block.stmts {
+                walk_stmt(stmt, text_len, src);
+            }
+            if let Some(result) = &block.result {
+                walk_expr(result, text_len, src);
+            }
+        }
     }
 }
 
@@ -1405,16 +1422,6 @@ fn excluded_constructs_inside_functions_are_rejected() {
         // pattern without `=>` is a dedicated E-P24.
         // Closure.
         ("let g = |x| x + 1;", ParseErrorKind::ExpectedExpression),
-        // Block expression.
-        (
-            "let y = { let z = 1; };",
-            ParseErrorKind::ExpectedExpression,
-        ),
-        // if expression.
-        (
-            "let y = if x { 1 } else { 2 };",
-            ParseErrorKind::ExpectedExpression,
-        ),
         // unsafe block.
         ("unsafe { }", ParseErrorKind::ExpectedExpression),
         // await expression.

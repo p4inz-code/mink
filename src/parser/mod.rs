@@ -28,8 +28,8 @@ mod error;
 
 use crate::ast::{
     AssignOp, Ast, BinaryOp, Block, ConstItem, ElseBranch, EnumItem, EnumVariant, Expr, ExprKind,
-    FnItem, Ident, IfStmt, Item, ItemKind, LetItem, MatchArm, MatchStmt, Param, Pattern, Stmt,
-    StmtKind, StructField, StructFieldInit, StructItem, Ty, TyKind, UnaryOp,
+    FnItem, Ident, IfExpr, IfStmt, Item, ItemKind, LetItem, MatchArm, MatchStmt, Param, Pattern,
+    Stmt, StmtKind, StructField, StructFieldInit, StructItem, Ty, TyKind, UnaryOp,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::source::{SourceFile, Span};
@@ -840,6 +840,7 @@ impl<'a> Parser<'a> {
                 self.recover_item();
                 Block {
                     stmts: Vec::new(),
+                    result: None,
                     span: self.point_span(),
                 }
             }
@@ -1098,6 +1099,7 @@ impl<'a> Parser<'a> {
         };
         let end = match &else_branch {
             Some(ElseBranch::If(nested)) => nested.span,
+            Some(ElseBranch::IfExpr(inner)) => inner.span,
             Some(ElseBranch::Block(block)) => block.span,
             None => then_block.span,
         };
@@ -1272,6 +1274,7 @@ impl<'a> Parser<'a> {
                 self.recover_statement();
                 Block {
                     stmts: Vec::new(),
+                    result: None,
                     span: self.point_span(),
                 }
             }
@@ -1555,12 +1558,20 @@ impl<'a> Parser<'a> {
                     let close = self.bump().span();
                     self.open_delims.pop();
                     let span = self.join(open, close);
-                    return Ok(Block { stmts, span });
+                    return Ok(Block {
+                        stmts,
+                        result: None,
+                        span,
+                    });
                 }
                 TokenKind::Eof => {
                     self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
                     let span = Span::new(self.file.id(), open.start()..self.file.len());
-                    return Ok(Block { stmts, span });
+                    return Ok(Block {
+                        stmts,
+                        result: None,
+                        span,
+                    });
                 }
                 TokenKind::Semi => {
                     // Empty statement: consume without producing a node.
@@ -1583,10 +1594,149 @@ impl<'a> Parser<'a> {
                 self.recover_statement();
                 Block {
                     stmts: Vec::new(),
+                    result: None,
                     span: self.point_span(),
                 }
             }
         }
+    }
+
+    /// Parses an expression block (session 28): `{ stmts; trailing_expr? }`.
+    /// Unlike [`parse_block_body`], this also parses an optional trailing
+    /// expression (the last expression not followed by `;`) which becomes
+    /// the block's value.
+    fn parse_block_expr(&mut self) -> Result<Block, ()> {
+        if self.current_kind() != TokenKind::LBrace {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedBlock, token.span());
+            return Err(());
+        }
+        let open = self.bump().span();
+        self.open_delims.push((TokenKind::LBrace, open));
+        let mut stmts = Vec::new();
+        let mut result = None;
+        loop {
+            match self.current_kind() {
+                TokenKind::RBrace => {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    let span = self.join(open, close);
+                    return Ok(Block {
+                        stmts,
+                        result,
+                        span,
+                    });
+                }
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                    let span = Span::new(self.file.id(), open.start()..self.file.len());
+                    return Ok(Block {
+                        stmts,
+                        result: None,
+                        span,
+                    });
+                }
+                TokenKind::Semi => {
+                    let _ = self.bump();
+                }
+                _ => {
+                    // Keyword-starting tokens produce statements (which
+                    // expect a trailing `;`).  Everything else is parsed
+                    // as an expression: followed by `;` it is an expression
+                    // statement; followed by `}` it is the trailing
+                    // expression that determines the block's value.
+                    let is_kw = matches!(
+                        self.current_kind(),
+                        TokenKind::Let
+                            | TokenKind::Const
+                            | TokenKind::Return
+                            | TokenKind::Break
+                            | TokenKind::Continue
+                            | TokenKind::While
+                            | TokenKind::For
+                            | TokenKind::Loop
+                            | TokenKind::Match
+                    );
+                    if is_kw {
+                        match self.parse_statement() {
+                            Ok(stmt) => stmts.push(stmt),
+                            Err(()) => self.recover_statement(),
+                        }
+                    } else {
+                        let expr = self.parse_expression()?;
+                        if self.current_kind() == TokenKind::Semi {
+                            let semi = self.bump().span();
+                            let span = self.join(expr.span, semi);
+                            stmts.push(Stmt {
+                                kind: StmtKind::Expr(expr),
+                                span,
+                            });
+                        } else {
+                            // Trailing expression — must be the last item.
+                            result = Some(expr);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        let close = self.bump().span(); // `}`
+        self.open_delims.pop();
+        let span = self.join(open, close);
+        Ok(Block {
+            stmts,
+            result,
+            span,
+        })
+    }
+
+    /// Parses an if-expression (session 28): `if Expr BlockExpr else
+    /// (IfExpr | BlockExpr)`.  The `else` branch is required because an
+    /// if-expression must produce a value.
+    fn parse_if_expr(&mut self) -> Result<Expr, ()> {
+        let start = self.bump().span(); // `if`
+        let saved = self.in_block_context;
+        self.in_block_context = true;
+        let cond = self.parse_expression()?;
+        self.in_block_context = saved;
+        let then_block = self.parse_block_expr()?;
+        // `else` is required for if-expressions.
+        if self.current_kind() != TokenKind::Else {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedElse, token.span());
+            return Err(());
+        }
+        let _ = self.bump(); // `else`
+        let else_branch = match self.current_kind() {
+            TokenKind::If => {
+                let nested = self.parse_if_expr()?;
+                match nested.kind {
+                    ExprKind::IfExpr(inner) => ElseBranch::IfExpr(inner),
+                    _ => unreachable!(),
+                }
+            }
+            TokenKind::LBrace => ElseBranch::Block(self.parse_block_expr()?),
+            _ => {
+                let token = self.current();
+                self.record_error(ParseErrorKind::ExpectedBlock, token.span());
+                return Err(());
+            }
+        };
+        let end = match &else_branch {
+            ElseBranch::IfExpr(inner) => inner.span,
+            ElseBranch::Block(block) => block.span,
+            _ => unreachable!(),
+        };
+        let span = self.join(start, end);
+        Ok(Expr {
+            kind: ExprKind::IfExpr(Box::new(IfExpr {
+                cond: Box::new(cond),
+                then_block,
+                else_branch,
+                span,
+            })),
+            span,
+        })
     }
 
     // ------------------------------------------------------------------
@@ -2076,6 +2226,15 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::LBracket => self.parse_array_literal(),
+            TokenKind::If => self.parse_if_expr(),
+            TokenKind::LBrace => {
+                let block = self.parse_block_expr()?;
+                let span = block.span;
+                Ok(Expr {
+                    kind: ExprKind::Block(Box::new(block)),
+                    span,
+                })
+            }
             TokenKind::LParen => {
                 let open = self.bump().span();
                 self.open_delims.push((TokenKind::LParen, open));

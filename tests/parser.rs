@@ -1530,6 +1530,10 @@ fn walk_if_stmt(if_stmt: &IfStmt, text_len: u32, src: &str) {
     if let Some(branch) = &if_stmt.else_branch {
         match branch {
             ElseBranch::If(nested) => walk_if_stmt(nested, text_len, src),
+            ElseBranch::IfExpr(inner) => {
+                walk_expr(&inner.cond, text_len, src);
+                walk_block(&inner.then_block, text_len, src);
+            }
             ElseBranch::Block(block) => walk_block(block, text_len, src),
         }
     }
@@ -1599,6 +1603,18 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
             }
         }
         ExprKind::Group(inner) => walk_expr(inner, text_len, src),
+        ExprKind::IfExpr(inner) => {
+            walk_expr(&inner.cond, text_len, src);
+            walk_block(&inner.then_block, text_len, src);
+        }
+        ExprKind::Block(block) => {
+            for stmt in &block.stmts {
+                walk_stmt(stmt, text_len, src);
+            }
+            if let Some(result) = &block.result {
+                walk_expr(result, text_len, src);
+            }
+        }
     }
 }
 

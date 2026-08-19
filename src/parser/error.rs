@@ -81,6 +81,8 @@ pub enum ParseErrorKind {
     /// payload: `Variant()`. A data-carrying variant carries exactly one
     /// payload.
     EmptyPayload,
+    /// `else` was required after the then-block of an if-expression.
+    ExpectedElse,
 }
 
 impl ParseErrorKind {
@@ -115,6 +117,7 @@ impl ParseErrorKind {
             Self::ExpectedPattern => "E-P23",
             Self::ExpectedFatArrow => "E-P24",
             Self::EmptyPayload => "E-P25",
+            Self::ExpectedElse => "E-P26",
         }
     }
 }
@@ -153,6 +156,7 @@ impl fmt::Display for ParseErrorKind {
             Self::EmptyPayload => {
                 "expected a payload in the parentheses of a data-carrying variant (a variant carries exactly one payload)"
             }
+            Self::ExpectedElse => "an if-expression requires an `else` branch to produce a value",
         };
         f.write_str(message)
     }

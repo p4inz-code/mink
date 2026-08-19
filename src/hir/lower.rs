@@ -228,6 +228,7 @@ impl<'a> Lowerer<'a> {
                 .iter()
                 .map(|stmt| self.lower_stmt(stmt))
                 .collect(),
+            result: block.result.as_ref().map(|expr| self.lower_expr(expr)),
             span: block.span,
         }
     }
@@ -368,6 +369,9 @@ impl<'a> Lowerer<'a> {
     fn lower_if(&mut self, stmt: &IfStmt) -> HirIf {
         let else_branch = stmt.else_branch.as_ref().map(|branch| match branch {
             ElseBranch::If(nested) => HirElseBranch::If(Box::new(self.lower_if(nested))),
+            ElseBranch::IfExpr(inner) => {
+                HirElseBranch::IfExpr(Box::new(self.lower_if_expr_to_hir_if(inner)))
+            }
             ElseBranch::Block(block) => HirElseBranch::Block(self.lower_block(block)),
         });
         HirIf {
@@ -375,6 +379,23 @@ impl<'a> Lowerer<'a> {
             then_block: self.lower_block(&stmt.then_block),
             else_branch,
             span: stmt.span,
+        }
+    }
+
+    /// Lowers an if-expression into a HirIf (for use in ElseBranch::IfExpr).
+    fn lower_if_expr_to_hir_if(&mut self, expr: &crate::ast::IfExpr) -> HirIf {
+        let else_branch = match &expr.else_branch {
+            ElseBranch::IfExpr(inner) => {
+                HirElseBranch::IfExpr(Box::new(self.lower_if_expr_to_hir_if(inner)))
+            }
+            ElseBranch::Block(block) => HirElseBranch::Block(self.lower_block(block)),
+            ElseBranch::If(stmt) => HirElseBranch::If(Box::new(self.lower_if(stmt))),
+        };
+        HirIf {
+            cond: self.lower_expr(&expr.cond),
+            then_block: self.lower_block(&expr.then_block),
+            else_branch: Some(else_branch),
+            span: expr.span,
         }
     }
 
@@ -489,6 +510,30 @@ impl<'a> Lowerer<'a> {
                     .unwrap_or(inner.ty);
                 return HirExpr {
                     kind: inner.kind,
+                    span: expr.span,
+                    ty,
+                };
+            }
+            ExprKind::IfExpr(inner) => {
+                let else_branch = match &inner.else_branch {
+                    ElseBranch::IfExpr(nested) => {
+                        HirElseBranch::If(Box::new(self.lower_if_expr_to_hir_if(nested)))
+                    }
+                    ElseBranch::Block(block) => HirElseBranch::Block(self.lower_block(block)),
+                    ElseBranch::If(stmt) => HirElseBranch::If(Box::new(self.lower_if(stmt))),
+                };
+                HirExprKind::IfExpr {
+                    cond: Box::new(self.lower_expr(&inner.cond)),
+                    then_block: Box::new(self.lower_block(&inner.then_block)),
+                    else_branch: Box::new(else_branch),
+                    span: inner.span,
+                }
+            }
+            ExprKind::Block(block) => {
+                let hir_block = self.lower_block(block);
+                let ty = self.expr_type(expr.span);
+                return HirExpr {
+                    kind: HirExprKind::Block(Box::new(hir_block)),
                     span: expr.span,
                     ty,
                 };

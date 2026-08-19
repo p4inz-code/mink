@@ -1285,7 +1285,11 @@ fn hand_built_unusual_asts_do_not_panic() {
                 span,
             }],
             return_ty: None,
-            body: Block { stmts, span },
+            body: Block {
+                stmts,
+                result: None,
+                span,
+            },
         }),
         span,
     }]);
@@ -1710,6 +1714,7 @@ fn hand_built_inference_shapes_do_not_panic() {
     let x = ident("x", next_span());
     let y = ident("y", next_span());
     let empty = Block {
+        result: None,
         stmts: Vec::new(),
         span: next_span(),
     };
@@ -1766,6 +1771,7 @@ fn hand_built_inference_shapes_do_not_panic() {
             return_ty: None,
             body: Block {
                 stmts,
+                result: None,
                 span: next_span(),
             },
         }),

@@ -528,6 +528,9 @@ impl Analyzer {
         match &stmt.else_branch {
             // Else-if chains keep their condition in the enclosing scope.
             Some(ElseBranch::If(nested)) => self.analyze_if(nested, ctx),
+            Some(ElseBranch::IfExpr(inner)) => {
+                self.analyze_if_expr(inner, ctx);
+            }
             Some(ElseBranch::Block(block)) => {
                 let else_scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
                 self.analyze_block(
@@ -539,6 +542,34 @@ impl Analyzer {
                 );
             }
             None => {}
+        }
+    }
+
+    /// Analyzes an if-expression (session 28): the condition, then-block,
+    /// and else-branch each run in their own scope.
+    fn analyze_if_expr(&mut self, expr: &crate::ast::IfExpr, ctx: Ctx) {
+        self.analyze_expr(&expr.cond, ctx);
+        let then_scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+        self.analyze_block(
+            &expr.then_block,
+            Ctx {
+                scope: then_scope,
+                ..ctx
+            },
+        );
+        match &expr.else_branch {
+            ElseBranch::IfExpr(inner) => self.analyze_if_expr(inner, ctx),
+            ElseBranch::Block(block) => {
+                let else_scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                self.analyze_block(
+                    block,
+                    Ctx {
+                        scope: else_scope,
+                        ..ctx
+                    },
+                );
+            }
+            ElseBranch::If(_) => unreachable!("statement if inside if-expression"),
         }
     }
 
@@ -611,6 +642,50 @@ impl Analyzer {
                 }
             }
             ExprKind::Group(inner) => self.analyze_expr(inner, ctx),
+            ExprKind::IfExpr(inner) => {
+                self.analyze_expr(&inner.cond, ctx);
+                let then_scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                self.analyze_block(
+                    &inner.then_block,
+                    Ctx {
+                        scope: then_scope,
+                        ..ctx
+                    },
+                );
+                match &inner.else_branch {
+                    ElseBranch::IfExpr(nested) => self.analyze_if_expr(nested, ctx),
+                    ElseBranch::Block(block) => {
+                        let else_scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                        self.analyze_block(
+                            block,
+                            Ctx {
+                                scope: else_scope,
+                                ..ctx
+                            },
+                        );
+                    }
+                    ElseBranch::If(_) => unreachable!(),
+                }
+            }
+            ExprKind::Block(block) => {
+                let block_scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                self.analyze_block(
+                    block,
+                    Ctx {
+                        scope: block_scope,
+                        ..ctx
+                    },
+                );
+                if let Some(result) = &block.result {
+                    self.analyze_expr(
+                        result,
+                        Ctx {
+                            scope: block_scope,
+                            ..ctx
+                        },
+                    );
+                }
+            }
         }
     }
 

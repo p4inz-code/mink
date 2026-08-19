@@ -455,6 +455,24 @@ impl<'a> Checker<'a> {
         self.resolve_deferred_block(&stmt.then_block);
         match &stmt.else_branch {
             Some(ElseBranch::If(nested)) => self.resolve_deferred_if(nested),
+            Some(ElseBranch::IfExpr(inner)) => {
+                let (ty, r) = self.resolve_deferred_expr(&inner.cond);
+                if r {
+                    self.recheck_condition(ty, inner.cond.span);
+                }
+                self.resolve_deferred_block(&inner.then_block);
+                match &inner.else_branch {
+                    ElseBranch::IfExpr(e) => {
+                        let (ty2, r2) = self.resolve_deferred_expr(&e.cond);
+                        if r2 {
+                            self.recheck_condition(ty2, e.cond.span);
+                        }
+                        self.resolve_deferred_block(&e.then_block);
+                    }
+                    ElseBranch::Block(b) => self.resolve_deferred_block(b),
+                    _ => {}
+                }
+            }
             Some(ElseBranch::Block(block)) => self.resolve_deferred_block(block),
             None => {}
         }
@@ -694,6 +712,19 @@ impl<'a> Checker<'a> {
                     )
                 }
             }
+            ExprKind::IfExpr(inner) => {
+                let _ = inner;
+                (
+                    self.recorded_ty(expr.span)
+                        .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                    false,
+                )
+            }
+            ExprKind::Block(_block) => (
+                self.recorded_ty(expr.span)
+                    .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                false,
+            ),
             ExprKind::Int
             | ExprKind::Float
             | ExprKind::Str
@@ -1333,6 +1364,41 @@ impl<'a> Checker<'a> {
     fn check_block(&mut self, block: &Block) {
         for stmt in &block.stmts {
             self.check_stmt(stmt);
+        }
+    }
+
+    /// Types a block and returns its value type (the trailing expression's
+    /// type, or `Unit` if there is no trailing expression).
+    fn check_block_return_type(&mut self, block: &Block) -> TypeId {
+        self.check_block(block);
+        match &block.result {
+            Some(result) => self.expr_type(result),
+            None => self.types.push(TypeKind::Unit),
+        }
+    }
+
+    /// Types an else branch and returns its value type.
+    fn check_else_return_type(&mut self, branch: &ElseBranch) -> TypeId {
+        match branch {
+            ElseBranch::Block(block) => self.check_block_return_type(block),
+            ElseBranch::IfExpr(inner) => {
+                self.check_condition(&inner.cond);
+                let then_ty = self.check_block_return_type(&inner.then_block);
+                let else_ty = self.check_else_return_type(&inner.else_branch);
+                if let Err((a, b)) = self.types.unify(then_ty, else_ty) {
+                    self.push_error(TypeError::mismatch(
+                        inner.span,
+                        self.display(a),
+                        self.display(b),
+                        None,
+                    ));
+                }
+                then_ty
+            }
+            ElseBranch::If(stmt) => {
+                self.check_if(stmt);
+                self.types.push(TypeKind::Unit)
+            }
         }
     }
 
@@ -2323,6 +2389,18 @@ impl<'a> Checker<'a> {
         self.check_block(&stmt.then_block);
         match &stmt.else_branch {
             Some(ElseBranch::If(nested)) => self.check_if(nested),
+            Some(ElseBranch::IfExpr(inner)) => {
+                self.check_condition(&inner.cond);
+                self.check_block(&inner.then_block);
+                match &inner.else_branch {
+                    ElseBranch::IfExpr(e) => {
+                        self.check_condition(&e.cond);
+                        self.check_block(&e.then_block);
+                    }
+                    ElseBranch::Block(b) => self.check_block(b),
+                    _ => {}
+                }
+            }
             Some(ElseBranch::Block(block)) => self.check_block(block),
             None => {}
         }
@@ -2497,6 +2575,27 @@ impl<'a> Checker<'a> {
                 payload,
             } => self.check_enum_variant(name, variant, payload, expr.span),
             ExprKind::Group(inner) => self.expr_type(inner),
+            ExprKind::IfExpr(inner) => {
+                self.check_condition(&inner.cond);
+                let then_ty = self.check_block_return_type(&inner.then_block);
+                let else_ty = self.check_else_return_type(&inner.else_branch);
+                if let Err((a, b)) = self.types.unify(then_ty, else_ty) {
+                    self.push_error(TypeError::mismatch(
+                        inner.span,
+                        self.display(a),
+                        self.display(b),
+                        None,
+                    ));
+                }
+                then_ty
+            }
+            ExprKind::Block(block) => {
+                self.check_block(block);
+                match &block.result {
+                    Some(result) => self.expr_type(result),
+                    None => self.types.push(TypeKind::Unit),
+                }
+            }
         }
     }
 

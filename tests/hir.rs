@@ -689,6 +689,7 @@ fn unresolved_reference_is_a_lowering_error() {
                     kind: StmtKind::Expr(unresolved.clone()),
                     span: next_span(),
                 }],
+                result: None,
                 span: next_span(),
             },
         }),

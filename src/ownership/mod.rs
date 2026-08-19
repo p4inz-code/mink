@@ -958,8 +958,19 @@ impl<'a> Analyzer<'a> {
         self.walk_block(&stmt.then_block);
         match &stmt.else_branch {
             Some(ElseBranch::If(nested)) => self.walk_if(nested),
+            Some(ElseBranch::IfExpr(inner)) => self.walk_if_expr(inner),
             Some(ElseBranch::Block(block)) => self.walk_block(block),
             None => {}
+        }
+    }
+
+    fn walk_if_expr(&mut self, expr: &crate::ast::IfExpr) {
+        self.eval_expr(&expr.cond, Mode::Observe);
+        self.walk_block(&expr.then_block);
+        match &expr.else_branch {
+            ElseBranch::IfExpr(inner) => self.walk_if_expr(inner),
+            ElseBranch::Block(block) => self.walk_block(block),
+            ElseBranch::If(nested) => self.walk_if(nested),
         }
     }
 
@@ -1234,6 +1245,20 @@ impl<'a> Analyzer<'a> {
                 })
             }
             ExprKind::Group(inner) => self.eval_expr(inner, mode),
+            ExprKind::IfExpr(inner) => {
+                self.eval_expr(&inner.cond, Mode::Observe);
+                self.walk_block(&inner.then_block);
+                match &inner.else_branch {
+                    ElseBranch::IfExpr(e) => self.walk_if_expr(e),
+                    ElseBranch::Block(b) => self.walk_block(b),
+                    ElseBranch::If(s) => self.walk_if(s),
+                }
+                EvalValue::copy()
+            }
+            ExprKind::Block(block) => {
+                self.walk_block(block);
+                EvalValue::copy()
+            }
         }
     }
 
