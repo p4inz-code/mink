@@ -332,6 +332,7 @@ impl<'a> Lowerer<'a> {
             },
             Some(TypeKind::Struct(id)) => self.classify_struct(ty, *id),
             Some(TypeKind::Array { .. }) => self.classify_array(ty),
+            Some(TypeKind::Tuple(elems)) => self.classify_tuple(ty, elems),
             // Enums (session 17) with only unit variants are single-word
             // discriminant values. An enum with a data-carrying variant
             // (session 19) is a tagged union: representable when its
@@ -460,6 +461,28 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Classifies a tuple type (session 29): it must have a finite
+    /// deterministic layout and every element type must classify.
+    fn classify_tuple(&mut self, ty: TypeId, elems: &[TypeId]) -> Option<BType> {
+        let reason = match layout::tuple_layout(elems, &self.program.types) {
+            Err(error) => Some(layout_error_message(&error)),
+            Ok(_) => {
+                // Check that every element type is supported.
+                elems
+                    .iter()
+                    .find(|e| self.classify(**e).is_none())
+                    .map(|e| format!("its element type `{}` is not supported", self.display(*e)))
+            }
+        };
+        match reason {
+            None => Some(BType::Struct), // tuples reuse struct layout
+            Some(reason) => {
+                self.unsupported_aggregates.insert(ty, reason);
+                None
+            }
+        }
+    }
+
     /// The number of stack words a value of `ty` (classified as
     /// `classified`) occupies: `ceil(size / 8)` for aggregates, the scalar
     /// width otherwise. A tagged-union enum (one with a data-carrying
@@ -498,6 +521,12 @@ impl<'a> Lowerer<'a> {
                 Ok(layout) => (layout.size, array_bottom_offset(&layout)),
                 Err(_) => (0, 0),
             },
+            Some(TypeKind::Tuple(elems)) => {
+                match layout::tuple_layout(elems, &self.program.types) {
+                    Ok(sl) => (sl.size, struct_bottom_offset(&sl)),
+                    Err(_) => (0, 0),
+                }
+            }
             _ => (0, 0),
         };
         value_bottom_words(size, bottom).max(1) as u32
@@ -709,6 +738,9 @@ impl<'a> Lowerer<'a> {
             Some(TypeKind::Array { .. }) => layout::array_layout(ty, &self.program.types)
                 .map(|layout| layout.size)
                 .unwrap_or(8),
+            Some(TypeKind::Tuple(elems)) => layout::tuple_layout(elems, &self.program.types)
+                .map(|sl| sl.size)
+                .unwrap_or(8),
             Some(TypeKind::Enum(id)) => layout::enum_layout(*id, &self.program.types)
                 .map(|layout| layout.size)
                 .unwrap_or(8),
@@ -825,6 +857,28 @@ impl<'a> Lowerer<'a> {
                     image[offset..offset + copy].copy_from_slice(&elem_image[..copy]);
                 }
                 Ok(image)
+            }
+            MirRvalueKind::TupleLit { elems } => {
+                if let Some(TypeKind::Tuple(tuple_elems)) = self.program.types.kind(rvalue.ty) {
+                    let tl =
+                        layout::tuple_layout(tuple_elems, &self.program.types).map_err(|e| {
+                            BackendError::invalid_backend_ir(rvalue.span, layout_error_message(&e))
+                        })?;
+                    let mut image = vec![0u8; tl.size as usize];
+                    for (i, elem) in elems.iter().enumerate() {
+                        let elem_image = self.static_operand_image(elem, images)?;
+                        let fl = &tl.fields[i];
+                        let offset = fl.offset as usize;
+                        let copy = elem_image.len().min(fl.size as usize);
+                        image[offset..offset + copy].copy_from_slice(&elem_image[..copy]);
+                    }
+                    Ok(image)
+                } else {
+                    Err(BackendError::invalid_backend_ir(
+                        rvalue.span,
+                        "a tuple literal has a non-tuple type",
+                    ))
+                }
             }
             MirRvalueKind::EnumInit {
                 discriminant,
@@ -1101,6 +1155,9 @@ impl<'a> Lowerer<'a> {
                 .iter()
                 .any(|(_, operand)| self.operand_is_unsupported(operand)),
             MirRvalueKind::ArrayLit { elems } => elems
+                .iter()
+                .any(|operand| self.operand_is_unsupported(operand)),
+            MirRvalueKind::TupleLit { elems } => elems
                 .iter()
                 .any(|operand| self.operand_is_unsupported(operand)),
             MirRvalueKind::EnumInit { payload, .. } => payload
@@ -1408,6 +1465,35 @@ impl<'a> Lowerer<'a> {
                 }
                 return Ok(());
             }
+            MirRvalueKind::TupleLit { elems } => {
+                // Tuple literal (session 29): store each element into the
+                // target at its deterministic byte offset.
+                let tuple_ty = rvalue.ty;
+                if let Some(TypeKind::Tuple(tuple_elems)) = self.program.types.kind(tuple_ty) {
+                    let tl =
+                        layout::tuple_layout(tuple_elems, &self.program.types).map_err(|e| {
+                            BackendError::invalid_backend_ir(rvalue.span, layout_error_message(&e))
+                        })?;
+                    for (i, elem) in elems.iter().enumerate() {
+                        let src = self.eval_operand(elem)?;
+                        let fl = &tl.fields[i];
+                        let bt = self.classify(tuple_elems[i]).ok_or_else(|| {
+                            self.unsupported_type_error(rvalue.span, tuple_elems[i])
+                        })?;
+                        self.push(
+                            BInstKind::FieldStore {
+                                base: target,
+                                field_ty: bt,
+                                byte_offset: fl.offset as u32,
+                                size: fl.size as u32,
+                                src,
+                            },
+                            elem.span,
+                        );
+                    }
+                }
+                return Ok(());
+            }
             MirRvalueKind::EnumInit {
                 discriminant,
                 payload,
@@ -1619,6 +1705,7 @@ impl<'a> Lowerer<'a> {
             // tagged-union construction).
             MirRvalueKind::StructLit { .. }
             | MirRvalueKind::ArrayLit { .. }
+            | MirRvalueKind::TupleLit { .. }
             | MirRvalueKind::EnumInit { .. } => unreachable!(),
         };
         self.push(kind, rvalue.span);
@@ -1848,7 +1935,36 @@ impl<'a> Lowerer<'a> {
         member: &crate::mir::MirName,
         span: Span,
     ) -> Result<(BType, u32, u32, TypeId), BackendError> {
-        let (info, layout) = self.struct_layout_of(base_ty, span)?;
+        // Check if the base type is a tuple (session 29): the member
+        // name is the element index as a string.
+        if let Some(TypeKind::Tuple(elems)) = self.program.types.kind(base_ty) {
+            let index: usize = member.name.parse().map_err(|_| {
+                BackendError::invalid_backend_ir(
+                    member.span,
+                    format!("invalid tuple index `{}`", member.name),
+                )
+            })?;
+            if index >= elems.len() {
+                return Err(BackendError::invalid_backend_ir(
+                    member.span,
+                    format!(
+                        "tuple index `{}` is out of range; the tuple has {} element{}",
+                        member.name,
+                        elems.len(),
+                        if elems.len() == 1 { "" } else { "s" }
+                    ),
+                ));
+            }
+            let elem_ty = elems[index];
+            let bt = self
+                .classify(elem_ty)
+                .ok_or_else(|| self.unsupported_type_error(member.span, elem_ty))?;
+            let tl = layout::tuple_layout(elems, &self.program.types)
+                .map_err(|e| BackendError::invalid_backend_ir(span, layout_error_message(&e)))?;
+            let fl = &tl.fields[index];
+            return Ok((bt, fl.offset as u32, fl.size as u32, elem_ty));
+        }
+        let (info, slayout) = self.struct_layout_of(base_ty, span)?;
         let index = info
             .fields
             .iter()
@@ -1863,7 +1979,7 @@ impl<'a> Lowerer<'a> {
         let field_ty = self
             .classify(field.ty)
             .ok_or_else(|| self.unsupported_type_error(member.span, field.ty))?;
-        let field_layout = layout.fields[index];
+        let field_layout = slayout.fields[index];
         Ok((
             field_ty,
             field_layout.offset as u32,

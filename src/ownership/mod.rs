@@ -857,6 +857,16 @@ impl<'a> Analyzer<'a> {
                     }
                     self.bind_payload_pattern(inner, provenance);
                 }
+                crate::ast::Pattern::Tuple { elements, .. } => {
+                    // Tuple pattern bindings: each element pattern binds
+                    // its sub-values. For now, treat each binding as a
+                    // copy (the tuple itself is observed, not consumed).
+                    for elem in elements {
+                        if let crate::ast::Pattern::Binding(name) = elem {
+                            self.bind(name.span, &EvalValue::copy());
+                        }
+                    }
+                }
                 _ => {}
             }
             // A guard (session 27) reads the pattern's bindings in the
@@ -928,6 +938,9 @@ impl<'a> Analyzer<'a> {
             crate::ast::Pattern::Or { alternatives, .. } => alternatives
                 .iter()
                 .any(|alt| self.payload_binding_transfers(alt, provenance)),
+            crate::ast::Pattern::Tuple { elements, .. } => elements
+                .iter()
+                .any(|e| self.payload_binding_transfers(e, provenance)),
             _ => false,
         }
     }
@@ -947,6 +960,11 @@ impl<'a> Analyzer<'a> {
             crate::ast::Pattern::Or { alternatives, .. } => {
                 for alternative in alternatives {
                     self.bind_payload_pattern(alternative, provenance);
+                }
+            }
+            crate::ast::Pattern::Tuple { elements, .. } => {
+                for elem in elements {
+                    self.bind_payload_pattern(elem, provenance);
                 }
             }
             _ => {}
@@ -1257,6 +1275,26 @@ impl<'a> Analyzer<'a> {
             }
             ExprKind::Block(block) => {
                 self.walk_block(block);
+                EvalValue::copy()
+            }
+            ExprKind::Tuple(elems) => {
+                let mut owned = false;
+                for elem in elems {
+                    let value = self.eval_expr(elem, Mode::Transfer);
+                    if value.provenance == Provenance::Owned {
+                        owned = true;
+                    }
+                }
+                EvalValue::with_provenance(if owned {
+                    Provenance::Owned
+                } else {
+                    Provenance::Immutable
+                })
+            }
+            ExprKind::TupleFieldAccess { base, .. } => {
+                // Reading a tuple field observes the value without
+                // consuming it.
+                self.eval_expr(base, Mode::Observe);
                 EvalValue::copy()
             }
         }

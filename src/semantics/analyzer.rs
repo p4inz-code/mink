@@ -512,6 +512,11 @@ impl Analyzer {
             | Pattern::Int { .. }
             | Pattern::Range { .. }
             | Pattern::EnumVariant { payload: None, .. } => {}
+            Pattern::Tuple { elements, .. } => {
+                for elem in elements {
+                    Self::collect_pattern_bindings(elem, out);
+                }
+            }
         }
     }
 
@@ -685,6 +690,14 @@ impl Analyzer {
                         },
                     );
                 }
+            }
+            ExprKind::Tuple(elems) => {
+                for elem in elems {
+                    self.analyze_expr(elem, ctx);
+                }
+            }
+            ExprKind::TupleFieldAccess { base, .. } => {
+                self.analyze_expr(base, ctx);
             }
         }
     }

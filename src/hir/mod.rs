@@ -347,6 +347,13 @@ pub enum HirPattern {
         /// Span of the whole or-pattern.
         span: Span,
     },
+    /// A tuple pattern (session 29): `(pat, pat, ...)` or `()`.
+    Tuple {
+        /// The element patterns, in source order.
+        elements: Vec<HirPattern>,
+        /// Span of the whole tuple pattern.
+        span: Span,
+    },
 }
 
 impl HirPattern {
@@ -360,6 +367,7 @@ impl HirPattern {
             Self::Int { span, .. } => *span,
             Self::Range { span, .. } => *span,
             Self::Or { span, .. } => *span,
+            Self::Tuple { span, .. } => *span,
         }
     }
 }
@@ -542,4 +550,16 @@ pub enum HirExprKind {
     },
     /// A block expression (session 28): `{ stmts; expr }`.
     Block(Box<HirBlock>),
+    /// A tuple expression (session 29): `(expr, expr, ...)` or `()`.
+    Tuple(Vec<HirExpr>),
+    /// A tuple field access (session 29): `base.index` where `index` is a
+    /// non-negative integer literal.
+    TupleFieldAccess {
+        /// The tuple expression.
+        base: Box<HirExpr>,
+        /// The field index (decoded from the literal's source text).
+        index: u32,
+        /// Span of the index literal token.
+        index_span: Span,
+    },
 }

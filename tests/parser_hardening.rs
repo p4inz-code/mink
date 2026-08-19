@@ -1224,6 +1224,11 @@ fn walk_ty(ty: &Ty, text_len: u32) {
             walk_ty(elem, text_len);
             walk_expr(len, text_len, "type");
         }
+        TyKind::Tuple(elems) => {
+            for elem in elems {
+                walk_ty(elem, text_len);
+            }
+        }
     }
 }
 
@@ -1374,6 +1379,14 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
             if let Some(result) = &block.result {
                 walk_expr(result, text_len, src);
             }
+        }
+        ExprKind::Tuple(elems) => {
+            for elem in elems {
+                walk_expr(elem, text_len, src);
+            }
+        }
+        ExprKind::TupleFieldAccess { base, .. } => {
+            walk_expr(base, text_len, src);
         }
     }
 }

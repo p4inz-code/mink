@@ -187,6 +187,10 @@ pub enum TyKind {
         /// decoded from the source text by later stages).
         len: Expr,
     },
+    /// A tuple type (session 29): `(T1, T2, ...)`. An empty tuple `()`
+    /// is the unit type. A single-element tuple `(T,)` is distinct from
+    /// `T`.
+    Tuple(Vec<Ty>),
 }
 
 /// A `fn` function declaration: `fn name(params) { body }` or
@@ -453,6 +457,14 @@ pub enum Pattern {
         /// Span covering the whole or-pattern.
         span: Span,
     },
+    /// A tuple pattern (session 29): `(pat, pat, ...)` or `()` for unit.
+    /// The pattern matches a tuple value element-wise.
+    Tuple {
+        /// The element patterns, in source order.
+        elements: Vec<Pattern>,
+        /// Span covering the whole tuple pattern.
+        span: Span,
+    },
 }
 
 impl Pattern {
@@ -470,6 +482,7 @@ impl Pattern {
             Self::Int { span, .. } => *span,
             Self::Range { span, .. } => *span,
             Self::Or { span, .. } => *span,
+            Self::Tuple { span, .. } => *span,
         }
     }
 }
@@ -639,6 +652,20 @@ pub enum ExprKind {
     /// A block expression (session 28): `{ stmts; expr }`. The block's
     /// trailing expression determines the value.
     Block(Box<Block>),
+    /// A tuple expression (session 29): `(expr, expr, ...)` or `()` for
+    /// the unit value. A single-element tuple `(expr,)` has a trailing
+    /// comma.
+    Tuple(Vec<Expr>),
+    /// A tuple field access (session 29): `base.index` where `index` is
+    /// a non-negative integer literal. The field index is decoded from
+    /// the source text by later stages.
+    TupleFieldAccess {
+        /// The tuple expression.
+        base: Box<Expr>,
+        /// The field index (the integer literal's span, for source text
+        /// recovery).
+        index: Ident,
+    },
 }
 
 /// An `if` expression (session 28): evaluates `cond`, then evaluates

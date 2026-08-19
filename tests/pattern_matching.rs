@@ -186,6 +186,9 @@ fn all_pattern_forms_parse() {
             mink::ast::Pattern::Or { alternatives, .. } => {
                 format!("or({})", alternatives.len())
             }
+            mink::ast::Pattern::Tuple { elements, .. } => {
+                format!("tuple({})", elements.len())
+            }
         })
         .collect();
     assert_eq!(

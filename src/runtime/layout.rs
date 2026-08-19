@@ -273,9 +273,11 @@ fn scalar_layout(kind: &TypeKind) -> Option<(u64, u64)> {
         // independent problems instead of stopping.
         TypeKind::Error | TypeKind::Infer(_) => Some((0, 1)),
         TypeKind::Unit => Some((0, 1)),
-        TypeKind::Enum(_) | TypeKind::Struct(_) | TypeKind::Array { .. } | TypeKind::Fn { .. } => {
-            None
-        }
+        TypeKind::Enum(_)
+        | TypeKind::Struct(_)
+        | TypeKind::Array { .. }
+        | TypeKind::Fn { .. }
+        | TypeKind::Tuple(_) => None,
     }
 }
 
@@ -367,6 +369,57 @@ pub fn array_layout(array: TypeId, types: &TypeTable) -> Result<ArrayLayout, Lay
         elem_size,
         elem_align,
         len,
+    })
+}
+
+/// Computes the deterministic byte layout of a tuple type (session 29).
+///
+/// Returns the layout as a [`StructLayout`] (reusing the struct layout
+/// model since tuples use the same C-style packing: fields in order,
+/// padded for alignment). An empty tuple `()` is unit-sized (size 0,
+/// alignment 1).
+pub fn tuple_layout(elems: &[TypeId], types: &TypeTable) -> Result<StructLayout, LayoutError> {
+    if elems.is_empty() {
+        // Unit type: zero-sized, alignment 1.
+        return Ok(StructLayout {
+            size: 0,
+            align: 1,
+            fields: Vec::new(),
+        });
+    }
+    let mut path = Vec::new();
+    let mut fields = Vec::with_capacity(elems.len());
+    let mut offset = 0u64;
+    let mut max_align = 1u64;
+    for elem_ty in elems {
+        let (size, align) = layout_of(types, *elem_ty, &mut path, "tuple")?;
+        offset = round_up(offset, align).ok_or_else(|| LayoutError::Overflow {
+            name: "tuple".to_string(),
+        })?;
+        fields.push(FieldLayout {
+            offset,
+            size,
+            align,
+        });
+        offset = offset
+            .checked_add(size)
+            .ok_or_else(|| LayoutError::Overflow {
+                name: "tuple".to_string(),
+            })?;
+        max_align = max_align.max(align);
+    }
+    let size = round_up(offset, max_align).ok_or_else(|| LayoutError::Overflow {
+        name: "tuple".to_string(),
+    })?;
+    if size > MAX_AGGREGATE_BYTES {
+        return Err(LayoutError::TooLarge {
+            name: "tuple".to_string(),
+        });
+    }
+    Ok(StructLayout {
+        size,
+        align: max_align,
+        fields,
     })
 }
 

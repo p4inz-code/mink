@@ -125,7 +125,11 @@ corruption, no segfault guessing games.
   interval-based exhaustiveness, and guarded arms `pat if cond =>`
   whose guards read the pattern's bindings), comparisons, logical and
   bitwise operators,
-  `if`/`while`/`for`/`loop` control flow, direct function calls, module
+  `if`/`while`/`for`/`loop` control flow, **block expressions**
+  (`{ stmts; expr }` producing a value), **if-as-expression**
+  (`if cond { a } else { b }` with required `else`), **tuples**
+  (`(Int, Bool)`, tuple expressions, `x.0` field access, tuple types in
+  annotations and struct fields), direct function calls, module
   bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
   with optional parameter types and return type, enforced by the type checker;
   unannotated parameters and return types remain inferred), **let/const
@@ -218,7 +222,7 @@ Honest status, because durable engineering starts with accurate claims:
   is no enum-to-`Int` conversion; pattern matching covers
   `Int`/`Bool`/enum scrutinees only (no struct/array destructuring
   yet, though or-patterns, ranges, and guards landed in session 27),
-  and there are no tuples or generics.
+  and there are no generics.
 - **Strings are byte sequences** — literals are immutable, there is no
   concatenation, and UTF-8 well-formedness is not validated at runtime.
 - **Borrowing is lexical, not non-lexical** — explicit references
@@ -266,7 +270,9 @@ that matters.
   the explicit-discriminants foundation
   ([`DISCRIMINANTS_IMPLEMENTATION.md`](docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md)),
   and the richer-patterns (or/range/guard) foundation
-  ([`RICHER_PATTERNS_IMPLEMENTATION.md`](docs/implementation/RICHER_PATTERNS_IMPLEMENTATION.md)).
+  ([`RICHER_PATTERNS_IMPLEMENTATION.md`](docs/implementation/RICHER_PATTERNS_IMPLEMENTATION.md)),
+  and the tuples foundation
+  ([`TUPLES_IMPLEMENTATION.md`](docs/implementation/TUPLES_IMPLEMENTATION.md)).
 - [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md)
   — compiler architecture and pipeline.
 - [`docs/language/`](docs/language/) — language specifications; the frozen
@@ -286,7 +292,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1380, all passing)
+├── tests/      Compiler tests (1415, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

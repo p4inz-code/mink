@@ -221,7 +221,7 @@ fn check_rvalue(
                 check_operand(value, local_count, errors, type_count);
             }
         }
-        MirRvalueKind::ArrayLit { elems } => {
+        MirRvalueKind::ArrayLit { elems } | MirRvalueKind::TupleLit { elems } => {
             for elem in elems {
                 check_operand(elem, local_count, errors, type_count);
             }

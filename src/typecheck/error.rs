@@ -121,6 +121,9 @@ pub enum TypeErrorKind {
     /// (session 27): a name bound in one alternative must be bound in
     /// every alternative, with a compatible type.
     InvalidOrPattern,
+    /// A tuple field access (session 29) uses an index that is out of
+    /// range for the tuple type.
+    TupleIndexOutOfRange,
 }
 
 impl TypeErrorKind {
@@ -165,6 +168,7 @@ impl TypeErrorKind {
             Self::DiscriminantOverflow => "E-T32",
             Self::DerefRootedAssignment => "E-T33",
             Self::InvalidOrPattern => "E-T34",
+            Self::TupleIndexOutOfRange => "E-T35",
         }
     }
 }
@@ -629,6 +633,20 @@ impl TypeError {
         )
     }
 
+    /// Creates a tuple-index-out-of-range error at `span` (`E-T35`): a
+    /// tuple field access uses an index that is out of range.
+    pub fn invalid_tuple_index(span: Span, index: u32, len: usize) -> Self {
+        Self::custom(
+            TypeErrorKind::TupleIndexOutOfRange,
+            span,
+            format!(
+                "tuple index `{index}` is out of range; the tuple has {len} element{}",
+                if len == 1 { "" } else { "s" }
+            ),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -713,7 +731,8 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::InvalidOrPattern
             | TypeErrorKind::DuplicateDiscriminant
             | TypeErrorKind::DiscriminantOverflow
-            | TypeErrorKind::DerefRootedAssignment => actual.to_string(),
+            | TypeErrorKind::DerefRootedAssignment
+            | TypeErrorKind::TupleIndexOutOfRange => actual.to_string(),
         };
         f.write_str(&message)
     }

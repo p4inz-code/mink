@@ -507,6 +507,13 @@ pub enum MirRvalueKind {
         /// The elements, in source order.
         elems: Vec<MirOperand>,
     },
+    /// A tuple literal (session 29): `(elem, elem, ...)`. Every element
+    /// is already evaluated to an operand; the materialized tuple value
+    /// is stored into the rvalue's target local element by element.
+    TupleLit {
+        /// The elements, in source order.
+        elems: Vec<MirOperand>,
+    },
     /// An enum variant construction (session 19): `E::V(payload)`. The
     /// rvalue's type is the enum type; the materialized tagged-union value
     /// is stored into the rvalue's target local — the discriminant word

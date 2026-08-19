@@ -736,6 +736,39 @@ impl<'a> Checker<'a> {
                     .unwrap_or_else(|| self.types.push(TypeKind::Error)),
                 false,
             ),
+            ExprKind::Tuple(elems) => {
+                let mut any = false;
+                for elem in elems {
+                    let (_, r) = self.resolve_deferred_expr(elem);
+                    any |= r;
+                }
+                if any {
+                    let elem_tys: Vec<TypeId> = elems.iter().map(|e| self.expr_type(e)).collect();
+                    let ty = self.types.push(TypeKind::Tuple(elem_tys));
+                    self.update_recorded(expr.span, ty);
+                    (ty, true)
+                } else {
+                    (
+                        self.recorded_ty(expr.span)
+                            .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                        false,
+                    )
+                }
+            }
+            ExprKind::TupleFieldAccess { base, index } => {
+                let (_base_ty, base_recomputed) = self.resolve_deferred_expr(base);
+                let recompute = self.deferred.contains(&expr.span) || base_recomputed;
+                if recompute {
+                    let ty = self.check_tuple_field_access(base, index, expr.span);
+                    (ty, true)
+                } else {
+                    (
+                        self.recorded_ty(expr.span)
+                            .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                        false,
+                    )
+                }
+            }
         };
         if recomputed {
             self.update_recorded(expr.span, computed);
@@ -1097,6 +1130,14 @@ impl<'a> Checker<'a> {
             TyKind::Array { elem, len } => {
                 let elem = self.resolve_type(elem);
                 self.array_type(elem, len, ty.span)
+            }
+            TyKind::Tuple(elements) => {
+                let resolved: Vec<TypeId> = elements.iter().map(|e| self.resolve_type(e)).collect();
+                if resolved.is_empty() {
+                    self.types.push(TypeKind::Unit)
+                } else {
+                    self.types.push(TypeKind::Tuple(resolved))
+                }
             }
         }
     }
@@ -1785,6 +1826,9 @@ impl<'a> Checker<'a> {
                 }
                 Some(Box::new(merged))
             }
+            // Tuple patterns in payload context: not yet fully supported
+            // for exhaustiveness — treat as non-covering for now.
+            Pattern::Tuple { .. } => None,
         }
     }
 
@@ -2003,6 +2047,8 @@ impl<'a> Checker<'a> {
                 }
                 merged
             }
+            // Tuple patterns: not yet fully supported for exhaustiveness.
+            Pattern::Tuple { .. } => Coverage::default(),
         }
     }
 
@@ -2225,6 +2271,11 @@ impl<'a> Checker<'a> {
             | Pattern::Int { .. }
             | Pattern::Range { .. }
             | Pattern::EnumVariant { payload: None, .. } => {}
+            Pattern::Tuple { elements, .. } => {
+                for elem in elements {
+                    Self::collect_pattern_names(elem, out);
+                }
+            }
         }
     }
 
@@ -2595,6 +2646,13 @@ impl<'a> Checker<'a> {
                     Some(result) => self.expr_type(result),
                     None => self.types.push(TypeKind::Unit),
                 }
+            }
+            ExprKind::Tuple(elems) => {
+                let elem_tys: Vec<TypeId> = elems.iter().map(|e| self.expr_type(e)).collect();
+                self.types.push(TypeKind::Tuple(elem_tys))
+            }
+            ExprKind::TupleFieldAccess { base, index } => {
+                self.check_tuple_field_access(base, index, expr.span)
             }
         }
     }
@@ -3409,6 +3467,44 @@ impl<'a> Checker<'a> {
                     member.span,
                     &member.name,
                     self.display(base),
+                ));
+                self.types.push(TypeKind::Error)
+            }
+        }
+    }
+
+    /// Types `base.index` for tuple field access (session 29): the base
+    /// must be a tuple type, and `index` must be a non-negative integer
+    /// literal within the tuple's length. The result is the element type
+    /// at that index.
+    fn check_tuple_field_access(&mut self, base: &Expr, index: &Ident, span: Span) -> TypeId {
+        let base_ty = self.expr_type(base);
+        let base_canonical = self.types.canonical(base_ty);
+        match self.types.kind(base_canonical) {
+            Some(TypeKind::Tuple(elems)) => {
+                // Decode the index from the literal's source text.
+                let idx_val: Option<u32> = index.name.parse().ok();
+                match idx_val {
+                    Some(idx) if (idx as usize) < elems.len() => elems[idx as usize],
+                    Some(idx) => {
+                        self.push_error(TypeError::invalid_tuple_index(span, idx, elems.len()));
+                        self.types.push(TypeKind::Error)
+                    }
+                    None => {
+                        self.push_error(TypeError::invalid_tuple_index(span, 0, elems.len()));
+                        self.types.push(TypeKind::Error)
+                    }
+                }
+            }
+            Some(TypeKind::Infer(_)) => {
+                // The base type is not yet known; infer a unit for now.
+                self.types.push(TypeKind::Unit)
+            }
+            _ => {
+                self.push_error(TypeError::member_access_on_non_struct(
+                    span,
+                    "tuple field",
+                    self.display(base_canonical),
                 ));
                 self.types.push(TypeKind::Error)
             }

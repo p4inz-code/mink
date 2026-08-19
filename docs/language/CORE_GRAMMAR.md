@@ -40,7 +40,8 @@ Notable exclusions:
 - Type annotations on bindings (`let x: Type = expr;`) arrived in
   session 26 — §19 (function parameter and return type annotations
   arrived in session 25 — §17)
-- Blocks as expressions, `if` as an expression, lambdas/closures
+- Tuples (see §21)
+- Lambdas/closures
 - `?` (optional handling), open-ended ranges (`a..`, `..b`), and bare `..`
   operators
 - Byte literals, raw strings (not lexed)
@@ -195,9 +196,11 @@ The following are **not** part of the frozen grammar and produce parser
 errors if used, until their milestones land: `type`/`trait`/`impl`
 declarations (struct and enum declarations arrived in sessions 14 and 17
 — see §11 and §12), `mod`/`use`/`pub`, `async fn`/`await`, `unsafe`
-blocks, closures, block expressions, `if` expressions, and the `?`
-operator. Return-type annotations and parameter type annotations arrived
-in session 25 (see §17).
+blocks, closures, and the `?` operator.
+Block expressions and `if` as an expression arrived in session 28;
+tuples arrived in session 29 (see §22). (see §21).
+Return-type annotations and parameter type annotations arrived in session 25
+(see §17).
 
 ## 10. Grammar-Freeze Changes to the Lexer
 
@@ -268,7 +271,7 @@ ArrayLit    := '[' ExprList ']'
 
 The session-13 lexer already produced `:` and `,` tokens; no lexical
 changes were required. Exclusions from §2 and §9 that remain (enums,
-tuples, `type` aliases, generics, parameter/return annotations) are
+`type` aliases, generics, parameter/return annotations) are
 unchanged.
 
 ## 12. Session-17 Additions: Enums
@@ -301,7 +304,7 @@ EnumVariantPath := Ident '::' Ident
   and an undeclared variant is `E-T23`.
 
 The session-17 lexer needed no changes (`::` and `,` already existed).
-Exclusions from §2 and §9 that remain (tuples, `type` aliases, generics,
+Exclusions from §2 and §9 that remain (`type` aliases, generics,
 parameter/return annotations, data-carrying variants) are unchanged.
 
 ## 13. Session-18 Additions: Pattern Matching
@@ -338,7 +341,7 @@ Pattern    := IntLit | '-' IntLit | BoolLit | Ident '::' Ident | Ident
   token where a pattern is required (e.g. a string literal) is `E-P23`.
 
 The session-18 lexer needed no changes (`=>`, `,`, `{`, `}` already
-existed). Exclusions from §2 and §9 that remain (tuples, `type` aliases,
+existed). Exclusions from §2 and §9 that remain (`type` aliases,
 generics, parameter/return annotations) are unchanged.
 
 ## 14. Session-19 Additions: Data-Carrying Variants
@@ -373,7 +376,7 @@ Pattern    := ... | Ident '::' Ident '(' Pattern ')'
   nested combinations. `E::V()` is `E-P25`.
 
 The session-19 lexer needed no changes (`(`, `)`, `,` already existed).
-Exclusions from §2 and §9 that remain (tuples, `type` aliases, generics,
+Exclusions from §2 and §9 that remain (`type` aliases, generics,
 parameter/return annotations) are unchanged.
 
 ## 15. Session-20 Additions: Explicit Discriminants
@@ -402,7 +405,7 @@ IntLit     := Int | '-' Int
   `enum E { A, B }` is unchanged from sessions 17/19.
 
 The session-20 lexer needed no changes (`=`, `-`, and integer literals
-already existed). Exclusions from §2 and §9 that remain (tuples, `type`
+already existed). Exclusions from §2 and §9 that remain (`type`
 aliases, generics, parameter/return annotations) are unchanged.
 
 ## 16. Status
@@ -443,7 +446,7 @@ Param       := Ident (':' Type)?
   `&T`, `&mut T`, and `[T; N]`.
 
 The session-25 lexer needed no changes (`->`, `:`, and type tokens
-already existed). Exclusions from §2 and §9 that remain (tuples, `type`
+already existed). Exclusions from §2 and §9 that remain (`type`
 aliases, generics) are unchanged.
 
 ## 18. Session-25 Additions: `Null` as a Named Type
@@ -483,7 +486,7 @@ ConstBinding:= 'const' Ident (':' Type)? '=' Expr ';'
   `&T`, `&mut T`, and `[T; N]`.
 
 The session-26 lexer needed no changes (`:` and type tokens already
-existed). Exclusions from §2 and §9 that remain (tuples, `type`
+existed). Exclusions from §2 and §9 that remain (`type`
 aliases, generics) are unchanged.
 
 ## 20. Session-27 Additions: Or-Patterns, Range Patterns, and Guards
@@ -524,5 +527,82 @@ AltPattern:= IntLit | '-' IntLit | IntLit '..' IntLit | IntLit '..=' IntLit
   exhaustiveness (`E-T25` reports the uncovered space).
 
 The session-27 lexer needed no changes (`|`, `..`, `..=`, and `if`
-already existed). Exclusions from §2 and §9 that remain (tuples, `type`
+already existed). Exclusions from §2 and §9 that remain (`type`
 aliases, generics) are unchanged.
+
+## 21. Session-28 Additions: Block Expressions and If-As-Expression
+
+**Session:** 28 — Block expressions and if-as-expression
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19/20/25/26/27 additions above remain authoritative;
+the new productions are:
+
+```
+Block       := '{' Stmt* Expr? '}'
+Primary     := ... | IfExpr | BlockExpr
+IfExpr      := 'if' Expr BlockExpr 'else' (IfExpr | BlockExpr)
+BlockExpr   := '{' Stmt* Expr? '}'
+```
+
+- **Block expressions** (`{ stmts; expr }`) evaluate their statements in
+  order, then evaluate the trailing expression (the last expression not
+  followed by `;`) as the block's value. An empty block or a block whose
+  last item ends with `;` has no trailing expression and evaluates to
+  `Unit`. Block expressions appear in expression position: `let x = { 1 +
+  2 };`.
+- **If-as-expression** (`if cond { a } else { b }`) evaluates `cond`,
+  then evaluates and returns the value of the taken branch. The `else`
+  branch is **required** (an if-expression without `else` is `E-P26`).
+  Both branches must be expression blocks with trailing expressions of the
+  same type (enforced by the type checker). If-expressions nest: `if a { x
+  } else if b { y } else { z }`.
+- **Distinguishing group vs tuple vs block**: `(expr)` remains a group
+  expression (parenthesized); `{ expr }` is a block expression returning
+  `expr`. `if expr { a } else { b }` in statement position is an
+  if-statement; in expression position it is an if-expression.
+
+The session-28 lexer needed no changes (`if`, `{`, `}`, `else` already
+existed). Exclusions from §2 and §9 that remain (`type` aliases,
+generics, lambdas/closures) are unchanged.
+
+## 22. Session-29 Additions: Tuple Types and Expressions
+
+**Session:** 29 — Tuple types, tuple expressions, and tuple field access
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19/20/25/26/27/28 additions above remain
+authoritative; the new productions are:
+
+```
+Type        := ... | TupleType
+TupleType   := '(' Type (',' Type)* ','? ')' | '()'
+Primary     := ... | TupleExpr | UnitExpr
+TupleExpr   := '(' Expr (',' Expr)* ','? ')'   (two or more elements)
+UnitExpr    := '()'
+Postfix     := ... | TupleFieldAccess
+TupleFieldAccess := '.' IntLit
+Pattern     := ... | TuplePattern
+TuplePattern:= '(' Pattern (',' Pattern)* ','? ')' | '()'
+```
+
+- **Tuple types** (`(Int, Bool)`, `(Int,)`, `()`) represent fixed-length
+  heterogeneous sequences of types. An empty tuple `()` is the unit type.
+  A single-element tuple `(Int,)` is distinct from `Int`. Tuple types
+  appear in all type positions: struct fields, let/const bindings,
+  function parameters, and return types.
+- **Tuple expressions** (`(1, true)`, `(1,)`, `()`) construct tuple
+  values. The element types determine the tuple type. `()` produces the
+  unit value. A single-element tuple requires a trailing comma `(1,)`.
+- **Tuple field access** (`x.0`, `x.1`) reads the element at the given
+  non-negative integer index. The index is a literal, not an expression;
+  it must be within the tuple's length (`E-T35` out of range).
+  Chained access requires grouping: `(x.0).1` because `x.0.1` lexes
+  `0.1` as a float literal.
+- **Tuple patterns** (`(a, b)`, `()`) destructure tuple values in match
+  arms. Each element pattern binds or tests the corresponding tuple
+  element. An empty tuple pattern `()` matches only unit values.
+
+The session-29 lexer needed no changes (all tokens already existed).
+Exclusions from §2 and §9 that remain (`type` aliases, generics,
+lambdas/closures) are unchanged.

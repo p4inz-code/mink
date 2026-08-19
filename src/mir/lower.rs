@@ -436,6 +436,39 @@ impl<'a> StmtEval<'a> {
                 // at the HIR level.  Return a defensive dummy operand.
                 self.literal_operand(expr)
             }
+            HirExprKind::Tuple(elems) => {
+                let elems = elems.iter().map(|e| self.eval_operand(e)).collect();
+                self.temp_rvalue(expr, MirRvalueKind::TupleLit { elems })
+            }
+            HirExprKind::TupleFieldAccess { base, index, .. } => {
+                // Tuple field access: evaluate the base, then extract
+                // the field by index through a Member rvalue.
+                let base_op = self.eval_operand(base);
+                let base_ty = base_op.ty;
+                match base_op.kind {
+                    MirOperandKind::Local(local) => self.load_tuple_field(local, *index, expr),
+                    _ => {
+                        // Non-local base: materialize into a temp first.
+                        let temp = self.temp(base_ty, base.span);
+                        self.emit(MirStmt {
+                            kind: MirStmtKind::Assign {
+                                target: MirTarget {
+                                    kind: MirTargetKind::Local(temp),
+                                    span: base.span,
+                                    ty: base_ty,
+                                },
+                                rvalue: MirRvalue {
+                                    kind: MirRvalueKind::Use(base_op),
+                                    span: base.span,
+                                    ty: base_ty,
+                                },
+                            },
+                            span: base.span,
+                        });
+                        self.load_tuple_field(temp, *index, expr)
+                    }
+                }
+            }
             HirExprKind::Assign { .. } => self.eval_assign(expr),
         }
     }
@@ -533,6 +566,28 @@ impl<'a> StmtEval<'a> {
             span: expr.span,
             ty: expr.ty,
         }
+    }
+
+    /// Loads a tuple field by index: `base.index` (session 29). The base
+    /// is already materialized in a local; the field is loaded through a
+    /// Member rvalue where the "member" name is the index string.
+    fn load_tuple_field(&mut self, base: LocalId, index: u32, expr: &HirExpr) -> MirOperand {
+        let base_op = MirOperand {
+            kind: MirOperandKind::Local(base),
+            span: expr.span,
+            ty: self.locals[base.raw() as usize].ty,
+        };
+        let member = MirName {
+            name: index.to_string(),
+            span: expr.span,
+        };
+        self.temp_rvalue(
+            expr,
+            MirRvalueKind::Member {
+                base: base_op,
+                member,
+            },
+        )
     }
 
     /// Lowers an assignment expression, emitting the store and returning
@@ -2134,6 +2189,79 @@ impl<'a> FnBuilder<'a> {
                     current_else = next_else;
                 }
             }
+            HirPattern::Tuple { elements, .. } => {
+                // A tuple pattern matches element-wise: each element
+                // pattern is tested against the corresponding tuple
+                // field. The scrutinee must be a tuple; we extract
+                // each field and match it recursively.
+                let elem_tys: Vec<TypeId> = match self.eval.table.kind(value.ty) {
+                    Some(TypeKind::Tuple(elems)) => elems.clone(),
+                    _ => {
+                        self.terminate(MirTerminator::Jump {
+                            target: else_,
+                            span,
+                        });
+                        return;
+                    }
+                };
+                if elem_tys.len() == elements.len() {
+                    for (i, (elem_pat, elem_ty)) in elements.iter().zip(elem_tys.iter()).enumerate()
+                    {
+                        let field_operand = self.emit_field_load(value, *elem_ty, i, span);
+                        if i + 1 == elements.len() {
+                            self.lower_pattern_chain(elem_pat, &field_operand, then, else_, span);
+                        } else {
+                            let next = self.alloc_block();
+                            self.lower_pattern_chain(elem_pat, &field_operand, next, else_, span);
+                            self.start_block(next, span);
+                        }
+                    }
+                } else {
+                    self.terminate(MirTerminator::Jump {
+                        target: else_,
+                        span,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Emits a field load for a tuple element by index.
+    fn emit_field_load(
+        &mut self,
+        base: &MirOperand,
+        ty: TypeId,
+        index: usize,
+        span: Span,
+    ) -> MirOperand {
+        let member = MirName {
+            name: index.to_string(),
+            span,
+        };
+        let rvalue = MirRvalueKind::Member {
+            base: base.clone(),
+            member,
+        };
+        let temp = self.eval.temp(ty, span);
+        self.eval.emit(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(temp),
+                    span,
+                    ty,
+                },
+                rvalue: MirRvalue {
+                    kind: rvalue,
+                    span,
+                    ty,
+                },
+            },
+            span,
+        });
+        MirOperand {
+            kind: MirOperandKind::Local(temp),
+            span,
+            ty,
         }
     }
 
@@ -2311,6 +2439,9 @@ impl<'a> FnBuilder<'a> {
             // equality test.
             HirPattern::Range { .. } | HirPattern::Or { .. } => {
                 unreachable!("range and or patterns lower through lower_pattern_chain")
+            }
+            HirPattern::Tuple { .. } => {
+                unreachable!("tuple patterns lower through lower_pattern_chain")
             }
         };
         self.emit_temp_rvalue(

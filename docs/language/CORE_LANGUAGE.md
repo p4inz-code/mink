@@ -376,7 +376,9 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   below), and Session 19 added **data-carrying variants** (sum types:
   `enum Option { Some(Int), None }`, constructed `Option::Some(5)`,
   matched with payload patterns, and laid out as tagged unions). Still
-  absent: tuples, generics, optional/result types, … — they arrive with
+  absent: generics, optional/result types, … — they arrive with
+  later milestones. Tuples arrived in session 29 (see
+  `docs/implementation/TUPLES_IMPLEMENTATION.md`).
   later milestones per `docs/language/TYPE_SYSTEM.md`.
 - **Literals.** Integer, floating-point, string, character, boolean, and
   `null` literals have the corresponding types above.

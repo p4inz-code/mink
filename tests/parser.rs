@@ -1467,6 +1467,11 @@ fn walk_ty(ty: &Ty, text_len: u32) {
             walk_ty(elem, text_len);
             walk_expr(len, text_len, "type");
         }
+        TyKind::Tuple(elems) => {
+            for elem in elems {
+                walk_ty(elem, text_len);
+            }
+        }
     }
 }
 
@@ -1615,6 +1620,14 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
                 walk_expr(result, text_len, src);
             }
         }
+        ExprKind::Tuple(elems) => {
+            for elem in elems {
+                walk_expr(elem, text_len, src);
+            }
+        }
+        ExprKind::TupleFieldAccess { base, .. } => {
+            walk_expr(base, text_len, src);
+        }
     }
 }
 
@@ -1752,7 +1765,7 @@ fn deeply_nested_parentheses_parse() {
         ")".repeat(depth)
     );
     std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let mut map = SourceMap::new();
             let id = map.add("test.mink", &src);

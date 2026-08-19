@@ -351,6 +351,10 @@ impl<'a> Lowerer<'a> {
                     .collect(),
                 span: *span,
             },
+            Pattern::Tuple { elements, span } => HirPattern::Tuple {
+                elements: elements.iter().map(|e| self.lower_pattern(e)).collect(),
+                span: *span,
+            },
         }
     }
 
@@ -534,6 +538,29 @@ impl<'a> Lowerer<'a> {
                 let ty = self.expr_type(expr.span);
                 return HirExpr {
                     kind: HirExprKind::Block(Box::new(hir_block)),
+                    span: expr.span,
+                    ty,
+                };
+            }
+            ExprKind::Tuple(elems) => {
+                let hir_elems: Vec<HirExpr> = elems.iter().map(|e| self.lower_expr(e)).collect();
+                let ty = self.expr_type(expr.span);
+                return HirExpr {
+                    kind: HirExprKind::Tuple(hir_elems),
+                    span: expr.span,
+                    ty,
+                };
+            }
+            ExprKind::TupleFieldAccess { base, index } => {
+                let idx_val: u32 = index.name.parse().unwrap_or(0);
+                let hir_base = self.lower_expr(base);
+                let ty = self.expr_type(expr.span);
+                return HirExpr {
+                    kind: HirExprKind::TupleFieldAccess {
+                        base: Box::new(hir_base),
+                        index: idx_val,
+                        index_span: index.span,
+                    },
                     span: expr.span,
                     ty,
                 };

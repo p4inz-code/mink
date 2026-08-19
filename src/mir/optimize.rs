@@ -421,7 +421,7 @@ fn rewrite_rvalue(rvalue: &mut MirRvalue, known: &[Option<MirOperand>]) -> bool 
                 changed |= rewrite_operand(value, known);
             }
         }
-        MirRvalueKind::ArrayLit { elems } => {
+        MirRvalueKind::ArrayLit { elems } | MirRvalueKind::TupleLit { elems } => {
             for elem in elems {
                 changed |= rewrite_operand(elem, known);
             }
@@ -874,7 +874,7 @@ fn mark_rvalue_reads(rvalue: &MirRvalue, read: &mut [bool]) {
                 mark_operand_read(value, read);
             }
         }
-        MirRvalueKind::ArrayLit { elems } => {
+        MirRvalueKind::ArrayLit { elems } | MirRvalueKind::TupleLit { elems } => {
             for elem in elems {
                 mark_operand_read(elem, read);
             }

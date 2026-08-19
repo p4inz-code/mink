@@ -787,6 +787,61 @@ impl<'a> Parser<'a> {
                     span,
                 })
             }
+            TokenKind::LParen => {
+                // A tuple type (session 29): `(Type, Type, ...)` or `()`.
+                let open = self.bump().span();
+                self.open_delims.push((TokenKind::LParen, open));
+                // Empty tuple: `()` is the unit type.
+                if self.current_kind() == TokenKind::RParen {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    let span = self.join(open, close);
+                    return Ok(Ty {
+                        kind: TyKind::Tuple(Vec::new()),
+                        span,
+                    });
+                }
+                // Parse the first type.
+                let first = self.parse_type()?;
+                // If no comma follows, it's not a tuple — but `(Type)` is
+                // not valid in the current grammar, so we reject it.
+                if self.current_kind() != TokenKind::Comma {
+                    let bad = self.current();
+                    self.record_error(ParseErrorKind::ExpectedComma, bad.span());
+                    // Recover: consume to `)` or a boundary.
+                    while !matches!(
+                        self.current_kind(),
+                        TokenKind::RParen | TokenKind::RBrace | TokenKind::Eof
+                    ) {
+                        let _ = self.bump();
+                    }
+                    if self.current_kind() == TokenKind::RParen {
+                        let _ = self.bump();
+                        self.open_delims.pop();
+                    }
+                    return Err(());
+                }
+                let mut elements = vec![first];
+                // Parse remaining elements: `Type` followed by `,` or `)`.
+                loop {
+                    let _ = self.bump(); // ','
+                    // Trailing comma: `(Type,)` or `(Type, Type,)`.
+                    if self.current_kind() == TokenKind::RParen {
+                        break;
+                    }
+                    let elem = self.parse_type()?;
+                    elements.push(elem);
+                    if self.current_kind() != TokenKind::Comma {
+                        break;
+                    }
+                }
+                let close = self.expect_paren_close()?;
+                let span = self.join(open, close);
+                Ok(Ty {
+                    kind: TyKind::Tuple(elements),
+                    span,
+                })
+            }
             _ => {
                 self.record_error(ParseErrorKind::ExpectedType, token.span());
                 Err(())
@@ -1503,6 +1558,71 @@ impl<'a> Parser<'a> {
                     span,
                 })
             }
+            TokenKind::LParen => {
+                // A tuple pattern (session 29): `(pat, pat, ...)` or `()`.
+                let open = self.bump().span();
+                self.open_delims.push((TokenKind::LParen, open));
+                // Empty tuple pattern: `()`.
+                if self.current_kind() == TokenKind::RParen {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    let span = self.join(open, close);
+                    return Ok(Pattern::Tuple {
+                        elements: Vec::new(),
+                        span,
+                    });
+                }
+                // Parse the first pattern.
+                let first = self.parse_pattern()?;
+                // If no comma follows, it's not a tuple.
+                if self.current_kind() != TokenKind::Comma {
+                    let bad = self.current();
+                    self.record_error(ParseErrorKind::ExpectedComma, bad.span());
+                    while !matches!(
+                        self.current_kind(),
+                        TokenKind::RParen | TokenKind::RBrace | TokenKind::Eof
+                    ) {
+                        let _ = self.bump();
+                    }
+                    if self.current_kind() == TokenKind::RParen {
+                        let _ = self.bump();
+                        self.open_delims.pop();
+                    }
+                    return Err(());
+                }
+                let mut elements = vec![first];
+                loop {
+                    let _ = self.bump(); // ','
+                    if self.current_kind() == TokenKind::RParen {
+                        break;
+                    }
+                    match self.parse_pattern() {
+                        Ok(elem) => elements.push(elem),
+                        Err(()) => {
+                            while !matches!(
+                                self.current_kind(),
+                                TokenKind::RParen
+                                    | TokenKind::Comma
+                                    | TokenKind::RBrace
+                                    | TokenKind::Eof
+                            ) {
+                                let _ = self.bump();
+                            }
+                            if self.current_kind() == TokenKind::RParen {
+                                let _ = self.bump();
+                                self.open_delims.pop();
+                            }
+                            return Err(());
+                        }
+                    }
+                    if self.current_kind() != TokenKind::Comma {
+                        break;
+                    }
+                }
+                let close = self.expect_paren_close()?;
+                let span = self.join(open, close);
+                Ok(Pattern::Tuple { elements, span })
+            }
             _ => {
                 self.record_error(ParseErrorKind::ExpectedPattern, token.span());
                 Err(())
@@ -1986,17 +2106,36 @@ impl<'a> Parser<'a> {
                     };
                 }
                 TokenKind::Dot => {
-                    let _ = self.bump();
+                    let _dot = self.bump();
                     let base = expr;
-                    let member = self.expect_ident()?;
-                    let span = self.join(base.span, member.span);
-                    expr = Expr {
-                        kind: ExprKind::Member {
-                            base: Box::new(base),
-                            member,
-                        },
-                        span,
-                    };
+                    // `base.index` where `index` is an integer literal is
+                    // a tuple field access (session 29); otherwise it is a
+                    // member access.
+                    if self.current_kind() == TokenKind::Int {
+                        let index_tok = self.bump();
+                        let index_ident = Ident {
+                            name: self.text(index_tok.span()),
+                            span: index_tok.span(),
+                        };
+                        let span = self.join(base.span, index_tok.span());
+                        expr = Expr {
+                            kind: ExprKind::TupleFieldAccess {
+                                base: Box::new(base),
+                                index: index_ident,
+                            },
+                            span,
+                        };
+                    } else {
+                        let member = self.expect_ident()?;
+                        let span = self.join(base.span, member.span);
+                        expr = Expr {
+                            kind: ExprKind::Member {
+                                base: Box::new(base),
+                                member,
+                            },
+                            span,
+                        };
+                    }
                 }
                 TokenKind::LBracket => {
                     let open = self.bump().span();
@@ -2238,6 +2377,16 @@ impl<'a> Parser<'a> {
             TokenKind::LParen => {
                 let open = self.bump().span();
                 self.open_delims.push((TokenKind::LParen, open));
+                // Empty parens: `()` is a unit expression (session 29).
+                if self.current_kind() == TokenKind::RParen {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    let span = self.join(open, close);
+                    return Ok(Expr {
+                        kind: ExprKind::Tuple(Vec::new()),
+                        span,
+                    });
+                }
                 // A parenthesized group is a self-contained expression:
                 // struct literals inside it are enabled even in a block
                 // context (`if (Point { x: 1 }) { }`).
@@ -2245,6 +2394,29 @@ impl<'a> Parser<'a> {
                 self.in_block_context = false;
                 let inner = self.parse_expression()?;
                 self.in_block_context = saved;
+                // If a comma follows, this is a tuple expression
+                // (session 29): `(expr, expr, ...)`.
+                if self.current_kind() == TokenKind::Comma {
+                    let mut elements = vec![inner];
+                    loop {
+                        let _ = self.bump(); // ','
+                        // Trailing comma: `(expr,)`.
+                        if self.current_kind() == TokenKind::RParen {
+                            break;
+                        }
+                        let elem = self.parse_expression()?;
+                        elements.push(elem);
+                        if self.current_kind() != TokenKind::Comma {
+                            break;
+                        }
+                    }
+                    let close = self.expect_paren_close()?;
+                    let span = self.join(open, close);
+                    return Ok(Expr {
+                        kind: ExprKind::Tuple(elements),
+                        span,
+                    });
+                }
                 let close = self.expect_paren_close()?;
                 let span = self.join(open, close);
                 Ok(Expr {

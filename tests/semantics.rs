@@ -202,6 +202,12 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
                 expr_idents(result, out);
             }
         }
+        ExprKind::Tuple(elems) => {
+            for elem in elems {
+                expr_idents(elem, out);
+            }
+        }
+        ExprKind::TupleFieldAccess { base, .. } => expr_idents(base, out),
     }
 }
 

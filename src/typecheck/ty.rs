@@ -226,6 +226,12 @@ pub enum TypeKind {
         /// The number of elements.
         len: u64,
     },
+    /// A tuple type (session 29): `(T1, T2, ...)` — a fixed-length,
+    /// heterogeneous sequence of types. An empty tuple `()` is the unit
+    /// type (equivalent to [`TypeKind::Unit`]). A single-element tuple
+    /// `(T,)` is distinct from `T`. Tuple types are structurally
+    /// compared and interned: `(Int, Bool)` is the same type everywhere.
+    Tuple(Vec<TypeId>),
     /// A function taking `params` and producing `result`.
     Fn {
         /// The parameter types, in declaration order.
@@ -455,6 +461,18 @@ impl TypeTable {
                 self.unify(*ea, *eb)?;
                 Ok(a)
             }
+            // Tuples unify element-wise: same length and same element
+            // types. An empty tuple unifies only with another empty tuple
+            // (or Unit, since () == Unit).
+            (TypeKind::Tuple(elems_a), TypeKind::Tuple(elems_b)) => {
+                if elems_a.len() != elems_b.len() {
+                    return Err((a, b));
+                }
+                for (ea, eb) in elems_a.iter().zip(elems_b.iter()) {
+                    self.unify(*ea, *eb)?;
+                }
+                Ok(a)
+            }
             // Struct and enum types are nominal: only the identical
             // struct/enum unifies with itself (caught by the `a == b` check
             // above); neither ever unifies with any other type, including a
@@ -524,6 +542,18 @@ impl TypeTable {
             Some(TypeKind::Array { elem, len }) => {
                 format!("Array<{}, {len}>", self.display(*elem))
             }
+            Some(TypeKind::Tuple(elems)) => {
+                if elems.is_empty() {
+                    "()".to_string()
+                } else {
+                    let inner = elems
+                        .iter()
+                        .map(|e| self.display(*e))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("({inner})")
+                }
+            }
             Some(TypeKind::Fn { params, result }) => {
                 let params = params
                     .iter()
@@ -544,6 +574,19 @@ impl TypeTable {
     /// Whether the table contains no types.
     pub fn is_empty(&self) -> bool {
         self.kinds.is_empty()
+    }
+
+    /// Whether `id` is a tuple type (session 29).
+    pub fn is_tuple(&self, id: TypeId) -> bool {
+        matches!(self.kind(id), Some(TypeKind::Tuple(_)))
+    }
+
+    /// The element types of a tuple, if `id` denotes a tuple.
+    pub fn tuple_elems(&self, id: TypeId) -> Option<&[TypeId]> {
+        match self.kind(id) {
+            Some(TypeKind::Tuple(elems)) => Some(elems),
+            _ => None,
+        }
     }
 
     /// Registers a new user-declared struct and returns its type id. The
