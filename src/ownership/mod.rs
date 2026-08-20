@@ -783,7 +783,12 @@ impl<'a> Analyzer<'a> {
                 let evaluated = self.eval_expr(value, Mode::Transfer);
                 self.merge_result(value, &evaluated);
             }
-            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Return(None) | StmtKind::Continue => {}
+            StmtKind::Break(value) => {
+                if let Some(value) = value {
+                    self.eval_expr(value, Mode::Transfer);
+                }
+            }
             StmtKind::If(stmt) => self.walk_if(stmt),
             StmtKind::While { cond, body } => {
                 self.eval_expr(cond, Mode::Observe);
@@ -1295,6 +1300,15 @@ impl<'a> Analyzer<'a> {
                 // Reading a tuple field observes the value without
                 // consuming it.
                 self.eval_expr(base, Mode::Observe);
+                EvalValue::copy()
+            }
+            ExprKind::WhileExpr { cond, body, .. } => {
+                self.eval_expr(cond, Mode::Observe);
+                self.walk_block(body);
+                EvalValue::copy()
+            }
+            ExprKind::LoopExpr { body, .. } => {
+                self.walk_block(body);
                 EvalValue::copy()
             }
         }

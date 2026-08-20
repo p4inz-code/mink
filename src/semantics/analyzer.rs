@@ -374,10 +374,13 @@ impl Analyzer {
                     self.analyze_expr(value, ctx);
                 }
             }
-            StmtKind::Break => {
+            StmtKind::Break(value) => {
                 if !ctx.in_loop {
                     self.errors
                         .push(SemanticError::break_outside_loop(stmt.span));
+                }
+                if let Some(value) = value {
+                    self.analyze_expr(value, ctx);
                 }
             }
             StmtKind::Continue => {
@@ -698,6 +701,29 @@ impl Analyzer {
             }
             ExprKind::TupleFieldAccess { base, .. } => {
                 self.analyze_expr(base, ctx);
+            }
+            ExprKind::WhileExpr { cond, body, .. } => {
+                self.analyze_expr(cond, ctx);
+                let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                self.analyze_block(
+                    body,
+                    Ctx {
+                        scope,
+                        in_loop: true,
+                        ..ctx
+                    },
+                );
+            }
+            ExprKind::LoopExpr { body, .. } => {
+                let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                self.analyze_block(
+                    body,
+                    Ctx {
+                        scope,
+                        in_loop: true,
+                        ..ctx
+                    },
+                );
             }
         }
     }

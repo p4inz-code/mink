@@ -1255,7 +1255,7 @@ fn walk_stmt(stmt: &Stmt, text_len: u32, src: &str) {
                 walk_expr(value, text_len, src);
             }
         }
-        StmtKind::Break | StmtKind::Continue => {}
+        StmtKind::Break(_) | StmtKind::Continue => {}
         StmtKind::If(if_stmt) => walk_if_stmt(if_stmt, text_len, src),
         StmtKind::While { cond, body } => {
             walk_expr(cond, text_len, src);
@@ -1387,6 +1387,13 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
         }
         ExprKind::TupleFieldAccess { base, .. } => {
             walk_expr(base, text_len, src);
+        }
+        ExprKind::WhileExpr { cond, body, .. } => {
+            walk_expr(cond, text_len, src);
+            walk_block(body, text_len, src);
+        }
+        ExprKind::LoopExpr { body, .. } => {
+            walk_block(body, text_len, src);
         }
     }
 }

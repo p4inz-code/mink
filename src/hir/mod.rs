@@ -218,8 +218,8 @@ pub enum HirStmtKind {
     Const(HirConst),
     /// `return;` or `return expr;`.
     Return(Option<HirExpr>),
-    /// `break;`.
-    Break,
+    /// `break;` or `break expr;` (session 30).
+    Break(Option<HirExpr>),
     /// `continue;`.
     Continue,
     /// An `if` / `else if` / `else` statement.
@@ -561,5 +561,21 @@ pub enum HirExprKind {
         index: u32,
         /// Span of the index literal token.
         index_span: Span,
+    },
+    /// A `while` expression (session 30): `while cond { body }`.
+    WhileExpr {
+        /// The loop condition.
+        cond: Box<HirExpr>,
+        /// The loop body (with trailing expression).
+        body: Box<HirBlock>,
+        /// Span.
+        span: Span,
+    },
+    /// A `loop` expression (session 30): `loop { body }`.
+    LoopExpr {
+        /// The loop body (with trailing expression).
+        body: Box<HirBlock>,
+        /// Span.
+        span: Span,
     },
 }

@@ -99,7 +99,7 @@ fn stmt_idents<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span, bool)>) {
             expr_idents(&binding.init, out);
         }
         StmtKind::Return(Some(value)) => expr_idents(value, out),
-        StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
+        StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue => {}
         StmtKind::If(stmt) => if_idents(stmt, out),
         StmtKind::While { cond, body } => {
             expr_idents(cond, out);
@@ -208,6 +208,11 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
             }
         }
         ExprKind::TupleFieldAccess { base, .. } => expr_idents(base, out),
+        ExprKind::WhileExpr { cond, body, .. } => {
+            expr_idents(cond, out);
+            block_idents(body, out);
+        }
+        ExprKind::LoopExpr { body, .. } => block_idents(body, out),
     }
 }
 

@@ -124,6 +124,10 @@ pub enum TypeErrorKind {
     /// A tuple field access (session 29) uses an index that is out of
     /// range for the tuple type.
     TupleIndexOutOfRange,
+    /// A `break;` inside a loop expression (session 30) does not carry a
+    /// value, but the loop is used in expression position and must
+    /// produce one.
+    BreakValueExpected,
 }
 
 impl TypeErrorKind {
@@ -169,6 +173,7 @@ impl TypeErrorKind {
             Self::DerefRootedAssignment => "E-T33",
             Self::InvalidOrPattern => "E-T34",
             Self::TupleIndexOutOfRange => "E-T35",
+            Self::BreakValueExpected => "E-T36",
         }
     }
 }
@@ -647,6 +652,17 @@ impl TypeError {
         )
     }
 
+    /// Creates a break-value-expected error at `span` (`E-T36`): `break;`
+    /// inside a loop expression must carry a value.
+    pub fn break_value_expected(span: Span) -> Self {
+        Self::custom(
+            TypeErrorKind::BreakValueExpected,
+            span,
+            "`break` inside a loop expression must carry a value (use `break expr;`)".to_string(),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -732,7 +748,8 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::DuplicateDiscriminant
             | TypeErrorKind::DiscriminantOverflow
             | TypeErrorKind::DerefRootedAssignment
-            | TypeErrorKind::TupleIndexOutOfRange => actual.to_string(),
+            | TypeErrorKind::TupleIndexOutOfRange
+            | TypeErrorKind::BreakValueExpected => actual.to_string(),
         };
         f.write_str(&message)
     }

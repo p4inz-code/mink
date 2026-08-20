@@ -379,7 +379,10 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   absent: generics, optional/result types, … — they arrive with
   later milestones. Tuples arrived in session 29 (see
   `docs/implementation/TUPLES_IMPLEMENTATION.md`).
-  later milestones per `docs/language/TYPE_SYSTEM.md`.
+  While/loop as expressions with break values arrived in session 30
+  (see `docs/implementation/LOOP_EXPRESSIONS_IMPLEMENTATION.md`).
+  Still absent: generics, optional/result types, closures — they arrive
+  with later milestones per `docs/language/TYPE_SYSTEM.md`.
 - **Literals.** Integer, floating-point, string, character, boolean, and
   `null` literals have the corresponding types above.
 - **No implicit conversions.** MINK defines no implicit numeric

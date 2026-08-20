@@ -240,7 +240,9 @@ impl<'a> Lowerer<'a> {
             StmtKind::Return(value) => {
                 HirStmtKind::Return(value.as_ref().map(|expr| self.lower_expr(expr)))
             }
-            StmtKind::Break => HirStmtKind::Break,
+            StmtKind::Break(value) => {
+                HirStmtKind::Break(value.as_ref().map(|expr| self.lower_expr(expr)))
+            }
             StmtKind::Continue => HirStmtKind::Continue,
             StmtKind::If(stmt) => HirStmtKind::If(self.lower_if(stmt)),
             StmtKind::While { cond, body } => HirStmtKind::While {
@@ -560,6 +562,29 @@ impl<'a> Lowerer<'a> {
                         base: Box::new(hir_base),
                         index: idx_val,
                         index_span: index.span,
+                    },
+                    span: expr.span,
+                    ty,
+                };
+            }
+            ExprKind::WhileExpr { cond, body, span } => {
+                let ty = self.expr_type(expr.span);
+                return HirExpr {
+                    kind: HirExprKind::WhileExpr {
+                        cond: Box::new(self.lower_expr(cond)),
+                        body: Box::new(self.lower_block(body)),
+                        span: *span,
+                    },
+                    span: expr.span,
+                    ty,
+                };
+            }
+            ExprKind::LoopExpr { body, span } => {
+                let ty = self.expr_type(expr.span);
+                return HirExpr {
+                    kind: HirExprKind::LoopExpr {
+                        body: Box::new(self.lower_block(body)),
+                        span: *span,
                     },
                     span: expr.span,
                     ty,

@@ -606,3 +606,40 @@ TuplePattern:= '(' Pattern (',' Pattern)* ','? ')' | '()'
 The session-29 lexer needed no changes (all tokens already existed).
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
+
+## 23. Session-30 Additions: While/Loop Expressions and Break Values
+
+**Session:** 30 — while/loop as expressions, break with values
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19/20/25/26/27/28/29 additions above remain
+authoritative; the new productions are:
+
+```
+Break       := 'break' Expr? ';'
+Primary     := ... | WhileExpr | LoopExpr
+WhileExpr   := 'while' Expr Block
+LoopExpr    := 'loop' Block
+```
+
+- **Break with value** (`break expr;`) carries an optional value out of
+  a loop. `break;` (no value) is unchanged and evaluates to `Unit`.
+  `break expr;` is valid in any loop (statement or expression position).
+  The value's type must be compatible with the loop's result type.
+- **While-expression** (`while cond { body }`) in expression position
+  evaluates the loop body repeatedly while `cond` is `true`. The
+  expression's type is determined by `break` values inside the body. A
+  `while` statement (followed by `;`) is unchanged and has type `Unit`.
+- **Loop-expression** (`loop { body }`) in expression position evaluates
+  the loop body repeatedly. The expression's type is determined by
+  `break` values inside the body. A `loop` statement (followed by `;`)
+  is unchanged and has type `Unit`.
+- Loop expressions appear in binding position (`let x = loop { ... }`),
+  return position (`return loop { ... }`), and expression statement
+  position. They do not appear in arbitrary operand position (function
+  arguments, binary operands); this mirrors the existing `if`-expression
+  limitation.
+
+The session-30 lexer needed no changes (all tokens already existed).
+Exclusions from §2 and §9 that remain (`type` aliases, generics,
+lambdas/closures) are unchanged.

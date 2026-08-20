@@ -433,7 +433,7 @@ fn loop_break_continue_lower() {
     let HirStmtKind::Loop(body) = &f.body.stmts[0].kind else {
         panic!("expected loop statement");
     };
-    assert_eq!(body.stmts[0].kind, HirStmtKind::Break);
+    assert_eq!(body.stmts[0].kind, HirStmtKind::Break(None));
     assert_eq!(body.stmts[1].kind, HirStmtKind::Continue);
 }
 

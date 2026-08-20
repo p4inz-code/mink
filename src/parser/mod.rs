@@ -1065,8 +1065,8 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenKind::Return => self.parse_return(),
-            TokenKind::Break => self.parse_break_or_continue(StmtKind::Break),
-            TokenKind::Continue => self.parse_break_or_continue(StmtKind::Continue),
+            TokenKind::Break => self.parse_break(),
+            TokenKind::Continue => self.parse_break_or_continue(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
             TokenKind::For => self.parse_for(),
@@ -1103,11 +1103,42 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_break_or_continue(&mut self, kind: StmtKind) -> Result<Stmt, ()> {
+    /// Parses `break;` or `break expr;` (session 30).
+    fn parse_break(&mut self) -> Result<Stmt, ()> {
         let start = self.bump().span();
+        let kind = if self.current_kind() == TokenKind::Semi
+            || matches!(
+                self.current_kind(),
+                TokenKind::RBrace
+                    | TokenKind::Eof
+                    | TokenKind::Let
+                    | TokenKind::Const
+                    | TokenKind::Return
+                    | TokenKind::Break
+                    | TokenKind::Continue
+                    | TokenKind::Fn
+                    | TokenKind::Struct
+                    | TokenKind::Enum
+            ) {
+            StmtKind::Break(None)
+        } else {
+            let value = self.parse_expression()?;
+            StmtKind::Break(Some(value))
+        };
         let semi = self.expect_semi()?;
         let span = self.join(start, semi);
         Ok(Stmt { kind, span })
+    }
+
+    /// Parses `continue;`.
+    fn parse_break_or_continue(&mut self) -> Result<Stmt, ()> {
+        let start = self.bump().span();
+        let semi = self.expect_semi()?;
+        let span = self.join(start, semi);
+        Ok(Stmt {
+            kind: StmtKind::Continue,
+            span,
+        })
     }
 
     fn parse_if(&mut self) -> Result<Stmt, ()> {
@@ -1181,6 +1212,45 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parses a while-expression (session 30): `while Expr BlockExpr`.
+    /// The while expression is the expression-position counterpart of the
+    /// while statement, appearing inside block expressions and other
+    /// expression contexts. The break value determines the expression's
+    /// type.
+    fn parse_while_expr(&mut self) -> Result<Expr, ()> {
+        let start = self.bump().span(); // 'while'
+        let saved = self.in_block_context;
+        self.in_block_context = true;
+        let cond = self.parse_expression()?;
+        self.in_block_context = saved;
+        let body = self.parse_body_or_recover();
+        let span = self.join(start, body.span);
+        Ok(Expr {
+            kind: ExprKind::WhileExpr {
+                cond: Box::new(cond),
+                body: Box::new(body),
+                span,
+            },
+            span,
+        })
+    }
+
+    /// Parses a loop-expression (session 30): `loop { ... }`.
+    /// The loop expression is the expression-position counterpart of the
+    /// loop statement. The break value determines the expression's type.
+    fn parse_loop_expr(&mut self) -> Result<Expr, ()> {
+        let start = self.bump().span(); // 'loop'
+        let body = self.parse_body_or_recover();
+        let span = self.join(start, body.span);
+        Ok(Expr {
+            kind: ExprKind::LoopExpr {
+                body: Box::new(body),
+                span,
+            },
+            span,
+        })
+    }
+
     fn parse_for(&mut self) -> Result<Stmt, ()> {
         let start = self.bump().span(); // 'for'
         let name = self.expect_ident()?;
@@ -1214,6 +1284,18 @@ impl<'a> Parser<'a> {
             kind: StmtKind::Loop(body),
             span,
         })
+    }
+
+    /// Parses a while-expression or loop-expression in primary expression
+    /// position (session 30). In expression position, `while`/`loop`
+    /// produce a value via `break expr;`; in statement position they are
+    /// parsed as statements by the statement parser.
+    fn parse_while_or_loop_expr(&mut self) -> Result<Expr, ()> {
+        match self.current_kind() {
+            TokenKind::While => self.parse_while_expr(),
+            TokenKind::Loop => self.parse_loop_expr(),
+            _ => unreachable!(),
+        }
     }
 
     /// Parses a `match scrutinee { pattern => block, ... }` statement
@@ -1765,6 +1847,11 @@ impl<'a> Parser<'a> {
                     // as an expression: followed by `;` it is an expression
                     // statement; followed by `}` it is the trailing
                     // expression that determines the block's value.
+                    // In expression-block trailing position, `while`/`loop`
+                    // are parsed as expressions (session 30). In statement
+                    // position they are parsed as statements.
+                    let is_expr_trailing =
+                        matches!(self.current_kind(), TokenKind::While | TokenKind::Loop);
                     let is_kw = matches!(
                         self.current_kind(),
                         TokenKind::Let
@@ -1777,7 +1864,22 @@ impl<'a> Parser<'a> {
                             | TokenKind::Loop
                             | TokenKind::Match
                     );
-                    if is_kw {
+                    if is_expr_trailing {
+                        // Parse while/loop as expression (trailing or
+                        // followed by `;` which makes it a statement).
+                        let expr = self.parse_while_or_loop_expr()?;
+                        if self.current_kind() == TokenKind::Semi {
+                            let semi = self.bump().span();
+                            let span = self.join(expr.span, semi);
+                            stmts.push(Stmt {
+                                kind: StmtKind::Expr(expr),
+                                span,
+                            });
+                        } else {
+                            result = Some(expr);
+                            break;
+                        }
+                    } else if is_kw {
                         match self.parse_statement() {
                             Ok(stmt) => stmts.push(stmt),
                             Err(()) => self.recover_statement(),
@@ -2366,6 +2468,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::LBracket => self.parse_array_literal(),
             TokenKind::If => self.parse_if_expr(),
+            TokenKind::While | TokenKind::Loop => self.parse_while_or_loop_expr(),
             TokenKind::LBrace => {
                 let block = self.parse_block_expr()?;
                 let span = block.span;

@@ -127,7 +127,9 @@ corruption, no segfault guessing games.
   bitwise operators,
   `if`/`while`/`for`/`loop` control flow, **block expressions**
   (`{ stmts; expr }` producing a value), **if-as-expression**
-  (`if cond { a } else { b }` with required `else`), **tuples**
+  (`if cond { a } else { b }` with required `else`), **while/loop as expressions**
+  (`let x = loop { break 42; };` with `break expr;` carrying a value;
+  type inferred from break values; `E-T36` on missing break value), **tuples**
   (`(Int, Bool)`, tuple expressions, `x.0` field access, tuple types in
   annotations and struct fields), direct function calls, module
   bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
@@ -292,7 +294,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1415, all passing)
+├── tests/      Compiler tests (1454, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

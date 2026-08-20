@@ -316,8 +316,8 @@ pub enum StmtKind {
     Const(ConstItem),
     /// `return;` or `return expr;`.
     Return(Option<Expr>),
-    /// `break;`.
-    Break,
+    /// `break;` or `break expr;` (session 30).
+    Break(Option<Expr>),
     /// `continue;`.
     Continue,
     /// An `if` / `else if` / `else` statement.
@@ -665,6 +665,26 @@ pub enum ExprKind {
         /// The field index (the integer literal's span, for source text
         /// recovery).
         index: Ident,
+    },
+    /// A `while` expression (session 30): `while cond { body }` used in
+    /// expression position. The loop body must contain `break` with a
+    /// value; the expression's type is inferred from the break values.
+    WhileExpr {
+        /// The loop condition.
+        cond: Box<Expr>,
+        /// The loop body (an expression block with trailing expression).
+        body: Box<Block>,
+        /// Span covering the whole expression.
+        span: Span,
+    },
+    /// A `loop` expression (session 30): `loop { body }` used in
+    /// expression position. The loop body must contain `break` with a
+    /// value; the expression's type is inferred from the break values.
+    LoopExpr {
+        /// The loop body (an expression block with trailing expression).
+        body: Box<Block>,
+        /// Span covering the whole expression.
+        span: Span,
     },
 }
 

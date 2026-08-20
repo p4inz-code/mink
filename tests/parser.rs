@@ -967,7 +967,7 @@ fn while_loop() {
         panic!("expected a while loop")
     };
     ident(cond, "a");
-    assert!(matches!(&body.stmts[0].kind, StmtKind::Break));
+    assert!(matches!(&body.stmts[0].kind, StmtKind::Break(_)));
 }
 
 #[test]
@@ -999,7 +999,7 @@ fn loop_break_continue() {
         panic!("expected a loop statement")
     };
     assert!(matches!(&body.stmts[0].kind, StmtKind::Continue));
-    assert!(matches!(&body.stmts[1].kind, StmtKind::Break));
+    assert!(matches!(&body.stmts[1].kind, StmtKind::Break(_)));
 }
 
 #[test]
@@ -1498,7 +1498,7 @@ fn walk_stmt(stmt: &Stmt, text_len: u32, src: &str) {
                 walk_expr(value, text_len, src);
             }
         }
-        StmtKind::Break | StmtKind::Continue => {}
+        StmtKind::Break(_) | StmtKind::Continue => {}
         StmtKind::If(if_stmt) => walk_if_stmt(if_stmt, text_len, src),
         StmtKind::While { cond, body } => {
             walk_expr(cond, text_len, src);
@@ -1627,6 +1627,13 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
         }
         ExprKind::TupleFieldAccess { base, .. } => {
             walk_expr(base, text_len, src);
+        }
+        ExprKind::WhileExpr { cond, body, .. } => {
+            walk_expr(cond, text_len, src);
+            walk_block(body, text_len, src);
+        }
+        ExprKind::LoopExpr { body, .. } => {
+            walk_block(body, text_len, src);
         }
     }
 }

@@ -470,6 +470,21 @@ impl<'a> StmtEval<'a> {
                 }
             }
             HirExprKind::Assign { .. } => self.eval_assign(expr),
+            HirExprKind::WhileExpr { .. } | HirExprKind::LoopExpr { .. } => {
+                // Loop expressions in pure operand position are lowered at
+                // the statement level by FnBuilder; return a defensive
+                // zero constant so the compiler does not panic on
+                // malformed internal state.
+                MirOperand {
+                    kind: MirOperandKind::Constant(MirConstant {
+                        kind: MirConstantKind::Bool(false),
+                        span: expr.span,
+                        ty: expr.ty,
+                    }),
+                    span: expr.span,
+                    ty: expr.ty,
+                }
+            }
         }
     }
 
@@ -1051,6 +1066,9 @@ struct LoopCtx {
     break_target: BlockId,
     /// Where `continue` jumps: the loop's continue block.
     continue_target: BlockId,
+    /// For loop expressions (session 30): the local that holds the break
+    /// value. `None` for statement-position loops.
+    break_value_local: Option<LocalId>,
 }
 
 /// The function-body builder: owns the block graph and fills it as
@@ -1283,6 +1301,49 @@ impl<'a> FnBuilder<'a> {
         }
     }
 
+    /// Lowers a block that might have a trailing while/loop expression
+    /// (session 30). Returns the block's value as an operand when the
+    /// trailing expression is a while/loop, or `None` when the trailing
+    /// expression is a normal operand that the caller will evaluate.
+    fn lower_block_trailing_expr(&mut self, block: &HirBlock) -> Option<MirOperand> {
+        // Lower statements first.
+        for stmt in &block.stmts {
+            self.lower_stmt(stmt);
+        }
+        let result = block.result.as_ref()?;
+        match &result.kind {
+            HirExprKind::WhileExpr { cond, body, span } => {
+                Some(self.lower_while_expr(cond, body, result.ty, *span))
+            }
+            HirExprKind::LoopExpr { body, span } => {
+                Some(self.lower_loop_expr(body, result.ty, *span))
+            }
+            _ => None,
+        }
+    }
+
+    /// Wraps `StmtEval::eval_operand` to intercept while/loop
+    /// expressions (session 30). These need CFG lowering that only
+    /// `FnBuilder` can provide.
+    fn eval_operand(&mut self, expr: &HirExpr) -> MirOperand {
+        match &expr.kind {
+            HirExprKind::WhileExpr { cond, body, span } => {
+                self.lower_while_expr(cond, body, expr.ty, *span)
+            }
+            HirExprKind::LoopExpr { body, span } => self.lower_loop_expr(body, expr.ty, *span),
+            HirExprKind::Block(block) => {
+                // A block expression in operand position: lower statements,
+                // then handle the trailing expression.
+                if let Some(result) = self.lower_block_trailing_expr(block) {
+                    return result;
+                }
+                // Non-loop trailing expression: fall through to StmtEval.
+                self.eval.eval_operand(expr)
+            }
+            _ => self.eval.eval_operand(expr),
+        }
+    }
+
     fn lower_stmt(&mut self, stmt: &HirStmt) {
         match &stmt.kind {
             HirStmtKind::Let(binding) => self.lower_binding(binding, binding.mutable),
@@ -1293,13 +1354,24 @@ impl<'a> FnBuilder<'a> {
                 if self.current.is_none() {
                     return;
                 }
-                let value = value.as_ref().map(|expr| self.eval.eval_operand(expr));
+                let value = value.as_ref().map(|expr| {
+                    // Session 30: while/loop expressions need CFG lowering.
+                    match &expr.kind {
+                        HirExprKind::WhileExpr { cond, body, span } => {
+                            self.lower_while_expr(cond, body, expr.ty, *span)
+                        }
+                        HirExprKind::LoopExpr { body, span } => {
+                            self.lower_loop_expr(body, expr.ty, *span)
+                        }
+                        _ => self.eval_operand(expr),
+                    }
+                });
                 self.terminate(MirTerminator::Return {
                     value,
                     span: stmt.span,
                 });
             }
-            HirStmtKind::Break => {
+            HirStmtKind::Break(value) => {
                 let Some(ctx) = self.loops.last() else {
                     // Defensive: semantic analysis rejects `break` outside a
                     // loop; report and continue lowering.
@@ -1308,10 +1380,32 @@ impl<'a> FnBuilder<'a> {
                         .push(MirError::break_outside_loop(stmt.span));
                     return;
                 };
+                // Copy out of ctx before mutable borrows below.
+                let break_local = ctx.break_value_local;
+                let break_target = ctx.break_target;
                 // An unreachable `break` (after a terminator) is skipped.
                 if self.current.is_some() {
+                    // Session 30: `break expr;` evaluates the value and
+                    // stores it in the loop's break-value local.
+                    if let Some(value_expr) = value {
+                        let value = self.eval_operand(value_expr);
+                        if let Some(local) = break_local {
+                            let target = MirTarget {
+                                kind: MirTargetKind::Local(local),
+                                span: stmt.span,
+                                ty: value_expr.ty,
+                            };
+                            self.emit_stmt(MirStmt {
+                                kind: MirStmtKind::Assign {
+                                    target,
+                                    rvalue: use_rvalue(value, stmt.span, value_expr.ty),
+                                },
+                                span: stmt.span,
+                            });
+                        }
+                    }
                     self.terminate(MirTerminator::Jump {
-                        target: ctx.break_target,
+                        target: break_target,
                         span: stmt.span,
                     });
                 }
@@ -1347,7 +1441,18 @@ impl<'a> FnBuilder<'a> {
                 // expression (after a terminator) starts a fresh block so
                 // the emission target always exists.
                 self.ensure_current(stmt.span);
-                let _ = self.eval.eval_operand(expr);
+                // Loop expressions in statement position: lower with CFG.
+                match &expr.kind {
+                    HirExprKind::WhileExpr { cond, body, span } => {
+                        self.lower_while_expr(cond, body, expr.ty, *span);
+                    }
+                    HirExprKind::LoopExpr { body, span } => {
+                        self.lower_loop_expr(body, expr.ty, *span);
+                    }
+                    _ => {
+                        let _ = self.eval_operand(expr);
+                    }
+                }
             }
         }
     }
@@ -1371,6 +1476,40 @@ impl<'a> FnBuilder<'a> {
         } = &binding.init.kind
         {
             self.lower_if_expr_binding(local, cond, then_block, else_branch, binding.ty, *span);
+            return;
+        }
+        // If the initializer is a while/loop expression, lower it with
+        // branching and a break-value local (session 30).
+        if let HirExprKind::WhileExpr { cond, body, span } = &binding.init.kind {
+            let result = self.lower_while_expr(cond, body, binding.ty, *span);
+            let target = MirTarget {
+                kind: MirTargetKind::Local(local),
+                span: binding.span,
+                ty: binding.ty,
+            };
+            self.emit_stmt(MirStmt {
+                kind: MirStmtKind::Assign {
+                    target,
+                    rvalue: use_rvalue(result, binding.span, binding.ty),
+                },
+                span: binding.span,
+            });
+            return;
+        }
+        if let HirExprKind::LoopExpr { body, span } = &binding.init.kind {
+            let result = self.lower_loop_expr(body, binding.ty, *span);
+            let target = MirTarget {
+                kind: MirTargetKind::Local(local),
+                span: binding.span,
+                ty: binding.ty,
+            };
+            self.emit_stmt(MirStmt {
+                kind: MirStmtKind::Assign {
+                    target,
+                    rvalue: use_rvalue(result, binding.span, binding.ty),
+                },
+                span: binding.span,
+            });
             return;
         }
         // If the initializer is a block expression, lower statements
@@ -1397,7 +1536,40 @@ impl<'a> FnBuilder<'a> {
                     );
                     return;
                 }
-                let value = self.eval.eval_operand(result_expr);
+                // Session 30: while/loop expressions as block trailing.
+                if let HirExprKind::WhileExpr { cond, body, span } = &result_expr.kind {
+                    let result = self.lower_while_expr(cond, body, binding.ty, *span);
+                    let target = MirTarget {
+                        kind: MirTargetKind::Local(local),
+                        span: binding.span,
+                        ty: binding.ty,
+                    };
+                    self.emit_stmt(MirStmt {
+                        kind: MirStmtKind::Assign {
+                            target,
+                            rvalue: use_rvalue(result, binding.span, binding.ty),
+                        },
+                        span: binding.span,
+                    });
+                    return;
+                }
+                if let HirExprKind::LoopExpr { body, span } = &result_expr.kind {
+                    let result = self.lower_loop_expr(body, binding.ty, *span);
+                    let target = MirTarget {
+                        kind: MirTargetKind::Local(local),
+                        span: binding.span,
+                        ty: binding.ty,
+                    };
+                    self.emit_stmt(MirStmt {
+                        kind: MirStmtKind::Assign {
+                            target,
+                            rvalue: use_rvalue(result, binding.span, binding.ty),
+                        },
+                        span: binding.span,
+                    });
+                    return;
+                }
+                let value = self.eval_operand(result_expr);
                 let target = MirTarget {
                     kind: MirTargetKind::Local(local),
                     span: binding.span,
@@ -1432,7 +1604,7 @@ impl<'a> FnBuilder<'a> {
             });
             return;
         }
-        let value = self.eval.eval_operand(&binding.init);
+        let value = self.eval_operand(&binding.init);
         let target = MirTarget {
             kind: MirTargetKind::Local(local),
             span: binding.span,
@@ -1458,7 +1630,7 @@ impl<'a> FnBuilder<'a> {
             binding.span,
         );
         self.eval.symbols.insert(binding.name.symbol, local);
-        let value = self.eval.eval_operand(&binding.init);
+        let value = self.eval_operand(&binding.init);
         let target = MirTarget {
             kind: MirTargetKind::Local(local),
             span: binding.span,
@@ -1500,7 +1672,7 @@ impl<'a> FnBuilder<'a> {
                 }
             }
             _ => {
-                let val = self.eval.eval_operand(expr);
+                let val = self.eval_operand(expr);
                 self.emit_stmt(MirStmt {
                     kind: MirStmtKind::Assign {
                         target: MirTarget {
@@ -1528,7 +1700,7 @@ impl<'a> FnBuilder<'a> {
         span: crate::source::Span,
     ) {
         use crate::hir::HirElseBranch;
-        let cond_op = self.eval.eval_operand(cond);
+        let cond_op = self.eval_operand(cond);
         let then_id = self.alloc_block();
         let else_id = self.alloc_block();
         let after_id = self.alloc_block();
@@ -1603,7 +1775,7 @@ impl<'a> FnBuilder<'a> {
         // A dead `if` (after a terminator) starts a fresh block so the
         // emission target always exists.
         self.ensure_current(stmt.span);
-        let cond = self.eval.eval_operand(&stmt.cond);
+        let cond = self.eval_operand(&stmt.cond);
         let then_block = self.alloc_block();
         let else_block = self.alloc_block();
         self.terminate(MirTerminator::Branch {
@@ -1648,12 +1820,13 @@ impl<'a> FnBuilder<'a> {
         self.loops.push(LoopCtx {
             break_target: exit,
             continue_target: header,
+            break_value_local: None,
         });
         // Jump into the loop from the preceding block.
         self.ensure_current(span);
         self.jump_to(header, span);
         self.start_block(header, span);
-        let cond = self.eval.eval_operand(cond);
+        let cond = self.eval_operand(cond);
         self.terminate(MirTerminator::Branch {
             cond,
             then_block: body_block,
@@ -1665,6 +1838,51 @@ impl<'a> FnBuilder<'a> {
         self.jump_to(header, span);
         self.loops.pop();
         self.start_block(exit, span);
+    }
+
+    /// Lowers a while-expression (session 30): like `lower_while` but
+    /// with a merge block for the break value.
+    fn lower_while_expr(
+        &mut self,
+        cond: &HirExpr,
+        body: &HirBlock,
+        result_ty: TypeId,
+        span: Span,
+    ) -> MirOperand {
+        let header = self.alloc_block();
+        let body_block = self.alloc_block();
+        let merge = self.alloc_block();
+        // A break-value local holds the result in the merge block.
+        let break_local = self
+            .eval
+            .declare_local(String::new(), None, result_ty, false, span);
+        self.loops.push(LoopCtx {
+            break_target: merge,
+            continue_target: header,
+            break_value_local: Some(break_local),
+        });
+        // Jump into the loop from the preceding block.
+        self.ensure_current(span);
+        self.jump_to(header, span);
+        self.start_block(header, span);
+        let cond_val = self.eval_operand(cond);
+        self.terminate(MirTerminator::Branch {
+            cond: cond_val,
+            then_block: body_block,
+            else_block: merge,
+            span,
+        });
+        self.start_block(body_block, body.span);
+        self.lower_block(body);
+        // Natural fall-through loops back to condition.
+        self.jump_to(header, span);
+        self.loops.pop();
+        self.start_block(merge, span);
+        MirOperand {
+            kind: MirOperandKind::Local(break_local),
+            span,
+            ty: result_ty,
+        }
     }
 
     /// Lowers `for var in iterable { body }` into a range iteration:
@@ -1716,6 +1934,7 @@ impl<'a> FnBuilder<'a> {
         self.loops.push(LoopCtx {
             break_target: exit,
             continue_target: header,
+            break_value_local: None,
         });
 
         // Jump into the init block from the preceding block.
@@ -1730,8 +1949,8 @@ impl<'a> FnBuilder<'a> {
                 start,
                 end,
             } => {
-                let start = self.eval.eval_operand(start);
-                let end = self.eval.eval_operand(end);
+                let start = self.eval_operand(start);
+                let end = self.eval_operand(end);
                 MirRvalue {
                     kind: MirRvalueKind::Range {
                         inclusive: *inclusive,
@@ -1743,7 +1962,7 @@ impl<'a> FnBuilder<'a> {
                 }
             }
             _ => {
-                let value = self.eval.eval_operand(iterable);
+                let value = self.eval_operand(iterable);
                 use_rvalue(value, iterable.span, iterable.ty)
             }
         };
@@ -1836,6 +2055,7 @@ impl<'a> FnBuilder<'a> {
         self.loops.push(LoopCtx {
             break_target: exit,
             continue_target: header,
+            break_value_local: None,
         });
         // Jump into the loop from the preceding block.
         self.ensure_current(span);
@@ -1845,6 +2065,35 @@ impl<'a> FnBuilder<'a> {
         self.jump_to(header, span);
         self.loops.pop();
         self.start_block(exit, span);
+    }
+
+    /// Lowers a loop-expression (session 30): like `lower_loop` but with
+    /// a merge block for the break value.
+    fn lower_loop_expr(&mut self, body: &HirBlock, result_ty: TypeId, span: Span) -> MirOperand {
+        let header = self.alloc_block();
+        let merge = self.alloc_block();
+        let break_local = self
+            .eval
+            .declare_local(String::new(), None, result_ty, false, span);
+        self.loops.push(LoopCtx {
+            break_target: merge,
+            continue_target: header,
+            break_value_local: Some(break_local),
+        });
+        // Jump into the loop from the preceding block.
+        self.ensure_current(span);
+        self.jump_to(header, span);
+        self.start_block(header, span);
+        self.lower_block(body);
+        // Natural fall-through loops back to header.
+        self.jump_to(header, span);
+        self.loops.pop();
+        self.start_block(merge, span);
+        MirOperand {
+            kind: MirOperandKind::Local(break_local),
+            span,
+            ty: result_ty,
+        }
     }
 
     /// Lowers a `match` statement into a chain of pattern-test blocks that
@@ -1877,7 +2126,7 @@ impl<'a> FnBuilder<'a> {
         // Evaluate the scrutinee exactly once, in the block the `match`
         // statement occupies.
         self.ensure_current(span);
-        let scrutinee = self.eval.eval_operand(&stmt.scrutinee);
+        let scrutinee = self.eval_operand(&stmt.scrutinee);
         let first_test = self.alloc_block();
         self.terminate(MirTerminator::Jump {
             target: first_test,
@@ -1952,7 +2201,7 @@ impl<'a> FnBuilder<'a> {
             if let Some(guard) = &arm.guard {
                 let next = next.expect("guarded arms always allocate an else block");
                 self.start_block(guard_block, arm.span);
-                let cond = self.eval.eval_operand(guard);
+                let cond = self.eval_operand(guard);
                 self.terminate(MirTerminator::Branch {
                     cond,
                     then_block: body_block,
@@ -2545,7 +2794,7 @@ mod tests {
             unreachable!()
         };
         f.body.stmts = vec![HirStmt {
-            kind: HirStmtKind::Break,
+            kind: HirStmtKind::Break(None),
             span: text_span(src, "return"),
         }];
         let errors = lower(&program).unwrap_err();

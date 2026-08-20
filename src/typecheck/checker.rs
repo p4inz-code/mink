@@ -214,6 +214,9 @@ struct Checker<'a> {
     errors: Vec<TypeError>,
     /// The current function's result type, while inside a function body.
     fn_result: Option<TypeId>,
+    /// The current loop's break value type, while inside a loop expression
+    /// (session 30). `Some(ty)` means `break expr;` must produce `ty`.
+    loop_result: Option<TypeId>,
 }
 
 impl<'a> Checker<'a> {
@@ -234,6 +237,7 @@ impl<'a> Checker<'a> {
             deferred: Vec::new(),
             errors: Vec::new(),
             fn_result: None,
+            loop_result: None,
         }
     }
 
@@ -393,7 +397,7 @@ impl<'a> Checker<'a> {
                     self.recheck_return(ty, value.span);
                 }
             }
-            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue => {}
             StmtKind::If(stmt) => self.resolve_deferred_if(stmt),
             StmtKind::While { cond, body } => {
                 let (ty, recomputed) = self.resolve_deferred_expr(cond);
@@ -761,6 +765,40 @@ impl<'a> Checker<'a> {
                 if recompute {
                     let ty = self.check_tuple_field_access(base, index, expr.span);
                     (ty, true)
+                } else {
+                    (
+                        self.recorded_ty(expr.span)
+                            .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                        false,
+                    )
+                }
+            }
+            ExprKind::WhileExpr { cond, body, .. } => {
+                let (_, cond_recomputed) = self.resolve_deferred_expr(cond);
+                let recompute = self.deferred.contains(&expr.span) || cond_recomputed;
+                if recompute {
+                    self.check_condition(cond);
+                    let result_var = self.types.push(TypeKind::Infer(None));
+                    let saved = self.loop_result.replace(result_var);
+                    self.check_block(body);
+                    self.loop_result = saved;
+                    (result_var, true)
+                } else {
+                    (
+                        self.recorded_ty(expr.span)
+                            .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                        false,
+                    )
+                }
+            }
+            ExprKind::LoopExpr { body, .. } => {
+                let recompute = self.deferred.contains(&expr.span);
+                if recompute {
+                    let result_var = self.types.push(TypeKind::Infer(None));
+                    let saved = self.loop_result.replace(result_var);
+                    self.check_block(body);
+                    self.loop_result = saved;
+                    (result_var, true)
                 } else {
                     (
                         self.recorded_ty(expr.span)
@@ -1490,7 +1528,26 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Break(value) => {
+                if let Some(value) = value {
+                    let ty = self.expr_type(value);
+                    if let Some(result) = self.loop_result {
+                        if let Err((expected, actual)) = self.types.unify(result, ty) {
+                            self.push_error(TypeError::mismatch(
+                                value.span,
+                                self.display(expected),
+                                self.display(actual),
+                                None,
+                            ));
+                        }
+                    }
+                } else if self.loop_result.is_some() {
+                    // `break;` inside a loop expression: the loop expects
+                    // a break value (E-T36).
+                    self.push_error(TypeError::break_value_expected(stmt.span));
+                }
+            }
+            StmtKind::Continue => {}
             StmtKind::If(stmt) => self.check_if(stmt),
             StmtKind::While { cond, body } => {
                 self.check_condition(cond);
@@ -2653,6 +2710,26 @@ impl<'a> Checker<'a> {
             }
             ExprKind::TupleFieldAccess { base, index } => {
                 self.check_tuple_field_access(base, index, expr.span)
+            }
+            ExprKind::WhileExpr { cond, body, .. } => {
+                // Session 30: while-expression. A fresh inference variable
+                // is the loop's break-value type; `break expr;` inside the
+                // body constrains it.
+                self.check_condition(cond);
+                let result_var = self.types.push(TypeKind::Infer(None));
+                let saved = self.loop_result.replace(result_var);
+                self.check_block(body);
+                self.loop_result = saved;
+                result_var
+            }
+            ExprKind::LoopExpr { body, .. } => {
+                // Session 30: loop-expression. Same as while-expression but
+                // without a condition.
+                let result_var = self.types.push(TypeKind::Infer(None));
+                let saved = self.loop_result.replace(result_var);
+                self.check_block(body);
+                self.loop_result = saved;
+                result_var
             }
         }
     }
