@@ -150,13 +150,27 @@ impl Analyzer {
                 ItemKind::Struct(s) => self.register_struct(s),
                 ItemKind::Enum(e) => self.register_enum(e),
                 ItemKind::Let(binding) => {
-                    let _ = self.bind(
-                        &binding.name,
-                        SymbolKind::Let {
-                            mutable: binding.mutable,
-                        },
-                        module,
-                    );
+                    if let Some(ref pattern) = binding.pattern {
+                        let mut names = Vec::new();
+                        Self::collect_pattern_bindings(pattern, &mut names);
+                        for name in names {
+                            let _ = self.bind(
+                                name,
+                                SymbolKind::Let {
+                                    mutable: binding.mutable,
+                                },
+                                module,
+                            );
+                        }
+                    } else {
+                        let _ = self.bind(
+                            &binding.name,
+                            SymbolKind::Let {
+                                mutable: binding.mutable,
+                            },
+                            module,
+                        );
+                    }
                 }
                 ItemKind::Const(binding) => {
                     let _ = self.bind(&binding.name, SymbolKind::Const, module);
@@ -350,13 +364,29 @@ impl Analyzer {
                 // so a binding is not visible in its own initializer
                 // (declaration-before-use within a block scope).
                 self.analyze_expr(&binding.init, ctx);
-                self.bind(
-                    &binding.name,
-                    SymbolKind::Let {
-                        mutable: binding.mutable,
-                    },
-                    ctx.scope,
-                );
+                // Tuple destructuring (session 31): bind each name in the
+                // pattern, not just the top-level name.
+                if let Some(ref pattern) = binding.pattern {
+                    let mut names = Vec::new();
+                    Self::collect_pattern_bindings(pattern, &mut names);
+                    for name in names {
+                        self.bind(
+                            name,
+                            SymbolKind::Let {
+                                mutable: binding.mutable,
+                            },
+                            ctx.scope,
+                        );
+                    }
+                } else {
+                    self.bind(
+                        &binding.name,
+                        SymbolKind::Let {
+                            mutable: binding.mutable,
+                        },
+                        ctx.scope,
+                    );
+                }
             }
             StmtKind::Const(binding) => {
                 self.analyze_expr(&binding.init, ctx);

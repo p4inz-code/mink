@@ -643,3 +643,40 @@ LoopExpr    := 'loop' Block
 The session-30 lexer needed no changes (all tokens already existed).
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
+
+## 24. Session-31 Additions: Tuple Destructuring in Let Bindings
+
+**Session:** 31 — tuple destructuring in let bindings
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19/20/25/26/27/28/29/30 additions above remain
+authoritative; the new production is:
+
+```
+LetBinding  := 'let' 'mut'? LetPattern (':' Type)? '=' Expr ';'
+LetPattern  := Ident | TupleLetPattern
+TupleLetPattern := '(' LetPattern (',' LetPattern)* ','? ')' | '()'
+```
+
+- **Tuple destructuring** (`let (a, b) = expr;`) extracts each element
+  of a tuple value into a separate binding. The initializer must be a
+  tuple type with matching arity (`E-T38` on mismatch); a non-tuple
+  initializer is `E-T37` (cannot destructure). Each element pattern is
+  a simple identifier that binds the corresponding tuple element.
+- **Nested destructuring** (`let (a, (b, c)) = expr;`) recursively
+  destructures nested tuples. Each inner pattern must match the
+  corresponding element's tuple type.
+- **Wildcard patterns** (`let (a, _) = expr;`) skip elements. The `_`
+  pattern binds nothing, matching the existing wildcard semantics.
+- **Type annotations** (`let (a, b): (Int, Bool) = expr;`) check the
+  whole tuple type against the annotation.
+- **Mutability** (`let mut (a, b) = expr;`) makes all destructured
+  bindings mutable.
+- **Unit destructuring** (`let () = expr;`) matches only unit values.
+- **Single-element tuples** (`let (a,) = expr;`) require a trailing
+  comma, matching the tuple expression convention.
+
+The session-31 lexer needed no changes (all tokens already existed).
+Const destructuring (`const (a, b) = expr;`) remains deferred.
+Exclusions from §2 and §9 that remain (`type` aliases, generics,
+lambdas/closures) are unchanged.

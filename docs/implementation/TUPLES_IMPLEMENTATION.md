@@ -121,8 +121,8 @@ according to its sub-pattern's ownership rules.
 - **Nested tuples in native backend:** `(Int, (Int, Int))` is not yet
   supported by the native subset (the inner tuple type is not classified
   as a supported aggregate).
-- **Tuple destructuring in let bindings:** `let (a, b) = x;` is not
-  yet supported (a natural follow-up).
+- **Tuple destructuring in let bindings:** Implemented in session 31
+  (see `TUPLE_DESTRUCTURE_IMPLEMENTATION.md`).
 - **Tuple patterns in match:** Basic support exists but exhaustiveness
   checking for tuples is deferred.
 - **Tuple equality:** `==`/`!=` on tuples is not supported.
@@ -131,7 +131,7 @@ according to its sub-pattern's ownership rules.
 
 ## 12. Tests
 
-**1,415 tests passing** (1,381 pre-existing + 34 new).
+**1,494 tests passing** (1,454 pre-existing + 40 new).
 
 New test file: `tests/tuples.rs` with:
 

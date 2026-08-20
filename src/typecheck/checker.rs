@@ -360,18 +360,22 @@ impl<'a> Checker<'a> {
             StmtKind::Let(binding) => {
                 let (ty, recomputed) = self.resolve_deferred_expr(&binding.init);
                 if recomputed {
-                    if let Some(ann) = &binding.ty {
-                        let ann_ty = self.resolve_type(ann);
-                        if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
-                            self.push_error(TypeError::mismatch(
-                                binding.init.span,
-                                self.display(expected),
-                                self.display(actual),
-                                Some(binding.name.span),
-                            ));
+                    if let Some(ref pattern) = binding.pattern {
+                        self.check_let_destructure(binding, pattern, ty);
+                    } else {
+                        if let Some(ann) = &binding.ty {
+                            let ann_ty = self.resolve_type(ann);
+                            if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                                self.push_error(TypeError::mismatch(
+                                    binding.init.span,
+                                    self.display(expected),
+                                    self.display(actual),
+                                    Some(binding.name.span),
+                                ));
+                            }
                         }
+                        self.unify_decl(&binding.name, ty, binding.init.span);
                     }
-                    self.unify_decl(&binding.name, ty, binding.init.span);
                 }
             }
             StmtKind::Const(binding) => {
@@ -1485,18 +1489,24 @@ impl<'a> Checker<'a> {
         match &stmt.kind {
             StmtKind::Let(binding) => {
                 let ty = self.expr_type(&binding.init);
-                if let Some(ann) = &binding.ty {
-                    let ann_ty = self.resolve_type(ann);
-                    if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
-                        self.push_error(TypeError::mismatch(
-                            binding.init.span,
-                            self.display(expected),
-                            self.display(actual),
-                            Some(binding.name.span),
-                        ));
+                if let Some(ref pattern) = binding.pattern {
+                    // Tuple destructuring (session 31): check the initializer
+                    // is a tuple with the right arity and element types.
+                    self.check_let_destructure(binding, pattern, ty);
+                } else {
+                    if let Some(ann) = &binding.ty {
+                        let ann_ty = self.resolve_type(ann);
+                        if let Err((expected, actual)) = self.types.unify(ann_ty, ty) {
+                            self.push_error(TypeError::mismatch(
+                                binding.init.span,
+                                self.display(expected),
+                                self.display(actual),
+                                Some(binding.name.span),
+                            ));
+                        }
                     }
+                    self.unify_decl(&binding.name, ty, binding.init.span);
                 }
-                self.unify_decl(&binding.name, ty, binding.init.span);
             }
             StmtKind::Const(binding) => {
                 let ty = self.expr_type(&binding.init);
@@ -2559,6 +2569,105 @@ impl<'a> Checker<'a> {
                 self.display(actual),
                 None,
             ));
+        }
+    }
+
+    /// Checks a tuple destructuring let binding (session 31).
+    ///
+    /// Verifies that the initializer is a tuple with the correct arity,
+    /// then unifies each element pattern's binding with the corresponding
+    /// tuple element type.
+    fn check_let_destructure(
+        &mut self,
+        binding: &crate::ast::LetItem,
+        pattern: &Pattern,
+        init_ty: TypeId,
+    ) {
+        // Check for optional type annotation first.
+        if let Some(ann) = &binding.ty {
+            let ann_ty = self.resolve_type(ann);
+            if let Err((expected, actual)) = self.types.unify(ann_ty, init_ty) {
+                self.push_error(TypeError::mismatch(
+                    binding.init.span,
+                    self.display(expected),
+                    self.display(actual),
+                    Some(binding.name.span),
+                ));
+            }
+        }
+
+        // The pattern must be a tuple pattern.
+        let Pattern::Tuple { elements, .. } = pattern else {
+            self.push_error(TypeError::cannot_destructure(
+                pattern.span(),
+                &self.display(init_ty),
+            ));
+            return;
+        };
+
+        // The initializer must be a tuple type.
+        let Some(elem_tys) = self.types.tuple_elems(init_ty).map(|s| s.to_vec()) else {
+            self.push_error(TypeError::cannot_destructure(
+                pattern.span(),
+                &self.display(init_ty),
+            ));
+            return;
+        };
+
+        // Arity check.
+        if elements.len() != elem_tys.len() {
+            self.push_error(TypeError::destructure_arity_mismatch(
+                pattern.span(),
+                elem_tys.len(),
+                elements.len(),
+            ));
+            return;
+        }
+
+        // Unify each element pattern's binding with the tuple element type.
+        for (elem_pat, &elem_ty) in elements.iter().zip(elem_tys.iter()) {
+            self.check_destructure_pattern_binding(elem_pat, elem_ty);
+        }
+    }
+
+    /// Recursively checks a single pattern inside a destructuring let,
+    /// unifying bindings with the expected type.
+    fn check_destructure_pattern_binding(&mut self, pattern: &Pattern, expected_ty: TypeId) {
+        match pattern {
+            Pattern::Binding(name) => {
+                self.unify_decl(name, expected_ty, name.span);
+            }
+            Pattern::Wildcard { .. } => {}
+            Pattern::Tuple { elements, span, .. } => {
+                // Nested tuple destructuring.
+                let Some(inner_elems) = self.types.tuple_elems(expected_ty).map(|s| s.to_vec())
+                else {
+                    self.push_error(TypeError::cannot_destructure(
+                        *span,
+                        &self.display(expected_ty),
+                    ));
+                    return;
+                };
+                if elements.len() != inner_elems.len() {
+                    self.push_error(TypeError::destructure_arity_mismatch(
+                        *span,
+                        inner_elems.len(),
+                        elements.len(),
+                    ));
+                    return;
+                }
+                for (elem_pat, &elem_ty) in elements.iter().zip(inner_elems.iter()) {
+                    self.check_destructure_pattern_binding(elem_pat, elem_ty);
+                }
+            }
+            // Literal and enum-variant patterns in let destructuring
+            // are rejected — they have no binding to unify.
+            other => {
+                self.push_error(TypeError::cannot_destructure(
+                    other.span(),
+                    &self.display(expected_ty),
+                ));
+            }
         }
     }
 

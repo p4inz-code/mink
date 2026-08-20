@@ -915,6 +915,10 @@ impl<'a> Parser<'a> {
     fn parse_let(&mut self) -> Result<(LetItem, Span), ()> {
         let start = self.bump().span(); // 'let'
         let mutable = self.eat(TokenKind::Mut);
+        // Tuple destructuring: `let (a, b) = expr;` (session 31).
+        if self.current_kind() == TokenKind::LParen {
+            return self.parse_let_destructure(start, mutable);
+        }
         self.parse_binding_tail(start, mutable)
     }
 
@@ -956,9 +960,58 @@ impl<'a> Parser<'a> {
                 mutable,
                 ty,
                 init,
+                pattern: None,
             },
             span,
         ))
+    }
+
+    /// Parses `let [mut] (a, b) [: Type] = expr ;` — tuple destructuring
+    /// (session 31).
+    fn parse_let_destructure(&mut self, start: Span, mutable: bool) -> Result<(LetItem, Span), ()> {
+        let pattern = self.parse_pattern()?;
+        // Extract the first binding name from the pattern for backward
+        // compatibility with consumers that only handle simple bindings.
+        let name = Self::first_binding_name(&pattern).unwrap_or_else(|| Ident {
+            name: "_".to_string(),
+            span: pattern.span(),
+        });
+        // Optional type annotation: `: (Int, Bool)`.
+        let ty = if self.current_kind() == TokenKind::Colon {
+            let _ = self.bump(); // ':'
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        if self.current_kind() != TokenKind::Eq {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedEqual, token.span());
+            return Err(());
+        }
+        let _ = self.bump();
+        let init = self.parse_expression()?;
+        let semi = self.expect_semi()?;
+        let span = self.join(start, semi);
+        Ok((
+            LetItem {
+                name,
+                mutable,
+                ty,
+                init,
+                pattern: Some(pattern),
+            },
+            span,
+        ))
+    }
+
+    /// Extracts the first binding name from a pattern, if any.
+    fn first_binding_name(pattern: &Pattern) -> Option<Ident> {
+        match pattern {
+            Pattern::Binding(ident) => Some(ident.clone()),
+            Pattern::Tuple { elements, .. } => elements.first().and_then(Self::first_binding_name),
+            Pattern::Wildcard { .. } => None,
+            _ => None,
+        }
     }
 
     /// Parses the parameter list up to and including `)`.

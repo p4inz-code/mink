@@ -131,8 +131,9 @@ corruption, no segfault guessing games.
   (`let x = loop { break 42; };` with `break expr;` carrying a value;
   type inferred from break values; `E-T36` on missing break value), **tuples**
   (`(Int, Bool)`, tuple expressions, `x.0` field access, tuple types in
-  annotations and struct fields), direct function calls, module
-  bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
+  annotations and struct fields, **tuple destructuring** `let (a, b) = x;`
+  with type annotations, nested patterns, and wildcards), direct function
+  calls, module bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
   with optional parameter types and return type, enforced by the type checker;
   unannotated parameters and return types remain inferred), **let/const
   binding type annotations** (`let x: Int = 1;` with optional `: Type`,
@@ -294,7 +295,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1454, all passing)
+├── tests/      Compiler tests (1494, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

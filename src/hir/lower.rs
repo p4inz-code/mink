@@ -198,12 +198,18 @@ impl<'a> Lowerer<'a> {
 
     fn lower_let(&mut self, binding: &LetItem, span: Span) -> HirLet {
         let name = self.lower_decl_ident(&binding.name);
+        let init = self.lower_expr(&binding.init);
+        let pattern = binding.pattern.as_ref().map(|p| self.lower_pattern(p));
+        // For tuple destructuring, the binding's type is the init's type
+        // (the tuple), not the first element's type.
+        let ty = if pattern.is_some() { init.ty } else { name.ty };
         HirLet {
-            ty: name.ty,
+            ty,
             name,
             mutable: binding.mutable,
-            init: Box::new(self.lower_expr(&binding.init)),
+            init: Box::new(init),
             span,
+            pattern,
         }
     }
 

@@ -161,6 +161,9 @@ pub struct HirLet {
     pub span: Span,
     /// The binding's type.
     pub ty: TypeId,
+    /// A destructuring pattern (session 31). When `Some`, the binding
+    /// destructures the initializer into its pattern elements.
+    pub pattern: Option<HirPattern>,
 }
 
 /// A lowered `const` binding with its initializer.

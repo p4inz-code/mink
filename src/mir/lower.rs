@@ -1457,8 +1457,77 @@ impl<'a> FnBuilder<'a> {
         }
     }
 
+    /// Lowers a tuple destructuring let binding (session 31).
+    ///
+    /// Evaluates the initializer into a temporary, then extracts each
+    /// element via field access into a separate local.
+    fn lower_binding_destructure(
+        &mut self,
+        binding: &HirLet,
+        elements: &[HirPattern],
+        mutable: bool,
+    ) {
+        // Evaluate the initializer.
+        let init_operand = self.eval_operand(&binding.init);
+        // Get element types from the tuple type.
+        let elem_tys: Vec<TypeId> = self
+            .eval
+            .table
+            .tuple_elems(binding.ty)
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        for (i, elem_pat) in elements.iter().enumerate() {
+            let HirPattern::Binding(ident) = elem_pat else {
+                // Non-binding patterns are rejected by the type checker;
+                // skip silently.
+                continue;
+            };
+            let elem_ty = elem_tys.get(i).copied().unwrap_or(binding.ty);
+            // Declare the element's local FIRST so the backend verifier
+            // can match the field load target type.
+            let local = self.eval.declare_local(
+                ident.name.clone(),
+                Some(ident.symbol),
+                elem_ty,
+                mutable,
+                ident.span,
+            );
+            self.eval.symbols.insert(ident.symbol, local);
+            // Extract element via member access: `init.0`, `init.1`, etc.
+            let member_name = MirName {
+                name: i.to_string(),
+                span: ident.span,
+            };
+            let field_rvalue = MirRvalueKind::Member {
+                base: init_operand.clone(),
+                member: member_name,
+            };
+            self.eval.emit(MirStmt {
+                kind: MirStmtKind::Assign {
+                    target: MirTarget {
+                        kind: MirTargetKind::Local(local),
+                        span: ident.span,
+                        ty: elem_ty,
+                    },
+                    rvalue: MirRvalue {
+                        kind: field_rvalue,
+                        span: ident.span,
+                        ty: elem_ty,
+                    },
+                },
+                span: ident.span,
+            });
+        }
+    }
+
     /// Declares a binding's local, evaluates its initializer, and stores it.
     fn lower_binding(&mut self, binding: &HirLet, mutable: bool) {
+        // Tuple destructuring (session 31): desugar `let (a, b) = expr;` into
+        // field extraction for each element.
+        if let Some(HirPattern::Tuple { elements, .. }) = &binding.pattern {
+            self.lower_binding_destructure(binding, elements, mutable);
+            return;
+        }
         let local = self.eval.declare_local(
             binding.name.name.clone(),
             Some(binding.name.symbol),

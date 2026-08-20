@@ -128,6 +128,12 @@ pub enum TypeErrorKind {
     /// value, but the loop is used in expression position and must
     /// produce one.
     BreakValueExpected,
+    /// A tuple destructuring pattern (session 31) is applied to a
+    /// non-tuple type.
+    CannotDestructure,
+    /// A tuple destructuring pattern (session 31) has a different number
+    /// of elements than the tuple type.
+    DestructureArityMismatch,
 }
 
 impl TypeErrorKind {
@@ -174,6 +180,8 @@ impl TypeErrorKind {
             Self::InvalidOrPattern => "E-T34",
             Self::TupleIndexOutOfRange => "E-T35",
             Self::BreakValueExpected => "E-T36",
+            Self::CannotDestructure => "E-T37",
+            Self::DestructureArityMismatch => "E-T38",
         }
     }
 }
@@ -663,6 +671,33 @@ impl TypeError {
         )
     }
 
+    /// Creates a cannot-destructure error at `span` (`E-T37`): a tuple
+    /// destructuring pattern is applied to a non-tuple type.
+    pub fn cannot_destructure(span: Span, ty: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::CannotDestructure,
+            span,
+            format!("cannot destructure `{ty}` (not a tuple type)"),
+            None,
+        )
+    }
+
+    /// Creates a destructure-arity-mismatch error at `span` (`E-T38`):
+    /// the destructuring pattern has a different number of elements than
+    /// the tuple type.
+    pub fn destructure_arity_mismatch(span: Span, expected: usize, actual: usize) -> Self {
+        Self::custom(
+            TypeErrorKind::DestructureArityMismatch,
+            span,
+            format!(
+                "tuple destructuring pattern has {actual} element{}, \
+                 but the tuple type has {expected}",
+                if actual == 1 { "" } else { "s" },
+            ),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -749,7 +784,9 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::DiscriminantOverflow
             | TypeErrorKind::DerefRootedAssignment
             | TypeErrorKind::TupleIndexOutOfRange
-            | TypeErrorKind::BreakValueExpected => actual.to_string(),
+            | TypeErrorKind::BreakValueExpected
+            | TypeErrorKind::CannotDestructure
+            | TypeErrorKind::DestructureArityMismatch => actual.to_string(),
         };
         f.write_str(&message)
     }

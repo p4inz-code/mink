@@ -232,15 +232,22 @@ pub struct Param {
     pub span: Span,
 }
 
-/// A `let` binding: `let [mut] name [: Type] = init;`.
+/// A `let` binding: `let [mut] name [: Type] = init;` or
+/// `let [mut] (a, b) [: Type] = init;` (session 31, tuple destructuring).
 ///
 /// Session 26 added optional type annotations: a binding may carry a
 /// declared type (`name: Type`) that the type checker enforces. When the
 /// annotation is absent (`None`), the type is inferred from the initializer
 /// expression, preserving backward compatibility.
+///
+/// Session 31 adds optional tuple destructuring patterns: when `pattern`
+/// is `Some(Pattern::Tuple { .. })`, the binding destructures the
+/// initializer into its elements. The `name` field is still set (to the
+/// first element's identifier) for backward compatibility with consumers
+/// that only handle simple bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LetItem {
-    /// The bound name.
+    /// The bound name (for simple `let x = ...` bindings).
     pub name: Ident,
     /// Whether the binding is mutable (`let mut`).
     pub mutable: bool,
@@ -250,6 +257,10 @@ pub struct LetItem {
     pub ty: Option<Ty>,
     /// The initializer expression.
     pub init: Expr,
+    /// An optional destructuring pattern (session 31). When `Some`, the
+    /// binding destructures the initializer into its pattern elements.
+    /// For simple `let x = ...` this is `None`.
+    pub pattern: Option<Pattern>,
 }
 
 /// A `const` binding: `const name [: Type] = init;`.

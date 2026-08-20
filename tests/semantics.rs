@@ -1378,6 +1378,7 @@ fn analyzer_tolerates_group_assignment_target() {
                 kind: ExprKind::Int,
                 span,
             },
+            pattern: None,
         }),
         span,
     };
