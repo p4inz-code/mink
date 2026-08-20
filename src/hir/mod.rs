@@ -357,6 +357,24 @@ pub enum HirPattern {
         /// Span of the whole tuple pattern.
         span: Span,
     },
+    /// A struct destructuring pattern (session 32): `Name { field1, field2 }`.
+    Struct {
+        /// The struct type name.
+        name: HirName,
+        /// The field patterns, in source order.
+        fields: Vec<HirStructPatternField>,
+        /// Span of the whole pattern.
+        span: Span,
+    },
+}
+
+/// One field in a struct destructuring pattern at HIR level (session 32).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirStructPatternField {
+    /// The struct field name to extract.
+    pub name: HirName,
+    /// The resolved binding identifier (with symbol and type).
+    pub binding: HirIdent,
 }
 
 impl HirPattern {
@@ -371,6 +389,7 @@ impl HirPattern {
             Self::Range { span, .. } => *span,
             Self::Or { span, .. } => *span,
             Self::Tuple { span, .. } => *span,
+            Self::Struct { span, .. } => *span,
         }
     }
 }

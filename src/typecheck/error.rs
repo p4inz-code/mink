@@ -134,6 +134,14 @@ pub enum TypeErrorKind {
     /// A tuple destructuring pattern (session 31) has a different number
     /// of elements than the tuple type.
     DestructureArityMismatch,
+    /// A struct destructuring pattern (session 32) names a field the
+    /// struct does not declare.
+    UnknownStructFieldInPattern,
+    /// A struct destructuring pattern (session 32) omits a declared field.
+    MissingStructFieldInPattern,
+    /// A struct destructuring pattern (session 32) names a struct type
+    /// that does not match the initializer's type.
+    StructPatternTypeMismatch,
 }
 
 impl TypeErrorKind {
@@ -182,6 +190,9 @@ impl TypeErrorKind {
             Self::BreakValueExpected => "E-T36",
             Self::CannotDestructure => "E-T37",
             Self::DestructureArityMismatch => "E-T38",
+            Self::UnknownStructFieldInPattern => "E-T39",
+            Self::MissingStructFieldInPattern => "E-T40",
+            Self::StructPatternTypeMismatch => "E-T41",
         }
     }
 }
@@ -698,6 +709,43 @@ impl TypeError {
         )
     }
 
+    /// Creates an unknown-struct-field-in-pattern error at `span` (`E-T39`):
+    /// the pattern names a field the struct does not declare.
+    pub fn unknown_struct_field_in_pattern(span: Span, field: &str, struct_name: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::UnknownStructFieldInPattern,
+            span,
+            format!("struct `{struct_name}` has no field named `{field}`",),
+            None,
+        )
+    }
+
+    /// Creates a missing-struct-field-in-pattern error at `span` (`E-T40`):
+    /// the pattern omits a declared field.
+    pub fn missing_struct_field_in_pattern(span: Span, field: &str, struct_name: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::MissingStructFieldInPattern,
+            span,
+            format!(
+                "struct destructuring pattern is missing field `{field}` of struct `{struct_name}`",
+            ),
+            None,
+        )
+    }
+
+    /// Creates a struct-pattern-type-mismatch error at `span` (`E-T41`):
+    /// the pattern's struct name doesn't match the initializer's type.
+    pub fn struct_pattern_type_mismatch(span: Span, pattern_name: &str, actual_type: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::StructPatternTypeMismatch,
+            span,
+            format!(
+                "struct pattern names `{pattern_name}` but the initializer has type `{actual_type}`",
+            ),
+            None,
+        )
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> TypeErrorKind {
         self.kind
@@ -786,7 +834,10 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::TupleIndexOutOfRange
             | TypeErrorKind::BreakValueExpected
             | TypeErrorKind::CannotDestructure
-            | TypeErrorKind::DestructureArityMismatch => actual.to_string(),
+            | TypeErrorKind::DestructureArityMismatch
+            | TypeErrorKind::UnknownStructFieldInPattern
+            | TypeErrorKind::MissingStructFieldInPattern
+            | TypeErrorKind::StructPatternTypeMismatch => actual.to_string(),
         };
         f.write_str(&message)
     }

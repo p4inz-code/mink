@@ -1520,12 +1520,75 @@ impl<'a> FnBuilder<'a> {
         }
     }
 
+    /// Lowers a struct destructuring let binding (session 32).
+    ///
+    /// Evaluates the initializer into a temporary, then extracts each
+    /// named field via member access into a separate local.
+    fn lower_binding_struct_destructure(
+        &mut self,
+        binding: &HirLet,
+        fields: &[crate::hir::HirStructPatternField],
+        mutable: bool,
+    ) {
+        // Evaluate the initializer.
+        let init_operand = self.eval_operand(&binding.init);
+        for field in fields {
+            let ident = &field.binding;
+            // Look up the field type from the struct type.
+            let field_ty = self
+                .eval
+                .table
+                .struct_field_type(binding.ty, &field.name.name)
+                .unwrap_or(binding.ty);
+            // Declare the element's local FIRST so the backend verifier
+            // can match the field load target type.
+            let local = self.eval.declare_local(
+                ident.name.clone(),
+                Some(ident.symbol),
+                field_ty,
+                mutable,
+                ident.span,
+            );
+            self.eval.symbols.insert(ident.symbol, local);
+            // Extract field via member access: `init.field_name`.
+            let member_name = MirName {
+                name: field.name.name.clone(),
+                span: ident.span,
+            };
+            let field_rvalue = MirRvalueKind::Member {
+                base: init_operand.clone(),
+                member: member_name,
+            };
+            self.eval.emit(MirStmt {
+                kind: MirStmtKind::Assign {
+                    target: MirTarget {
+                        kind: MirTargetKind::Local(local),
+                        span: ident.span,
+                        ty: field_ty,
+                    },
+                    rvalue: MirRvalue {
+                        kind: field_rvalue,
+                        span: ident.span,
+                        ty: field_ty,
+                    },
+                },
+                span: ident.span,
+            });
+        }
+    }
+
     /// Declares a binding's local, evaluates its initializer, and stores it.
     fn lower_binding(&mut self, binding: &HirLet, mutable: bool) {
         // Tuple destructuring (session 31): desugar `let (a, b) = expr;` into
         // field extraction for each element.
         if let Some(HirPattern::Tuple { elements, .. }) = &binding.pattern {
             self.lower_binding_destructure(binding, elements, mutable);
+            return;
+        }
+        // Struct destructuring (session 32): desugar `let Name { x, y } = expr;`
+        // into named field extraction for each element.
+        if let Some(HirPattern::Struct { fields, .. }) = &binding.pattern {
+            self.lower_binding_struct_destructure(binding, fields, mutable);
             return;
         }
         let local = self.eval.declare_local(
@@ -2541,6 +2604,14 @@ impl<'a> FnBuilder<'a> {
                     });
                 }
             }
+            HirPattern::Struct { .. } => {
+                // Struct patterns in match arms are not yet supported;
+                // the type checker rejects them (E-T26).
+                self.terminate(MirTerminator::Jump {
+                    target: else_,
+                    span,
+                });
+            }
         }
     }
 
@@ -2760,6 +2831,9 @@ impl<'a> FnBuilder<'a> {
             }
             HirPattern::Tuple { .. } => {
                 unreachable!("tuple patterns lower through lower_pattern_chain")
+            }
+            HirPattern::Struct { .. } => {
+                unreachable!("struct patterns lower through lower_pattern_chain")
             }
         };
         self.emit_temp_rvalue(

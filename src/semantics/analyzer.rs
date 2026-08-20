@@ -550,6 +550,14 @@ impl Analyzer {
                     Self::collect_pattern_bindings(elem, out);
                 }
             }
+            Pattern::Struct { fields, .. } => {
+                for field in fields {
+                    match &field.binding {
+                        Some(inner) => Self::collect_pattern_bindings(inner, out),
+                        None => out.push(&field.name),
+                    }
+                }
+            }
         }
     }
 

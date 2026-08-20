@@ -629,6 +629,17 @@ impl TypeTable {
             _ => None,
         }
     }
+
+    /// The type of a named field on the struct type `ty`, if `ty` is a
+    /// struct and the field exists.
+    pub fn struct_field_type(&self, ty: TypeId, field_name: &str) -> Option<TypeId> {
+        let id = self.struct_id(ty)?;
+        let info = self.struct_info(id)?;
+        info.fields
+            .iter()
+            .find(|f| f.name == field_name)
+            .map(|f| f.ty)
+    }
 }
 
 #[cfg(test)]

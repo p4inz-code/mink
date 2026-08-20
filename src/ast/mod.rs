@@ -476,6 +476,35 @@ pub enum Pattern {
         /// Span covering the whole tuple pattern.
         span: Span,
     },
+    /// A struct destructuring pattern (session 32): `Name { field1, field2 }`.
+    /// Each field binds a value extracted from the struct by field name.
+    /// A field may have an explicit binding pattern (`field: pat`) or use
+    /// the shorthand form (`field` binds to the field's own name).
+    Struct {
+        /// The struct type name.
+        name: Ident,
+        /// The field patterns, in source order.
+        fields: Vec<StructPatternField>,
+        /// Span covering the whole pattern from name through closing brace.
+        span: Span,
+    },
+}
+
+/// One field in a struct destructuring pattern (session 32).
+///
+/// Each field extracts a named field from the struct value. The field name
+/// is the struct field being accessed; the binding is either a simple
+/// identifier pattern or a nested pattern for sub-destructuring.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructPatternField {
+    /// The struct field name to extract.
+    pub name: Ident,
+    /// The optional binding pattern. When `None`, the field is bound to a
+    /// name matching the field name (shorthand). When `Some(pat)`, the
+    /// field is destructured into `pat`.
+    pub binding: Option<Pattern>,
+    /// Span covering the whole field (name and optional `: pat`).
+    pub span: Span,
 }
 
 impl Pattern {
@@ -494,6 +523,7 @@ impl Pattern {
             Self::Range { span, .. } => *span,
             Self::Or { span, .. } => *span,
             Self::Tuple { span, .. } => *span,
+            Self::Struct { span, .. } => *span,
         }
     }
 }

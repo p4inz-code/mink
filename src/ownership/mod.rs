@@ -773,7 +773,32 @@ impl<'a> Analyzer<'a> {
         match &stmt.kind {
             StmtKind::Let(binding) => {
                 let value = self.eval_expr(&binding.init, Mode::Transfer);
-                self.bind(binding.name.span, &value);
+                // For destructuring patterns, bind each field individually.
+                match &binding.pattern {
+                    Some(crate::ast::Pattern::Tuple { elements, .. }) => {
+                        for elem in elements {
+                            if let crate::ast::Pattern::Binding(name) = elem {
+                                self.bind(name.span, &EvalValue::copy());
+                            }
+                        }
+                    }
+                    Some(crate::ast::Pattern::Struct { fields, .. }) => {
+                        for field in fields {
+                            match &field.binding {
+                                Some(crate::ast::Pattern::Binding(name)) => {
+                                    self.bind(name.span, &EvalValue::copy());
+                                }
+                                None => {
+                                    self.bind(field.name.span, &EvalValue::copy());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {
+                        self.bind(binding.name.span, &value);
+                    }
+                }
             }
             StmtKind::Const(binding) => {
                 let value = self.eval_expr(&binding.init, Mode::Transfer);

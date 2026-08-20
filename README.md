@@ -132,7 +132,10 @@ corruption, no segfault guessing games.
   type inferred from break values; `E-T36` on missing break value), **tuples**
   (`(Int, Bool)`, tuple expressions, `x.0` field access, tuple types in
   annotations and struct fields, **tuple destructuring** `let (a, b) = x;`
-  with type annotations, nested patterns, and wildcards), direct function
+  with type annotations, nested patterns, and wildcards, **struct destructuring**
+  `let Point { x, y } = p;` with shorthand and explicit field bindings,
+  field existence validation (`E-T39`), missing field rejection (`E-T40`),
+  struct type name validation (`E-T41`), and nested struct patterns), direct function
   calls, module bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
   with optional parameter types and return type, enforced by the type checker;
   unannotated parameters and return types remain inferred), **let/const

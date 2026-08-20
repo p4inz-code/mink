@@ -680,3 +680,40 @@ The session-31 lexer needed no changes (all tokens already existed).
 Const destructuring (`const (a, b) = expr;`) remains deferred.
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
+
+## 25. Session-32 Additions: Struct Destructuring in Let Bindings
+
+**Session:** 32 — struct destructuring in let bindings
+
+This section extends the frozen grammar additively. The base grammar and
+the session-14/17/18/19/20/25/26/27/28/29/30/31 additions above remain
+authoritative; the new production is:
+
+```
+LetBinding  := 'let' 'mut'? LetPattern (':' Type)? '=' Expr ';'
+LetPattern  := Ident | TupleLetPattern | StructLetPattern
+StructLetPattern := Ident '{' StructPatternField (',' StructPatternField)* ','? '}'
+StructPatternField := Ident (':' Pattern)?
+```
+
+- **Struct destructuring** (`let Point { x, y } = expr;`) extracts each
+  named field of a struct value into a separate binding. The initializer
+  must be a struct type whose name matches the pattern (`E-T41` on
+  mismatch); a non-struct initializer is `E-T37` (cannot destructure).
+- **Shorthand bindings** (`x` instead of `x: x`) bind the field to a
+  name matching the field name. **Explicit bindings** (`x: renamed`)
+  bind the field to a different name or a nested pattern.
+- **All declared fields required** — every declared field must appear in
+  the pattern (`E-T40` on omission); unknown fields are `E-T39`.
+- **Nested destructuring** (`let Point { x: Inner { a, b } } = p;`)
+  recursively destructures nested struct fields.
+- **Type annotations** (`let Point { x, y }: Point = expr;`) check the
+  whole struct type against the annotation.
+- **Mutability** (`let mut Point { x, y } = expr;`) makes all
+  destructured bindings mutable.
+
+The session-32 lexer needed no changes (all tokens already existed).
+Const struct destructuring (`const Point { x, y } = expr;`) remains
+deferred. Match-arm struct patterns are not yet supported.
+Exclusions from §2 and §9 that remain (`type` aliases, generics,
+lambdas/closures) are unchanged.

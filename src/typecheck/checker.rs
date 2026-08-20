@@ -1896,6 +1896,8 @@ impl<'a> Checker<'a> {
             // Tuple patterns in payload context: not yet fully supported
             // for exhaustiveness — treat as non-covering for now.
             Pattern::Tuple { .. } => None,
+            // Struct patterns in payload context: not yet supported.
+            Pattern::Struct { .. } => None,
         }
     }
 
@@ -2116,6 +2118,8 @@ impl<'a> Checker<'a> {
             }
             // Tuple patterns: not yet fully supported for exhaustiveness.
             Pattern::Tuple { .. } => Coverage::default(),
+            // Struct patterns: not yet supported in match arms.
+            Pattern::Struct { .. } => Coverage::default(),
         }
     }
 
@@ -2341,6 +2345,14 @@ impl<'a> Checker<'a> {
             Pattern::Tuple { elements, .. } => {
                 for elem in elements {
                     Self::collect_pattern_names(elem, out);
+                }
+            }
+            Pattern::Struct { fields, .. } => {
+                for field in fields {
+                    match &field.binding {
+                        Some(inner) => Self::collect_pattern_names(inner, out),
+                        None => out.push(field.name.name.clone()),
+                    }
                 }
             }
         }
@@ -2596,19 +2608,30 @@ impl<'a> Checker<'a> {
             }
         }
 
-        // The pattern must be a tuple pattern.
-        let Pattern::Tuple { elements, .. } = pattern else {
-            self.push_error(TypeError::cannot_destructure(
-                pattern.span(),
-                &self.display(init_ty),
-            ));
-            return;
-        };
+        match pattern {
+            Pattern::Tuple { elements, .. } => {
+                self.check_tuple_destructure(elements, init_ty, pattern.span());
+            }
+            Pattern::Struct {
+                name, fields, span, ..
+            } => {
+                self.check_struct_destructure(name, fields, init_ty, *span);
+            }
+            _ => {
+                self.push_error(TypeError::cannot_destructure(
+                    pattern.span(),
+                    &self.display(init_ty),
+                ));
+            }
+        }
+    }
 
+    /// Checks a tuple destructuring pattern against a tuple type.
+    fn check_tuple_destructure(&mut self, elements: &[Pattern], init_ty: TypeId, pat_span: Span) {
         // The initializer must be a tuple type.
         let Some(elem_tys) = self.types.tuple_elems(init_ty).map(|s| s.to_vec()) else {
             self.push_error(TypeError::cannot_destructure(
-                pattern.span(),
+                pat_span,
                 &self.display(init_ty),
             ));
             return;
@@ -2617,7 +2640,7 @@ impl<'a> Checker<'a> {
         // Arity check.
         if elements.len() != elem_tys.len() {
             self.push_error(TypeError::destructure_arity_mismatch(
-                pattern.span(),
+                pat_span,
                 elem_tys.len(),
                 elements.len(),
             ));
@@ -2627,6 +2650,98 @@ impl<'a> Checker<'a> {
         // Unify each element pattern's binding with the tuple element type.
         for (elem_pat, &elem_ty) in elements.iter().zip(elem_tys.iter()) {
             self.check_destructure_pattern_binding(elem_pat, elem_ty);
+        }
+    }
+
+    /// Checks a struct destructuring pattern against a struct type.
+    ///
+    /// Validates that the initializer is a struct type, that every field
+    /// in the pattern exists on the struct (`E-T39`), that no declared
+    /// field is omitted (`E-T40`), and that each field binding unifies
+    /// with the corresponding struct field's type.
+    fn check_struct_destructure(
+        &mut self,
+        name: &Ident,
+        fields: &[crate::ast::StructPatternField],
+        init_ty: TypeId,
+        pat_span: Span,
+    ) {
+        // The initializer must be a struct type.
+        let canonical = self.types.canonical(init_ty);
+        let struct_id = match self.types.kind(canonical) {
+            Some(TypeKind::Struct(id)) => *id,
+            _ => {
+                self.push_error(TypeError::cannot_destructure(
+                    pat_span,
+                    &self.display(init_ty),
+                ));
+                return;
+            }
+        };
+
+        // Resolve the struct's declared fields.
+        let struct_info = match self.types.struct_info(struct_id) {
+            Some(info) => info.clone(),
+            _ => {
+                self.push_error(TypeError::cannot_destructure(
+                    pat_span,
+                    &self.display(init_ty),
+                ));
+                return;
+            }
+        };
+
+        // Validate the struct type name in the pattern matches the
+        // initializer's struct type.
+        if struct_info.name != name.name {
+            self.push_error(TypeError::struct_pattern_type_mismatch(
+                name.span,
+                &name.name,
+                &self.display(init_ty),
+            ));
+            return;
+        }
+
+        // Check that every field in the pattern exists in the struct.
+        for field in fields {
+            if !struct_info.fields.iter().any(|f| f.name == field.name.name) {
+                self.push_error(TypeError::unknown_struct_field_in_pattern(
+                    field.name.span,
+                    &field.name.name,
+                    &struct_info.name,
+                ));
+            }
+        }
+
+        // Check that every declared field is present in the pattern.
+        for declared_field in &struct_info.fields {
+            if !fields.iter().any(|f| f.name.name == declared_field.name) {
+                self.push_error(TypeError::missing_struct_field_in_pattern(
+                    pat_span,
+                    &declared_field.name,
+                    &struct_info.name,
+                ));
+            }
+        }
+
+        // Unify each field pattern's binding with the struct field's type.
+        for field in fields {
+            if let Some(field_info) = struct_info
+                .fields
+                .iter()
+                .find(|f| f.name == field.name.name)
+            {
+                let field_ty = field_info.ty;
+                match &field.binding {
+                    Some(inner) => {
+                        self.check_destructure_pattern_binding(inner, field_ty);
+                    }
+                    None => {
+                        // Shorthand: bind to the field name.
+                        self.unify_decl(&field.name, field_ty, field.name.span);
+                    }
+                }
+            }
         }
     }
 
@@ -2659,6 +2774,12 @@ impl<'a> Checker<'a> {
                 for (elem_pat, &elem_ty) in elements.iter().zip(inner_elems.iter()) {
                     self.check_destructure_pattern_binding(elem_pat, elem_ty);
                 }
+            }
+            Pattern::Struct {
+                name, fields, span, ..
+            } => {
+                // Nested struct destructuring.
+                self.check_struct_destructure(name, fields, expected_ty, *span);
             }
             // Literal and enum-variant patterns in let destructuring
             // are rejected — they have no binding to unify.

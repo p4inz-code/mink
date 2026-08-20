@@ -29,7 +29,8 @@ mod error;
 use crate::ast::{
     AssignOp, Ast, BinaryOp, Block, ConstItem, ElseBranch, EnumItem, EnumVariant, Expr, ExprKind,
     FnItem, Ident, IfExpr, IfStmt, Item, ItemKind, LetItem, MatchArm, MatchStmt, Param, Pattern,
-    Stmt, StmtKind, StructField, StructFieldInit, StructItem, Ty, TyKind, UnaryOp,
+    Stmt, StmtKind, StructField, StructFieldInit, StructItem, StructPatternField, Ty, TyKind,
+    UnaryOp,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::source::{SourceFile, Span};
@@ -919,6 +920,40 @@ impl<'a> Parser<'a> {
         if self.current_kind() == TokenKind::LParen {
             return self.parse_let_destructure(start, mutable);
         }
+        // Struct destructuring: `let Name { x, y } = expr;` (session 32).
+        // We need two-token lookahead to distinguish `let Name { ... }`
+        // (struct pattern) from `let Name = ...` (simple binding). Consume
+        // the Ident first, then check the next token.
+        if self.current_kind() == TokenKind::Ident {
+            let name_token = self.bump(); // consume the Ident
+            if self.current_kind() == TokenKind::LBrace {
+                return self.parse_let_struct_destructure(start, mutable, name_token);
+            }
+            // Not a struct pattern — the Ident is the binding name.
+            // Handle the rest of the binding inline since we already consumed
+            // the name token.
+            let name = self.make_ident(&name_token);
+            let ty = self.parse_optional_type_annotation();
+            if self.current_kind() != TokenKind::Eq {
+                let token = self.current();
+                self.record_error(ParseErrorKind::ExpectedEqual, token.span());
+                return Err(());
+            }
+            let _ = self.bump();
+            let init = self.parse_expression()?;
+            let semi = self.expect_semi()?;
+            let span = self.join(start, semi);
+            return Ok((
+                LetItem {
+                    name,
+                    mutable,
+                    ty,
+                    init,
+                    pattern: None,
+                },
+                span,
+            ));
+        }
         self.parse_binding_tail(start, mutable)
     }
 
@@ -933,6 +968,120 @@ impl<'a> Parser<'a> {
             },
             span,
         ))
+    }
+
+    /// Creates an [`Ident`] from a consumed token.
+    fn make_ident(&self, token: &Token) -> Ident {
+        Ident {
+            name: self.text(token.span()),
+            span: token.span(),
+        }
+    }
+
+    /// Parses an optional `: Type` annotation. Returns `Some(Ty)` if a
+    /// colon is present, `None` otherwise.
+    fn parse_optional_type_annotation(&mut self) -> Option<Ty> {
+        if self.current_kind() == TokenKind::Colon {
+            let _ = self.bump(); // ':'
+            self.parse_type().ok()
+        } else {
+            None
+        }
+    }
+
+    /// Parses `let [mut] Name { field1, field2, ... } [: Type] = expr ;` —
+    /// struct destructuring (session 32).
+    ///
+    /// The `name_token` is the already-consumed struct type name token.
+    fn parse_let_struct_destructure(
+        &mut self,
+        start: Span,
+        mutable: bool,
+        name_token: Token,
+    ) -> Result<(LetItem, Span), ()> {
+        let struct_name = self.make_ident(&name_token);
+        let lbrace = self.bump(); // '{'
+        self.open_delims.push((TokenKind::LBrace, lbrace.span()));
+        let mut fields = Vec::new();
+        if self.current_kind() != TokenKind::RBrace {
+            loop {
+                let field = self.parse_struct_pattern_field()?;
+                fields.push(field);
+                if self.current_kind() == TokenKind::Comma {
+                    let _ = self.bump();
+                    if self.current_kind() == TokenKind::RBrace {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+        if self.current_kind() != TokenKind::RBrace {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedRBrace, token.span());
+            while !matches!(
+                self.current_kind(),
+                TokenKind::RBrace | TokenKind::Semi | TokenKind::Eof
+            ) {
+                let _ = self.bump();
+            }
+        }
+        let close = self.bump(); // '}'
+        self.open_delims.pop();
+        let pattern_span = self.join(name_token.span(), close.span());
+        let pattern = Pattern::Struct {
+            name: struct_name,
+            fields,
+            span: pattern_span,
+        };
+        // Optional type annotation: `: Type`.
+        let ty = self.parse_optional_type_annotation();
+        if self.current_kind() != TokenKind::Eq {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedEqual, token.span());
+            return Err(());
+        }
+        let _ = self.bump();
+        let init = self.parse_expression()?;
+        let semi = self.expect_semi()?;
+        let span = self.join(start, semi);
+        // Extract first binding name for backward compatibility.
+        let first_name = Self::first_binding_name(&pattern).unwrap_or_else(|| Ident {
+            name: "_".to_string(),
+            span: pattern.span(),
+        });
+        Ok((
+            LetItem {
+                name: first_name,
+                mutable,
+                ty,
+                init,
+                pattern: Some(pattern),
+            },
+            span,
+        ))
+    }
+
+    /// Parses a single field in a struct destructuring pattern: `name` or
+    /// `name: pattern`.
+    fn parse_struct_pattern_field(&mut self) -> Result<StructPatternField, ()> {
+        let name = self.expect_ident()?;
+        let binding = if self.current_kind() == TokenKind::Colon {
+            let _ = self.bump(); // ':'
+            Some(self.parse_pattern()?)
+        } else {
+            None // shorthand: field binds to its own name
+        };
+        let span = match &binding {
+            Some(p) => self.join(name.span, p.span()),
+            None => name.span,
+        };
+        Ok(StructPatternField {
+            name,
+            binding,
+            span,
+        })
     }
 
     /// Parses `name [: Type] = expr ;` shared by `let` and `const` bindings.
@@ -1009,6 +1158,10 @@ impl<'a> Parser<'a> {
         match pattern {
             Pattern::Binding(ident) => Some(ident.clone()),
             Pattern::Tuple { elements, .. } => elements.first().and_then(Self::first_binding_name),
+            Pattern::Struct { fields, .. } => fields.first().and_then(|f| match &f.binding {
+                Some(inner) => Self::first_binding_name(inner),
+                None => Some(f.name.clone()),
+            }),
             Pattern::Wildcard { .. } => None,
             _ => None,
         }

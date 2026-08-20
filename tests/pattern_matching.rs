@@ -189,6 +189,9 @@ fn all_pattern_forms_parse() {
             mink::ast::Pattern::Tuple { elements, .. } => {
                 format!("tuple({})", elements.len())
             }
+            mink::ast::Pattern::Struct { name, fields, .. } => {
+                format!("struct({}:{})", name.name, fields.len())
+            }
         })
         .collect();
     assert_eq!(

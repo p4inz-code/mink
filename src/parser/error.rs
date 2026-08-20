@@ -83,6 +83,8 @@ pub enum ParseErrorKind {
     EmptyPayload,
     /// `else` was required after the then-block of an if-expression.
     ExpectedElse,
+    /// A struct pattern field name was expected.
+    ExpectedStructField,
 }
 
 impl ParseErrorKind {
@@ -118,6 +120,7 @@ impl ParseErrorKind {
             Self::ExpectedFatArrow => "E-P24",
             Self::EmptyPayload => "E-P25",
             Self::ExpectedElse => "E-P26",
+            Self::ExpectedStructField => "E-P27",
         }
     }
 }
@@ -157,6 +160,9 @@ impl fmt::Display for ParseErrorKind {
                 "expected a payload in the parentheses of a data-carrying variant (a variant carries exactly one payload)"
             }
             Self::ExpectedElse => "an if-expression requires an `else` branch to produce a value",
+            Self::ExpectedStructField => {
+                "expected a struct pattern field name (`Name` or `Name: pattern`)"
+            }
         };
         f.write_str(message)
     }
