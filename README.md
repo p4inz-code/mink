@@ -135,7 +135,10 @@ corruption, no segfault guessing games.
   with type annotations, nested patterns, and wildcards, **struct destructuring**
   `let Point { x, y } = p;` with shorthand and explicit field bindings,
   field existence validation (`E-T39`), missing field rejection (`E-T40`),
-  struct type name validation (`E-T41`), and nested struct patterns), direct function
+  struct type name validation (`E-T41`), and nested struct patterns), **match
+  expressions** (`let x = match e { pat => expr, ... }` producing a value with
+  result-type unification across arms, exhaustive pattern matching, and
+  support for all existing pattern forms), direct function
   calls, module bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
   with optional parameter types and return type, enforced by the type checker;
   unannotated parameters and return types remain inferred), **let/const
@@ -298,7 +301,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1494, all passing)
+├── tests/      Compiler tests (1563, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

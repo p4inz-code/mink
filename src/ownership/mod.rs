@@ -1336,6 +1336,60 @@ impl<'a> Analyzer<'a> {
                 self.walk_block(body);
                 EvalValue::copy()
             }
+            ExprKind::MatchExpr(m) => {
+                self.eval_expr(&m.scrutinee, Mode::Observe);
+                let mut moved_payload = false;
+                for arm in &m.arms {
+                    match &arm.pattern {
+                        crate::ast::Pattern::Binding(name) => {
+                            self.bind(name.span, &EvalValue::copy());
+                        }
+                        crate::ast::Pattern::Or { alternatives, .. } => {
+                            for alternative in alternatives {
+                                if let crate::ast::Pattern::EnumVariant {
+                                    payload: Some(inner),
+                                    ..
+                                } = alternative
+                                {
+                                    let provenance =
+                                        self.payload_provenance(&m.scrutinee, &EvalValue::copy());
+                                    if self.payload_binding_transfers(inner, provenance) {
+                                        moved_payload = true;
+                                    }
+                                    self.bind_payload_pattern(inner, provenance);
+                                }
+                            }
+                        }
+                        crate::ast::Pattern::EnumVariant {
+                            payload: Some(inner),
+                            ..
+                        } => {
+                            let provenance =
+                                self.payload_provenance(&m.scrutinee, &EvalValue::copy());
+                            if self.payload_binding_transfers(inner, provenance) {
+                                moved_payload = true;
+                            }
+                            self.bind_payload_pattern(inner, provenance);
+                        }
+                        crate::ast::Pattern::Tuple { elements, .. } => {
+                            for elem in elements {
+                                if let crate::ast::Pattern::Binding(name) = elem {
+                                    self.bind(name.span, &EvalValue::copy());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.eval_expr(guard, Mode::Observe);
+                    }
+                    self.eval_expr(&arm.body, Mode::Observe);
+                }
+                if moved_payload {
+                    self.mark_scrutinee_consumed(&m.scrutinee);
+                }
+                EvalValue::copy()
+            }
         }
     }
 

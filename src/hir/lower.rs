@@ -295,6 +295,23 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Lowers a match expression arm (session 33): wraps the expression
+    /// body in a synthetic block with a trailing expression, producing
+    /// a `HirMatchArm` compatible with the existing MIR lowering.
+    fn lower_match_expr_arm(&mut self, arm: &crate::ast::MatchExprArm) -> HirMatchArm {
+        let body_expr = self.lower_expr(&arm.body);
+        HirMatchArm {
+            pattern: self.lower_pattern(&arm.pattern),
+            guard: arm.guard.as_ref().map(|guard| self.lower_expr(guard)),
+            body: HirBlock {
+                stmts: Vec::new(),
+                result: Some(body_expr),
+                span: arm.body.span,
+            },
+            span: arm.span,
+        }
+    }
+
     /// Lowers a match pattern, resolving pattern bindings through the
     /// declaration index like any other binding. A data-carrying variant
     /// pattern's payload pattern is lowered recursively.
@@ -629,6 +646,24 @@ impl<'a> Lowerer<'a> {
                     kind: HirExprKind::LoopExpr {
                         body: Box::new(self.lower_block(body)),
                         span: *span,
+                    },
+                    span: expr.span,
+                    ty,
+                };
+            }
+            ExprKind::MatchExpr(m) => {
+                let ty = self.expr_type(expr.span);
+                let scrutinee = self.lower_expr(&m.scrutinee);
+                let arms = m
+                    .arms
+                    .iter()
+                    .map(|arm| self.lower_match_expr_arm(arm))
+                    .collect();
+                return HirExpr {
+                    kind: HirExprKind::MatchExpr {
+                        scrutinee: Box::new(scrutinee),
+                        arms,
+                        span: m.span,
                     },
                     span: expr.span,
                     ty,

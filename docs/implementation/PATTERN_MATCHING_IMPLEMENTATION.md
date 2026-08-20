@@ -201,8 +201,9 @@ lowering as ordinary CFG — no new validation rules were needed.
 
 ## 4. Conservative decisions and known limitations
 
-- **No match expressions.** `match` is a statement; `let x = match e { .. };`
-  is a parse error. Value-producing matches are future work.
+- **Match expressions landed in session 33.** `match` can now be used as
+  an expression (`let x = match e { pat => expr, ... }`); see
+  `MATCH_EXPRESSIONS_IMPLEMENTATION.md`.
 - **No destructuring.** Patterns match scalar values only — no struct
   patterns, array patterns, or tuple forms; no nested patterns.
 - **No ranges, or-patterns, or guards.** `1 | 2 =>`, `1..=3 =>`, and
@@ -307,5 +308,6 @@ fn main() {
 ## 7. Status
 
 Frozen for the constructs it covers. Statements and declarations outside
-it are rejected with stable diagnostics. Later sessions extend this
-document additively.
+it are rejected with stable diagnostics. Match expressions landed in
+session 33 (`MATCH_EXPRESSIONS_IMPLEMENTATION.md`). Later sessions extend
+this document additively.

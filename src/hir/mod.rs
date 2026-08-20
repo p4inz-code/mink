@@ -600,4 +600,15 @@ pub enum HirExprKind {
         /// Span.
         span: Span,
     },
+    /// A `match` expression (session 33): `match scrutinee { pattern =>
+    /// expr, ... }`. Each arm's body is an expression that produces the
+    /// match result.
+    MatchExpr {
+        /// The typed scrutinee.
+        scrutinee: Box<HirExpr>,
+        /// The arms, in source order.
+        arms: Vec<HirMatchArm>,
+        /// Span.
+        span: Span,
+    },
 }

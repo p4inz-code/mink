@@ -33,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{AssignOp, BinaryOp, UnaryOp};
 use crate::hir::{
     HirBlock, HirConst, HirElseBranch, HirExpr, HirExprKind, HirFn, HirIdent, HirIf, HirItemKind,
-    HirLet, HirMatch, HirName, HirPattern, HirProgram, HirStmt, HirStmtKind,
+    HirLet, HirMatch, HirMatchArm, HirName, HirPattern, HirProgram, HirStmt, HirStmtKind,
 };
 use crate::semantics::SymbolId;
 use crate::source::{SourceId, Span};
@@ -472,6 +472,21 @@ impl<'a> StmtEval<'a> {
             HirExprKind::Assign { .. } => self.eval_assign(expr),
             HirExprKind::WhileExpr { .. } | HirExprKind::LoopExpr { .. } => {
                 // Loop expressions in pure operand position are lowered at
+                // the statement level by FnBuilder; return a defensive
+                // zero constant so the compiler does not panic on
+                // malformed internal state.
+                MirOperand {
+                    kind: MirOperandKind::Constant(MirConstant {
+                        kind: MirConstantKind::Bool(false),
+                        span: expr.span,
+                        ty: expr.ty,
+                    }),
+                    span: expr.span,
+                    ty: expr.ty,
+                }
+            }
+            HirExprKind::MatchExpr { .. } => {
+                // Match expressions in pure operand position are lowered at
                 // the statement level by FnBuilder; return a defensive
                 // zero constant so the compiler does not panic on
                 // malformed internal state.
@@ -1318,6 +1333,11 @@ impl<'a> FnBuilder<'a> {
             HirExprKind::LoopExpr { body, span } => {
                 Some(self.lower_loop_expr(body, result.ty, *span))
             }
+            HirExprKind::MatchExpr {
+                scrutinee,
+                arms,
+                span,
+            } => Some(self.lower_match_expr(scrutinee, arms, result.ty, *span)),
             _ => None,
         }
     }
@@ -1331,6 +1351,11 @@ impl<'a> FnBuilder<'a> {
                 self.lower_while_expr(cond, body, expr.ty, *span)
             }
             HirExprKind::LoopExpr { body, span } => self.lower_loop_expr(body, expr.ty, *span),
+            HirExprKind::MatchExpr {
+                scrutinee,
+                arms,
+                span,
+            } => self.lower_match_expr(scrutinee, arms, expr.ty, *span),
             HirExprKind::Block(block) => {
                 // A block expression in operand position: lower statements,
                 // then handle the trailing expression.
@@ -1355,7 +1380,7 @@ impl<'a> FnBuilder<'a> {
                     return;
                 }
                 let value = value.as_ref().map(|expr| {
-                    // Session 30: while/loop expressions need CFG lowering.
+                    // Session 30: while/loop/match expressions need CFG lowering.
                     match &expr.kind {
                         HirExprKind::WhileExpr { cond, body, span } => {
                             self.lower_while_expr(cond, body, expr.ty, *span)
@@ -1363,6 +1388,11 @@ impl<'a> FnBuilder<'a> {
                         HirExprKind::LoopExpr { body, span } => {
                             self.lower_loop_expr(body, expr.ty, *span)
                         }
+                        HirExprKind::MatchExpr {
+                            scrutinee,
+                            arms,
+                            span,
+                        } => self.lower_match_expr(scrutinee, arms, expr.ty, *span),
                         _ => self.eval_operand(expr),
                     }
                 });
@@ -1441,13 +1471,20 @@ impl<'a> FnBuilder<'a> {
                 // expression (after a terminator) starts a fresh block so
                 // the emission target always exists.
                 self.ensure_current(stmt.span);
-                // Loop expressions in statement position: lower with CFG.
+                // Loop/match expressions in statement position: lower with CFG.
                 match &expr.kind {
                     HirExprKind::WhileExpr { cond, body, span } => {
                         self.lower_while_expr(cond, body, expr.ty, *span);
                     }
                     HirExprKind::LoopExpr { body, span } => {
                         self.lower_loop_expr(body, expr.ty, *span);
+                    }
+                    HirExprKind::MatchExpr {
+                        scrutinee,
+                        arms,
+                        span,
+                    } => {
+                        self.lower_match_expr(scrutinee, arms, expr.ty, *span);
                     }
                     _ => {
                         let _ = self.eval_operand(expr);
@@ -1644,6 +1681,29 @@ impl<'a> FnBuilder<'a> {
             });
             return;
         }
+        // If the initializer is a match expression, lower it with branching
+        // and a merge block (session 33).
+        if let HirExprKind::MatchExpr {
+            scrutinee,
+            arms,
+            span,
+        } = &binding.init.kind
+        {
+            let result = self.lower_match_expr(scrutinee, arms, binding.ty, *span);
+            let target = MirTarget {
+                kind: MirTargetKind::Local(local),
+                span: binding.span,
+                ty: binding.ty,
+            };
+            self.emit_stmt(MirStmt {
+                kind: MirStmtKind::Assign {
+                    target,
+                    rvalue: use_rvalue(result, binding.span, binding.ty),
+                },
+                span: binding.span,
+            });
+            return;
+        }
         // If the initializer is a block expression, lower statements
         // then the trailing expression.
         if let HirExprKind::Block(block) = &binding.init.kind {
@@ -1687,6 +1747,27 @@ impl<'a> FnBuilder<'a> {
                 }
                 if let HirExprKind::LoopExpr { body, span } = &result_expr.kind {
                     let result = self.lower_loop_expr(body, binding.ty, *span);
+                    let target = MirTarget {
+                        kind: MirTargetKind::Local(local),
+                        span: binding.span,
+                        ty: binding.ty,
+                    };
+                    self.emit_stmt(MirStmt {
+                        kind: MirStmtKind::Assign {
+                            target,
+                            rvalue: use_rvalue(result, binding.span, binding.ty),
+                        },
+                        span: binding.span,
+                    });
+                    return;
+                }
+                if let HirExprKind::MatchExpr {
+                    scrutinee,
+                    arms,
+                    span,
+                } = &result_expr.kind
+                {
+                    let result = self.lower_match_expr(scrutinee, arms, binding.ty, *span);
                     let target = MirTarget {
                         kind: MirTargetKind::Local(local),
                         span: binding.span,
@@ -2223,6 +2304,175 @@ impl<'a> FnBuilder<'a> {
         self.start_block(merge, span);
         MirOperand {
             kind: MirOperandKind::Local(break_local),
+            span,
+            ty: result_ty,
+        }
+    }
+
+    /// Lowers a `match` expression (session 33) into a chain of
+    /// pattern-test blocks that branch into the matching arm's body,
+    /// with a result local and merge block:
+    ///
+    /// ```text
+    /// pre:     scrutinee = <scrutinee value>     (evaluated once)
+    ///          result = <zero>                   (result local)
+    ///          jump test0
+    /// test0:   cond = scrutinee == <arm0 const>  (refutable arms only)
+    ///          branch cond → arm0, test1
+    /// ...
+    /// testn:   cond = scrutinee == <armn const>
+    ///          branch cond → armn, unreachable
+    /// armk:    [binding copy] <arm body>
+    ///          result = <arm body value>         (jumps to merge)
+    /// unreachable: return                        (never reached)
+    /// merge:   ...                               (result = result local)
+    /// ```
+    ///
+    /// Each arm body is an expression block whose trailing expression
+    /// produces the arm's result value, stored in the result local.
+    /// After all arms converge on the merge block, the result local is
+    /// the expression's value.
+    fn lower_match_expr(
+        &mut self,
+        scrutinee: &HirExpr,
+        arms: &[HirMatchArm],
+        result_ty: TypeId,
+        span: Span,
+    ) -> MirOperand {
+        let mut after: Option<BlockId> = None;
+        let mut unreachable: Option<BlockId> = None;
+        // Evaluate the scrutinee exactly once, in the block the `match`
+        // expression occupies.
+        self.ensure_current(span);
+        let scrutinee_op = self.eval_operand(scrutinee);
+        // Allocate a result local to hold the match expression's value.
+        let result_local = self
+            .eval
+            .declare_local(String::new(), None, result_ty, false, span);
+        // Zero-arm match (empty enum): vacuously exhaustive but dead code.
+        // The expression is unreachable, so return a defensive zero.
+        if arms.is_empty() {
+            return MirOperand {
+                kind: MirOperandKind::Constant(MirConstant {
+                    kind: MirConstantKind::Bool(false),
+                    span,
+                    ty: result_ty,
+                }),
+                span,
+                ty: result_ty,
+            };
+        }
+        let first_test = self.alloc_block();
+        self.terminate(MirTerminator::Jump {
+            target: first_test,
+            span,
+        });
+        let mut test = first_test;
+        let arm_count = arms.len();
+        for (index, arm) in arms.iter().enumerate() {
+            let is_last = index + 1 == arm_count;
+            self.start_block(test, arm.span);
+            let body_block = self.alloc_block();
+            let guard_block = if arm.guard.is_some() {
+                self.alloc_block()
+            } else {
+                body_block
+            };
+            let needs_next = arm.guard.is_some()
+                || !matches!(
+                    &arm.pattern,
+                    HirPattern::Wildcard { .. } | HirPattern::Binding(_)
+                );
+            let next = if needs_next {
+                Some(if is_last {
+                    *unreachable.get_or_insert_with(|| self.alloc_block())
+                } else {
+                    self.alloc_block()
+                })
+            } else {
+                None
+            };
+            match &arm.pattern {
+                HirPattern::Wildcard { .. } => {
+                    self.terminate(MirTerminator::Jump {
+                        target: guard_block,
+                        span: arm.span,
+                    });
+                }
+                HirPattern::Binding(ident) => {
+                    let local = self.binding_local(ident);
+                    self.eval.emit(MirStmt {
+                        kind: MirStmtKind::Assign {
+                            target: MirTarget {
+                                kind: MirTargetKind::Local(local),
+                                span: ident.span,
+                                ty: ident.ty,
+                            },
+                            rvalue: use_rvalue(scrutinee_op.clone(), ident.span, ident.ty),
+                        },
+                        span: ident.span,
+                    });
+                    self.terminate(MirTerminator::Jump {
+                        target: guard_block,
+                        span: arm.span,
+                    });
+                }
+                _ => {
+                    let next = next.expect("refutable patterns always allocate an else block");
+                    self.lower_pattern_chain(
+                        &arm.pattern,
+                        &scrutinee_op,
+                        guard_block,
+                        next,
+                        arm.span,
+                    );
+                    test = next;
+                }
+            }
+            if let Some(guard) = &arm.guard {
+                let next = next.expect("guarded arms always allocate an else block");
+                self.start_block(guard_block, arm.span);
+                let cond = self.eval_operand(guard);
+                self.terminate(MirTerminator::Branch {
+                    cond,
+                    then_block: body_block,
+                    else_block: next,
+                    span: arm.span,
+                });
+                test = next;
+            }
+            self.start_block(body_block, arm.body.span);
+            // The arm body is an expression block with a trailing expression.
+            // Lower statements first, then evaluate the trailing expression
+            // into the result local.
+            for stmt in &arm.body.stmts {
+                self.lower_stmt(stmt);
+            }
+            if let Some(result_expr) = &arm.body.result {
+                let value = self.eval_operand(result_expr);
+                self.eval.emit(MirStmt {
+                    kind: MirStmtKind::Assign {
+                        target: MirTarget {
+                            kind: MirTargetKind::Local(result_local),
+                            span: result_expr.span,
+                            ty: result_ty,
+                        },
+                        rvalue: use_rvalue(value, result_expr.span, result_ty),
+                    },
+                    span: result_expr.span,
+                });
+            }
+            self.finish_into(&mut after, span);
+        }
+        if let Some(unreachable) = unreachable {
+            self.start_block(unreachable, span);
+            self.terminate(MirTerminator::Return { value: None, span });
+        }
+        if let Some(after) = after {
+            self.start_block(after, span);
+        }
+        MirOperand {
+            kind: MirOperandKind::Local(result_local),
             span,
             ty: result_ty,
         }

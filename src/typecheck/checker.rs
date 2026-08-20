@@ -811,6 +811,18 @@ impl<'a> Checker<'a> {
                     )
                 }
             }
+            ExprKind::MatchExpr(m) => {
+                let recompute = self.deferred.contains(&expr.span);
+                if recompute {
+                    (self.check_match_expr(m), true)
+                } else {
+                    (
+                        self.recorded_ty(expr.span)
+                            .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                        false,
+                    )
+                }
+            }
         };
         if recomputed {
             self.update_recorded(expr.span, computed);
@@ -1590,6 +1602,98 @@ impl<'a> Checker<'a> {
         for arm in &stmt.arms {
             self.check_block(&arm.body);
         }
+    }
+
+    /// Types a `match` expression (session 33): the scrutinee is typed,
+    /// every arm's pattern is checked against it, the match must be
+    /// exhaustive, and every arm's expression is typed. All arm
+    /// expression types are unified to determine the match expression's
+    /// result type.
+    fn check_match_expr(&mut self, m: &crate::ast::MatchExpr) -> TypeId {
+        let scrutinee_ty = self.expr_type(&m.scrutinee);
+        // Reuse the existing pattern-checking infrastructure by building
+        // a temporary view of the arms.
+        let arm_count = m.arms.len();
+        let mut coverage = Coverage::default();
+        let mut canon = self.types.canonical(scrutinee_ty);
+        if self.types.is_error(canon) {
+            for arm in &m.arms {
+                self.expr_type(&arm.body);
+            }
+            return self.types.push(TypeKind::Error);
+        }
+        let matchable = matches!(
+            self.types.kind(canon),
+            Some(TypeKind::Int | TypeKind::Bool | TypeKind::Enum(_))
+        );
+        if !matchable && !matches!(self.types.kind(canon), Some(TypeKind::Infer(_))) {
+            self.push_error(TypeError::invalid_match_scrutinee(
+                m.scrutinee.span,
+                self.display(canon),
+            ));
+            for arm in &m.arms {
+                self.expr_type(&arm.body);
+            }
+            return self.types.push(TypeKind::Error);
+        }
+        // Unification variable for the match expression's result type.
+        let result_var = self.types.push(TypeKind::Infer(None));
+        for (index, arm) in m.arms.iter().enumerate() {
+            let _is_last = index + 1 == arm_count;
+            canon = self.types.canonical(scrutinee_ty);
+            if coverage.all {
+                self.push_error(TypeError::unreachable_match_arm(
+                    arm.pattern.span(),
+                    "this arm can never run: an earlier `_` or binding arm already matches every value",
+                ));
+                let _ = self.expr_type(&arm.body);
+                continue;
+            }
+            let guarded = arm.guard.is_some();
+            match &arm.pattern {
+                crate::ast::Pattern::Or { alternatives, span } => {
+                    self.check_or_arm(alternatives, *span, canon, guarded, &mut coverage);
+                }
+                _ => {
+                    let arm_coverage =
+                        self.check_arm_pattern(&arm.pattern, canon, arm.pattern.span());
+                    if self.coverage_contains(&coverage, &arm_coverage) {
+                        self.push_error(TypeError::unreachable_match_arm(
+                            arm.pattern.span(),
+                            "this arm can never run: an earlier arm already matches the same value",
+                        ));
+                    } else if !guarded {
+                        self.merge_arm_coverage(&mut coverage, arm_coverage);
+                    }
+                }
+            }
+            if let Some(guard) = &arm.guard {
+                self.check_condition(guard);
+            }
+            // Type the arm's expression and unify with the result type.
+            let arm_ty = self.expr_type(&arm.body);
+            if let Err((expected, actual)) = self.types.unify(result_var, arm_ty) {
+                self.push_error(TypeError::mismatch(
+                    arm.body.span,
+                    self.display(expected),
+                    self.display(actual),
+                    None,
+                ));
+            }
+        }
+        // Exhaustiveness check.
+        canon = self.types.canonical(scrutinee_ty);
+        if !self.types.is_error(canon)
+            && !matches!(self.types.kind(canon), Some(TypeKind::Infer(_)))
+            && !coverage.all
+            && !self.coverage_exhaustive(&coverage, canon)
+        {
+            self.push_error(TypeError::non_exhaustive_match(
+                m.span,
+                self.exhaustiveness_message(&coverage, canon),
+            ));
+        }
+        result_var
     }
 
     /// Checks every arm of a `match` against the scrutinee type and
@@ -2961,6 +3065,7 @@ impl<'a> Checker<'a> {
                 self.loop_result = saved;
                 result_var
             }
+            ExprKind::MatchExpr(m) => self.check_match_expr(m),
         }
     }
 

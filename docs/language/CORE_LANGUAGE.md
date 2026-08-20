@@ -496,6 +496,9 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   [`PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/PATTERN_MATCHING_IMPLEMENTATION.md)
   and
   [`RICHER_PATTERNS_IMPLEMENTATION.md`](../implementation/RICHER_PATTERNS_IMPLEMENTATION.md).
+  **Session 33** adds match expressions (`let x = match e { pat => expr, ... }`),
+  where every arm is an expression and all arm types are unified to produce
+  the match result. See [`MATCH_EXPRESSIONS_IMPLEMENTATION.md`](../implementation/MATCH_EXPRESSIONS_IMPLEMENTATION.md).
 - **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T34`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
   count, not iterable, the session-14 aggregate rules, the session-17/19/20

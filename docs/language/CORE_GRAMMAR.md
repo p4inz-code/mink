@@ -717,3 +717,46 @@ Const struct destructuring (`const Point { x, y } = expr;`) remains
 deferred. Match-arm struct patterns are not yet supported.
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
+
+## 26. Session-33 Additions: Match Expressions
+
+**Session:** 33 — match as expression
+
+This section extends the frozen grammar additively. The base grammar and
+all prior session additions remain authoritative; the new productions are:
+
+```
+Primary     := ... | MatchExpr
+MatchExpr   := 'match' Expr '{' MatchExprArm* '}'
+MatchExprArm:= Pattern ('if' Expr)? '=>' Expr
+```
+
+- **Match expressions** (`match scrutinee { pattern => expr, ... }`) in
+  expression position evaluate the scrutinee once, then evaluate and
+  return the value of the first arm whose pattern matches. Every arm's
+  expression must produce a compatible result type (`E-T01` on mismatch).
+- Match expressions appear in binding position (`let x = match ...`),
+  return position (`return match ...`), expression statement position,
+  block trailing position, and nested within other expressions.
+  They do **not** appear in arbitrary operand position (function
+  arguments, binary operands) — this mirrors the existing `if`-expression
+  limitation.
+- The scrutinee may be any expression. Its type decides whether the
+  match is legal: `Int`, `Bool`, and enums are matchable; every other
+  type is `E-T26`.
+- Arms are `pattern => expr`, separated by commas (a trailing comma is
+  allowed). The body is an expression, so `=> 1` works directly and
+  `=> { stmt; expr }` works through block expressions.
+- A guard (`pattern if expr => expr`) is evaluated after the pattern
+  matches and before the arm body expression. The guard must be `Bool`
+  (`E-T09` on mismatch). A guarded arm does not commit its pattern's
+  coverage.
+- All existing pattern forms work in match expressions: integer literals,
+  boolean literals, enum variant paths, binding patterns, `_` wildcard,
+  or-patterns, range patterns, and payload patterns.
+- The match must be exhaustive: a missing variant or uncovered space is
+  `E-T24`; an unreachable arm is `E-T25`.
+
+The session-33 lexer needed no changes (all tokens already existed).
+Exclusions from §2 and §9 that remain (`type` aliases, generics,
+lambdas/closures) are unchanged.

@@ -1395,6 +1395,14 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
         ExprKind::LoopExpr { body, .. } => {
             walk_block(body, text_len, src);
         }
+        ExprKind::MatchExpr(m) => {
+            assert_span_ok(m.span, text_len, src);
+            walk_expr(&m.scrutinee, text_len, src);
+            for arm in &m.arms {
+                assert_span_ok(arm.pattern.span(), text_len, src);
+                walk_expr(&arm.body, text_len, src);
+            }
+        }
     }
 }
 

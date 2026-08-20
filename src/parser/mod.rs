@@ -1949,6 +1949,116 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a `match scrutinee { pattern => expr, ... }` expression
+    /// (session 33). Each arm's body is an expression, not a block, so
+    /// `match x { 1 => 1, _ => 0 }` works directly. Block expressions
+    /// are valid arm bodies: `=> { stmt; expr }`.
+    fn parse_match_expr(&mut self) -> Result<Expr, ()> {
+        let start = self.bump().span(); // 'match'
+        // The scrutinee is followed by a `{ ... }` block in the grammar,
+        // so an `Ident {` in it is the block, never a struct literal.
+        let saved = self.in_block_context;
+        self.in_block_context = true;
+        let scrutinee = self.parse_expression()?;
+        self.in_block_context = saved;
+        if self.current_kind() != TokenKind::LBrace {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedBlock, token.span());
+            return Err(());
+        }
+        let open = self.bump().span();
+        self.open_delims.push((TokenKind::LBrace, open));
+        let mut arms = Vec::new();
+        loop {
+            match self.current_kind() {
+                TokenKind::RBrace => {
+                    let close = self.bump().span();
+                    self.open_delims.pop();
+                    let span = self.join(start, close);
+                    return Ok(Expr {
+                        kind: ExprKind::MatchExpr(Box::new(crate::ast::MatchExpr {
+                            scrutinee,
+                            arms,
+                            span,
+                        })),
+                        span,
+                    });
+                }
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                    return Err(());
+                }
+                _ => match self.parse_match_expr_arm() {
+                    Ok(arm) => arms.push(arm),
+                    Err(()) => self.skip_to_arm_boundary(),
+                },
+            }
+            // The separator after an arm: a comma (trailing commas are
+            // allowed) or the closing brace.
+            match self.current_kind() {
+                TokenKind::Comma => {
+                    let _ = self.bump();
+                    if self.current_kind() == TokenKind::RBrace {
+                        break;
+                    }
+                }
+                TokenKind::RBrace => break,
+                TokenKind::Eof => {
+                    self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+                    return Err(());
+                }
+                _ => {
+                    let token = self.current();
+                    self.record_error(ParseErrorKind::ExpectedComma, token.span());
+                    self.skip_to_arm_boundary();
+                    if self.current_kind() == TokenKind::Comma {
+                        let _ = self.bump();
+                    }
+                }
+            }
+        }
+        let close = self.bump().span(); // `}`
+        self.open_delims.pop();
+        let span = self.join(start, close);
+        Ok(Expr {
+            kind: ExprKind::MatchExpr(Box::new(crate::ast::MatchExpr {
+                scrutinee,
+                arms,
+                span,
+            })),
+            span,
+        })
+    }
+
+    /// Parses one match expression arm: `pattern ('if' Expr)? => Expr`
+    /// (session 33). The body is an expression, not a block, so simple
+    /// expressions like `=> 1` work directly.
+    fn parse_match_expr_arm(&mut self) -> Result<crate::ast::MatchExprArm, ()> {
+        let pattern = self.parse_pattern()?;
+        // A guard (session 27): `pattern if expr =>`.
+        let mut guard = None;
+        if self.current_kind() == TokenKind::If {
+            let _ = self.bump(); // 'if'
+            if let Ok(expr) = self.parse_expression() {
+                guard = Some(expr);
+            }
+        }
+        if self.current_kind() != TokenKind::FatArrow {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedFatArrow, token.span());
+            return Err(());
+        }
+        let _ = self.bump(); // '=>'
+        let body = self.parse_expression()?;
+        let span = self.join(pattern.span(), body.span);
+        Ok(crate::ast::MatchExprArm {
+            pattern,
+            guard,
+            body,
+            span,
+        })
+    }
+
     /// Parses a `{ ... }` block body; on a missing `{` records
     /// [`ParseErrorKind::ExpectedBlock`] and returns `Err`.
     fn parse_block_body(&mut self) -> Result<Block, ()> {
@@ -2056,8 +2166,10 @@ impl<'a> Parser<'a> {
                     // In expression-block trailing position, `while`/`loop`
                     // are parsed as expressions (session 30). In statement
                     // position they are parsed as statements.
-                    let is_expr_trailing =
-                        matches!(self.current_kind(), TokenKind::While | TokenKind::Loop);
+                    let is_expr_trailing = matches!(
+                        self.current_kind(),
+                        TokenKind::While | TokenKind::Loop | TokenKind::Match
+                    );
                     let is_kw = matches!(
                         self.current_kind(),
                         TokenKind::Let
@@ -2071,9 +2183,15 @@ impl<'a> Parser<'a> {
                             | TokenKind::Match
                     );
                     if is_expr_trailing {
-                        // Parse while/loop as expression (trailing or
+                        // Parse while/loop/match as expression (trailing or
                         // followed by `;` which makes it a statement).
-                        let expr = self.parse_while_or_loop_expr()?;
+                        let expr = match self.current_kind() {
+                            TokenKind::While | TokenKind::Loop => {
+                                self.parse_while_or_loop_expr()?
+                            }
+                            TokenKind::Match => self.parse_match_expr()?,
+                            _ => unreachable!(),
+                        };
                         if self.current_kind() == TokenKind::Semi {
                             let semi = self.bump().span();
                             let span = self.join(expr.span, semi);
@@ -2675,6 +2793,7 @@ impl<'a> Parser<'a> {
             TokenKind::LBracket => self.parse_array_literal(),
             TokenKind::If => self.parse_if_expr(),
             TokenKind::While | TokenKind::Loop => self.parse_while_or_loop_expr(),
+            TokenKind::Match => self.parse_match_expr(),
             TokenKind::LBrace => {
                 let block = self.parse_block_expr()?;
                 let span = block.span;

@@ -727,6 +727,11 @@ pub enum ExprKind {
         /// Span covering the whole expression.
         span: Span,
     },
+    /// A `match` expression (session 33): `match scrutinee { pattern =>
+    /// expr, ... }` dispatching on the value of `scrutinee` and
+    /// producing a result value. Every arm's expression must have a
+    /// compatible result type; mismatched types are `E-T01`.
+    MatchExpr(Box<MatchExpr>),
 }
 
 /// An `if` expression (session 28): evaluates `cond`, then evaluates
@@ -744,6 +749,36 @@ pub struct IfExpr {
     /// Required for if-expressions.
     pub else_branch: ElseBranch,
     /// Span covering the whole expression from `if` through the else branch.
+    pub span: Span,
+}
+
+/// A `match` expression (session 33): evaluates `scrutinee` once, then
+/// evaluates and returns the value of the first arm whose pattern matches.
+/// Every arm's expression must produce a compatible result type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchExpr {
+    /// The value being matched, evaluated exactly once.
+    pub scrutinee: Expr,
+    /// The arms, in source order. The first matching arm's expression
+    /// determines the result.
+    pub arms: Vec<MatchExprArm>,
+    /// Span covering the whole `match` expression including its braces.
+    pub span: Span,
+}
+
+/// One arm of a [`MatchExpr`]: `pattern => expr`, optionally guarded
+/// (`pattern if expr => expr`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchExprArm {
+    /// The pattern this arm matches.
+    pub pattern: Pattern,
+    /// The guard condition (session 27): when present, the arm runs only
+    /// if the pattern matches **and** the guard evaluates to `true`.
+    pub guard: Option<Expr>,
+    /// The expression evaluated when the pattern matches (and the guard
+    /// passes).
+    pub body: Expr,
+    /// Span covering the whole arm (pattern, guard, `=>`, and expression).
     pub span: Span,
 }
 

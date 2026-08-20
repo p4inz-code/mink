@@ -763,6 +763,17 @@ impl Analyzer {
                     },
                 );
             }
+            ExprKind::MatchExpr(m) => {
+                self.analyze_expr(&m.scrutinee, ctx);
+                for arm in &m.arms {
+                    let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                    self.bind_pattern_bindings(&arm.pattern, scope);
+                    if let Some(guard) = &arm.guard {
+                        self.analyze_expr(guard, Ctx { scope, ..ctx });
+                    }
+                    self.analyze_expr(&arm.body, Ctx { scope, ..ctx });
+                }
+            }
         }
     }
 

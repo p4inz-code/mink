@@ -213,6 +213,15 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
             block_idents(body, out);
         }
         ExprKind::LoopExpr { body, .. } => block_idents(body, out),
+        ExprKind::MatchExpr(m) => {
+            expr_idents(&m.scrutinee, out);
+            for arm in &m.arms {
+                if let Pattern::Binding(name) = &arm.pattern {
+                    out.push((name.name.as_str(), name.span, false));
+                }
+                expr_idents(&arm.body, out);
+            }
+        }
     }
 }
 
