@@ -77,6 +77,29 @@ fn collect_idents(ast: &Ast) -> Vec<(&str, Span, bool)> {
             // Struct and enum names live in the type namespace, not the
             // value namespace: they are not collected as identifiers.
             ItemKind::Struct(_) | ItemKind::Enum(_) => {}
+            ItemKind::Module(_) | ItemKind::Use(_) => {}
+            ItemKind::Pub(pub_item) => {
+                // Recurse into the pub-qualified inner item.
+                match &pub_item.item.kind {
+                    ItemKind::Fn(f) => {
+                        out.push((f.name.name.as_str(), f.name.span, true));
+                        for param in &f.params {
+                            out.push((param.name.name.as_str(), param.name.span, true));
+                        }
+                        block_idents(&f.body, &mut out);
+                    }
+                    ItemKind::Let(binding) => {
+                        out.push((binding.name.name.as_str(), binding.name.span, true));
+                        expr_idents(&binding.init, &mut out);
+                    }
+                    ItemKind::Const(binding) => {
+                        out.push((binding.name.name.as_str(), binding.name.span, true));
+                        expr_idents(&binding.init, &mut out);
+                    }
+                    ItemKind::Struct(_) | ItemKind::Enum(_) => {}
+                    ItemKind::Module(_) | ItemKind::Use(_) | ItemKind::Pub(_) => {}
+                }
+            }
         }
     }
     out

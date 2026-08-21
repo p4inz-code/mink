@@ -401,6 +401,30 @@ impl<'a> Analyzer<'a> {
                 // Struct and enum declarations are types, not values: the
                 // ownership walk has nothing to analyze in them.
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {}
+                ItemKind::Module(_) | ItemKind::Use(_) => {
+                    // Handled during module discovery, not ownership analysis.
+                }
+                ItemKind::Pub(pub_item) => {
+                    // Recurse into the pub-qualified inner item.
+                    match &pub_item.item.kind {
+                        ItemKind::Struct(_) | ItemKind::Enum(_) => {}
+                        ItemKind::Module(_) | ItemKind::Use(_) | ItemKind::Pub(_) => {}
+                        ItemKind::Let(binding) => {
+                            let value = self.eval_expr(&binding.init, Mode::Transfer);
+                            self.bind(binding.name.span, &value);
+                        }
+                        ItemKind::Const(binding) => {
+                            let value = self.eval_expr(&binding.init, Mode::Transfer);
+                            self.bind(binding.name.span, &value);
+                        }
+                        ItemKind::Fn(f) => {
+                            if let Some(symbol) = self.symbol_of(&f.name) {
+                                let result = self.analyze_fn(f);
+                                self.fn_results.insert(symbol, result);
+                            }
+                        }
+                    }
+                }
                 ItemKind::Let(binding) => {
                     let value = self.eval_expr(&binding.init, Mode::Transfer);
                     self.bind(binding.name.span, &value);

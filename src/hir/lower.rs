@@ -50,6 +50,17 @@ pub fn lower(
     semantic: &SemanticResult,
     types: &TypeResult,
 ) -> Result<HirProgram, Vec<HirError>> {
+    lower_with_imports(ast, semantic, types, &[])
+}
+
+/// Lowers `ast` with its semantic and type results into HIR, with
+/// additional imported symbols from other modules.
+pub fn lower_with_imports(
+    ast: &Ast,
+    semantic: &SemanticResult,
+    types: &TypeResult,
+    imported_symbols: &[(SymbolId, String)],
+) -> Result<HirProgram, Vec<HirError>> {
     let mut lowerer = Lowerer::new(ast, semantic, types);
     lowerer.run();
     // Record every predeclared runtime intrinsic symbol, so later stages
@@ -68,6 +79,7 @@ pub fn lower(
             items: lowerer.items,
             types: lowerer.table,
             intrinsic_symbols,
+            imported_symbols: imported_symbols.to_vec(),
         })
     } else {
         Err(lowerer.errors)
@@ -122,8 +134,9 @@ impl<'a> Lowerer<'a> {
 
     fn run(&mut self) {
         for item in &self.ast.items {
-            let lowered = self.lower_item(item);
-            self.items.push(lowered);
+            if let Some(lowered) = self.lower_item(item) {
+                self.items.push(lowered);
+            }
         }
     }
 
@@ -131,18 +144,24 @@ impl<'a> Lowerer<'a> {
     // Items
     // ------------------------------------------------------------------
 
-    fn lower_item(&mut self, item: &Item) -> HirItem {
+    fn lower_item(&mut self, item: &Item) -> Option<HirItem> {
         let kind = match &item.kind {
             ItemKind::Fn(f) => HirItemKind::Fn(self.lower_fn(f, item.span)),
             ItemKind::Struct(s) => HirItemKind::Struct(self.lower_struct(s)),
             ItemKind::Enum(e) => HirItemKind::Enum(self.lower_enum(e)),
             ItemKind::Let(binding) => HirItemKind::Let(self.lower_let(binding, item.span)),
             ItemKind::Const(binding) => HirItemKind::Const(self.lower_const(binding, item.span)),
+            ItemKind::Pub(pub_item) => return self.lower_item(pub_item.item.as_ref()),
+            ItemKind::Module(_) | ItemKind::Use(_) => {
+                // Module declarations and use imports are metadata only;
+                // they produce no HIR items.
+                return None;
+            }
         };
-        HirItem {
+        Some(HirItem {
             kind,
             span: item.span,
-        }
+        })
     }
 
     /// A struct declaration lowers to a plain name: struct names are type

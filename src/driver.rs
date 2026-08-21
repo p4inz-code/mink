@@ -4,25 +4,17 @@
 //! Type Analysis → HIR → MIR → Optimization → Backend (see
 //! `docs/compiler/COMPILER_ARCHITECTURE.md` §2). The driver runs source
 //! loading plus lexical, syntactic, semantic, type, and HIR analysis, and
-//! lowers to MIR when the front end is clean: the parser consumes the token
-//! stream and produces the AST, and when the source is lexically and
-//! syntactically valid, the semantic analyzer validates it and the type
-//! checker types it. When semantic and type analysis report no errors, HIR
-//! lowering runs, and when HIR lowering succeeds, MIR lowering, MIR
-//! validation, and MIR optimization run. [`check`] reports the result;
-//! [`build`] additionally compiles the optimized MIR into a native
-//! executable image for the requested [`Target`] and writes it to disk
-//! (see `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`). Errors
-//! are reported together across stages.
+//! lowers to MIR when the front end is clean.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::backend::{self, BackendError, Target};
-use crate::hir::{self, HirError, HirProgram};
+use crate::hir::{self, HirProgram};
 use crate::lexer::LexError;
-use crate::mir::{self, MirError, MirProgram};
+use crate::mir::{self, MirProgram};
 use crate::parser::{self, ParseError};
 use crate::semantics::{self, SemanticError, SemanticResult};
 use crate::source::{SourceId, SourceMap, Span};
@@ -36,8 +28,6 @@ pub struct BuildOptions {
 }
 
 impl Default for BuildOptions {
-    /// The host's native target (the first implemented target,
-    /// `x86_64-windows-pe`).
     fn default() -> Self {
         Self {
             target: Target::native(),
@@ -45,42 +35,38 @@ impl Default for BuildOptions {
     }
 }
 
-/// The outcome of a successful [`build`]: where the executable was written
-/// and what it contains.
+/// The outcome of a successful [`build`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildOutcome {
-    /// The id of the built source file.
+    /// The source id of the root module.
     pub source_id: SourceId,
-    /// The path of the written executable.
+    /// The path to the generated executable.
     pub output: PathBuf,
-    /// The target the executable was compiled for.
+    /// The target the binary was compiled for.
     pub target: Target,
-    /// The number of compiled functions.
+    /// Number of user functions in the program.
     pub functions: usize,
-    /// The number of compiled module bindings.
+    /// Number of static bindings in the program.
     pub statics: usize,
 }
 
 /// Errors produced while running the build pipeline.
 #[derive(Debug)]
 pub enum BuildError {
-    /// The source file could not be read from disk.
+    /// A source file could not be read.
     Io {
-        /// The path that could not be read.
+        /// The path that failed.
         path: PathBuf,
         /// The underlying I/O error.
         source: io::Error,
     },
-    /// The source failed front-end analysis (lexing, parsing, semantic
-    /// analysis, type checking, HIR lowering, MIR lowering, or MIR
-    /// optimization); the report carries every diagnostic.
+    /// One or more front-end errors (lex / parse / semantic / type / HIR / MIR).
     FrontEnd(Box<CheckReport>),
-    /// The optimized MIR could not be compiled by the backend; every
-    /// backend diagnostic is included.
+    /// One or more back-end errors (unsupported constructs, verification).
     Backend(Box<[BackendError]>),
-    /// The executable image could not be written to disk.
+    /// The executable could not be written.
     Output {
-        /// The path that could not be written.
+        /// The path that failed.
         path: PathBuf,
         /// The underlying I/O error.
         source: io::Error,
@@ -115,31 +101,25 @@ impl std::error::Error for BuildError {
     }
 }
 
-/// A single problem found by `check`: a lexical, a syntax, a semantic, a
-/// type, a HIR, or a MIR error.
-///
-/// All kinds carry a stable code, a human-readable message, and the exact
-/// source span they apply to, so the CLI (and future diagnostic engine) can
-/// render them uniformly.
+/// A single problem found by `check`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckError {
-    /// A lexical error produced by the lexer.
+    /// A lexical error.
     Lex(LexError),
-    /// A syntax error produced by the parser.
+    /// A syntax/parse error.
     Parse(ParseError),
-    /// A semantic error produced by the semantic analyzer.
+    /// A semantic error.
     Semantic(SemanticError),
-    /// A type error produced by the type checker.
+    /// A type error.
     Type(TypeError),
-    /// A HIR lowering error produced by the HIR layer.
-    Hir(HirError),
-    /// A MIR lowering or validation error produced by the MIR layer.
-    Mir(MirError),
+    /// A HIR lowering error.
+    Hir(hir::HirError),
+    /// A MIR lowering error.
+    Mir(mir::MirError),
 }
 
 impl CheckError {
-    /// The stable machine-readable code of this error (e.g. `E-L01`,
-    /// `E-P03`, `E-S01`, `E-T01`, `E-H01`, `E-M01`).
+    /// The diagnostic code (e.g. `"E-L01"`, `"E-T05"`).
     pub fn code(&self) -> &'static str {
         match self {
             Self::Lex(error) => error.kind().code(),
@@ -151,7 +131,7 @@ impl CheckError {
         }
     }
 
-    /// The source span this error applies to.
+    /// The primary span of the error.
     pub fn span(&self) -> Span {
         match self {
             Self::Lex(error) => error.span(),
@@ -163,9 +143,8 @@ impl CheckError {
         }
     }
 
-    /// A related source span, when this error references another location
-    /// (for example the original declaration of a duplicate definition, or
-    /// the target of a mismatched assignment).
+    /// An optional related span (the original declaration for duplicates,
+    /// the expected type for mismatches, etc.).
     pub fn related_span(&self) -> Option<Span> {
         match self {
             Self::Semantic(error) => error.original(),
@@ -188,154 +167,69 @@ impl fmt::Display for CheckError {
     }
 }
 
-/// The result of running lexical, syntactic, semantic, type, HIR, and
-/// (where applicable) MIR analysis on one source file.
+/// The result of running the full pipeline on one source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckReport {
-    /// The id of the checked source file.
+    /// The root source file id.
     pub source_id: SourceId,
-    /// Number of tokens produced, excluding the final `Eof` token.
+    /// Total token count across all processed source files.
     pub token_count: usize,
-    /// Lexical, syntax, semantic, type, HIR, and MIR errors, in source
-    /// order. Empty for valid input.
+    /// All diagnostic errors, in source order.
     pub errors: Vec<CheckError>,
-    /// The semantic-analysis result, present when the source was lexically
-    /// and syntactically valid and analysis therefore ran. `None` when
-    /// lexical or syntax errors made analysis unsafe or meaningless.
+    /// The semantic analysis result, if the front end got that far.
     pub semantic: Option<SemanticResult>,
-    /// The type-analysis result, present whenever semantic analysis ran.
-    /// `None` when lexical or syntax errors suppressed analysis.
+    /// The type analysis result, if the front end got that far.
     pub types: Option<TypeResult>,
-    /// The ownership-analysis result, present when semantic and type
-    /// analysis were clean (ownership needs valid types). `None` when
-    /// earlier stages reported errors.
+    /// The ownership analysis result, if the front end got that far.
     pub ownership: Option<crate::ownership::OwnershipResult>,
-    /// The lowered HIR, present when the front end (semantic, type, and
-    /// ownership analysis) reported no errors and lowering succeeded.
-    /// `None` otherwise.
+    /// The HIR program, if the front end got that far.
     pub hir: Option<HirProgram>,
-    /// The lowered, structurally validated, and optimized MIR, present when
-    /// HIR lowering succeeded and MIR lowering, validation, and
-    /// optimization reported no errors. `None` otherwise.
+    /// The optimized MIR program, if the front end got that far.
     pub mir: Option<MirProgram>,
 }
 
-/// Loads `path` and runs lexical, syntactic, semantic, type, HIR, MIR, and
-/// MIR-optimization analysis over it.
-///
-/// On success returns a [`CheckReport`] describing the token stream, any
-/// errors across all stages, and — when the source is lexically and
-/// syntactically valid — the [`SemanticResult`], [`TypeResult`], lowered
-/// [`HirProgram`], and (for a clean pipeline) lowered, validated, and
-/// optimized [`MirProgram`] of analyzing the parsed AST. The caller decides
-/// how to surface them. An I/O failure to read the file is reported as
-/// [`BuildError::Io`].
-///
-/// Semantic analysis runs only when parsing produced a usable AST (no
-/// lexical or syntax errors); otherwise the existing error behavior is
-/// preserved and no cascading semantic diagnostics are generated. Type
-/// analysis runs whenever semantic analysis ran: the type checker consumes
-/// the semantic result directly and its unknown/error type keeps semantic
-/// errors from cascading into misleading type diagnostics. HIR lowering
-/// runs only when semantic and type analysis reported no errors — lowering
-/// an inconsistent front end would only add misleading diagnostics; a
-/// lowering failure on a clean front end is an internal compiler error and
-/// is reported as such (`E-H01`…`E-H03`). MIR lowering runs only when HIR
-/// lowering succeeded; the lowered MIR is structurally validated and then
-/// optimized (with validation before the first pass and after every pass)
-/// before it is reported; a failure on clean HIR is an internal compiler
-/// error and is reported as such (`E-M01`…`E-M11`).
+// ======================================================================
+// Public entry points
+// ======================================================================
+
+/// Loads `path` and runs the full pipeline. When the source contains `mod`
+/// declarations, all reachable modules are loaded and compiled together.
 pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildError> {
-    let source_id = sources.load(path).map_err(|source| BuildError::Io {
-        path: path.to_path_buf(),
-        source,
+    // Discover all modules reachable from the root file.
+    let modules = discover_modules(sources, path).map_err(|errors| match errors {
+        // Root file I/O error: report as BuildError::Io.
+        None => BuildError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("failed to read '{}'", path.display()),
+            ),
+        },
+        // Child-module errors: report as FrontEnd.
+        Some(errors) => {
+            let report = CheckReport {
+                source_id: SourceId::new(0),
+                token_count: 0,
+                errors,
+                semantic: None,
+                types: None,
+                ownership: None,
+                hir: None,
+                mir: None,
+            };
+            BuildError::FrontEnd(Box::new(report))
+        }
     })?;
-    let file = sources
-        .get(source_id)
-        .expect("the file id returned by load is always registered");
-    let parsed = parser::parse(file);
-    let mut errors: Vec<CheckError> = parsed
-        .lex_errors()
-        .iter()
-        .copied()
-        .map(CheckError::Lex)
-        .collect();
-    errors.extend(parsed.parse_errors().iter().copied().map(CheckError::Parse));
-    // Semantic and type analysis only when the source is lexically and
-    // syntactically valid; a broken token stream or tree makes further
-    // analysis unsafe or meaningless, and skipping it avoids cascades.
-    let (semantic, types, ownership, hir, mir) = if parsed.is_valid() {
-        let semantic = semantics::analyze(parsed.ast());
-        let types = typecheck::check(parsed.ast(), &semantic, sources);
-        errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
-        errors.extend(types.errors().iter().cloned().map(CheckError::Type));
-        // Ownership analysis runs only on a clean semantic/type front end
-        // (it needs valid types); its errors gate HIR lowering, so invalid
-        // ownership programs fail before code generation.
-        let ownership = if errors.is_empty() {
-            let result = crate::ownership::check(parsed.ast(), &semantic, &types);
-            errors.extend(result.errors().iter().cloned().map(CheckError::Semantic));
-            Some(result)
-        } else {
-            None
-        };
-        let (hir, mir) = if errors.is_empty() {
-            match hir::lower(parsed.ast(), &semantic, &types) {
-                Ok(program) => {
-                    let mir = match mir::lower(&program) {
-                        Ok(mir_program) => match mir::optimize(&mir_program) {
-                            // `optimize` validates before the first pass and
-                            // after every pass, so malformed or corrupted
-                            // MIR surfaces here as structured errors.
-                            Ok(optimized) => Some(optimized),
-                            Err(optimization_errors) => {
-                                errors.extend(optimization_errors.into_iter().map(CheckError::Mir));
-                                None
-                            }
-                        },
-                        Err(lowering_errors) => {
-                            errors.extend(lowering_errors.into_iter().map(CheckError::Mir));
-                            None
-                        }
-                    };
-                    (Some(program), mir)
-                }
-                Err(lowering_errors) => {
-                    errors.extend(lowering_errors.into_iter().map(CheckError::Hir));
-                    (None, None)
-                }
-            }
-        } else {
-            (None, None)
-        };
-        (Some(semantic), Some(types), ownership, hir, mir)
-    } else {
-        (None, None, None, None, None)
-    };
-    // Report problems in source order regardless of which stage produced
-    // them (a stable sort keeps equal-position errors in stage order).
-    errors.sort_by_key(|error| error.span().start());
-    Ok(CheckReport {
-        source_id,
-        token_count: parsed.token_count(),
-        errors,
-        semantic,
-        types,
-        ownership,
-        hir,
-        mir,
-    })
+    // Single-module fast path (no mod declarations discovered).
+    if modules.len() == 1 {
+        return check_single_module(sources, path);
+    }
+    // Multi-module pipeline: flatten all modules into a single AST.
+    check_multi_module(sources, &modules)
 }
 
 /// Runs the full compiler pipeline for a single MINK source file and writes
 /// a native executable.
-///
-/// Runs the same front end as [`check`]; when the front end is clean, the
-/// optimized MIR is compiled by the backend for `options.target` and the
-/// resulting executable image is written next to the source (the source
-/// path with its extension replaced by `exe`). On success returns the
-/// [`BuildOutcome`] describing the artifact. Front-end, backend, and
-/// output failures are reported as [`BuildError`] variants.
 pub fn build(
     sources: &mut SourceMap,
     path: &Path,
@@ -364,8 +258,391 @@ pub fn build(
     })
 }
 
-/// The executable path for a source file: the source path with its
-/// extension replaced by `exe` (`foo.mink` → `foo.exe`, `main` → `main.exe`).
+// ======================================================================
+// Single-module pipeline
+// ======================================================================
+
+fn check_single_module(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildError> {
+    let source_id = sources.load(path).map_err(|source| BuildError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let file = sources
+        .get(source_id)
+        .expect("the file id returned by load is always registered");
+    let parsed = parser::parse(file);
+    let mut errors: Vec<CheckError> = parsed
+        .lex_errors()
+        .iter()
+        .copied()
+        .map(CheckError::Lex)
+        .collect();
+    errors.extend(parsed.parse_errors().iter().copied().map(CheckError::Parse));
+    let (semantic, types, ownership, hir, mir) = if parsed.is_valid() {
+        let semantic = semantics::analyze(parsed.ast());
+        let types = typecheck::check(parsed.ast(), &semantic, sources);
+        errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
+        errors.extend(types.errors().iter().cloned().map(CheckError::Type));
+        let ownership = if errors.is_empty() {
+            let result = crate::ownership::check(parsed.ast(), &semantic, &types);
+            errors.extend(result.errors().iter().cloned().map(CheckError::Semantic));
+            Some(result)
+        } else {
+            None
+        };
+        let (hir, mir) = if errors.is_empty() {
+            match hir::lower(parsed.ast(), &semantic, &types) {
+                Ok(program) => {
+                    let mir = match mir::lower(&program) {
+                        Ok(mir_program) => match mir::optimize(&mir_program) {
+                            Ok(optimized) => Some(optimized),
+                            Err(optimization_errors) => {
+                                errors.extend(optimization_errors.into_iter().map(CheckError::Mir));
+                                None
+                            }
+                        },
+                        Err(lowering_errors) => {
+                            errors.extend(lowering_errors.into_iter().map(CheckError::Mir));
+                            None
+                        }
+                    };
+                    (Some(program), mir)
+                }
+                Err(lowering_errors) => {
+                    errors.extend(lowering_errors.into_iter().map(CheckError::Hir));
+                    (None, None)
+                }
+            }
+        } else {
+            (None, None)
+        };
+        (Some(semantic), Some(types), ownership, hir, mir)
+    } else {
+        (None, None, None, None, None)
+    };
+    errors.sort_by_key(|error| error.span().start());
+    Ok(CheckReport {
+        source_id,
+        token_count: parsed.token_count(),
+        errors,
+        semantic,
+        types,
+        ownership,
+        hir,
+        mir,
+    })
+}
+
+// ======================================================================
+// Multi-module pipeline (Session 34)
+//
+// Flattens all discovered modules into a single AST and runs the standard
+// single-module pipeline. Child module items are injected into the root
+// module's item list, `mod`/`use` declarations are stripped, and the
+// combined AST is analyzed as one compilation unit. This avoids the
+// complexity of cross-module SymbolId and TypeId merging.
+// ======================================================================
+
+fn check_multi_module(
+    sources: &mut SourceMap,
+    modules: &[ModuleSource],
+) -> Result<CheckReport, BuildError> {
+    let root_source_id = modules[0].source_id;
+    let mut all_errors: Vec<CheckError> = Vec::new();
+    let mut total_tokens = 0;
+
+    // Build a map: module_name → its parsed AST items (excluding mod/use).
+    let mut child_items: std::collections::HashMap<String, Vec<crate::ast::Item>> =
+        std::collections::HashMap::new();
+    let mut root_items: Vec<crate::ast::Item> = Vec::new();
+    let mut root_valid = false;
+
+    for module in modules {
+        if !module.parsed.is_valid() {
+            // Collect parse errors from non-root modules.
+            if module.source_id != root_source_id {
+                for e in module.parsed.lex_errors() {
+                    all_errors.push(CheckError::Lex(*e));
+                }
+                for e in module.parsed.parse_errors() {
+                    all_errors.push(CheckError::Parse(*e));
+                }
+            }
+            continue;
+        }
+        total_tokens += module.parsed.token_count();
+
+        if module.source_id == root_source_id {
+            root_valid = true;
+            // Collect the root module's items, stripping mod/use.
+            for item in module.parsed.ast().items() {
+                match &item.kind {
+                    crate::ast::ItemKind::Module(_) | crate::ast::ItemKind::Use(_) => {}
+                    _ => root_items.push(item.clone()),
+                }
+            }
+        } else {
+            // Child modules: collect public items and add them to the
+            // combined root. Private items are excluded because they
+            // should not be visible from the root module.
+            let mut items = Vec::new();
+            for item in module.parsed.ast().items() {
+                match &item.kind {
+                    crate::ast::ItemKind::Module(_) | crate::ast::ItemKind::Use(_) => {}
+                    crate::ast::ItemKind::Pub(pub_item) => {
+                        // Public items are always included.
+                        items.push(pub_item.item.as_ref().clone());
+                    }
+                    _ => {
+                        // Non-public items are included too (they may be
+                        // needed by public items that reference them, e.g.
+                        // private helper functions called by public ones).
+                        // For V1, all items are included from all modules.
+                        items.push(item.clone());
+                    }
+                }
+            }
+            child_items.insert(module.name.clone(), items);
+        }
+    }
+
+    if !root_valid {
+        // Root module had no valid content. Return whatever errors we have.
+        all_errors.sort_by_key(|e| e.span().start());
+        return Ok(CheckReport {
+            source_id: root_source_id,
+            token_count: total_tokens,
+            errors: all_errors,
+            semantic: None,
+            types: None,
+            ownership: None,
+            hir: None,
+            mir: None,
+        });
+    }
+
+    // Append child module items to the root module's items.
+    // Process children in a deterministic order (sorted by name).
+    let mut child_names: Vec<String> = child_items.keys().cloned().collect();
+    child_names.sort();
+    for name in &child_names {
+        if let Some(items) = child_items.remove(name) {
+            root_items.extend(items);
+        }
+    }
+
+    // Build a combined AST and run the single-module pipeline.
+    let combined_ast = crate::ast::Ast::new(root_items);
+
+    // Run semantic analysis.
+    let semantic = semantics::analyze(&combined_ast);
+    all_errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
+
+    // Run type checking.
+    let types = typecheck::check(&combined_ast, &semantic, sources);
+    all_errors.extend(types.errors().iter().cloned().map(CheckError::Type));
+
+    // Run ownership analysis if clean so far.
+    let ownership = if all_errors.is_empty() {
+        let result = crate::ownership::check(&combined_ast, &semantic, &types);
+        all_errors.extend(result.errors().iter().cloned().map(CheckError::Semantic));
+        Some(result)
+    } else {
+        None
+    };
+
+    // HIR + MIR lowering.
+    let (hir, mir) = if all_errors.is_empty() {
+        match hir::lower(&combined_ast, &semantic, &types) {
+            Ok(hir_program) => match mir::lower(&hir_program) {
+                Ok(mir_program) => match mir::optimize(&mir_program) {
+                    Ok(optimized) => (Some(hir_program), Some(optimized)),
+                    Err(errs) => {
+                        all_errors.extend(errs.into_iter().map(CheckError::Mir));
+                        (Some(hir_program), None)
+                    }
+                },
+                Err(errs) => {
+                    all_errors.extend(errs.into_iter().map(CheckError::Mir));
+                    (Some(hir_program), None)
+                }
+            },
+            Err(errs) => {
+                all_errors.extend(errs.into_iter().map(CheckError::Hir));
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+
+    all_errors.sort_by_key(|e| e.span().start());
+    Ok(CheckReport {
+        source_id: root_source_id,
+        token_count: total_tokens,
+        errors: all_errors,
+        semantic: Some(semantic),
+        types: Some(types),
+        ownership,
+        hir,
+        mir,
+    })
+}
+
+// ======================================================================
+// Module discovery (Session 34)
+// ======================================================================
+
+/// A discovered source module: its AST, file path, and source id.
+#[allow(dead_code)]
+pub(crate) struct ModuleSource {
+    /// The module's name (file stem).
+    pub name: String,
+    /// The file path on disk.
+    pub path: PathBuf,
+    /// The source id assigned to this file.
+    pub source_id: SourceId,
+    /// The parsed output for this module.
+    pub parsed: parser::ParseOutput,
+    /// The parent module name, if any (None for root).
+    pub parent: Option<String>,
+}
+
+/// Discovers all modules reachable from `root_path` by following `mod`
+/// declarations recursively.
+///
+/// Returns either the module list, a list of semantic/syntax errors from
+/// child modules, or `Err(None)` when the root file itself cannot be
+/// loaded (I/O error — the caller should report it as `BuildError::Io`).
+pub(crate) fn discover_modules(
+    sources: &mut SourceMap,
+    root_path: &Path,
+) -> Result<Vec<ModuleSource>, Option<Vec<CheckError>>> {
+    // Try loading the root file first. If it fails, return None so the
+    // caller can report the proper I/O error.
+    if !root_path.exists() {
+        return Err(None);
+    }
+    let mut modules = Vec::new();
+    let mut visited = HashSet::new();
+    let mut errors = Vec::new();
+    discover_modules_recursive(
+        sources,
+        root_path,
+        None,
+        &mut modules,
+        &mut visited,
+        &mut errors,
+    );
+    if errors.is_empty() {
+        Ok(modules)
+    } else {
+        errors.sort_by_key(|e| e.span().start());
+        Err(Some(errors))
+    }
+}
+
+fn discover_modules_recursive(
+    sources: &mut SourceMap,
+    path: &Path,
+    parent: Option<String>,
+    modules: &mut Vec<ModuleSource>,
+    visited: &mut HashSet<PathBuf>,
+    errors: &mut Vec<CheckError>,
+) {
+    // Canonicalize to detect cycles and missing files.
+    let canon = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            errors.push(CheckError::Semantic(SemanticError::unresolved(
+                format!("module file '{}' not found", path.display()),
+                Span::new(SourceId::new(0), 0..0),
+            )));
+            return;
+        }
+    };
+    if !visited.insert(canon) {
+        return;
+    }
+    let source_id = match sources.load(path) {
+        Ok(id) => id,
+        Err(_) => {
+            errors.push(CheckError::Semantic(SemanticError::unresolved(
+                format!("module file '{}' not found", path.display()),
+                Span::new(SourceId::new(0), 0..0),
+            )));
+            return;
+        }
+    };
+    let file = sources
+        .get(source_id)
+        .expect("loaded file always registered");
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let parsed = parser::parse(file);
+
+    // Only collect lex/parse errors from child modules; the root file's
+    // errors are handled by check_single_module or check_multi_module.
+    if parent.is_some() {
+        for e in parsed.lex_errors() {
+            errors.push(CheckError::Lex(*e));
+        }
+        for e in parsed.parse_errors() {
+            errors.push(CheckError::Parse(*e));
+        }
+    }
+
+    // Collect mod declarations before moving `parsed` into ModuleSource.
+    let mod_names: Vec<String> = if parsed.is_valid() {
+        parsed
+            .ast()
+            .items()
+            .iter()
+            .filter_map(|item| {
+                if let crate::ast::ItemKind::Module(mod_decl) = &item.kind {
+                    Some(mod_decl.name.name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let module_name = name.clone();
+    modules.push(ModuleSource {
+        name,
+        path: path.to_path_buf(),
+        source_id,
+        parsed,
+        parent,
+    });
+
+    // Recurse into child modules.
+    if !mod_names.is_empty() {
+        let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        for child_name in mod_names {
+            let child_path = parent_dir.join(format!("{child_name}.mink"));
+            discover_modules_recursive(
+                sources,
+                &child_path,
+                Some(module_name.clone()),
+                modules,
+                visited,
+                errors,
+            );
+        }
+    }
+}
+
+// ======================================================================
+// Helpers
+// ======================================================================
+
 fn executable_path(path: &Path) -> PathBuf {
     path.with_extension("exe")
 }

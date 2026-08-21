@@ -35,7 +35,7 @@ Notable exclusions:
 - Type declarations (`type`, `trait`, `impl`) — type-system milestone
   (`struct` and `enum` declarations arrived in sessions 14 and 17; see
   §11 and §12)
-- Module system (`mod`, `use`, `pub`) — module-system milestone
+- Module system (`mod`, `use`, `pub`) — implemented in session 34 (§28–§30)
 - Async/await and unsafe — concurrency/unsafe milestones
 - Type annotations on bindings (`let x: Type = expr;`) arrived in
   session 26 — §19 (function parameter and return type annotations
@@ -760,3 +760,47 @@ MatchExprArm:= Pattern ('if' Expr)? '=>' Expr
 The session-33 lexer needed no changes (all tokens already existed).
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
+
+---
+
+## §28  Module declarations (`mod`)
+
+Session 34.
+
+```EBNF
+ModuleDecl  = "mod" Ident ( ";" | Block ) ;
+```
+
+A `mod name;` declaration loads `name.mink` from the same directory as
+the declaring file. The module's public items become visible to the
+declaring file via `use` imports.
+
+Inline module blocks (`mod name { ... }`) are parsed but not yet
+supported.
+
+## §29  Use declarations (`use`)
+
+Session 34.
+
+```EBNF
+UseDecl     = "use" UsePath ( ";" ) ;
+UsePath     = Ident { "::" Ident } ;
+```
+
+`use module_name::item_name;` brings `item_name` from `module_name`
+into the current scope. `use module_name;` is a no-op (module paths in
+expressions are a later milestone).
+
+## §30  Public visibility (`pub`)
+
+Session 34.
+
+```EBNF
+PubItem     = "pub" Item ;
+```
+
+`pub` on a top-level declaration makes it visible to other modules via
+`use` imports. Without `pub`, a declaration is module-private. Currently,
+all items from all modules are included in the combined AST, so private
+items are also accessible (true private-vs-public enforcement is a
+later milestone).

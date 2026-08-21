@@ -36,9 +36,16 @@ use super::symbol::{ScopeId, ScopeKind, ScopeTable, SymbolId, SymbolKind, Symbol
 ///
 /// The analysis is deterministic: scopes, symbols, resolutions, and errors
 /// are produced in source order.
-pub(crate) fn analyze_ast(ast: &Ast) -> SemanticResult {
+pub(crate) fn analyze_ast(
+    ast: &Ast,
+    registry: Option<(&crate::module::ModuleRegistry, &str)>,
+) -> SemanticResult {
     let mut analyzer = Analyzer::new();
     let module = analyzer.collect_module_scope(ast);
+    // Resolve `use` imports from other modules.
+    if let Some((reg, module_name)) = registry {
+        analyzer.resolve_imports(ast, module, reg, module_name);
+    }
     for item in &ast.items {
         analyzer.analyze_item(item, module);
     }
@@ -149,6 +156,46 @@ impl Analyzer {
                 }
                 ItemKind::Struct(s) => self.register_struct(s),
                 ItemKind::Enum(e) => self.register_enum(e),
+                ItemKind::Module(_) | ItemKind::Use(_) => {
+                    // Handled during module discovery, not semantic analysis.
+                }
+                ItemKind::Pub(pub_item) => {
+                    // Recurse into the inner item to collect its declaration.
+                    match &pub_item.item.kind {
+                        ItemKind::Fn(f) => {
+                            let _ = self.bind(&f.name, SymbolKind::Fn, module);
+                        }
+                        ItemKind::Struct(s) => self.register_struct(s),
+                        ItemKind::Enum(e) => self.register_enum(e),
+                        ItemKind::Let(binding) => {
+                            if let Some(ref pattern) = binding.pattern {
+                                let mut names = Vec::new();
+                                Self::collect_pattern_bindings(pattern, &mut names);
+                                for name in names {
+                                    let _ = self.bind(
+                                        name,
+                                        SymbolKind::Let {
+                                            mutable: binding.mutable,
+                                        },
+                                        module,
+                                    );
+                                }
+                            } else {
+                                let _ = self.bind(
+                                    &binding.name,
+                                    SymbolKind::Let {
+                                        mutable: binding.mutable,
+                                    },
+                                    module,
+                                );
+                            }
+                        }
+                        ItemKind::Const(binding) => {
+                            let _ = self.bind(&binding.name, SymbolKind::Const, module);
+                        }
+                        ItemKind::Module(_) | ItemKind::Use(_) | ItemKind::Pub(_) => {}
+                    }
+                }
                 ItemKind::Let(binding) => {
                     if let Some(ref pattern) = binding.pattern {
                         let mut names = Vec::new();
@@ -178,6 +225,63 @@ impl Analyzer {
             }
         }
         module
+    }
+
+    /// Resolves `use` imports from other modules by looking them up in
+    /// the cross-module registry and binding them into the current scope.
+    fn resolve_imports(
+        &mut self,
+        ast: &Ast,
+        module: ScopeId,
+        registry: &crate::module::ModuleRegistry,
+        current_module: &str,
+    ) {
+        for item in &ast.items {
+            if let crate::ast::ItemKind::Use(use_decl) = &item.kind {
+                if use_decl.path.is_empty() {
+                    continue;
+                }
+                // For `use module_name::item_name;`, the path is
+                // [module_name, item_name].
+                // For `use module_name;`, the path is [module_name].
+                if use_decl.path.len() >= 2 {
+                    let mod_name = use_decl.path[0].name.as_str();
+                    let item_name = use_decl.path[1].name.as_str();
+                    if mod_name == current_module {
+                        // Importing from the same module — this is a
+                        // self-import, which is a no-op (the item is
+                        // already in scope).
+                        continue;
+                    }
+                    if let Some(registered) = registry.lookup(mod_name, item_name) {
+                        if registered.visibility.is_public() {
+                            let kind = match registered.kind {
+                                crate::module::ModuleItemKind::Fn => SymbolKind::Fn,
+                                crate::module::ModuleItemKind::Struct
+                                | crate::module::ModuleItemKind::Enum => SymbolKind::Fn,
+                                crate::module::ModuleItemKind::Let
+                                | crate::module::ModuleItemKind::Const => SymbolKind::Const,
+                            };
+                            let ident = Ident {
+                                name: item_name.to_string(),
+                                span: use_decl.path[1].span,
+                            };
+                            self.bind(&ident, kind, module);
+                        } else {
+                            self.errors.push(SemanticError::unresolved(
+                                format!("`{item_name}` is not public in module `{mod_name}`"),
+                                use_decl.span,
+                            ));
+                        }
+                    } else {
+                        self.errors.push(SemanticError::unresolved(
+                            format!("cannot find `{item_name}` in module `{mod_name}`"),
+                            use_decl.span,
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     /// Registers a struct declaration in the type namespace, reporting a
@@ -285,6 +389,12 @@ impl Analyzer {
             // module-scope collection; their field types and variants are
             // resolved by the type checker.
             ItemKind::Struct(_) | ItemKind::Enum(_) => {}
+            ItemKind::Module(_) | ItemKind::Use(_) => {
+                // Handled during module discovery, not semantic analysis.
+            }
+            ItemKind::Pub(pub_item) => {
+                self.analyze_item(pub_item.item.as_ref(), module);
+            }
             ItemKind::Let(binding) => {
                 self.analyze_expr(&binding.init, Ctx::module(module));
             }

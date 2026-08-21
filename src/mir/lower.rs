@@ -97,6 +97,8 @@ impl<'a> Lowerer<'a> {
             // The predeclared runtime intrinsics resolve like module items:
             // a reference is a `Static` operand the backend recognizes.
             .chain(hir.intrinsic_symbols.iter().map(|(symbol, _)| *symbol))
+            // Imported symbols from other modules also resolve as module items.
+            .chain(hir.imported_symbols.iter().map(|(symbol, _)| *symbol))
             .collect();
         Self {
             hir,

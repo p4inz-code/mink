@@ -301,7 +301,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1563, all passing)
+├── tests/      Compiler tests (1603, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

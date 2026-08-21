@@ -28,7 +28,20 @@ impl SourceMap {
     }
 
     /// Reads the file at `path` from disk and registers it.
+    ///
+    /// If the path was already loaded, returns its existing id instead of
+    /// creating a duplicate entry.
     pub fn load(&mut self, path: &Path) -> io::Result<SourceId> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        for (i, file) in self.files.iter().enumerate() {
+            let existing_canon = file
+                .name()
+                .canonicalize()
+                .unwrap_or_else(|_| file.name().to_path_buf());
+            if existing_canon == canon {
+                return Ok(SourceId::new(i as u32));
+            }
+        }
         let text = fs::read_to_string(path)?;
         Ok(self.add(path.to_path_buf(), text))
     }

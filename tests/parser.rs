@@ -1454,6 +1454,17 @@ fn walk_item(item: &Item, text_len: u32, src: &str) {
                 walk_ident(&variant.name, text_len, src);
             }
         }
+        ItemKind::Module(m) => {
+            walk_ident(&m.name, text_len, src);
+        }
+        ItemKind::Use(u) => {
+            for segment in &u.path {
+                walk_ident(segment, text_len, src);
+            }
+        }
+        ItemKind::Pub(p) => {
+            walk_item(&p.item, text_len, src);
+        }
     }
 }
 

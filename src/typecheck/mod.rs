@@ -35,6 +35,76 @@ pub use ty::{
     TypeTable,
 };
 
+/// A serializable function signature for cross-module type sharing.
+///
+/// Unlike [`TypeKind::Fn`], this stores scalar type names instead of
+/// [`TypeId`]s, so it can be constructed in one module's [`TypeTable`]
+/// and consumed in another module's table without stale id references.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalFnSig {
+    /// The concrete type name for each parameter.
+    pub params: Vec<ScalarType>,
+    /// The concrete type name for the return value.
+    pub result: ScalarType,
+}
+
+/// A scalar type that can be serialized across module boundaries.
+///
+/// This covers the V1 language's non-parametric types. Parameterized
+/// types (e.g. `Ptr<T>`, `Range<T>`) are not yet importable across
+/// modules and will be added in a later milestone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScalarType {
+    /// 64-bit integer type.
+    Int,
+    /// 64-bit floating-point type.
+    Float,
+    /// Boolean type.
+    Bool,
+    /// Unicode scalar value type.
+    Char,
+    /// String type.
+    Str,
+    /// Null literal type.
+    Null,
+    /// Unit (zero-width) type.
+    Unit,
+    /// Unresolved inference variable.
+    Infer,
+}
+
+impl ScalarType {
+    /// Converts a scalar type to the corresponding [`TypeKind`].
+    pub fn to_type_kind(self) -> TypeKind {
+        match self {
+            Self::Int => TypeKind::Int,
+            Self::Float => TypeKind::Float,
+            Self::Bool => TypeKind::Bool,
+            Self::Char => TypeKind::Char,
+            Self::Str => TypeKind::Str,
+            Self::Null => TypeKind::Null,
+            Self::Unit => TypeKind::Unit,
+            Self::Infer => TypeKind::Infer(None),
+        }
+    }
+
+    /// Converts a [`TypeKind`] to a scalar type, if possible.
+    /// Non-scalar types (references, pointers, tuples, etc.) return `None`.
+    pub fn from_type_kind(kind: &TypeKind) -> Option<Self> {
+        match kind {
+            TypeKind::Int => Some(Self::Int),
+            TypeKind::Float => Some(Self::Float),
+            TypeKind::Bool => Some(Self::Bool),
+            TypeKind::Char => Some(Self::Char),
+            TypeKind::Str => Some(Self::Str),
+            TypeKind::Null => Some(Self::Null),
+            TypeKind::Unit => Some(Self::Unit),
+            TypeKind::Infer(_) => Some(Self::Infer),
+            _ => None,
+        }
+    }
+}
+
 /// The human-readable reason a layout could not be computed (shared with
 /// the backend lowering, which validates aggregate layouts against the
 /// same deterministic engine).
@@ -52,7 +122,21 @@ pub(crate) use checker::layout_error_message;
 /// sub-expressions receive the unknown/error type so one root error does
 /// not cascade into misleading secondary diagnostics.
 pub fn check(ast: &Ast, semantic: &SemanticResult, sources: &SourceMap) -> TypeResult {
-    checker::check_ast(ast, semantic, sources)
+    checker::check_ast(ast, semantic, sources, &std::collections::HashMap::new())
+}
+
+/// Runs type analysis with pre-resolved types for imported symbols.
+///
+/// `external_types` maps a symbol's name to its type kind (e.g. the
+/// function signature from another module). Symbols present in this map
+/// receive the given type instead of `Infer(None)`.
+pub fn check_with_external_types(
+    ast: &Ast,
+    semantic: &SemanticResult,
+    sources: &SourceMap,
+    external_types: &std::collections::HashMap<String, crate::typecheck::ExternalFnSig>,
+) -> TypeResult {
+    checker::check_ast(ast, semantic, sources, external_types)
 }
 
 /// The result of running type analysis on one program.

@@ -326,7 +326,10 @@ impl<'a> Parser<'a> {
                 | TokenKind::Struct
                 | TokenKind::Enum
                 | TokenKind::Let
-                | TokenKind::Const => match self.parse_item() {
+                | TokenKind::Const
+                | TokenKind::Mod
+                | TokenKind::Use
+                | TokenKind::Pub => match self.parse_item() {
                     Ok(item) => items.push(item),
                     Err(()) => self.recover_item(),
                 },
@@ -374,6 +377,27 @@ impl<'a> Parser<'a> {
                 let (binding, span) = self.parse_const()?;
                 Ok(Item {
                     kind: ItemKind::Const(binding),
+                    span,
+                })
+            }
+            TokenKind::Mod => {
+                let (decl, span) = self.parse_mod_decl()?;
+                Ok(Item {
+                    kind: ItemKind::Module(decl),
+                    span,
+                })
+            }
+            TokenKind::Use => {
+                let (decl, span) = self.parse_use_decl()?;
+                Ok(Item {
+                    kind: ItemKind::Use(decl),
+                    span,
+                })
+            }
+            TokenKind::Pub => {
+                let (pub_item, span) = self.parse_pub_item()?;
+                Ok(Item {
+                    kind: ItemKind::Pub(pub_item),
                     span,
                 })
             }
@@ -965,6 +989,59 @@ impl<'a> Parser<'a> {
                 name: binding.name,
                 ty: binding.ty,
                 init: binding.init,
+            },
+            span,
+        ))
+    }
+
+    /// Parses a `mod name;` declaration (file-based module).
+    fn parse_mod_decl(&mut self) -> Result<(crate::ast::ModuleDecl, Span), ()> {
+        let start = self.bump().span(); // 'mod'
+        let name = self.expect_ident()?;
+        // Consume optional semicolon.
+        if self.current_kind() == TokenKind::Semi {
+            let _ = self.bump(); // ';'
+        }
+        let span = self.join(start, name.span);
+        Ok((
+            crate::ast::ModuleDecl {
+                name,
+                body: None,
+                span,
+            },
+            span,
+        ))
+    }
+
+    /// Parses a `use path::to::Item;` import declaration.
+    fn parse_use_decl(&mut self) -> Result<(crate::ast::UseDecl, Span), ()> {
+        let start = self.bump().span(); // 'use'
+        let mut path = Vec::new();
+        path.push(self.expect_ident()?);
+        while self.current_kind() == TokenKind::ColonColon {
+            let _ = self.bump(); // '::'
+            if self.current_kind() == TokenKind::Semi || self.current_kind() == TokenKind::Eof {
+                break;
+            }
+            path.push(self.expect_ident()?);
+        }
+        if self.current_kind() == TokenKind::Semi {
+            let _ = self.bump(); // ';'
+        }
+        let last_span = path.last().map_or(start, |ident| ident.span);
+        let span = self.join(start, last_span);
+        Ok((crate::ast::UseDecl { path, span }, span))
+    }
+
+    /// Parses a `pub`-qualified declaration.
+    fn parse_pub_item(&mut self) -> Result<(crate::ast::PubItem, Span), ()> {
+        let start = self.bump().span(); // 'pub'
+        let item = self.parse_item()?;
+        let span = self.join(start, item.span);
+        Ok((
+            crate::ast::PubItem {
+                item: Box::new(item),
+                span,
             },
             span,
         ))

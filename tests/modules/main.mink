@@ -1,0 +1,10 @@
+mod math;
+use math::add;
+use math::multiply;
+fn main() {
+    let sum = add(3, 4);
+    let prod = multiply(5, 6);
+    rt_print_int(sum);
+    rt_print_int(prod);
+    return 0;
+}

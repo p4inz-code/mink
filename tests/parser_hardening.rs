@@ -1211,6 +1211,17 @@ fn walk_item(item: &Item, text_len: u32, src: &str) {
                 walk_ident(&variant.name, text_len, src);
             }
         }
+        ItemKind::Module(m) => {
+            walk_ident(&m.name, text_len, src);
+        }
+        ItemKind::Use(u) => {
+            for segment in &u.path {
+                walk_ident(segment, text_len, src);
+            }
+        }
+        ItemKind::Pub(p) => {
+            walk_item(&p.item, text_len, src);
+        }
     }
 }
 
@@ -1427,9 +1438,6 @@ fn excluded_declarations_at_top_level_are_rejected() {
         "type X = int;",
         "trait T {}",
         "impl T for U {}",
-        "mod m;",
-        "use std;",
-        "pub fn f() {}",
         "async fn f() {}",
         "unsafe fn f() {}",
         "match x {}",
@@ -1516,10 +1524,11 @@ fn excluded_tokens_and_operators_are_rejected() {
 
 #[test]
 fn excluded_keywords_are_never_silently_accepted() {
-    let excluded = [
-        "enum", "type", "trait", "impl", "mod", "use", "pub", "match", "async", "await", "unsafe",
+    // Keywords that remain rejected at both statement and item positions.
+    let excluded_both = [
+        "enum", "type", "trait", "impl", "match", "async", "await", "unsafe",
     ];
-    for kw in excluded {
+    for kw in excluded_both {
         let at_statement = format!("fn f() {{ {kw} x; }}");
         assert!(
             !parse_src(&at_statement).is_valid(),
@@ -1529,6 +1538,16 @@ fn excluded_keywords_are_never_silently_accepted() {
         assert!(
             !parse_src(&at_item).is_valid(),
             "keyword {kw:?} accepted at item position"
+        );
+    }
+    // mod, use, pub are now accepted at item position (session 34)
+    // but remain rejected at statement position.
+    let item_only = ["mod", "use", "pub"];
+    for kw in item_only {
+        let at_statement = format!("fn f() {{ {kw} x; }}");
+        assert!(
+            !parse_src(&at_statement).is_valid(),
+            "keyword {kw:?} accepted at statement position"
         );
     }
 }

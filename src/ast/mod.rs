@@ -51,7 +51,7 @@ impl Ast {
 }
 
 /// A top-level declaration: a function, a `struct` declaration, a `let`
-/// binding, or a `const` binding.
+/// binding, a `const` binding, a `mod` declaration, or a `use` import.
 ///
 /// The grammar currently allows only declarations at module scope; executable
 /// statements live inside function bodies (see
@@ -79,6 +79,14 @@ pub enum ItemKind {
     Let(LetItem),
     /// A `const` binding.
     Const(ConstItem),
+    /// A `mod` declaration (session 34): `mod name;` loads a submodule
+    /// from a file, or `mod name { ... }` declares an inline module.
+    Module(ModuleDecl),
+    /// A `use` import (session 34): `use path;` or `use path::Item;`.
+    Use(UseDecl),
+    /// A `pub`-qualified declaration (session 34): the inner item is
+    /// visible across module boundaries.
+    Pub(PubItem),
 }
 
 /// A `struct` declaration: `struct Name { field: Type, ... }` (session 14).
@@ -278,6 +286,57 @@ pub struct ConstItem {
     pub ty: Option<Ty>,
     /// The compile-time constant expression.
     pub init: Expr,
+}
+
+/// The visibility of a declaration: `pub` makes it visible across module
+/// boundaries; private (no modifier) restricts it to the declaring module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Visibility {
+    /// Private to the declaring module (default).
+    Private,
+    /// Visible to other modules (`pub`).
+    Public,
+}
+
+impl Visibility {
+    /// Whether this visibility is public.
+    pub fn is_public(self) -> bool {
+        matches!(self, Self::Public)
+    }
+}
+
+/// A `mod` declaration (session 34): `mod name;` loads a submodule from
+/// a file, or `mod name { ... }` declares an inline module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleDecl {
+    /// The module name.
+    pub name: Ident,
+    /// The optional inline module body (`mod name { ... }`). When `None`,
+    /// the module is loaded from a file (`mod name;`).
+    pub body: Option<Block>,
+    /// Span covering the whole declaration.
+    pub span: Span,
+}
+
+/// A `use` import (session 34): `use path;` or `use path::Item;`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseDecl {
+    /// The path segments (e.g. `["shapes"]` for `use shapes;` or
+    /// `["shapes", "Point"]` for `use shapes::Point;`).
+    pub path: Vec<Ident>,
+    /// Span covering the whole `use` statement.
+    pub span: Span,
+}
+
+/// A `pub`-qualified declaration (session 34): the inner item is visible
+/// across module boundaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PubItem {
+    /// The inner declaration, which must be a function, struct, enum, let,
+    /// const, or mod.
+    pub item: Box<Item>,
+    /// Span covering the `pub` keyword plus the inner item.
+    pub span: Span,
 }
 
 /// A name: its source spelling plus the span of the identifier token.

@@ -48,7 +48,19 @@ pub use symbol::{
 /// deterministic and continues past independent errors (see the module
 /// documentation and `docs/language/CORE_LANGUAGE.md` §24).
 pub fn analyze(ast: &Ast) -> SemanticResult {
-    analyzer::analyze_ast(ast)
+    analyzer::analyze_ast(ast, None)
+}
+
+/// Runs semantic analysis with access to a cross-module registry.
+///
+/// When a `use` import is encountered, the registry is consulted to
+/// resolve the imported symbol from another module.
+pub fn analyze_with_registry(
+    ast: &Ast,
+    registry: &crate::module::ModuleRegistry,
+    module_name: &str,
+) -> SemanticResult {
+    analyzer::analyze_ast(ast, Some((registry, module_name)))
 }
 
 /// The result of running semantic analysis on one program.

@@ -640,6 +640,143 @@ impl TypeTable {
             .find(|f| f.name == field_name)
             .map(|f| f.ty)
     }
+
+    /// Merges another type table into this one, remapping every
+    /// [`TypeId`], [`StructId`], and [`EnumId`] from the source table
+    /// to point into this table.
+    ///
+    /// Returns a remapping function: `old_id` → `new_id` for every type
+    /// in the source table.
+    pub fn merge_from(&mut self, other: &TypeTable) -> HashMap<TypeId, TypeId> {
+        use std::collections::hash_map::Entry;
+
+        let type_offset = TypeId::new(self.kinds.len() as u32);
+        let struct_offset = StructId::new(self.structs.len() as u32);
+        let enum_offset = EnumId::new(self.enums.len() as u32);
+
+        // Step 1: remap a TypeKind from the source table to use this
+        // table's ids. This must be called after the new slots have been
+        // reserved (steps 2 and 3), so the new TypeIds are valid.
+        let remap_type_kind = |kind: &TypeKind, remap: &HashMap<TypeId, TypeId>| -> TypeKind {
+            match kind {
+                TypeKind::Error
+                | TypeKind::Int
+                | TypeKind::Float
+                | TypeKind::Bool
+                | TypeKind::Char
+                | TypeKind::Str
+                | TypeKind::Null
+                | TypeKind::Unit => kind.clone(),
+                TypeKind::Infer(target) => {
+                    TypeKind::Infer(target.and_then(|t| remap.get(&t).copied()))
+                }
+                TypeKind::Range(elem) => TypeKind::Range(remap.get(elem).copied().unwrap_or(*elem)),
+                TypeKind::Ptr(elem) => TypeKind::Ptr(remap.get(elem).copied().unwrap_or(*elem)),
+                TypeKind::Ref { mutable, elem } => TypeKind::Ref {
+                    mutable: *mutable,
+                    elem: remap.get(elem).copied().unwrap_or(*elem),
+                },
+                TypeKind::Fn { params, result } => TypeKind::Fn {
+                    params: params
+                        .iter()
+                        .map(|p| remap.get(p).copied().unwrap_or(*p))
+                        .collect(),
+                    result: remap.get(result).copied().unwrap_or(*result),
+                },
+                TypeKind::Tuple(elems) => TypeKind::Tuple(
+                    elems
+                        .iter()
+                        .map(|e| remap.get(e).copied().unwrap_or(*e))
+                        .collect(),
+                ),
+                TypeKind::Struct(sid) => {
+                    let new_sid = StructId::new(sid.raw() + struct_offset.raw());
+                    TypeKind::Struct(new_sid)
+                }
+                TypeKind::Enum(eid) => {
+                    let new_eid = EnumId::new(eid.raw() + enum_offset.raw());
+                    TypeKind::Enum(new_eid)
+                }
+                TypeKind::Array { elem, len } => TypeKind::Array {
+                    elem: remap.get(elem).copied().unwrap_or(*elem),
+                    len: *len,
+                },
+            }
+        };
+
+        // Step 2: Remap source TypeIds and reserve new slots.
+        // We need a two-pass approach: first assign new TypeIds, then
+        // fill in the kind details.
+        let mut remap: HashMap<TypeId, TypeId> = HashMap::new();
+        let source_kinds: Vec<TypeKind> = other.kinds.to_vec();
+
+        // First pass: assign TypeIds.
+        for (i, _) in source_kinds.iter().enumerate() {
+            let old_id = TypeId::new(i as u32);
+            let new_id = TypeId::new(type_offset.0 + i as u32);
+            remap.insert(old_id, new_id);
+        }
+
+        // Second pass: push remapped kinds into self.
+        for kind in &source_kinds {
+            let new_kind = remap_type_kind(kind, &remap);
+            // For Infer and Error, always push (don't intern).
+            // For others, push into the table. Note: the interning map
+            // may already have an equivalent type; that's fine —
+            // `push` will deduplicate via interning.
+            self.kinds.push(new_kind.clone());
+        }
+
+        // Update the interning map for all newly pushed concrete types.
+        for (i, kind) in self.kinds[type_offset.0 as usize..].iter().enumerate() {
+            if !matches!(kind, TypeKind::Infer(_) | TypeKind::Error) {
+                let new_id = TypeId::new((type_offset.0 as usize + i) as u32);
+                match self.interned.entry(kind.clone()) {
+                    Entry::Occupied(_) => {
+                        // Already interned — the id we just pushed is
+                        // a duplicate. That's acceptable; the earlier
+                        // interned id is the canonical one.
+                    }
+                    Entry::Vacant(vacant) => {
+                        vacant.insert(new_id);
+                    }
+                }
+            }
+        }
+
+        // Step 3: Extend structs and enums.
+        for info in &other.structs {
+            let new_info = StructInfo {
+                name: info.name.clone(),
+                fields: info
+                    .fields
+                    .iter()
+                    .map(|f| StructFieldInfo {
+                        name: f.name.clone(),
+                        ty: remap.get(&f.ty).copied().unwrap_or(f.ty),
+                    })
+                    .collect(),
+            };
+            self.structs.push(new_info);
+        }
+        for info in &other.enums {
+            let new_info = EnumInfo {
+                name: info.name.clone(),
+                variants: info
+                    .variants
+                    .iter()
+                    .map(|v| EnumVariantInfo {
+                        name: v.name.clone(),
+                        discriminant: v.discriminant,
+                        payload: v.payload.map(|p| remap.get(&p).copied().unwrap_or(p)),
+                    })
+                    .collect(),
+            };
+            self.enums.push(new_info);
+        }
+
+        remap
+    }
 }
 
 #[cfg(test)]

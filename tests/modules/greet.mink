@@ -1,0 +1,2 @@
+pub fn greet(name: Str) { rt_print_str(name); return; }
+pub const VERSION: Int = 1;

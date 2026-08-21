@@ -45,7 +45,7 @@ use crate::source::Span;
 use crate::typecheck::{TypeId, TypeTable};
 
 pub use error::{HirError, HirErrorKind};
-pub use lower::lower;
+pub use lower::{lower, lower_with_imports};
 
 /// A lowered MINK program: typed, symbol-resolved items in source order,
 /// plus the type table its [`TypeId`]s refer to.
@@ -64,6 +64,11 @@ pub struct HirProgram {
     /// lower intrinsic references to module-item-style operands, and the
     /// backend uses it to lower calls to runtime services.
     pub intrinsic_symbols: Vec<(crate::semantics::SymbolId, crate::runtime::IntrinsicId)>,
+    /// Imported symbols from other modules: each is a (symbol, name) pair
+    /// for a function imported via `use`. The MIR layer includes these in
+    /// its `module_symbols` set so they lower to `Static` operands, and
+    /// the backend resolves them across compiled modules.
+    pub imported_symbols: Vec<(crate::semantics::SymbolId, String)>,
 }
 
 /// A top-level declaration: a function, a `let` binding, or a `const`

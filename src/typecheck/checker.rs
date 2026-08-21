@@ -34,6 +34,7 @@ use crate::runtime::layout::{self, LayoutError};
 use crate::semantics::{SemanticResult, SymbolId, SymbolKind};
 use crate::source::{SourceMap, Span};
 
+use super::ExternalFnSig;
 use super::TypeResult;
 use super::error::TypeError;
 use super::ty::{EnumId, EnumVariantInfo, StructFieldInfo, StructId, TypeId, TypeKind, TypeTable};
@@ -64,8 +65,13 @@ type PendingEnumVariants = Vec<(EnumId, String, Vec<PendingVariant>)>;
 ///
 /// The analysis is deterministic: symbol types, expression types, and
 /// errors are produced in source order.
-pub(crate) fn check_ast(ast: &Ast, semantic: &SemanticResult, sources: &SourceMap) -> TypeResult {
-    let mut checker = Checker::new(ast, semantic, sources);
+pub(crate) fn check_ast(
+    ast: &Ast,
+    semantic: &SemanticResult,
+    sources: &SourceMap,
+    external_types: &HashMap<String, ExternalFnSig>,
+) -> TypeResult {
+    let mut checker = Checker::new(ast, semantic, sources, external_types);
     checker.run();
     checker.finish()
 }
@@ -194,6 +200,8 @@ struct Checker<'a> {
     /// The source map, for reading literal source text (the
     /// null-pointer-constant rule and array-length decoding).
     sources: &'a SourceMap,
+    /// Pre-resolved function signatures for imported symbols from other modules.
+    external_types: &'a HashMap<String, ExternalFnSig>,
     types: TypeTable,
     /// The type of every symbol, indexed by `SymbolId::raw()`.
     symbol_types: Vec<TypeId>,
@@ -220,7 +228,12 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
-    fn new(ast: &'a Ast, semantic: &'a SemanticResult, sources: &'a SourceMap) -> Self {
+    fn new(
+        ast: &'a Ast,
+        semantic: &'a SemanticResult,
+        sources: &'a SourceMap,
+        external_types: &'a HashMap<String, ExternalFnSig>,
+    ) -> Self {
         let mut types = TypeTable::new();
         // Placeholder for symbol slots until pre-registration fills them.
         let placeholder = types.push(TypeKind::Error);
@@ -228,6 +241,7 @@ impl<'a> Checker<'a> {
             ast,
             semantic,
             sources,
+            external_types,
             types,
             symbol_types: vec![placeholder; semantic.symbols().len()],
             decls: HashMap::new(),
@@ -331,6 +345,7 @@ impl<'a> Checker<'a> {
                     }
                 }
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {}
+                ItemKind::Module(_) | ItemKind::Use(_) | ItemKind::Pub(_) => {}
             }
         }
     }
@@ -1300,7 +1315,19 @@ impl<'a> Checker<'a> {
         type FnInfo = (usize, Vec<Option<Ty>>, Option<Ty>);
         let mut fn_info: HashMap<u32, FnInfo> = HashMap::new();
         for item in &self.ast.items {
-            if let ItemKind::Fn(f) = &item.kind {
+            // Collect fn_info from both bare `fn` and `pub fn` declarations.
+            let fn_item = match &item.kind {
+                ItemKind::Fn(f) => Some(f),
+                ItemKind::Pub(pi) => {
+                    if let ItemKind::Fn(f) = &pi.item.kind {
+                        Some(f)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(f) = fn_item {
                 let param_tys: Vec<Option<Ty>> = f.params.iter().map(|p| p.ty.clone()).collect();
                 fn_info.insert(
                     f.name.span.start(),
@@ -1311,25 +1338,37 @@ impl<'a> Checker<'a> {
         for symbol in self.semantic.symbols().iter() {
             let ty = match symbol.kind {
                 SymbolKind::Fn => {
-                    let (arity, param_tys, return_ty) = fn_info
-                        .get(&symbol.span.start())
-                        .cloned()
-                        .unwrap_or((0, Vec::new(), None));
-                    let params: Vec<TypeId> = (0..arity)
-                        .map(|i| {
-                            if let Some(ann) = param_tys.get(i).and_then(|t| t.as_ref()) {
-                                self.resolve_type(ann)
-                            } else {
-                                self.types.push(TypeKind::Infer(None))
-                            }
-                        })
-                        .collect();
-                    let result = if let Some(ann) = &return_ty {
-                        self.resolve_type(ann)
+                    if let Some(ext) = self.external_types.get(&symbol.name) {
+                        // Imported symbol with known function signature from another module.
+                        // Reconstruct proper TypeIds in this module's TypeTable.
+                        let params: Vec<TypeId> = ext
+                            .params
+                            .iter()
+                            .map(|p| self.types.push(p.to_type_kind()))
+                            .collect();
+                        let result = self.types.push(ext.result.to_type_kind());
+                        self.types.push(TypeKind::Fn { params, result })
                     } else {
-                        self.types.push(TypeKind::Infer(None))
-                    };
-                    self.types.push(TypeKind::Fn { params, result })
+                        let (arity, param_tys, return_ty) = fn_info
+                            .get(&symbol.span.start())
+                            .cloned()
+                            .unwrap_or((0, Vec::new(), None));
+                        let params: Vec<TypeId> = (0..arity)
+                            .map(|i| {
+                                if let Some(ann) = param_tys.get(i).and_then(|t| t.as_ref()) {
+                                    self.resolve_type(ann)
+                                } else {
+                                    self.types.push(TypeKind::Infer(None))
+                                }
+                            })
+                            .collect();
+                        let result = if let Some(ann) = &return_ty {
+                            self.resolve_type(ann)
+                        } else {
+                            self.types.push(TypeKind::Infer(None))
+                        };
+                        self.types.push(TypeKind::Fn { params, result })
+                    }
                 }
                 SymbolKind::Intrinsic => self.intrinsic_type(symbol),
                 _ => self.types.push(TypeKind::Infer(None)),
@@ -1388,6 +1427,12 @@ impl<'a> Checker<'a> {
             // Struct and enum declarations were registered (types, fields,
             // variants, and layout) before any body was analyzed.
             ItemKind::Struct(_) | ItemKind::Enum(_) => {}
+            ItemKind::Module(_) | ItemKind::Use(_) => {
+                // Handled during module discovery, not type checking.
+            }
+            ItemKind::Pub(pub_item) => {
+                self.check_item(pub_item.item.as_ref());
+            }
             ItemKind::Let(binding) => {
                 let ty = self.expr_type(&binding.init);
                 // Session 26: when a type annotation is present, unify the
