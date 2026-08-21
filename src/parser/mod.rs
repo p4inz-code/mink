@@ -775,74 +775,61 @@ impl<'a> Parser<'a> {
                     span: token.span(),
                 };
                 if self.current_kind() == TokenKind::Lt {
-                    if ident.name != "Ptr" {
-                        // Only `Ptr<T>` has the generic form; anything else
-                        // is rejected rather than silently misparsed.
-                        let lt = self.current();
-                        self.record_error(ParseErrorKind::ExpectedGT, lt.span());
-                        while !matches!(
-                            self.current_kind(),
-                            TokenKind::Gt | TokenKind::Comma | TokenKind::RBrace | TokenKind::Eof
-                        ) {
-                            let _ = self.bump();
+                    if ident.name == "Ptr" {
+                        // `Ptr<T>` is the pointer type.
+                        let _ = self.bump(); // '<'
+                        let inner = self.parse_type()?;
+                        if self.current_kind() != TokenKind::Gt {
+                            let bad = self.current();
+                            self.record_error(ParseErrorKind::ExpectedGT, bad.span());
+                            return Err(());
                         }
-                        if self.current_kind() == TokenKind::Gt {
-                            let _ = self.bump();
-                        }
-                        return Err(());
-                    }
-                    let _ = self.bump(); // '<'
-                    let inner = self.parse_type()?;
-                    if self.current_kind() != TokenKind::Gt {
-                        let bad = self.current();
-                        self.record_error(ParseErrorKind::ExpectedGT, bad.span());
-                        return Err(());
-                    }
-                    let gt = self.bump().span();
-                    let span = self.join(token.span(), gt);
-                    Ok(Ty {
-                        kind: TyKind::Ptr(Box::new(inner)),
-                        span,
-                    })
-                } else if self.current_kind() == TokenKind::Lt {
-                    // Generic type application: `Pair<T, U>`.
-                    let _ = self.bump(); // '<'
-                    let mut args = Vec::new();
-                    loop {
-                        if self.current_kind() == TokenKind::Gt {
-                            let _ = self.bump();
-                            break;
-                        }
-                        if self.current_kind() == TokenKind::Eof {
-                            let sp = self.point_span();
-                            self.record_error(ParseErrorKind::ExpectedGT, sp);
-                            break;
-                        }
-                        match self.parse_type() {
-                            Ok(ty) => args.push(ty),
-                            Err(()) => {
-                                // Skip to next comma or >.
-                                while !matches!(
-                                    self.current_kind(),
-                                    TokenKind::Comma | TokenKind::Gt | TokenKind::Eof
-                                ) {
-                                    let _ = self.bump();
+                        let gt = self.bump().span();
+                        let span = self.join(token.span(), gt);
+                        Ok(Ty {
+                            kind: TyKind::Ptr(Box::new(inner)),
+                            span,
+                        })
+                    } else {
+                        // Generic type application: `Pair<T, U>`.
+                        let _ = self.bump(); // '<'
+                        let mut args = Vec::new();
+                        loop {
+                            if self.current_kind() == TokenKind::Gt {
+                                let _ = self.bump();
+                                break;
+                            }
+                            if self.current_kind() == TokenKind::Eof {
+                                let sp = self.point_span();
+                                self.record_error(ParseErrorKind::ExpectedGT, sp);
+                                break;
+                            }
+                            match self.parse_type() {
+                                Ok(ty) => args.push(ty),
+                                Err(()) => {
+                                    // Skip to next comma or >.
+                                    while !matches!(
+                                        self.current_kind(),
+                                        TokenKind::Comma | TokenKind::Gt | TokenKind::Eof
+                                    ) {
+                                        let _ = self.bump();
+                                    }
                                 }
                             }
+                            if self.current_kind() == TokenKind::Comma {
+                                let _ = self.bump();
+                            } else if self.current_kind() != TokenKind::Gt {
+                                let sp = self.point_span();
+                                self.record_error(ParseErrorKind::ExpectedGT, sp);
+                            }
                         }
-                        if self.current_kind() == TokenKind::Comma {
-                            let _ = self.bump();
-                        } else if self.current_kind() != TokenKind::Gt {
-                            let sp = self.point_span();
-                            self.record_error(ParseErrorKind::ExpectedGT, sp);
-                        }
+                        let ps = self.point_span();
+                        let gt_span = self.join(token.span(), ps);
+                        Ok(Ty {
+                            kind: TyKind::NamedApp { name: ident, args },
+                            span: gt_span,
+                        })
                     }
-                    let ps = self.point_span();
-                    let gt_span = self.join(token.span(), ps);
-                    Ok(Ty {
-                        kind: TyKind::NamedApp { name: ident, args },
-                        span: gt_span,
-                    })
                 } else {
                     Ok(Ty {
                         kind: TyKind::Named(ident),
@@ -2715,6 +2702,7 @@ impl<'a> Parser<'a> {
                         span,
                     };
                 }
+
                 TokenKind::Dot => {
                     let _dot = self.bump();
                     let base = expr;
@@ -2954,13 +2942,128 @@ impl<'a> Parser<'a> {
                 let _ = self.bump();
                 let name = self.text(span);
                 let ident = Ident { name, span };
-                // `Name::Variant` is an enum variant reference (session 17):
-                // a path whose first segment names an enum type and whose
-                // second names one of its variants. `::` was previously
-                // lexed but rejected; it now forms variant paths only —
-                // module paths (`mod::item`) remain a later milestone.
+                // `Name::<Type>` is an explicit type argument call.
+                // `Name::Variant` is an enum variant reference (session 17).
                 if self.current_kind() == TokenKind::ColonColon {
-                    self.parse_enum_variant(ident)
+                    // Two-token lookahead: `::<` vs `::Ident`.
+                    // Save the ColonColon token, peek at what follows.
+                    let _ = self.bump(); // consume '::'
+                    if self.current_kind() == TokenKind::Lt {
+                        // `Name::<Type>` — explicit type arguments.
+                        let _ = self.bump(); // '<'
+                        let mut type_args = Vec::new();
+                        loop {
+                            if self.current_kind() == TokenKind::Gt {
+                                let _ = self.bump();
+                                break;
+                            }
+                            if self.current_kind() == TokenKind::Eof {
+                                let sp = self.point_span();
+                                self.record_error(ParseErrorKind::ExpectedGT, sp);
+                                break;
+                            }
+                            match self.parse_type() {
+                                Ok(ty) => type_args.push(ty),
+                                Err(()) => {
+                                    while !matches!(
+                                        self.current_kind(),
+                                        TokenKind::Comma | TokenKind::Gt | TokenKind::Eof
+                                    ) {
+                                        let _ = self.bump();
+                                    }
+                                }
+                            }
+                            if self.current_kind() == TokenKind::Comma {
+                                let _ = self.bump();
+                            } else if self.current_kind() != TokenKind::Gt {
+                                let sp = self.point_span();
+                                self.record_error(ParseErrorKind::ExpectedGT, sp);
+                            }
+                        }
+                        // Now expect '(' for the call arguments.
+                        if self.current_kind() == TokenKind::LParen {
+                            let (args, close) = self.parse_args()?;
+                            let ident_span = ident.span;
+                            let call_span = self.join(ident_span, close);
+                            Ok(Expr {
+                                kind: ExprKind::Call {
+                                    callee: Box::new(Expr {
+                                        kind: ExprKind::Ident(ident),
+                                        span: ident_span,
+                                    }),
+                                    args,
+                                    type_args: Some(type_args),
+                                },
+                                span: call_span,
+                            })
+                        } else {
+                            // Type args without parens — syntax error.
+                            let token = self.current();
+                            self.record_error(ParseErrorKind::ExpectedLParen, token.span());
+                            Err(())
+                        }
+                    } else {
+                        // `::Ident` — enum variant reference.
+                        // We already consumed '::' and the lexer is positioned
+                        // at the token after it. Inline the variant parsing
+                        // from parse_enum_variant (which expects to consume
+                        // '::' itself, but we already did).
+                        if self.current_kind() != TokenKind::Ident {
+                            let token = self.current();
+                            self.record_error(ParseErrorKind::ExpectedVariant, token.span());
+                            return Err(());
+                        }
+                        let token = self.bump();
+                        let variant = Ident {
+                            name: self.text(token.span()),
+                            span: token.span(),
+                        };
+                        let mut vspan = self.join(span, variant.span);
+                        let mut payload = None;
+                        if self.current_kind() == TokenKind::LParen {
+                            let open = self.bump().span();
+                            self.open_delims.push((TokenKind::LParen, open));
+                            if self.current_kind() == TokenKind::RParen {
+                                let bad = self.current();
+                                self.record_error(ParseErrorKind::EmptyPayload, bad.span());
+                                let _ = self.bump();
+                                self.open_delims.pop();
+                            } else {
+                                let expr = match self.parse_expression() {
+                                    Ok(expr) => expr,
+                                    Err(()) => {
+                                        self.recover_construction_payload();
+                                        return Ok(Expr {
+                                            kind: ExprKind::EnumVariant {
+                                                name: Box::new(ident),
+                                                variant: Box::new(variant),
+                                                payload,
+                                            },
+                                            span: vspan,
+                                        });
+                                    }
+                                };
+                                if self.current_kind() != TokenKind::RParen {
+                                    let bad = self.current();
+                                    self.record_error(ParseErrorKind::ExpectedRParen, bad.span());
+                                    self.recover_construction_payload();
+                                } else {
+                                    let close = self.bump().span();
+                                    self.open_delims.pop();
+                                    vspan = self.join(span, close);
+                                    payload = Some(Box::new(expr));
+                                }
+                            }
+                        }
+                        Ok(Expr {
+                            kind: ExprKind::EnumVariant {
+                                name: Box::new(ident),
+                                variant: Box::new(variant),
+                                payload,
+                            },
+                            span: vspan,
+                        })
+                    }
                 } else if !self.in_block_context && self.current_kind() == TokenKind::LBrace {
                     // `Name { ... }` is a struct literal unless the
                     // expression sits directly before a block in the
@@ -3054,6 +3157,7 @@ impl<'a> Parser<'a> {
     /// `Name::Variant(payload)`; the payload is parsed here (not as a call)
     /// because `E::V` is unambiguously a variant path, so `E::V(x)` can
     /// never be a function call. An empty payload `Variant()` is `E-P25`.
+    #[allow(dead_code)]
     fn parse_enum_variant(&mut self, name: Ident) -> Result<Expr, ()> {
         let _ = self.bump(); // '::'
         if self.current_kind() != TokenKind::Ident {
