@@ -758,7 +758,11 @@ impl Analyzer {
                 self.analyze_expr(start, ctx);
                 self.analyze_expr(end, ctx);
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                type_args: _,
+            } => {
                 self.analyze_call_target(callee, ctx);
                 for arg in args {
                     self.analyze_expr(arg, ctx);

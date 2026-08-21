@@ -414,6 +414,7 @@ impl<'a> Parser<'a> {
     fn parse_enum(&mut self) -> Result<(EnumItem, Span), ()> {
         let start = self.bump().span(); // 'enum'
         let name = self.expect_ident()?;
+        let generic_params = self.parse_generic_params();
         if self.current_kind() != TokenKind::LBrace {
             let token = self.current();
             self.record_error(ParseErrorKind::ExpectedBlock, token.span());
@@ -431,6 +432,7 @@ impl<'a> Parser<'a> {
                     return Ok((
                         EnumItem {
                             name,
+                            generic_params: generic_params.clone(),
                             variants,
                             span,
                         },
@@ -524,6 +526,7 @@ impl<'a> Parser<'a> {
         Ok((
             EnumItem {
                 name,
+                generic_params,
                 variants,
                 span,
             },
@@ -653,6 +656,7 @@ impl<'a> Parser<'a> {
     fn parse_struct(&mut self) -> Result<(StructItem, Span), ()> {
         let start = self.bump().span(); // 'struct'
         let name = self.expect_ident()?;
+        let generic_params = self.parse_generic_params();
         if self.current_kind() != TokenKind::LBrace {
             let token = self.current();
             self.record_error(ParseErrorKind::ExpectedBlock, token.span());
@@ -667,7 +671,15 @@ impl<'a> Parser<'a> {
                     let close = self.bump().span();
                     self.open_delims.pop();
                     let span = self.join(start, close);
-                    return Ok((StructItem { name, fields, span }, span));
+                    return Ok((
+                        StructItem {
+                            name,
+                            generic_params: generic_params.clone(),
+                            fields,
+                            span,
+                        },
+                        span,
+                    ));
                 }
                 TokenKind::Eof => {
                     self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
@@ -705,7 +717,15 @@ impl<'a> Parser<'a> {
         let close = self.bump().span();
         self.open_delims.pop();
         let span = self.join(start, close);
-        Ok((StructItem { name, fields, span }, span))
+        Ok((
+            StructItem {
+                name,
+                generic_params,
+                fields,
+                span,
+            },
+            span,
+        ))
     }
 
     /// Parses one `name: Type` struct field declaration.
@@ -783,6 +803,45 @@ impl<'a> Parser<'a> {
                     Ok(Ty {
                         kind: TyKind::Ptr(Box::new(inner)),
                         span,
+                    })
+                } else if self.current_kind() == TokenKind::Lt {
+                    // Generic type application: `Pair<T, U>`.
+                    let _ = self.bump(); // '<'
+                    let mut args = Vec::new();
+                    loop {
+                        if self.current_kind() == TokenKind::Gt {
+                            let _ = self.bump();
+                            break;
+                        }
+                        if self.current_kind() == TokenKind::Eof {
+                            let sp = self.point_span();
+                            self.record_error(ParseErrorKind::ExpectedGT, sp);
+                            break;
+                        }
+                        match self.parse_type() {
+                            Ok(ty) => args.push(ty),
+                            Err(()) => {
+                                // Skip to next comma or >.
+                                while !matches!(
+                                    self.current_kind(),
+                                    TokenKind::Comma | TokenKind::Gt | TokenKind::Eof
+                                ) {
+                                    let _ = self.bump();
+                                }
+                            }
+                        }
+                        if self.current_kind() == TokenKind::Comma {
+                            let _ = self.bump();
+                        } else if self.current_kind() != TokenKind::Gt {
+                            let sp = self.point_span();
+                            self.record_error(ParseErrorKind::ExpectedGT, sp);
+                        }
+                    }
+                    let ps = self.point_span();
+                    let gt_span = self.join(token.span(), ps);
+                    Ok(Ty {
+                        kind: TyKind::NamedApp { name: ident, args },
+                        span: gt_span,
                     })
                 } else {
                     Ok(Ty {
@@ -903,6 +962,7 @@ impl<'a> Parser<'a> {
     fn parse_fn(&mut self) -> Result<(FnItem, Span), ()> {
         let start = self.bump().span(); // 'fn'
         let name = self.expect_ident()?;
+        let generic_params = self.parse_generic_params();
         self.expect_lparen()?;
         let params = self.parse_params()?;
         // Optional return-type annotation: `-> Type`.
@@ -929,12 +989,58 @@ impl<'a> Parser<'a> {
         Ok((
             FnItem {
                 name,
+                generic_params,
                 params,
                 return_ty,
                 body,
             },
             span,
         ))
+    }
+
+    /// Parses an optional generic parameter list: `<T>` or `<T, U>`.
+    /// Returns an empty vec if no `<` follows.
+    fn parse_generic_params(&mut self) -> Vec<crate::ast::GenericParam> {
+        if self.current_kind() != TokenKind::Lt {
+            return Vec::new();
+        }
+        let _ = self.bump(); // '<'
+        let mut params = Vec::new();
+        loop {
+            if self.current_kind() == TokenKind::Gt {
+                let _ = self.bump(); // '>'
+                break;
+            }
+            if self.current_kind() == TokenKind::Eof {
+                let sp = self.point_span();
+                self.record_error(ParseErrorKind::ExpectedGT, sp);
+                break;
+            }
+            if let Some(ident) = self.try_ident() {
+                params.push(crate::ast::GenericParam {
+                    name: ident.clone(),
+                    span: ident.span,
+                });
+            } else {
+                let sp = self.point_span();
+                self.record_error(ParseErrorKind::ExpectedIdentifier, sp);
+                // Skip to the next comma or >.
+                while !matches!(
+                    self.current_kind(),
+                    TokenKind::Comma | TokenKind::Gt | TokenKind::Eof
+                ) {
+                    let _ = self.bump();
+                }
+            }
+            if self.current_kind() == TokenKind::Comma {
+                let _ = self.bump(); // ','
+            } else if self.current_kind() != TokenKind::Gt {
+                // Unexpected token — try to continue.
+                let sp = self.point_span();
+                self.record_error(ParseErrorKind::ExpectedGT, sp);
+            }
+        }
+        params
     }
 
     fn parse_let(&mut self) -> Result<(LetItem, Span), ()> {
@@ -2604,6 +2710,7 @@ impl<'a> Parser<'a> {
                         kind: ExprKind::Call {
                             callee: Box::new(callee),
                             args,
+                            type_args: None,
                         },
                         span,
                     };
@@ -3165,6 +3272,22 @@ impl<'a> Parser<'a> {
         }
         self.record_error(ParseErrorKind::ExpectedIdentifier, token.span());
         Err(())
+    }
+
+    /// Tries to consume an identifier, returning `None` if the current
+    /// token is not an identifier (does not record an error).
+    fn try_ident(&mut self) -> Option<Ident> {
+        let token = self.current();
+        if token.kind() == TokenKind::Ident {
+            let _ = self.bump();
+            let name = self.text(token.span());
+            Some(Ident {
+                name,
+                span: token.span(),
+            })
+        } else {
+            None
+        }
     }
 
     /// Consumes `(`, recording [`ParseErrorKind::ExpectedLParen`] and

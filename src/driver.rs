@@ -279,19 +279,22 @@ fn check_single_module(sources: &mut SourceMap, path: &Path) -> Result<CheckRepo
         .collect();
     errors.extend(parsed.parse_errors().iter().copied().map(CheckError::Parse));
     let (semantic, types, ownership, hir, mir) = if parsed.is_valid() {
-        let semantic = semantics::analyze(parsed.ast());
-        let types = typecheck::check(parsed.ast(), &semantic, sources);
+        // Run monomorphization: create concrete copies of generic functions.
+        let mut mono_ast = parsed.ast().clone();
+        crate::monomorphize::monomorphize(&mut mono_ast);
+        let semantic = semantics::analyze(&mono_ast);
+        let types = typecheck::check(&mono_ast, &semantic, sources);
         errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
         errors.extend(types.errors().iter().cloned().map(CheckError::Type));
         let ownership = if errors.is_empty() {
-            let result = crate::ownership::check(parsed.ast(), &semantic, &types);
+            let result = crate::ownership::check(&mono_ast, &semantic, &types);
             errors.extend(result.errors().iter().cloned().map(CheckError::Semantic));
             Some(result)
         } else {
             None
         };
         let (hir, mir) = if errors.is_empty() {
-            match hir::lower(parsed.ast(), &semantic, &types) {
+            match hir::lower(&mono_ast, &semantic, &types) {
                 Ok(program) => {
                     let mir = match mir::lower(&program) {
                         Ok(mir_program) => match mir::optimize(&mir_program) {
@@ -432,7 +435,10 @@ fn check_multi_module(
     }
 
     // Build a combined AST and run the single-module pipeline.
-    let combined_ast = crate::ast::Ast::new(root_items);
+    let mut combined_ast = crate::ast::Ast::new(root_items);
+
+    // Run monomorphization: create concrete copies of generic functions.
+    crate::monomorphize::monomorphize(&mut combined_ast);
 
     // Run semantic analysis.
     let semantic = semantics::analyze(&combined_ast);

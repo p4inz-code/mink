@@ -231,7 +231,7 @@ Honest status, because durable engineering starts with accurate claims:
   is no enum-to-`Int` conversion; pattern matching covers
   `Int`/`Bool`/enum scrutinees only (no struct/array destructuring
   yet, though or-patterns, ranges, and guards landed in session 27),
-  and there are no generics.
+  and generics are supported for functions (session 35) via monomorphization.
 - **Strings are byte sequences** — literals are immutable, there is no
   concatenation, and UTF-8 well-formedness is not validated at runtime.
 - **Borrowing is lexical, not non-lexical** — explicit references
@@ -301,7 +301,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1603, all passing)
+├── tests/      Compiler tests (1583, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

@@ -424,8 +424,9 @@ the session-14/17/18/19/20 additions above remain authoritative; the new
 productions are:
 
 ```
-Fn          := 'fn' Ident '(' ParamList? ')' ('->' Type)? Block
+Fn          := 'fn' Ident ('<' GenericParamList '>')? '(' ParamList? ')' ('->' Type)? Block
 Param       := Ident (':' Type)?
+GenericParamList := Ident (',' Ident)*
 ```
 
 - **Function declarations** may now carry an optional return-type

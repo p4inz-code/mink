@@ -1194,7 +1194,11 @@ impl<'a> Analyzer<'a> {
                 self.apply_assignment(op, target, &evaluated);
                 evaluated
             }
-            ExprKind::Call { callee, args } => self.eval_call(callee, args),
+            ExprKind::Call {
+                callee,
+                args,
+                type_args: _,
+            } => self.eval_call(callee, args),
             ExprKind::Member { base, member } => {
                 let base_value = self.eval_expr(base, Mode::Observe);
                 if !self.expr_may_own(expr.span) {

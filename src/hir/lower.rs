@@ -528,7 +528,11 @@ impl<'a> Lowerer<'a> {
                 start: Box::new(self.lower_expr(start)),
                 end: Box::new(self.lower_expr(end)),
             },
-            ExprKind::Call { callee, args } => HirExprKind::Call {
+            ExprKind::Call {
+                callee,
+                args,
+                type_args: _,
+            } => HirExprKind::Call {
                 callee: Box::new(self.lower_expr(callee)),
                 args: args.iter().map(|arg| self.lower_expr(arg)).collect(),
             },

@@ -507,7 +507,7 @@ fn chained_binary_operations_group_left() {
 #[test]
 fn calls_with_arguments() {
     let e = expr("f(1, 2)");
-    let ExprKind::Call { callee, args } = &e.kind else {
+    let ExprKind::Call { callee, args, .. } = &e.kind else {
         panic!("expected a call, found {:?}", e.kind)
     };
     ident(callee, "f");
@@ -537,7 +537,7 @@ fn calls_without_arguments() {
 #[test]
 fn nested_calls() {
     let e = expr("f(g(x))");
-    let ExprKind::Call { callee, args } = &e.kind else {
+    let ExprKind::Call { callee, args, .. } = &e.kind else {
         panic!("expected a call")
     };
     ident(callee, "f");
@@ -1472,6 +1472,13 @@ fn walk_ty(ty: &Ty, text_len: u32) {
     assert_span_ok(ty.span, text_len, "type");
     match &ty.kind {
         TyKind::Named(ident) => walk_ident(ident, text_len, "type"),
+        TyKind::GenericParam(ident) => walk_ident(ident, text_len, "type"),
+        TyKind::NamedApp { name, args } => {
+            walk_ident(name, text_len, "type");
+            for arg in args {
+                walk_ty(arg, text_len);
+            }
+        }
         TyKind::Ptr(inner) => walk_ty(inner, text_len),
         TyKind::Ref { inner, .. } => walk_ty(inner, text_len),
         TyKind::Array { elem, len } => {
@@ -1581,7 +1588,7 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
             walk_expr(start, text_len, src);
             walk_expr(end, text_len, src);
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             walk_expr(callee, text_len, src);
             for arg in args {
                 walk_expr(arg, text_len, src);

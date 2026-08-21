@@ -295,7 +295,7 @@ fn calls_lower_with_callee_args_and_result_type() {
     let HirStmtKind::Expr(call_expr) = &g.body.stmts[0].kind else {
         panic!("expected expression statement");
     };
-    let HirExprKind::Call { callee, args } = &call_expr.kind else {
+    let HirExprKind::Call { callee, args, .. } = &call_expr.kind else {
         panic!("expected call");
     };
     let callee_var = expect_var(&program, callee, "f");
@@ -682,6 +682,7 @@ fn unresolved_reference_is_a_lowering_error() {
                 name: "f".to_string(),
                 span: next_span(),
             },
+            generic_params: Vec::new(),
             params: Vec::new(),
             return_ty: None,
             body: Block {

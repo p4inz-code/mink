@@ -109,7 +109,7 @@ fn is_int(e: &Expr) {
 
 fn call(e: &Expr) -> (&Expr, &[Expr]) {
     match &e.kind {
-        ExprKind::Call { callee, args } => (callee, args),
+        ExprKind::Call { callee, args, .. } => (callee, args),
         other => panic!("expected a call, found {other:?}"),
     }
 }
@@ -1229,6 +1229,13 @@ fn walk_ty(ty: &Ty, text_len: u32) {
     assert_span_ok(ty.span, text_len, "type");
     match &ty.kind {
         TyKind::Named(ident) => walk_ident(ident, text_len, "type"),
+        TyKind::GenericParam(ident) => walk_ident(ident, text_len, "type"),
+        TyKind::NamedApp { name, args } => {
+            walk_ident(name, text_len, "type");
+            for arg in args {
+                walk_ty(arg, text_len);
+            }
+        }
         TyKind::Ptr(inner) => walk_ty(inner, text_len),
         TyKind::Ref { inner, .. } => walk_ty(inner, text_len),
         TyKind::Array { elem, len } => {
@@ -1341,7 +1348,7 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
             walk_expr(start, text_len, src);
             walk_expr(end, text_len, src);
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             walk_expr(callee, text_len, src);
             for arg in args {
                 walk_expr(arg, text_len, src);

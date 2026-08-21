@@ -188,7 +188,7 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
             expr_idents(start, out);
             expr_idents(end, out);
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             expr_idents(callee, out);
             for arg in args {
                 expr_idents(arg, out);
@@ -1326,6 +1326,7 @@ fn analyzer_tolerates_literal_assignment_target() {
                 name: "f".to_string(),
                 span,
             },
+            generic_params: Vec::new(),
             params: vec![Param {
                 name: Ident {
                     name: "p".to_string(),
@@ -1420,6 +1421,7 @@ fn analyzer_tolerates_group_assignment_target() {
                 name: "f".to_string(),
                 span: Span::new(file_id, 0..1),
             },
+            generic_params: Vec::new(),
             params: Vec::new(),
             return_ty: None,
             body: Block {

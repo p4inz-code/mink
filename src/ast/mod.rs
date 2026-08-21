@@ -100,6 +100,8 @@ pub enum ItemKind {
 pub struct StructItem {
     /// The struct's name (a type name, resolved in the type namespace).
     pub name: Ident,
+    /// Generic type parameters (e.g. `T` in `struct Box<T>`).
+    pub generic_params: Vec<GenericParam>,
     /// The declared fields, in source order.
     pub fields: Vec<StructField>,
     /// Span covering the whole item from `struct` through the closing brace.
@@ -119,6 +121,8 @@ pub struct StructItem {
 pub struct EnumItem {
     /// The enum's name (a type name, resolved in the type namespace).
     pub name: Ident,
+    /// Generic type parameters (e.g. `T` in `enum Option<T>`).
+    pub generic_params: Vec<GenericParam>,
     /// The declared variants, in source order.
     pub variants: Vec<EnumVariant>,
     /// Span covering the whole item from `enum` through the closing brace.
@@ -169,12 +173,31 @@ pub struct Ty {
     pub span: Span,
 }
 
+/// A generic type parameter declaration: `T` in `fn f<T>(x: T)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericParam {
+    /// The parameter's name.
+    pub name: Ident,
+    /// Span of the parameter name.
+    pub span: Span,
+}
+
 /// The kind of a [`Ty`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TyKind {
     /// A named type: a primitive (`Int`, `Float`, `Bool`, `Char`, `Str`) or
-    /// a user-declared struct name.
+    /// a user-declared struct/enum name without type arguments.
     Named(Ident),
+    /// A bare generic type parameter reference: `T` in `fn f<T>(x: T) -> T`.
+    /// Only valid inside a generic declaration's scope.
+    GenericParam(Ident),
+    /// A named type applied to generic type arguments: `Pair<T, U>`.
+    NamedApp {
+        /// The type name.
+        name: Ident,
+        /// The type arguments.
+        args: Vec<Ty>,
+    },
     /// A pointer type: `Ptr<T>`.
     Ptr(Box<Ty>),
     /// A reference type (session 16): `&T` (immutable) or `&mut T`
@@ -212,6 +235,8 @@ pub enum TyKind {
 pub struct FnItem {
     /// The function's name.
     pub name: Ident,
+    /// Generic type parameters (e.g. `T` in `fn f<T>(x: T)`).
+    pub generic_params: Vec<GenericParam>,
     /// The declared parameters.
     pub params: Vec<Param>,
     /// An optional return-type annotation (`-> Type`). When `Some`, the
@@ -692,12 +717,16 @@ pub enum ExprKind {
         /// The range end.
         end: Box<Expr>,
     },
-    /// A function call: `callee(args)`.
+    /// A function call: `callee(args)` or `callee::<T>(args)`.
     Call {
         /// The called expression.
         callee: Box<Expr>,
         /// The arguments, in source order.
         args: Vec<Expr>,
+        /// Optional explicit type arguments: `::<T, U>`.
+        /// When `Some`, the call targets a generic function with these
+        /// concrete type arguments.
+        type_args: Option<Vec<Ty>>,
     },
     /// A member access: `base.member`.
     Member {

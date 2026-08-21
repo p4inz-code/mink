@@ -1253,6 +1253,7 @@ fn hand_built_unusual_asts_do_not_panic() {
         kind: ExprKind::Call {
             callee: Box::new(int()),
             args: vec![int()],
+            type_args: None,
         },
         span,
     };
@@ -1276,6 +1277,7 @@ fn hand_built_unusual_asts_do_not_panic() {
                 name: "f".to_string(),
                 span,
             },
+            generic_params: Vec::new(),
             params: vec![Param {
                 name: Ident {
                     name: "p".to_string(),
@@ -1767,6 +1769,7 @@ fn hand_built_inference_shapes_do_not_panic() {
                 name: "f".to_string(),
                 span: next_span(),
             },
+            generic_params: Vec::new(),
             params: Vec::new(),
             return_ty: None,
             body: Block {

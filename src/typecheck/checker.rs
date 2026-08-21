@@ -656,7 +656,11 @@ impl<'a> Checker<'a> {
                     )
                 }
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                type_args: _,
+            } => {
                 let (callee_ty, callee_recomputed) = self.resolve_deferred_expr(callee);
                 let mut any = callee_recomputed;
                 for arg in args {
@@ -1166,6 +1170,30 @@ impl<'a> Checker<'a> {
                     }
                 }
             },
+            TyKind::GenericParam(_ident) => {
+                // A generic type parameter reference. During type checking of
+                // a generic function body, these are resolved to inference
+                // variables that are constrained by usage. During
+                // instantiation, they are substituted with concrete types.
+                // For now, create an inference variable for the parameter.
+                self.types.push(TypeKind::Infer(None))
+            }
+            TyKind::NamedApp { name, args } => {
+                // A named type with generic arguments, e.g. `Pair<T, U>`.
+                // For V1, only known container types are supported.
+                // Resolve each argument type first.
+                let _arg_tys: Vec<TypeId> = args.iter().map(|a| self.resolve_type(a)).collect();
+                // Try to resolve as a struct or enum with the given name.
+                if let Some(reg) = self.structs.get(&name.name) {
+                    reg.id
+                } else if let Some(reg) = self.enums.get(&name.name) {
+                    reg.id
+                } else {
+                    self.errors
+                        .push(TypeError::unknown_type(name.span, &name.name));
+                    self.types.push(TypeKind::Error)
+                }
+            }
             TyKind::Ptr(inner) => {
                 let elem = self.resolve_type(inner);
                 self.types.push(TypeKind::Ptr(elem))
@@ -3020,7 +3048,11 @@ impl<'a> Checker<'a> {
                 let end_ty = self.expr_type(end);
                 self.check_range(start_ty, end_ty, expr.span)
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                type_args: _,
+            } => {
                 let callee_ty = self.expr_type(callee);
                 self.check_call(callee, callee_ty, args, expr.span)
             }
