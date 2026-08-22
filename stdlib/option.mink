@@ -1,0 +1,7 @@
+// Option<T> — the standard MINK type for nullable values.
+// Represents a value that may or may not be present.
+
+enum Option<T> {
+    Some(T),
+    None
+}
