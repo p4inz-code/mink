@@ -742,17 +742,24 @@ impl Monomorphizer {
             }
         }
         // Step 2: Rewrite call sites in all function bodies.
+        // Pass each function's parameter names so Case 1 skips params
+        // (they are not closure variables from outer scopes).
         for item in &mut ast.items {
             match &mut item.kind {
                 ItemKind::Fn(f) => {
-                    self.rewrite_closure_calls_in_block(&mut f.body, &var_to_closure);
+                    let params: std::collections::HashSet<String> =
+                        f.params.iter().map(|p| p.name.name.clone()).collect();
+                    self.rewrite_closure_calls_in_block(&mut f.body, &var_to_closure, &params);
                 }
                 ItemKind::Let(let_item) => {
-                    self.rewrite_closure_calls_in_expr(&mut let_item.init, &var_to_closure);
+                    let empty = std::collections::HashSet::new();
+                    self.rewrite_closure_calls_in_expr(&mut let_item.init, &var_to_closure, &empty);
                 }
                 ItemKind::Pub(pub_item) => {
                     if let ItemKind::Fn(f) = &mut pub_item.item.kind {
-                        self.rewrite_closure_calls_in_block(&mut f.body, &var_to_closure);
+                        let params: std::collections::HashSet<String> =
+                            f.params.iter().map(|p| p.name.name.clone()).collect();
+                        self.rewrite_closure_calls_in_block(&mut f.body, &var_to_closure, &params);
                     }
                 }
                 _ => {}
@@ -835,53 +842,74 @@ impl Monomorphizer {
         &mut self,
         block: &mut Block,
         var_to_closure: &HashMap<String, (String, Vec<String>)>,
+        fn_params: &std::collections::HashSet<String>,
     ) {
         for stmt in &mut block.stmts {
             match &mut stmt.kind {
                 StmtKind::Let(let_item) => {
-                    self.rewrite_closure_calls_in_expr(&mut let_item.init, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(
+                        &mut let_item.init,
+                        var_to_closure,
+                        fn_params,
+                    );
                 }
                 StmtKind::Expr(e) => {
-                    self.rewrite_closure_calls_in_expr(e, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(e, var_to_closure, fn_params);
                 }
                 StmtKind::Return(Some(e)) => {
-                    self.rewrite_closure_calls_in_expr(e, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(e, var_to_closure, fn_params);
                 }
                 StmtKind::Break(Some(e)) => {
-                    self.rewrite_closure_calls_in_expr(e, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(e, var_to_closure, fn_params);
                 }
                 StmtKind::If(if_stmt) => {
-                    self.rewrite_closure_calls_in_expr(&mut if_stmt.cond, var_to_closure);
-                    self.rewrite_closure_calls_in_block(&mut if_stmt.then_block, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(
+                        &mut if_stmt.cond,
+                        var_to_closure,
+                        fn_params,
+                    );
+                    self.rewrite_closure_calls_in_block(
+                        &mut if_stmt.then_block,
+                        var_to_closure,
+                        fn_params,
+                    );
                 }
                 StmtKind::While { cond, body } => {
-                    self.rewrite_closure_calls_in_expr(cond, var_to_closure);
-                    self.rewrite_closure_calls_in_block(body, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(cond, var_to_closure, fn_params);
+                    self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
                 }
                 StmtKind::Loop(body) => {
-                    self.rewrite_closure_calls_in_block(body, var_to_closure);
+                    self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
                 }
                 StmtKind::For { iterable, body, .. } => {
-                    self.rewrite_closure_calls_in_expr(iterable, var_to_closure);
-                    self.rewrite_closure_calls_in_block(body, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(iterable, var_to_closure, fn_params);
+                    self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
                 }
                 StmtKind::Match(m) => {
-                    self.rewrite_closure_calls_in_expr(&mut m.scrutinee, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(&mut m.scrutinee, var_to_closure, fn_params);
                     for arm in &mut m.arms {
                         if let Some(guard) = &mut arm.guard {
-                            self.rewrite_closure_calls_in_expr(guard, var_to_closure);
+                            self.rewrite_closure_calls_in_expr(guard, var_to_closure, fn_params);
                         }
-                        self.rewrite_closure_calls_in_block(&mut arm.body, var_to_closure);
+                        self.rewrite_closure_calls_in_block(
+                            &mut arm.body,
+                            var_to_closure,
+                            fn_params,
+                        );
                     }
                 }
                 StmtKind::Const(const_item) => {
-                    self.rewrite_closure_calls_in_expr(&mut const_item.init, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(
+                        &mut const_item.init,
+                        var_to_closure,
+                        fn_params,
+                    );
                 }
                 StmtKind::Return(None) | StmtKind::Break(None) | StmtKind::Continue => {}
             }
         }
         if let Some(result) = &mut block.result {
-            self.rewrite_closure_calls_in_expr(result, var_to_closure);
+            self.rewrite_closure_calls_in_expr(result, var_to_closure, fn_params);
         }
     }
 
@@ -890,64 +918,75 @@ impl Monomorphizer {
         &mut self,
         expr: &mut Expr,
         var_to_closure: &HashMap<String, (String, Vec<String>)>,
+        fn_params: &std::collections::HashSet<String>,
     ) {
         match &mut expr.kind {
             ExprKind::Call { callee, args, .. } => {
                 // First, recurse into callee and args.
-                self.rewrite_closure_calls_in_expr(callee, var_to_closure);
+                self.rewrite_closure_calls_in_expr(callee, var_to_closure, fn_params);
                 for arg in args.iter_mut() {
-                    self.rewrite_closure_calls_in_expr(arg, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(arg, var_to_closure, fn_params);
                 }
                 // Then check if callee is a closure variable.
+                // Skip if callee is a function parameter (not a local closure var).
                 if let ExprKind::Ident(ident) = &mut callee.kind {
-                    if let Some((closure_name, caps)) = var_to_closure.get(&ident.name).cloned() {
-                        // Inject captured variables as leading arguments.
-                        let cap_args: Vec<Expr> = caps
-                            .iter()
-                            .map(|cap| {
-                                let span = self.next_span();
-                                Expr {
-                                    kind: ExprKind::Ident(Ident {
-                                        name: cap.clone(),
+                    if !fn_params.contains(&ident.name) {
+                        if let Some((closure_name, caps)) = var_to_closure.get(&ident.name).cloned()
+                        {
+                            // Inject captured variables as leading arguments.
+                            let cap_args: Vec<Expr> = caps
+                                .iter()
+                                .map(|cap| {
+                                    let span = self.next_span();
+                                    Expr {
+                                        kind: ExprKind::Ident(Ident {
+                                            name: cap.clone(),
+                                            span,
+                                        }),
                                         span,
-                                    }),
-                                    span,
-                                }
-                            })
-                            .collect();
-                        let mut new_args = cap_args;
-                        new_args.append(args);
-                        *args = new_args;
-                        // Update callee to the actual closure function name.
-                        ident.name = closure_name;
-                    }
+                                    }
+                                })
+                                .collect();
+                            let mut new_args = cap_args;
+                            new_args.append(args);
+                            *args = new_args;
+                            // Update callee to the actual closure function name.
+                            ident.name = closure_name;
+                        }
+                    } // end !fn_params check
                 }
             }
             ExprKind::Binary { lhs, rhs, .. } => {
-                self.rewrite_closure_calls_in_expr(lhs, var_to_closure);
-                self.rewrite_closure_calls_in_expr(rhs, var_to_closure);
+                self.rewrite_closure_calls_in_expr(lhs, var_to_closure, fn_params);
+                self.rewrite_closure_calls_in_expr(rhs, var_to_closure, fn_params);
             }
             ExprKind::Unary { operand, .. } => {
-                self.rewrite_closure_calls_in_expr(operand, var_to_closure);
+                self.rewrite_closure_calls_in_expr(operand, var_to_closure, fn_params);
             }
             ExprKind::Assign { target, value, .. } => {
-                self.rewrite_closure_calls_in_expr(target, var_to_closure);
-                self.rewrite_closure_calls_in_expr(value, var_to_closure);
+                self.rewrite_closure_calls_in_expr(target, var_to_closure, fn_params);
+                self.rewrite_closure_calls_in_expr(value, var_to_closure, fn_params);
             }
             ExprKind::Block(b) => {
-                self.rewrite_closure_calls_in_block(b, var_to_closure);
+                self.rewrite_closure_calls_in_block(b, var_to_closure, fn_params);
             }
             ExprKind::IfExpr(inner) => {
-                self.rewrite_closure_calls_in_expr(&mut inner.cond, var_to_closure);
-                self.rewrite_closure_calls_in_block(&mut inner.then_block, var_to_closure);
+                self.rewrite_closure_calls_in_expr(&mut inner.cond, var_to_closure, fn_params);
+                self.rewrite_closure_calls_in_block(
+                    &mut inner.then_block,
+                    var_to_closure,
+                    fn_params,
+                );
                 match &mut inner.else_branch {
-                    ElseBranch::Block(b) => self.rewrite_closure_calls_in_block(b, var_to_closure),
+                    ElseBranch::Block(b) => {
+                        self.rewrite_closure_calls_in_block(b, var_to_closure, fn_params)
+                    }
                     ElseBranch::IfExpr(e) => {
                         let mut wrapper = Expr {
                             kind: ExprKind::IfExpr(e.clone()),
                             span: e.span,
                         };
-                        self.rewrite_closure_calls_in_expr(&mut wrapper, var_to_closure);
+                        self.rewrite_closure_calls_in_expr(&mut wrapper, var_to_closure, fn_params);
                         if let ExprKind::IfExpr(new_inner) = wrapper.kind {
                             *e = new_inner;
                         }
@@ -957,54 +996,54 @@ impl Monomorphizer {
             }
             ExprKind::Tuple(elems) | ExprKind::ArrayLit(elems) => {
                 for e in elems.iter_mut() {
-                    self.rewrite_closure_calls_in_expr(e, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(e, var_to_closure, fn_params);
                 }
             }
             ExprKind::Member { base, .. } => {
-                self.rewrite_closure_calls_in_expr(base, var_to_closure);
+                self.rewrite_closure_calls_in_expr(base, var_to_closure, fn_params);
             }
             ExprKind::Index { base, index } => {
-                self.rewrite_closure_calls_in_expr(base, var_to_closure);
-                self.rewrite_closure_calls_in_expr(index, var_to_closure);
+                self.rewrite_closure_calls_in_expr(base, var_to_closure, fn_params);
+                self.rewrite_closure_calls_in_expr(index, var_to_closure, fn_params);
             }
             ExprKind::StructLit { fields, .. } => {
                 for f in fields.iter_mut() {
-                    self.rewrite_closure_calls_in_expr(&mut f.value, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(&mut f.value, var_to_closure, fn_params);
                 }
             }
             ExprKind::EnumVariant { payload, .. } => {
                 if let Some(p) = payload {
-                    self.rewrite_closure_calls_in_expr(p, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(p, var_to_closure, fn_params);
                 }
             }
             ExprKind::Range { start, end, .. } => {
-                self.rewrite_closure_calls_in_expr(start, var_to_closure);
-                self.rewrite_closure_calls_in_expr(end, var_to_closure);
+                self.rewrite_closure_calls_in_expr(start, var_to_closure, fn_params);
+                self.rewrite_closure_calls_in_expr(end, var_to_closure, fn_params);
             }
             ExprKind::WhileExpr { cond, body, .. } => {
-                self.rewrite_closure_calls_in_expr(cond, var_to_closure);
-                self.rewrite_closure_calls_in_block(body, var_to_closure);
+                self.rewrite_closure_calls_in_expr(cond, var_to_closure, fn_params);
+                self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
             }
             ExprKind::LoopExpr { body, .. } => {
-                self.rewrite_closure_calls_in_block(body, var_to_closure);
+                self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
             }
             ExprKind::MatchExpr(m) => {
-                self.rewrite_closure_calls_in_expr(&mut m.scrutinee, var_to_closure);
+                self.rewrite_closure_calls_in_expr(&mut m.scrutinee, var_to_closure, fn_params);
                 for arm in &mut m.arms {
                     if let Some(guard) = &mut arm.guard {
-                        self.rewrite_closure_calls_in_expr(guard, var_to_closure);
+                        self.rewrite_closure_calls_in_expr(guard, var_to_closure, fn_params);
                     }
-                    self.rewrite_closure_calls_in_expr(&mut arm.body, var_to_closure);
+                    self.rewrite_closure_calls_in_expr(&mut arm.body, var_to_closure, fn_params);
                 }
             }
             ExprKind::Group(inner) => {
-                self.rewrite_closure_calls_in_expr(inner, var_to_closure);
+                self.rewrite_closure_calls_in_expr(inner, var_to_closure, fn_params);
             }
             ExprKind::TupleFieldAccess { base, .. } => {
-                self.rewrite_closure_calls_in_expr(base, var_to_closure);
+                self.rewrite_closure_calls_in_expr(base, var_to_closure, fn_params);
             }
             ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => {
-                self.rewrite_closure_calls_in_expr(operand, var_to_closure);
+                self.rewrite_closure_calls_in_expr(operand, var_to_closure, fn_params);
             }
             ExprKind::Int
             | ExprKind::Float
