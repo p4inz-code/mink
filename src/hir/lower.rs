@@ -692,6 +692,37 @@ impl<'a> Lowerer<'a> {
                     ty,
                 };
             }
+            ExprKind::Closure { params, body } => {
+                let ty = self.expr_type(expr.span);
+                let hir_params: Vec<super::HirClosureParam> = params
+                    .iter()
+                    .map(|p| super::HirClosureParam {
+                        name: super::HirIdent {
+                            name: p.name.name.clone(),
+                            symbol: SymbolId::new(0),
+                            span: p.name.span,
+                            ty: self.types.expr_type_exact(p.span).unwrap_or_else(|| {
+                                self.table.push(crate::typecheck::TypeKind::Infer(None))
+                            }),
+                        },
+                        ty: self
+                            .types
+                            .expr_type_exact(p.span)
+                            .map(|id| self.table.canonical(id)),
+                    })
+                    .collect();
+                let hir_body = self.lower_expr(body);
+                return HirExpr {
+                    kind: HirExprKind::Closure {
+                        params: hir_params,
+                        body: Box::new(hir_body),
+                        captures: Vec::new(),
+                        span: expr.span,
+                    },
+                    span: expr.span,
+                    ty,
+                };
+            }
         };
         let ty = self.expr_type(expr.span);
         HirExpr {

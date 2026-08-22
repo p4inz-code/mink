@@ -465,6 +465,13 @@ impl Analyzer {
         for stmt in &block.stmts {
             self.analyze_stmt(stmt, ctx);
         }
+        // Session 37: also analyze trailing result expressions so that
+        // identifier references inside them are resolved. Previously only
+        // statements were walked, leaving trailing expressions (e.g. the
+        // then-branch of an if-expression) with unresolved symbols.
+        if let Some(result) = &block.result {
+            self.analyze_expr(result, ctx);
+        }
     }
 
     fn analyze_stmt(&mut self, stmt: &Stmt, ctx: Ctx) {
@@ -887,6 +894,13 @@ impl Analyzer {
                     }
                     self.analyze_expr(&arm.body, Ctx { scope, ..ctx });
                 }
+            }
+            ExprKind::Closure { params, body, .. } => {
+                let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                for p in params {
+                    self.bind(&p.name, SymbolKind::Param, scope);
+                }
+                self.analyze_expr(body, Ctx { scope, ..ctx });
             }
         }
     }

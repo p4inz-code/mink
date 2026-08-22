@@ -1418,6 +1418,15 @@ impl<'a> Analyzer<'a> {
                 }
                 EvalValue::copy()
             }
+            ExprKind::Closure {
+                params: _, body, ..
+            } => {
+                // Closures move captured values. For V1, evaluate the body
+                // in observe mode to discover uses; captures are handled at
+                // semantic analysis time.
+                self.eval_expr(body, Mode::Observe);
+                EvalValue::copy()
+            }
         }
     }
 

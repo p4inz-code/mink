@@ -1661,6 +1661,12 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
                 walk_expr(&arm.body, text_len, src);
             }
         }
+        ExprKind::Closure { body, params, .. } => {
+            for p in params {
+                assert_span_ok(p.span, text_len, src);
+            }
+            walk_expr(body, text_len, src);
+        }
     }
 }
 

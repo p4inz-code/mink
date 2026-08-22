@@ -616,4 +616,25 @@ pub enum HirExprKind {
         /// Span.
         span: Span,
     },
+    /// A closure expression (session 37): `|params| body`.
+    /// Captured variables are resolved to their symbols.
+    Closure {
+        /// The closure parameters.
+        params: Vec<HirClosureParam>,
+        /// The closure body expression.
+        body: Box<HirExpr>,
+        /// The captured variables (resolved symbol + name + span).
+        captures: Vec<HirIdent>,
+        /// Span.
+        span: Span,
+    },
+}
+
+/// A closure parameter in the HIR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirClosureParam {
+    /// The parameter name.
+    pub name: HirIdent,
+    /// Optional type annotation.
+    pub ty: Option<crate::typecheck::TypeId>,
 }

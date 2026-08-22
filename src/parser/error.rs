@@ -85,6 +85,10 @@ pub enum ParseErrorKind {
     ExpectedElse,
     /// A struct pattern field name was expected.
     ExpectedStructField,
+    /// `|` was required to close a closure parameter list.
+    ExpectedPipe,
+    /// An identifier was expected.
+    ExpectedIdent,
 }
 
 impl ParseErrorKind {
@@ -121,6 +125,8 @@ impl ParseErrorKind {
             Self::EmptyPayload => "E-P25",
             Self::ExpectedElse => "E-P26",
             Self::ExpectedStructField => "E-P27",
+            Self::ExpectedPipe => "E-P28",
+            Self::ExpectedIdent => "E-P29",
         }
     }
 }
@@ -163,6 +169,8 @@ impl fmt::Display for ParseErrorKind {
             Self::ExpectedStructField => {
                 "expected a struct pattern field name (`Name` or `Name: pattern`)"
             }
+            Self::ExpectedPipe => "expected '|' to close the closure parameter list",
+            Self::ExpectedIdent => "expected an identifier",
         };
         f.write_str(message)
     }

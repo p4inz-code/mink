@@ -805,6 +805,14 @@ impl Code {
         self.patch(PatchKind::Function(function_index));
     }
 
+    /// `call rax` — indirect call through the RAX register.
+    /// Used for function pointers and closures (session 37).
+    /// Encoding: FF D0 (ModRM: mod=11, reg=/2, rm=rax)
+    pub(crate) fn call_rax(&mut self) {
+        self.u8(0xFF);
+        self.u8(0xD0); // ModRM: 11_010_000
+    }
+
     /// `jmp rel32` to a runtime label (patched later).
     pub(crate) fn jmp_label(&mut self, label: u32) {
         self.jmp(PatchKind::Label(label));
@@ -1276,6 +1284,16 @@ fn emit_inst(
             let size = statics[*static_index].size;
             copy_static_into_slot(code, slots, *target, Reg::Rcx, size);
         }
+        BInstKind::LoadFnPtr {
+            target,
+            function_index,
+        } => {
+            // Session 37: load the address of a function into the target slot.
+            // The address is a RIP-relative reference to the function's
+            // entry point, patched during image layout.
+            code.lea_r_rip(Reg::Rax, PatchKind::Function(*function_index));
+            code.mov_rbp_rax(slots[target.raw() as usize].0);
+        }
         BInstKind::StoreStatic { static_index, src } => {
             let size = statics[*static_index].size;
             if size <= 8 {
@@ -1450,6 +1468,51 @@ fn emit_inst(
             service,
             args,
         } => emit_runtime_call(code, f, slots, *target, *service, args),
+        BInstKind::IndirectCall {
+            target,
+            fn_ptr,
+            args,
+        } => {
+            // Session 37: indirect call through a function pointer.
+            // Same calling convention as direct calls, but the callee
+            // address is loaded from a register instead of a fixed label.
+            let aggregate = f
+                .local(*target)
+                .map(|local| local.words > 1)
+                .unwrap_or(false);
+            let mut words = 0usize;
+            for arg in args {
+                words += operand_words(f, *arg);
+            }
+            let total = words + usize::from(aggregate);
+            let pad = total % 2;
+            if pad == 1 {
+                code.sub_rsp(8);
+            }
+            if aggregate {
+                code.lea_r_mem(Reg::Rax, Reg::Rbp, slots[target.raw() as usize].0);
+                code.push_rax();
+            }
+            for arg in args.iter().rev() {
+                push_operand(code, f, slots, *arg);
+            }
+            // Load the function pointer into rax.
+            match fn_ptr {
+                BOperand::Local(id) => {
+                    code.mov_r_mem(Reg::Rax, Reg::Rbp, slots[id.raw() as usize].0);
+                }
+                BOperand::Const(addr) => {
+                    code.movabs(Reg::Rax, *addr as u64);
+                }
+            }
+            code.call_rax();
+            if total > 0 {
+                code.add_rsp((8 * total) as i32);
+            }
+            if !aggregate {
+                code.mov_rbp_rax(slots[target.raw() as usize].0);
+            }
+        }
         BInstKind::RangeInit {
             target,
             start,

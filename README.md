@@ -144,8 +144,13 @@ corruption, no segfault guessing games.
   unannotated parameters and return types remain inferred), **let/const
   binding type annotations** (`let x: Int = 1;` with optional `: Type`,
   enforced by the type checker; unannotated bindings remain inferred),
-  `Null` as a named type in annotations, and integer results becoming
-  process exit codes.
+  `Null` as a named type in annotations, integer results becoming
+  process exit codes, **closures/lambdas** (`|x: Int| x + 1`, `|a, b| a + b`, `| | 42`
+  with by-value capture of free variables, desugaring to named functions,
+  indirect calls via function pointers, and deterministic capture ordering),
+  **generics** (`fn id<T>(x: T) -> T`, generic structs/enums with
+  monomorphization and explicit type arguments), and **modules** (`mod`/`use`/`pub`
+  with multi-file compilation and cross-module symbol resolution).
 - **Ownership & borrow checking** — compile-time move semantics for
   heap-owning values (`Str`, structs/arrays containing them): owned
   values move on transfer (use-after-move is `E-S10`), string literals
@@ -303,7 +308,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1598, all passing)
+├── tests/      Compiler tests (1624, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

@@ -277,15 +277,21 @@ fn check_with_excluded_declaration_fails() {
 
 #[test]
 fn check_with_excluded_construct_inside_function_fails() {
-    // A closure is excluded from the frozen grammar; it must be rejected
-    // inside a function body too.
-    let path = temp_source("excluded_stmt.mink", "fn f() { let g = |x| x; }\n");
+    // Closures are now valid syntax (session 37); `|x| x` should parse
+    // and type-check successfully.
+    let path = temp_source(
+        "closure_basic.mink",
+        "fn f() -> Int { let g = |x: Int| x; return g(42); }\n",
+    );
     let output = mink().arg("check").arg(&path).output().unwrap();
     let _ = std::fs::remove_file(&path);
 
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("E-P03"), "stderr was: {stderr}");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

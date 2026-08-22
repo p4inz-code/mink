@@ -502,6 +502,18 @@ impl<'a> StmtEval<'a> {
                     ty: expr.ty,
                 }
             }
+            HirExprKind::Closure { .. } => {
+                // Closures are lowered at the statement level by FnBuilder.
+                MirOperand {
+                    kind: MirOperandKind::Constant(MirConstant {
+                        kind: MirConstantKind::Bool(false),
+                        span: expr.span,
+                        ty: expr.ty,
+                    }),
+                    span: expr.span,
+                    ty: expr.ty,
+                }
+            }
         }
     }
 

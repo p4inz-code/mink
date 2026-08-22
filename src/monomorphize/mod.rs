@@ -35,8 +35,14 @@ pub struct Monomorphizer {
     concrete_structs: HashMap<String, StructItem>,
     /// Concrete enum instantiations: "name__T1_T2" → EnumItem.
     concrete_enums: HashMap<String, EnumItem>,
+    /// Generated closure functions: "__closure_N" → FnItem.
+    closure_fns: HashMap<String, FnItem>,
+    /// Captured variable names per closure: "__closure_N" → ["y", "z", ...].
+    closure_captures: HashMap<String, Vec<String>>,
     /// Counter for generating unique synthetic spans.
     synthetic_id: u32,
+    /// Counter for generating unique closure names.
+    closure_counter: u32,
 }
 
 impl Default for Monomorphizer {
@@ -55,7 +61,10 @@ impl Monomorphizer {
             instantiations: HashMap::new(),
             concrete_structs: HashMap::new(),
             concrete_enums: HashMap::new(),
+            closure_fns: HashMap::new(),
+            closure_captures: HashMap::new(),
             synthetic_id: 0,
+            closure_counter: 0,
         }
     }
 
@@ -113,6 +122,13 @@ impl Monomorphizer {
             self.monomorphize_item(item);
         }
 
+        // Phase 3.5: Rewrite closure call sites.
+        // After Phase 3, closures are replaced with Ident("__closure_N").
+        // But call sites still use the variable name (e.g., `add_y(32)`).
+        // This phase finds `let x = __closure_N` bindings and rewrites
+        // `x(args)` to `__closure_N(captured_vars..., args)`.
+        self.rewrite_closure_calls(ast);
+
         // Phase 4: Remove generic declarations and add concrete copies.
         ast.items.retain(|item| match &item.kind {
             ItemKind::Fn(f) => f.generic_params.is_empty(),
@@ -142,6 +158,12 @@ impl Monomorphizer {
         for (_key, enum_item) in self.concrete_enums.drain() {
             new_items.push(Item {
                 kind: ItemKind::Enum(enum_item),
+                span: Span::new(SourceId::new(0), 0..0),
+            });
+        }
+        for (_key, closure_fn) in self.closure_fns.drain() {
+            new_items.push(Item {
+                kind: ItemKind::Fn(closure_fn),
                 span: Span::new(SourceId::new(0), 0..0),
             });
         }
@@ -576,6 +598,422 @@ impl Monomorphizer {
                 self.monomorphize_expr(operand);
             }
             ExprKind::Group(inner) => self.monomorphize_expr(inner),
+            ExprKind::Closure { params, body, .. } => {
+                // Desugar closure into a named function.
+                self.closure_counter += 1;
+                let name = format!("__closure_{}", self.closure_counter);
+                let name_span = self.next_span();
+
+                // Collect free variables in the body.
+                let mut param_names = std::collections::HashSet::new();
+                for p in params.iter() {
+                    param_names.insert(p.name.name.clone());
+                }
+                let mut free_vars = std::collections::HashSet::new();
+                collect_free_vars(body, &param_names, &mut free_vars);
+
+                if !free_vars.is_empty() {
+                    // Capturing closure: add captured variables as extra parameters.
+                    let mut all_params = params.clone();
+                    let mut sorted_free: Vec<String> = free_vars.iter().cloned().collect();
+                    sorted_free.sort();
+                    for fv in &sorted_free {
+                        all_params.insert(
+                            0,
+                            ClosureParam {
+                                name: Ident {
+                                    name: fv.clone(),
+                                    span: self.next_span(),
+                                },
+                                ty: None,
+                                span: self.next_span(),
+                            },
+                        );
+                    }
+                    self.closure_captures
+                        .insert(name.clone(), sorted_free.clone());
+                    self.desugar_closure_to_fn(&name, name_span, &all_params, body);
+                } else {
+                    self.desugar_closure_to_fn(&name, name_span, params, body);
+                }
+
+                // Replace the closure expression with a reference to the generated function.
+                *expr = Expr {
+                    kind: ExprKind::Ident(Ident {
+                        name,
+                        span: name_span,
+                    }),
+                    span: expr.span,
+                };
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Closure desugaring helpers
+    // ------------------------------------------------------------------
+
+    /// Desugars a closure body into a named function and registers it.
+    fn desugar_closure_to_fn(
+        &mut self,
+        name: &str,
+        name_span: Span,
+        params: &[ClosureParam],
+        body: &Expr,
+    ) {
+        let fn_params: Vec<Param> = params
+            .iter()
+            .map(|p| Param {
+                name: Ident {
+                    name: p.name.name.clone(),
+                    span: self.next_span(),
+                },
+                ty: p.ty.clone(),
+                span: self.next_span(),
+            })
+            .collect();
+
+        // Create the function body with a return statement wrapping the closure body.
+        // Clone the body but do NOT reassign spans: the semantic analyzer and
+        // type checker need the original spans to resolve types correctly.
+        let body_clone = body.clone();
+        let body_block = Block {
+            stmts: vec![Stmt {
+                kind: StmtKind::Return(Some(body_clone)),
+                span: self.next_span(),
+            }],
+            result: None,
+            span: self.next_span(),
+        };
+
+        let fn_item = FnItem {
+            name: Ident {
+                name: name.to_string(),
+                span: name_span,
+            },
+            generic_params: Vec::new(),
+            params: fn_params,
+            return_ty: None,
+            body: body_block,
+        };
+
+        self.closure_fns.insert(name.to_string(), fn_item);
+    }
+
+    // ------------------------------------------------------------------
+    // Closure call-site rewriting
+    // ------------------------------------------------------------------
+
+    /// After Phase 3, closures have been replaced with Ident("__closure_N")
+    /// in their let-binding init, but call sites still reference the variable
+    /// name. This method:
+    /// 1. Finds `let x = __closure_N` bindings to build a var→closure map.
+    /// 2. Rewrites `x(args)` → `__closure_N(captured..., args)`.
+    fn rewrite_closure_calls(&mut self, ast: &mut Ast) {
+        // Step 1: Recursively collect let x = __closure_N bindings from all scopes.
+        let mut var_to_closure: HashMap<String, (String, Vec<String>)> = HashMap::new();
+        for item in &ast.items {
+            match &item.kind {
+                ItemKind::Fn(f) => {
+                    Self::collect_closure_bindings_in_block(
+                        &f.body,
+                        &self.closure_captures,
+                        &mut var_to_closure,
+                    );
+                }
+                ItemKind::Let(let_item) => {
+                    Self::collect_closure_binding(
+                        &let_item.init,
+                        &let_item.name.name,
+                        &self.closure_captures,
+                        &mut var_to_closure,
+                    );
+                }
+                ItemKind::Pub(pub_item) => {
+                    if let ItemKind::Fn(f) = &pub_item.item.kind {
+                        Self::collect_closure_bindings_in_block(
+                            &f.body,
+                            &self.closure_captures,
+                            &mut var_to_closure,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Step 2: Rewrite call sites in all function bodies.
+        for item in &mut ast.items {
+            match &mut item.kind {
+                ItemKind::Fn(f) => {
+                    self.rewrite_closure_calls_in_block(&mut f.body, &var_to_closure);
+                }
+                ItemKind::Let(let_item) => {
+                    self.rewrite_closure_calls_in_expr(&mut let_item.init, &var_to_closure);
+                }
+                ItemKind::Pub(pub_item) => {
+                    if let ItemKind::Fn(f) = &mut pub_item.item.kind {
+                        self.rewrite_closure_calls_in_block(&mut f.body, &var_to_closure);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Collects closure bindings recursively from a let-init expression.
+    fn collect_closure_binding(
+        expr: &Expr,
+        var_name: &str,
+        captures: &HashMap<String, Vec<String>>,
+        out: &mut HashMap<String, (String, Vec<String>)>,
+    ) {
+        if let ExprKind::Ident(ident) = &expr.kind {
+            if let Some(caps) = captures.get(&ident.name) {
+                out.insert(var_name.to_string(), (ident.name.clone(), caps.clone()));
+            }
+        }
+    }
+
+    /// Collects closure bindings recursively from a block (all nested scopes).
+    fn collect_closure_bindings_in_block(
+        block: &Block,
+        captures: &HashMap<String, Vec<String>>,
+        out: &mut HashMap<String, (String, Vec<String>)>,
+    ) {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Let(binding) => {
+                    Self::collect_closure_binding(&binding.init, &binding.name.name, captures, out);
+                }
+                StmtKind::If(if_stmt) => {
+                    Self::collect_closure_bindings_in_block(&if_stmt.then_block, captures, out);
+                }
+                StmtKind::While { body, .. } => {
+                    Self::collect_closure_bindings_in_block(body, captures, out);
+                }
+                StmtKind::Loop(body) => {
+                    Self::collect_closure_bindings_in_block(body, captures, out);
+                }
+                StmtKind::For { body, .. } => {
+                    Self::collect_closure_bindings_in_block(body, captures, out);
+                }
+                StmtKind::Match(m) => {
+                    for arm in &m.arms {
+                        Self::collect_closure_bindings_in_block(&arm.body, captures, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(result) = &block.result {
+            Self::collect_closure_binding_in_expr(result, captures, out);
+        }
+    }
+
+    /// Helper: collect closure bindings from an expression.
+    fn collect_closure_binding_in_expr(
+        expr: &Expr,
+        captures: &HashMap<String, Vec<String>>,
+        out: &mut HashMap<String, (String, Vec<String>)>,
+    ) {
+        match &expr.kind {
+            ExprKind::Block(b) => {
+                Self::collect_closure_bindings_in_block(b, captures, out);
+            }
+            ExprKind::IfExpr(inner) => {
+                Self::collect_closure_bindings_in_block(&inner.then_block, captures, out);
+                if let ElseBranch::Block(b) = &inner.else_branch {
+                    Self::collect_closure_bindings_in_block(b, captures, out)
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recursively rewrites closure calls within a block.
+    fn rewrite_closure_calls_in_block(
+        &mut self,
+        block: &mut Block,
+        var_to_closure: &HashMap<String, (String, Vec<String>)>,
+    ) {
+        for stmt in &mut block.stmts {
+            match &mut stmt.kind {
+                StmtKind::Let(let_item) => {
+                    self.rewrite_closure_calls_in_expr(&mut let_item.init, var_to_closure);
+                }
+                StmtKind::Expr(e) => {
+                    self.rewrite_closure_calls_in_expr(e, var_to_closure);
+                }
+                StmtKind::Return(Some(e)) => {
+                    self.rewrite_closure_calls_in_expr(e, var_to_closure);
+                }
+                StmtKind::Break(Some(e)) => {
+                    self.rewrite_closure_calls_in_expr(e, var_to_closure);
+                }
+                StmtKind::If(if_stmt) => {
+                    self.rewrite_closure_calls_in_expr(&mut if_stmt.cond, var_to_closure);
+                    self.rewrite_closure_calls_in_block(&mut if_stmt.then_block, var_to_closure);
+                }
+                StmtKind::While { cond, body } => {
+                    self.rewrite_closure_calls_in_expr(cond, var_to_closure);
+                    self.rewrite_closure_calls_in_block(body, var_to_closure);
+                }
+                StmtKind::Loop(body) => {
+                    self.rewrite_closure_calls_in_block(body, var_to_closure);
+                }
+                StmtKind::For { iterable, body, .. } => {
+                    self.rewrite_closure_calls_in_expr(iterable, var_to_closure);
+                    self.rewrite_closure_calls_in_block(body, var_to_closure);
+                }
+                StmtKind::Match(m) => {
+                    self.rewrite_closure_calls_in_expr(&mut m.scrutinee, var_to_closure);
+                    for arm in &mut m.arms {
+                        if let Some(guard) = &mut arm.guard {
+                            self.rewrite_closure_calls_in_expr(guard, var_to_closure);
+                        }
+                        self.rewrite_closure_calls_in_block(&mut arm.body, var_to_closure);
+                    }
+                }
+                StmtKind::Const(const_item) => {
+                    self.rewrite_closure_calls_in_expr(&mut const_item.init, var_to_closure);
+                }
+                StmtKind::Return(None) | StmtKind::Break(None) | StmtKind::Continue => {}
+            }
+        }
+        if let Some(result) = &mut block.result {
+            self.rewrite_closure_calls_in_expr(result, var_to_closure);
+        }
+    }
+
+    /// Recursively rewrites closure calls within an expression.
+    fn rewrite_closure_calls_in_expr(
+        &mut self,
+        expr: &mut Expr,
+        var_to_closure: &HashMap<String, (String, Vec<String>)>,
+    ) {
+        match &mut expr.kind {
+            ExprKind::Call { callee, args, .. } => {
+                // First, recurse into callee and args.
+                self.rewrite_closure_calls_in_expr(callee, var_to_closure);
+                for arg in args.iter_mut() {
+                    self.rewrite_closure_calls_in_expr(arg, var_to_closure);
+                }
+                // Then check if callee is a closure variable.
+                if let ExprKind::Ident(ident) = &mut callee.kind {
+                    if let Some((closure_name, caps)) = var_to_closure.get(&ident.name).cloned() {
+                        // Inject captured variables as leading arguments.
+                        let cap_args: Vec<Expr> = caps
+                            .iter()
+                            .map(|cap| {
+                                let span = self.next_span();
+                                Expr {
+                                    kind: ExprKind::Ident(Ident {
+                                        name: cap.clone(),
+                                        span,
+                                    }),
+                                    span,
+                                }
+                            })
+                            .collect();
+                        let mut new_args = cap_args;
+                        new_args.append(args);
+                        *args = new_args;
+                        // Update callee to the actual closure function name.
+                        ident.name = closure_name;
+                    }
+                }
+            }
+            ExprKind::Binary { lhs, rhs, .. } => {
+                self.rewrite_closure_calls_in_expr(lhs, var_to_closure);
+                self.rewrite_closure_calls_in_expr(rhs, var_to_closure);
+            }
+            ExprKind::Unary { operand, .. } => {
+                self.rewrite_closure_calls_in_expr(operand, var_to_closure);
+            }
+            ExprKind::Assign { target, value, .. } => {
+                self.rewrite_closure_calls_in_expr(target, var_to_closure);
+                self.rewrite_closure_calls_in_expr(value, var_to_closure);
+            }
+            ExprKind::Block(b) => {
+                self.rewrite_closure_calls_in_block(b, var_to_closure);
+            }
+            ExprKind::IfExpr(inner) => {
+                self.rewrite_closure_calls_in_expr(&mut inner.cond, var_to_closure);
+                self.rewrite_closure_calls_in_block(&mut inner.then_block, var_to_closure);
+                match &mut inner.else_branch {
+                    ElseBranch::Block(b) => self.rewrite_closure_calls_in_block(b, var_to_closure),
+                    ElseBranch::IfExpr(e) => {
+                        let mut wrapper = Expr {
+                            kind: ExprKind::IfExpr(e.clone()),
+                            span: e.span,
+                        };
+                        self.rewrite_closure_calls_in_expr(&mut wrapper, var_to_closure);
+                        if let ExprKind::IfExpr(new_inner) = wrapper.kind {
+                            *e = new_inner;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            ExprKind::Tuple(elems) | ExprKind::ArrayLit(elems) => {
+                for e in elems.iter_mut() {
+                    self.rewrite_closure_calls_in_expr(e, var_to_closure);
+                }
+            }
+            ExprKind::Member { base, .. } => {
+                self.rewrite_closure_calls_in_expr(base, var_to_closure);
+            }
+            ExprKind::Index { base, index } => {
+                self.rewrite_closure_calls_in_expr(base, var_to_closure);
+                self.rewrite_closure_calls_in_expr(index, var_to_closure);
+            }
+            ExprKind::StructLit { fields, .. } => {
+                for f in fields.iter_mut() {
+                    self.rewrite_closure_calls_in_expr(&mut f.value, var_to_closure);
+                }
+            }
+            ExprKind::EnumVariant { payload, .. } => {
+                if let Some(p) = payload {
+                    self.rewrite_closure_calls_in_expr(p, var_to_closure);
+                }
+            }
+            ExprKind::Range { start, end, .. } => {
+                self.rewrite_closure_calls_in_expr(start, var_to_closure);
+                self.rewrite_closure_calls_in_expr(end, var_to_closure);
+            }
+            ExprKind::WhileExpr { cond, body, .. } => {
+                self.rewrite_closure_calls_in_expr(cond, var_to_closure);
+                self.rewrite_closure_calls_in_block(body, var_to_closure);
+            }
+            ExprKind::LoopExpr { body, .. } => {
+                self.rewrite_closure_calls_in_block(body, var_to_closure);
+            }
+            ExprKind::MatchExpr(m) => {
+                self.rewrite_closure_calls_in_expr(&mut m.scrutinee, var_to_closure);
+                for arm in &mut m.arms {
+                    if let Some(guard) = &mut arm.guard {
+                        self.rewrite_closure_calls_in_expr(guard, var_to_closure);
+                    }
+                    self.rewrite_closure_calls_in_expr(&mut arm.body, var_to_closure);
+                }
+            }
+            ExprKind::Group(inner) => {
+                self.rewrite_closure_calls_in_expr(inner, var_to_closure);
+            }
+            ExprKind::TupleFieldAccess { base, .. } => {
+                self.rewrite_closure_calls_in_expr(base, var_to_closure);
+            }
+            ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => {
+                self.rewrite_closure_calls_in_expr(operand, var_to_closure);
+            }
+            ExprKind::Int
+            | ExprKind::Float
+            | ExprKind::Str
+            | ExprKind::Char
+            | ExprKind::Bool(_)
+            | ExprKind::Null
+            | ExprKind::Ident(_) => {}
+            ExprKind::Closure { .. } => {}
         }
     }
 
@@ -1146,6 +1584,7 @@ impl Monomorphizer {
                 self.resolve_names_in_expr(operand, subst);
             }
             ExprKind::Group(inner) => self.resolve_names_in_expr(inner, subst),
+            ExprKind::Closure { body, .. } => self.resolve_names_in_expr(body, subst),
             ExprKind::Int
             | ExprKind::Float
             | ExprKind::Str
@@ -1298,6 +1737,7 @@ impl Monomorphizer {
                 self.resolve_all_named_app_in_expr(operand);
             }
             ExprKind::Group(inner) => self.resolve_all_named_app_in_expr(inner),
+            ExprKind::Closure { body, .. } => self.resolve_all_named_app_in_expr(body),
             ExprKind::Int
             | ExprKind::Float
             | ExprKind::Str
@@ -1483,6 +1923,7 @@ impl Monomorphizer {
                 self.substitute_expr(operand, subst);
             }
             ExprKind::Group(inner) => self.substitute_expr(inner, subst),
+            ExprKind::Closure { body, .. } => self.substitute_expr(body, subst),
             ExprKind::Int
             | ExprKind::Float
             | ExprKind::Str
@@ -1685,6 +2126,13 @@ impl Monomorphizer {
                 self.reassign_expr_spans(operand);
             }
             ExprKind::Group(inner) => self.reassign_expr_spans(inner),
+            ExprKind::Closure { body, params, .. } => {
+                for p in params.iter_mut() {
+                    p.span = self.next_span();
+                    p.name.span = self.next_span();
+                }
+                self.reassign_expr_spans(body);
+            }
             ExprKind::Int
             | ExprKind::Float
             | ExprKind::Str
@@ -1757,4 +2205,187 @@ impl Monomorphizer {
 pub fn monomorphize(ast: &mut Ast) {
     let mut mono = Monomorphizer::new();
     mono.run(ast);
+}
+
+// ------------------------------------------------------------------
+// Closure desugaring
+// ------------------------------------------------------------------
+
+/// Collects free variable names in an expression.
+/// A free variable is a name that is referenced but not in the `bound` set
+/// (parameter names, let-bound names, etc.).
+fn collect_free_vars(
+    expr: &Expr,
+    bound: &std::collections::HashSet<String>,
+    out: &mut std::collections::HashSet<String>,
+) {
+    match &expr.kind {
+        ExprKind::Ident(ident) => {
+            if !bound.contains(&ident.name) {
+                out.insert(ident.name.clone());
+            }
+        }
+        ExprKind::Unary { operand, .. } => collect_free_vars(operand, bound, out),
+        ExprKind::Binary { lhs, rhs, .. } => {
+            collect_free_vars(lhs, bound, out);
+            collect_free_vars(rhs, bound, out);
+        }
+        ExprKind::Call { callee, args, .. } => {
+            collect_free_vars(callee, bound, out);
+            for arg in args {
+                collect_free_vars(arg, bound, out);
+            }
+        }
+        ExprKind::Member { base, .. } => collect_free_vars(base, bound, out),
+        ExprKind::Index { base, index } => {
+            collect_free_vars(base, bound, out);
+            collect_free_vars(index, bound, out);
+        }
+        ExprKind::Assign { target, value, .. } => {
+            collect_free_vars(target, bound, out);
+            collect_free_vars(value, bound, out);
+        }
+        ExprKind::Group(inner) => collect_free_vars(inner, bound, out),
+        ExprKind::Block(block) => {
+            let mut inner_bound = bound.clone();
+            for stmt in &block.stmts {
+                match &stmt.kind {
+                    StmtKind::Let(binding) => {
+                        collect_free_vars(&binding.init, &inner_bound, out);
+                        inner_bound.insert(binding.name.name.clone());
+                    }
+                    StmtKind::Expr(e) | StmtKind::Return(Some(e)) => {
+                        collect_free_vars(e, &inner_bound, out);
+                    }
+                    StmtKind::Return(None) | StmtKind::Break(None) | StmtKind::Continue => {}
+                    StmtKind::Break(Some(e)) => collect_free_vars(e, &inner_bound, out),
+                    StmtKind::If(if_stmt) => {
+                        collect_free_vars(&if_stmt.cond, &inner_bound, out);
+                        collect_free_vars_block(&if_stmt.then_block, &inner_bound, out);
+                    }
+                    StmtKind::While { cond, body } => {
+                        collect_free_vars(cond, &inner_bound, out);
+                        collect_free_vars_block(body, &inner_bound, out);
+                    }
+                    StmtKind::Loop(body) => {
+                        collect_free_vars_block(body, &inner_bound, out);
+                    }
+                    StmtKind::For {
+                        name,
+                        iterable,
+                        body,
+                    } => {
+                        collect_free_vars(iterable, &inner_bound, out);
+                        let mut loop_bound = inner_bound.clone();
+                        loop_bound.insert(name.name.clone());
+                        collect_free_vars_block(body, &loop_bound, out);
+                    }
+                    StmtKind::Match(m) => {
+                        collect_free_vars(&m.scrutinee, &inner_bound, out);
+                        for arm in &m.arms {
+                            collect_free_vars_block(&arm.body, &inner_bound, out);
+                        }
+                    }
+                    StmtKind::Const(binding) => {
+                        collect_free_vars(&binding.init, &inner_bound, out);
+                    }
+                }
+            }
+            if let Some(result) = &block.result {
+                collect_free_vars(result, &inner_bound, out);
+            }
+        }
+        ExprKind::Tuple(elems) | ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                collect_free_vars(e, bound, out);
+            }
+        }
+        ExprKind::IfExpr(inner) => {
+            collect_free_vars(&inner.cond, bound, out);
+            collect_free_vars_block(&inner.then_block, bound, out);
+            match &inner.else_branch {
+                ElseBranch::Block(b) => collect_free_vars_block(b, bound, out),
+                ElseBranch::IfExpr(e) => collect_free_vars(
+                    &Expr {
+                        kind: ExprKind::IfExpr(e.clone()),
+                        span: e.span,
+                    },
+                    bound,
+                    out,
+                ),
+                _ => {}
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            collect_free_vars(start, bound, out);
+            collect_free_vars(end, bound, out);
+        }
+        ExprKind::WhileExpr { cond, body, .. } => {
+            collect_free_vars(cond, bound, out);
+            collect_free_vars_block(body, bound, out);
+        }
+        ExprKind::LoopExpr { body, .. } => {
+            collect_free_vars_block(body, bound, out);
+        }
+        ExprKind::MatchExpr(m) => {
+            collect_free_vars(&m.scrutinee, bound, out);
+            for arm in &m.arms {
+                collect_free_vars(&arm.body, bound, out);
+            }
+        }
+        ExprKind::Closure { params, body, .. } => {
+            let mut closure_bound = bound.clone();
+            for p in params {
+                closure_bound.insert(p.name.name.clone());
+            }
+            collect_free_vars(body, &closure_bound, out);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for f in fields {
+                collect_free_vars(&f.value, bound, out);
+            }
+        }
+        ExprKind::EnumVariant { payload, .. } => {
+            if let Some(p) = payload {
+                collect_free_vars(p, bound, out);
+            }
+        }
+        ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => {
+            collect_free_vars(operand, bound, out);
+        }
+        ExprKind::TupleFieldAccess { base, .. } => {
+            collect_free_vars(base, bound, out);
+        }
+        ExprKind::Int
+        | ExprKind::Float
+        | ExprKind::Str
+        | ExprKind::Char
+        | ExprKind::Bool(_)
+        | ExprKind::Null => {}
+    }
+}
+
+/// Helper: collects free vars across a block.
+fn collect_free_vars_block(
+    block: &Block,
+    bound: &std::collections::HashSet<String>,
+    out: &mut std::collections::HashSet<String>,
+) {
+    let mut inner_bound = bound.clone();
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let(binding) => {
+                collect_free_vars(&binding.init, &inner_bound, out);
+                inner_bound.insert(binding.name.name.clone());
+            }
+            StmtKind::Expr(e) | StmtKind::Return(Some(e)) | StmtKind::Break(Some(e)) => {
+                collect_free_vars(e, &inner_bound, out);
+            }
+            StmtKind::Return(None) | StmtKind::Break(None) | StmtKind::Continue => {}
+            _ => {}
+        }
+    }
+    if let Some(result) = &block.result {
+        collect_free_vars(result, &inner_bound, out);
+    }
 }

@@ -49,13 +49,15 @@ use super::ir::{
     BType, LowerResult, RuntimeService,
 };
 
-/// The resolved target of a call: a user function or an embedded runtime
-/// service.
+/// The resolved target of a call: a user function, an embedded runtime
+/// service, or a function pointer (session 37).
 enum Callee {
     /// A user function, by index into [`BProgram::functions`].
     Function(usize),
     /// A runtime service (`rt_*` intrinsic).
     Runtime(RuntimeService),
+    /// An indirect call through a function pointer.
+    Indirect(BOperand),
 }
 
 /// The resolved storage root of a multi-step place assignment: a function
@@ -344,7 +346,10 @@ impl<'a> Lowerer<'a> {
             // variable is the only `Infer` that remains. Unit is the type
             // of intrinsics that produce no value.
             Some(TypeKind::Infer(_)) | Some(TypeKind::Unit) => Some(BType::Unit),
-            Some(TypeKind::Error | TypeKind::Fn { .. }) | None => None,
+            // Function types (session 37): closures and function values are
+            // represented as a single word (the function address).
+            Some(TypeKind::Fn { .. }) => Some(BType::FnPtr),
+            Some(TypeKind::Error) | None => None,
         }
     }
 
@@ -1556,10 +1561,19 @@ impl<'a> Lowerer<'a> {
                         string_index,
                     },
                 },
-                MirOperandKind::Static(symbol) => BInstKind::LoadStatic {
-                    target,
-                    static_index: self.resolve_static(*symbol, rvalue.span)?,
-                },
+                MirOperandKind::Static(symbol) => {
+                    if let Some(&fn_idx) = self.fn_index.get(symbol) {
+                        BInstKind::LoadFnPtr {
+                            target,
+                            function_index: fn_idx,
+                        }
+                    } else {
+                        BInstKind::LoadStatic {
+                            target,
+                            static_index: self.resolve_static(*symbol, rvalue.span)?,
+                        }
+                    }
+                }
             },
             MirRvalueKind::Unary { op, operand } => BInstKind::Unary {
                 target,
@@ -1592,6 +1606,11 @@ impl<'a> Lowerer<'a> {
                     Callee::Runtime(service) => BInstKind::RuntimeCall {
                         target,
                         service,
+                        args: lowered_args,
+                    },
+                    Callee::Indirect(fn_ptr) => BInstKind::IndirectCall {
+                        target,
+                        fn_ptr,
                         args: lowered_args,
                     },
                 }
@@ -1797,6 +1816,10 @@ impl<'a> Lowerer<'a> {
                     span,
                     "callee references an unknown module item",
                 ))
+            }
+            MirOperandKind::Local(id) => {
+                // Session 37: a local with FnPtr type is a function pointer.
+                Ok(Callee::Indirect(BOperand::Local(*id)))
             }
             _ => Err(BackendError::unsupported_callee(
                 span,
@@ -2022,7 +2045,7 @@ impl<'a> Lowerer<'a> {
             | BType::Enum => 8,
             BType::Bool | BType::Char => 1,
             BType::Range => 16,
-            BType::Unit => 0,
+            BType::Unit | BType::FnPtr => 0,
         };
         Ok((classified, size))
     }
@@ -2054,9 +2077,13 @@ impl<'a> Lowerer<'a> {
             }
             // `Null` is word-sized (the layout treats it like a pointer
             // slot); `Char` is a single byte (layout `(1, 1)`).
-            BType::Int | BType::Ptr | BType::Ref | BType::Str | BType::Float | BType::Null => {
-                Some(8)
-            }
+            BType::Int
+            | BType::Ptr
+            | BType::Ref
+            | BType::Str
+            | BType::Float
+            | BType::Null
+            | BType::FnPtr => Some(8),
             BType::Bool | BType::Char => Some(1),
             BType::Range => Some(16),
             BType::Unit => Some(0),
@@ -2161,6 +2188,18 @@ impl<'a> Lowerer<'a> {
                 }
             },
             MirOperandKind::Static(symbol) => {
+                // Session 37: function symbols produce a function pointer.
+                if let Some(&fn_idx) = self.fn_index.get(symbol) {
+                    let temp = self.alloc_temp(operand.ty, BType::FnPtr, operand.span);
+                    self.push(
+                        BInstKind::LoadFnPtr {
+                            target: temp,
+                            function_index: fn_idx,
+                        },
+                        operand.span,
+                    );
+                    return Ok(BOperand::Local(temp));
+                }
                 let slot = self.resolve_static(*symbol, operand.span)?;
                 let ty = self.static_types[slot]
                     .expect("unsupported statics are skipped before operand evaluation");

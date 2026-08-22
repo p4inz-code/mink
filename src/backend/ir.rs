@@ -101,6 +101,9 @@ pub enum BType {
     Enum,
     /// No value (a function that does not produce one).
     Unit,
+    /// A function pointer (session 37): a single word holding the address
+    /// of a function. Used by closures and first-class function values.
+    FnPtr,
 }
 
 impl BType {
@@ -108,7 +111,7 @@ impl BType {
     pub fn is_word_sized(self) -> bool {
         matches!(
             self,
-            Self::Int | Self::Bool | Self::Float | Self::Char | Self::Null
+            Self::Int | Self::Bool | Self::Float | Self::Char | Self::Null | Self::FnPtr
         )
     }
 
@@ -128,6 +131,7 @@ impl BType {
             | Self::Ref
             | Self::Str
             | Self::Enum
+            | Self::FnPtr
             | Self::Unit => 1,
             Self::Range => 2,
             Self::Struct | Self::Array => 1,
@@ -150,6 +154,7 @@ impl BType {
             Self::Array => "array",
             Self::Enum => "enum",
             Self::Unit => "unit",
+            Self::FnPtr => "fn ptr",
         }
     }
 }
@@ -346,6 +351,15 @@ pub enum BInstKind {
         /// Index into [`BProgram::statics`].
         static_index: usize,
     },
+    /// Load the address of a function into `target` (session 37).
+    /// Used when a function is referenced as a value (function pointers,
+    /// closures).
+    LoadFnPtr {
+        /// The destination slot (a `FnPtr` local).
+        target: crate::mir::LocalId,
+        /// Index into [`BProgram::functions`].
+        function_index: usize,
+    },
     /// Load the address of string blob `string_index` (an index into
     /// [`BProgram::strings`]) into `target`. The blob lives in the image's
     /// immutable data; its address is the string value.
@@ -410,6 +424,17 @@ pub enum BInstKind {
         target: crate::mir::LocalId,
         /// The runtime service to invoke.
         service: RuntimeService,
+        /// The arguments, in source order.
+        args: Vec<BOperand>,
+    },
+    /// Call through a function pointer (session 37): `fn_ptr(args)`.
+    /// The callee is a word-sized function address; arguments are passed
+    /// using the same calling convention as direct calls.
+    IndirectCall {
+        /// The destination slot for the call's result.
+        target: crate::mir::LocalId,
+        /// The function pointer operand (a `FnPtr` local or constant).
+        fn_ptr: BOperand,
         /// The arguments, in source order.
         args: Vec<BOperand>,
     },

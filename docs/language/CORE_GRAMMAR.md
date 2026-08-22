@@ -36,12 +36,12 @@ Notable exclusions:
   (`struct` and `enum` declarations arrived in sessions 14 and 17; see
   §11 and §12)
 - Module system (`mod`, `use`, `pub`) — implemented in session 34 (§28–§30)
+- Closures/lambdas — implemented in session 37 (see §23)
 - Async/await and unsafe — concurrency/unsafe milestones
 - Type annotations on bindings (`let x: Type = expr;`) arrived in
   session 26 — §19 (function parameter and return type annotations
   arrived in session 25 — §17)
 - Tuples (see §21)
-- Lambdas/closures
 - `?` (optional handling), open-ended ranges (`a..`, `..b`), and bare `..`
   operators
 - Byte literals, raw strings (not lexed)
@@ -196,7 +196,8 @@ The following are **not** part of the frozen grammar and produce parser
 errors if used, until their milestones land: `type`/`trait`/`impl`
 declarations (struct and enum declarations arrived in sessions 14 and 17
 — see §11 and §12), `mod`/`use`/`pub`, `async fn`/`await`, `unsafe`
-blocks, closures, and the `?` operator.
+blocks, and the `?` operator.
+Closures arrived in session 37 — see §23.
 Block expressions and `if` as an expression arrived in session 28;
 tuples arrived in session 29 (see §22). (see §21).
 Return-type annotations and parameter type annotations arrived in session 25
@@ -805,3 +806,33 @@ PubItem     = "pub" Item ;
 all items from all modules are included in the combined AST, so private
 items are also accessible (true private-vs-public enforcement is a
 later milestone).
+
+## §31  Closures / Lambdas
+
+**Session:** 37 — Closure expressions with capture support.
+
+```EBNF
+ClosureExpr  = "|" [ ClosureParams ] "|" ( BlockExpr | Expression ) ;
+ClosureParams = ClosureParam { "," ClosureParam } "," ;
+ClosureParam  = Identifier [ ":" Type ] ;
+```
+
+### Examples
+
+```mink
+let inc = |x: Int| x + 1;
+let add = |a: Int, b: Int| a + b;
+let g = | | 42;
+let named = |x: Int| { let y = x * 2; y + 1 };
+```
+
+### Capture semantics
+
+- Closures capture free variables by value (copy for `Int`, move for
+  non-`Copy` types).
+- Captures are passed as leading parameters to the desugared function;
+  the rewriting is fully deterministic.
+- No-argument closures use `| |` (two pipes with a space between).
+- Mutating captured values is not supported in V1.
+- Escaping closures that outlive their defining scope are rejected
+  when they would produce dangling references.

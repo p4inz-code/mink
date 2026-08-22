@@ -842,6 +842,11 @@ impl<'a> Checker<'a> {
                     )
                 }
             }
+            ExprKind::Closure { .. } => (
+                self.recorded_ty(expr.span)
+                    .unwrap_or_else(|| self.types.push(TypeKind::Error)),
+                false,
+            ),
         };
         if recomputed {
             self.update_recorded(expr.span, computed);
@@ -1767,6 +1772,29 @@ impl<'a> Checker<'a> {
             ));
         }
         result_var
+    }
+
+    /// Type-checks a closure expression.
+    fn check_closure(
+        &mut self,
+        params: &[crate::ast::ClosureParam],
+        body: &Expr,
+        _span: Span,
+    ) -> TypeId {
+        let mut param_types = Vec::new();
+        for p in params {
+            let ty = if let Some(ann) = &p.ty {
+                self.resolve_type(ann)
+            } else {
+                self.types.push(TypeKind::Infer(None))
+            };
+            param_types.push(ty);
+        }
+        let result_ty = self.expr_type(body);
+        self.types.push(TypeKind::Fn {
+            params: param_types,
+            result: result_ty,
+        })
     }
 
     /// Checks every arm of a `match` against the scrutinee type and
@@ -3143,6 +3171,7 @@ impl<'a> Checker<'a> {
                 result_var
             }
             ExprKind::MatchExpr(m) => self.check_match_expr(m),
+            ExprKind::Closure { params, body, .. } => self.check_closure(params, body, expr.span),
         }
     }
 

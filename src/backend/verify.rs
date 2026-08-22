@@ -177,6 +177,30 @@ fn verify_inst(
                 }
             }
         }
+        BInstKind::LoadFnPtr {
+            target,
+            function_index,
+        } => {
+            verify_target(function, *target, inst.span, errors);
+            if program.functions.get(*function_index).is_none() {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: LoadFnPtr references unknown function index {function_index}",
+                        function.name
+                    ),
+                ));
+            }
+            if function.local(*target).map(|local| local.ty) != Some(BType::FnPtr) {
+                errors.push(error(
+                    inst.span,
+                    format!(
+                        "function `{}`: LoadFnPtr target must be FnPtr",
+                        function.name
+                    ),
+                ));
+            }
+        }
         BInstKind::LoadStr {
             target,
             string_index,
@@ -310,6 +334,17 @@ fn verify_inst(
                     ),
                 ));
             }
+            for arg in args {
+                verify_operand(function, arg, inst.span, errors);
+            }
+        }
+        BInstKind::IndirectCall {
+            target,
+            fn_ptr,
+            args,
+        } => {
+            verify_target(function, *target, inst.span, errors);
+            verify_operand(function, fn_ptr, inst.span, errors);
             for arg in args {
                 verify_operand(function, arg, inst.span, errors);
             }

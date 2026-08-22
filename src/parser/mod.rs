@@ -2229,6 +2229,96 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parses a closure expression: `|param1, param2| body`.
+    /// The body is either an expression (when not followed by `{`)
+    /// or a block expression.
+    fn parse_closure(&mut self) -> Result<Expr, ()> {
+        let open = self.bump().span(); // '|'
+        let mut params = Vec::new();
+        if self.current_kind() != TokenKind::Pipe {
+            loop {
+                let token = self.current();
+                let param_span = token.span();
+                if token.kind() != TokenKind::Ident {
+                    self.record_error(ParseErrorKind::ExpectedIdent, param_span);
+                    // Skip to next '|' or recover.
+                    while !matches!(
+                        self.current_kind(),
+                        TokenKind::Pipe | TokenKind::RBrace | TokenKind::Eof
+                    ) {
+                        let _ = self.bump();
+                    }
+                    break;
+                }
+                let _ = self.bump();
+                let name = Ident {
+                    name: self.text(param_span),
+                    span: param_span,
+                };
+                let mut ty = None;
+                if self.current_kind() == TokenKind::Colon {
+                    let _ = self.bump(); // ':'
+                    match self.parse_type() {
+                        Ok(t) => ty = Some(t),
+                        Err(()) => {
+                            // Recover to next param or close.
+                            while !matches!(
+                                self.current_kind(),
+                                TokenKind::Comma | TokenKind::Pipe | TokenKind::Eof
+                            ) {
+                                let _ = self.bump();
+                            }
+                        }
+                    }
+                }
+                let span = self.join(
+                    param_span,
+                    ty.as_ref().map(|t| t.span).unwrap_or(param_span),
+                );
+                params.push(crate::ast::ClosureParam { name, ty, span });
+                if self.current_kind() == TokenKind::Comma {
+                    let _ = self.bump(); // ','
+                } else {
+                    break;
+                }
+            }
+        }
+        // Expect closing '|' of parameter list.
+        if self.current_kind() != TokenKind::Pipe {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedPipe, token.span());
+            // Skip to find the pipe.
+            while !matches!(
+                self.current_kind(),
+                TokenKind::Pipe | TokenKind::RBrace | TokenKind::Eof
+            ) {
+                let _ = self.bump();
+            }
+        }
+        if self.current_kind() == TokenKind::Pipe {
+            let _ = self.bump(); // '|'
+        }
+        // Parse the body: block or expression.
+        let body = if self.current_kind() == TokenKind::LBrace {
+            let block = self.parse_block_expr()?;
+            let bspan = block.span;
+            Expr {
+                kind: ExprKind::Block(Box::new(block)),
+                span: bspan,
+            }
+        } else {
+            self.parse_expression()?
+        };
+        let span = self.join(open, body.span);
+        Ok(Expr {
+            kind: ExprKind::Closure {
+                params,
+                body: Box::new(body),
+            },
+            span,
+        })
+    }
+
     /// Parses a `{ ... }` block body; on a missing `{` records
     /// [`ParseErrorKind::ExpectedBlock`] and returns `Err`.
     fn parse_block_body(&mut self) -> Result<Block, ()> {
@@ -3081,6 +3171,10 @@ impl<'a> Parser<'a> {
             TokenKind::If => self.parse_if_expr(),
             TokenKind::While | TokenKind::Loop => self.parse_while_or_loop_expr(),
             TokenKind::Match => self.parse_match_expr(),
+            TokenKind::Pipe => {
+                // Closure: |param1, param2| expr or |param1, param2| { block }
+                self.parse_closure()
+            }
             TokenKind::LBrace => {
                 let block = self.parse_block_expr()?;
                 let span = block.span;

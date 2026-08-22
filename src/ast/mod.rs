@@ -820,6 +820,28 @@ pub enum ExprKind {
     /// producing a result value. Every arm's expression must have a
     /// compatible result type; mismatched types are `E-T01`.
     MatchExpr(Box<MatchExpr>),
+    /// A closure expression (session 37): `|param1, param2| expr` or
+    /// `|param1, param2| { stmts; expr }`. Closures capture local
+    /// variables from their enclosing scope. At V1, captures are
+    /// by-move (ownership transferred) for non-Copy types and by-copy
+    /// for Copy types.
+    Closure {
+        /// The closure parameters.
+        params: Vec<ClosureParam>,
+        /// The closure body (an expression or block).
+        body: Box<Expr>,
+    },
+}
+
+/// A closure parameter: `name` or `name: Type`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureParam {
+    /// The parameter's name.
+    pub name: Ident,
+    /// An optional type annotation (`: Type`).
+    pub ty: Option<Ty>,
+    /// Span of the parameter.
+    pub span: Span,
 }
 
 /// An `if` expression (session 28): evaluates `cond`, then evaluates

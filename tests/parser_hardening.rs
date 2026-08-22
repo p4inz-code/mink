@@ -1421,6 +1421,12 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
                 walk_expr(&arm.body, text_len, src);
             }
         }
+        ExprKind::Closure { body, params, .. } => {
+            for p in params {
+                assert_span_ok(p.span, text_len, src);
+            }
+            walk_expr(body, text_len, src);
+        }
     }
 }
 
@@ -1463,8 +1469,6 @@ fn excluded_constructs_inside_functions_are_rejected() {
     let excluded: &[(&str, ParseErrorKind)] = &[
         // match statements arrived with session 18 and are accepted; a
         // pattern without `=>` is a dedicated E-P24.
-        // Closure.
-        ("let g = |x| x + 1;", ParseErrorKind::ExpectedExpression),
         // unsafe block.
         ("unsafe { }", ParseErrorKind::ExpectedExpression),
         // await expression.
@@ -1562,9 +1566,12 @@ fn excluded_keywords_are_never_silently_accepted() {
 #[test]
 fn combined_excluded_program_reports_every_offender() {
     // `let x: int = 1` now parses (type annotations on bindings are
-    // accepted since session 26); only the closure remains an error.
+    // accepted since session 26); closures also parse (session 37).
     let src = "fn main() { let x: int = 1; let g = |a| a; }";
-    assert_eq!(error_kinds(src), vec![ParseErrorKind::ExpectedExpression]);
+    assert!(
+        error_kinds(src).is_empty(),
+        "expected no parse errors for {src:?}"
+    );
 }
 
 #[test]

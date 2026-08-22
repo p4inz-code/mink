@@ -683,10 +683,18 @@ fn non_constant_module_binding_is_rejected() {
 
 #[test]
 fn function_used_as_value_is_rejected() {
-    // The local `h` receives the function type, which is rejected when the
-    // local is classified.
-    let kinds = error_kinds("fn f() { return; } fn main() { let h = f; return; }");
-    assert_eq!(kinds, [BackendErrorKind::UnsupportedType]);
+    // Session 37: functions can now be used as values (function pointers).
+    // This should compile successfully with no errors.
+    let mut sources = SourceMap::new();
+    let path = unique_source("fnptr");
+    std::fs::write(&path, "fn f() { return; } fn main() { let h = f; return; }").unwrap();
+    let report = driver::check(&mut sources, &path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        report.errors.is_empty(),
+        "function as value should be accepted, got: {:?}",
+        report.errors
+    );
 }
 
 #[test]
