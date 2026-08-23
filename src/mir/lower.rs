@@ -2131,8 +2131,9 @@ impl<'a> FnBuilder<'a> {
         }
     }
 
-    /// Lowers `for var in iterable { body }` into a range iteration:
+    /// Lowers `for var in iterable { body }` into either:
     ///
+    /// **Range iteration:**
     /// ```text
     /// init:   iter = <iterable value>
     ///         jump header
@@ -2144,20 +2145,37 @@ impl<'a> FnBuilder<'a> {
     /// exit:   ...
     /// ```
     ///
-    /// `continue` jumps to the header (which re-checks completion and lets
-    /// the body fetch the next element); `break` jumps to the exit. A
-    /// syntactically written range keeps its inclusive flag in the `Range`
-    /// construction; iteration over a range *value* defers inclusive-ness
-    /// to the backend.
+    /// **Array iteration (Session 41):**
+    /// ```text
+    /// init:   idx = 0
+    ///         jump header
+    /// header: done = idx >= len
+    ///         branch done → exit, body
+    /// body:   var = arr[idx]
+    ///         <body statements>
+    ///         idx = idx + 1
+    ///         jump header
+    /// exit:   ...
+    /// ```
     fn lower_for(&mut self, var: &HirIdent, iterable: &HirExpr, body: &HirBlock, span: Span) {
-        // Defensive: the type checker guarantees a range-typed iterable; an
-        // internally inconsistent one is reported and lowered through the
-        // value path anyway, so all independent problems surface.
-        if !matches!(self.eval.table.kind(iterable.ty), Some(TypeKind::Range(_))) {
+        let iter_kind = self.eval.table.kind(iterable.ty);
+        let array_len = match iter_kind {
+            Some(TypeKind::Array { len, .. }) => Some(*len),
+            _ => None,
+        };
+        let is_range = matches!(iter_kind, Some(TypeKind::Range(_)));
+        if !is_range && array_len.is_none() {
             self.eval
                 .errors
                 .push(MirError::non_range_for_iterable(iterable.span));
         }
+
+        // Session 41: array iteration uses an index-based loop.
+        if let Some(arr_len) = array_len {
+            self.lower_for_array(var, iterable, body, span, arr_len);
+            return;
+        }
+
         // The loop variable's slot is written by the loop machinery each
         // iteration, so it is marked mutable (source-level reassignment is
         // still rejected by semantic analysis).
@@ -2292,6 +2310,264 @@ impl<'a> FnBuilder<'a> {
         self.start_block(exit, span);
     }
 
+    /// Lowers `for var in array { body }` into an index-based loop
+    /// (Session 41).
+    ///
+    /// ```text
+    /// init:   idx = 0
+    ///         jump header
+    /// header: done = idx >= arr_len
+    ///         branch done → exit, body
+    /// body:   var = array[idx]
+    ///         <body statements>
+    ///         idx = idx + 1
+    ///         jump header
+    /// exit:   ...
+    /// ```
+    fn lower_for_array(
+        &mut self,
+        var: &HirIdent,
+        iterable: &HirExpr,
+        body: &HirBlock,
+        span: Span,
+        arr_len: u64,
+    ) {
+        let var_local =
+            self.eval
+                .declare_local(var.name.clone(), Some(var.symbol), var.ty, true, var.span);
+        self.eval.symbols.insert(var.symbol, var_local);
+
+        // Store the array in a local.
+        let arr_local =
+            self.eval
+                .declare_local(String::new(), None, iterable.ty, false, iterable.span);
+        let int_ty = self.eval.table.push(TypeKind::Int);
+        let idx_local = self
+            .eval
+            .declare_local(String::new(), None, int_ty, true, iterable.span);
+        let bool_ty = self.eval.bool_ty();
+        let done_local =
+            self.eval
+                .declare_local(String::new(), None, bool_ty, false, iterable.span);
+
+        let init_block = self.alloc_block();
+        let header = self.alloc_block();
+        let body_block = self.alloc_block();
+        let exit = self.alloc_block();
+        self.loops.push(LoopCtx {
+            break_target: exit,
+            continue_target: header,
+            break_value_local: None,
+        });
+
+        self.ensure_current(span);
+        self.jump_to(init_block, span);
+
+        // Init: capture the array and set idx = 0.
+        self.start_block(init_block, iterable.span);
+        let arr_value = self.eval_operand(iterable);
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(arr_local),
+                    span: iterable.span,
+                    ty: iterable.ty,
+                },
+                rvalue: use_rvalue(arr_value, iterable.span, iterable.ty),
+            },
+            span: iterable.span,
+        });
+        // idx = 0
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(idx_local),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Use(MirOperand {
+                        kind: MirOperandKind::Constant(MirConstant {
+                            kind: MirConstantKind::Null,
+                            span: iterable.span,
+                            ty: int_ty,
+                        }),
+                        span: iterable.span,
+                        ty: int_ty,
+                    }),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        self.terminate(MirTerminator::Jump {
+            target: header,
+            span,
+        });
+
+        // Header: done = idx >= arr_len.
+        self.start_block(header, span);
+        // Create a constant for the array length.
+        let len_operand = MirOperand {
+            kind: MirOperandKind::Constant(MirConstant {
+                kind: MirConstantKind::Enum {
+                    variant: arr_len as i64,
+                },
+                span: iterable.span,
+                ty: int_ty,
+            }),
+            span: iterable.span,
+            ty: int_ty,
+        };
+        let idx_operand = MirOperand {
+            kind: MirOperandKind::Local(idx_local),
+            span: iterable.span,
+            ty: int_ty,
+        };
+        let done_operand = MirOperand {
+            kind: MirOperandKind::Local(done_local),
+            span: iterable.span,
+            ty: bool_ty,
+        };
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(done_local),
+                    span: iterable.span,
+                    ty: bool_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Binary {
+                        op: BinaryOp::Ge,
+                        lhs: idx_operand,
+                        rhs: len_operand,
+                    },
+                    span: iterable.span,
+                    ty: bool_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        self.terminate(MirTerminator::Branch {
+            cond: done_operand,
+            then_block: exit,
+            else_block: body_block,
+            span,
+        });
+
+        // Body: var = array[idx], then body, then idx = idx + 1.
+        self.start_block(body_block, body.span);
+        let elem = self
+            .eval
+            .declare_local(String::new(), None, var.ty, false, var.span);
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(elem),
+                    span: var.span,
+                    ty: var.ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Index {
+                        base: MirOperand {
+                            kind: MirOperandKind::Local(arr_local),
+                            span: iterable.span,
+                            ty: iterable.ty,
+                        },
+                        index: MirOperand {
+                            kind: MirOperandKind::Local(idx_local),
+                            span: iterable.span,
+                            ty: int_ty,
+                        },
+                    },
+                    span: iterable.span,
+                    ty: var.ty,
+                },
+            },
+            span: var.span,
+        });
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(var_local),
+                    span: var.span,
+                    ty: var.ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Use(MirOperand {
+                        kind: MirOperandKind::Local(elem),
+                        span: var.span,
+                        ty: var.ty,
+                    }),
+                    span: var.span,
+                    ty: var.ty,
+                },
+            },
+            span: var.span,
+        });
+        self.lower_block(body);
+
+        // idx = idx + 1.
+        let one_operand = MirOperand {
+            kind: MirOperandKind::Constant(MirConstant {
+                kind: MirConstantKind::Enum { variant: 1 },
+                span: iterable.span,
+                ty: int_ty,
+            }),
+            span: iterable.span,
+            ty: int_ty,
+        };
+        let idx_operand2 = MirOperand {
+            kind: MirOperandKind::Local(idx_local),
+            span: iterable.span,
+            ty: int_ty,
+        };
+        let new_idx_local =
+            self.eval
+                .declare_local(String::new(), None, int_ty, false, iterable.span);
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(new_idx_local),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Binary {
+                        op: BinaryOp::Add,
+                        lhs: idx_operand2,
+                        rhs: one_operand,
+                    },
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(idx_local),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Use(MirOperand {
+                        kind: MirOperandKind::Local(new_idx_local),
+                        span: iterable.span,
+                        ty: int_ty,
+                    }),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        self.jump_to(header, span);
+        self.loops.pop();
+        self.start_block(exit, span);
+    }
     /// Lowers `loop { body }` into a single-body-block loop: the preceding
     /// block jumps into the body, the body jumps back to itself, `continue`
     /// jumps to the body start, and `break` jumps to the exit block.

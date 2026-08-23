@@ -169,6 +169,34 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Char],
         result: IntrinsicType::Unit,
     },
+    // --- Vec intrinsics (Session 41) ---
+    // Buffer layout: [capacity: Int][length: Int][elem0][elem1]...
+    // Each element is one word (8 bytes).
+    Intrinsic {
+        name: "rt_vec_new",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Ptr,
+    },
+    Intrinsic {
+        name: "rt_vec_push",
+        params: &[IntrinsicType::Ptr, IntrinsicType::Int],
+        result: IntrinsicType::Ptr,
+    },
+    Intrinsic {
+        name: "rt_vec_get",
+        params: &[IntrinsicType::Ptr, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_vec_len",
+        params: &[IntrinsicType::Ptr],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_vec_free",
+        params: &[IntrinsicType::Ptr],
+        result: IntrinsicType::Unit,
+    },
 ];
 
 /// Looks up an intrinsic by its reserved name.

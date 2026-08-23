@@ -2758,9 +2758,9 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Types a `for` loop variable from the iterable's element type. Only
-    /// ranges are iterable at this stage. An unconstrained iterable is
-    /// pinned to `Range<T>` with a fresh element variable (bidirectional
+    /// Types a `for` loop variable from the iterable's element type.
+    /// Ranges, arrays, and Vec<T> are iterable. An unconstrained iterable
+    /// is pinned to `Range<T>` with a fresh element variable (bidirectional
     /// checking: `for` imposes the expected type `Range<_>`), so its type
     /// is determined by the first real constraint; unknown/error iterables
     /// defer silently — their root cause is reported elsewhere.
@@ -2772,6 +2772,11 @@ impl<'a> Checker<'a> {
         let canon = self.types.canonical(iter_ty);
         match self.types.kind(canon) {
             Some(TypeKind::Range(elem)) => {
+                let _ = self.types.unify(var, *elem);
+            }
+            Some(TypeKind::Array { elem, .. }) => {
+                // Session 41: arrays are iterable — the loop variable
+                // takes the array's element type.
                 let _ = self.types.unify(var, *elem);
             }
             Some(TypeKind::Infer(_)) => {

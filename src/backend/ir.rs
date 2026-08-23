@@ -736,6 +736,17 @@ pub enum RuntimeService {
     /// out, or `E-R05`). Accepts only a live heap-block start; immutable
     /// image strings are rejected.
     StrValidateHeap,
+    // --- Vec services (Session 41) ---
+    /// `rt_vec_new(capacity) -> Ptr<Int>`: allocate a Vec buffer.
+    VecNew,
+    /// `rt_vec_push(data, value) -> Ptr<Int>`: push element (may reallocate).
+    VecPush,
+    /// `rt_vec_get(data, index) -> Int`: bounds-checked element access.
+    VecGet,
+    /// `rt_vec_len(data) -> Int`: get current length.
+    VecLen,
+    /// `rt_vec_free(data)`: deallocate Vec buffer.
+    VecFree,
 }
 
 impl RuntimeService {
@@ -762,6 +773,8 @@ impl RuntimeService {
             | Self::PrintChar => 1,
             Self::MemStore | Self::StrByte => 2,
             Self::StrSetByte => 3,
+            Self::VecPush | Self::VecGet => 2,
+            Self::VecNew | Self::VecLen | Self::VecFree => 1,
         }
     }
 
@@ -784,6 +797,11 @@ impl RuntimeService {
                 | Self::PrintInt
                 | Self::PrintFloat
                 | Self::PrintChar
+                | Self::VecNew
+                | Self::VecPush
+                | Self::VecGet
+                | Self::VecLen
+                | Self::VecFree
         )
     }
 }

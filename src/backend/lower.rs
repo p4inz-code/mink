@@ -1848,6 +1848,11 @@ impl<'a> Lowerer<'a> {
             "rt_print_int" => RuntimeService::PrintInt,
             "rt_print_float" => RuntimeService::PrintFloat,
             "rt_print_char" => RuntimeService::PrintChar,
+            "rt_vec_new" => RuntimeService::VecNew,
+            "rt_vec_push" => RuntimeService::VecPush,
+            "rt_vec_get" => RuntimeService::VecGet,
+            "rt_vec_len" => RuntimeService::VecLen,
+            "rt_vec_free" => RuntimeService::VecFree,
             _ => return None,
         };
         debug_assert!(service.is_callable());

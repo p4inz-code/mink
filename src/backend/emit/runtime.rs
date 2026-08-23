@@ -144,6 +144,11 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::StrValidateHeap, |code, _| {
         emit_str_validate(code, true)
     });
+    emit(code, RuntimeService::VecNew, |code, _| emit_vec_new(code));
+    emit(code, RuntimeService::VecPush, |code, _| emit_vec_push(code));
+    emit(code, RuntimeService::VecGet, |code, _| emit_vec_get(code));
+    emit(code, RuntimeService::VecLen, |code, _| emit_vec_len(code));
+    emit(code, RuntimeService::VecFree, |code, _| emit_vec_free(code));
     offsets
 }
 
@@ -1416,5 +1421,239 @@ fn emit_write(code: &mut Code, stdout: bool) {
     code.add_rsp(48);
 
     code.bind_label(done);
+    code.leave_ret();
+}
+
+// ---------------------------------------------------------------------------
+// Vec services (Session 41)
+// ---------------------------------------------------------------------------
+
+// Buffer layout: [capacity: 8 bytes][length: 8 bytes][element_0][element_1]...
+// Each element is one word (8 bytes). Total allocation = (2 + capacity) * 8.
+
+/// `rt_vec_new(capacity) -> data_ptr` (capacity at [rbp + 16]).
+///
+/// Allocates a zero-initialized Vec buffer with the given capacity.
+/// Returns a pointer to the buffer. The buffer stores capacity at
+/// offset 0, length (initially 0) at offset 8, and elements starting
+/// at offset 16.
+fn emit_vec_new(code: &mut Code) {
+    prologue(code);
+    // rsp = rbp - 8.
+    // Need to call rt_alloc(size) where size = (2 + capacity) * 8.
+    // We need rsp to be 16-byte aligned at the call site.
+    code.sub_rsp(24); // rsp = rbp - 32 (16-byte aligned)
+
+    // rax = capacity from [rbp + 16].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    // Validate: capacity must be > 0.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let bad = code.label();
+    code.jcc_label(0x8E, bad); // jle
+
+    // rax = (2 + capacity) * 8.
+    code.add_r_imm8(Reg::Rax, 2);
+    code.shl_r_imm8(Reg::Rax, 3); // rax *= 8
+
+    // Place size argument on the stack for rt_alloc.
+    // Convention: sub_rsp(8) for padding (1 arg = odd), then store arg at [rsp].
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16); // clean up: 8 (pad) + 8 (arg)
+    // rax = allocated buffer pointer.
+
+    // Initialize header: [rax+0] = capacity, [rax+8] = 0 (length).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // capacity
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_mem_imm32(Reg::Rax, 8, 0); // length = 0
+
+    code.add_rsp(24);
+    code.leave_ret();
+
+    code.bind_label(bad);
+    fail(code, 8); // E-R08 (invalid size)
+}
+
+/// `rt_vec_push(data, value) -> data_ptr`
+/// (data at [rbp + 16], value at [rbp + 24]).
+///
+/// Pushes `value` onto the end of the Vec buffer. If the buffer is
+/// full (length == capacity), reallocates with double capacity, copies
+/// elements, and frees the old buffer. Returns the (possibly new) data
+/// pointer.
+///
+/// Stack layout (after sub_rsp(32)):
+///   [rbp-8]  = data ptr (updated if reallocated)
+///   [rbp-16] = value to push
+///   [rbp-24] = old data ptr (for free after realloc)
+///   [rbp-32] = unused (padding)
+fn emit_vec_push(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(32);
+    // Save args to spill slots.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // value
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+
+    let no_realloc = code.label();
+    let store_value = code.label();
+
+    // Check if realloc needed: length == capacity?
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // length
+    code.cmp_rr(Reg::Rdx, Reg::Rcx);
+    code.jcc_label(0x8C, no_realloc); // jl (length < capacity)
+
+    // --- Reallocation ---
+    // Save old data ptr.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+
+    // new_size = (2 + capacity * 2) * 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.shl_r_imm8(Reg::Rcx, 1); // capacity * 2
+    code.add_r_imm8(Reg::Rcx, 2); // + 2
+    code.shl_r_imm8(Reg::Rcx, 3); // * 8
+
+    // Call rt_alloc(new_size).
+    code.sub_rsp(24);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rcx);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.add_rsp(24);
+    // rax = new data ptr.
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    // Copy header: new_cap = old_cap * 2, length = old length.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // new data ptr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24); // old data ptr
+    code.mov_r_mem(Reg::Rax, Reg::Rdx, 0); // old capacity
+    code.shl_r_imm8(Reg::Rax, 1); // new cap = old cap * 2
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rdx, 8); // old length
+    code.mov_mem_r(Reg::Rcx, 8, Reg::Rax);
+
+    // Copy elements loop: i = 0..length.
+    // R8 = i, Rax = length, Rdx = old ptr, Rcx = new ptr.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let loop_exit = code.label();
+    code.jcc_label(0x84, loop_exit); // jz (length == 0)
+    code.mov_r32_imm32(Reg::R8, 0);
+    let loop_top = code.label();
+    code.bind_label(loop_top);
+    code.cmp_rr(Reg::R8, Reg::Rax);
+    code.jcc_label(0x8D, loop_exit); // jge
+    // offset = 16 + i * 8.
+    code.mov_rr(Reg::R9, Reg::R8);
+    code.shl_r_imm8(Reg::R9, 3);
+    code.add_r_imm8(Reg::R9, 16);
+    // src = old + offset.
+    code.mov_rr(Reg::R10, Reg::Rdx);
+    code.add_rr(Reg::R10, Reg::R9);
+    code.mov_r_mem(Reg::R11, Reg::R10, 0);
+    // dst = new + offset.
+    code.mov_rr(Reg::R10, Reg::Rcx);
+    code.add_rr(Reg::R10, Reg::R9);
+    code.mov_mem_r(Reg::R10, 0, Reg::R11);
+    code.add_r_imm8(Reg::R8, 1);
+    code.jmp_label(loop_top);
+    code.bind_label(loop_exit);
+
+    // Free old buffer.
+    code.sub_rsp(24);
+    code.sub_rsp(8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(16);
+    code.add_rsp(24);
+    code.jmp_label(store_value);
+
+    // --- No reallocation ---
+    code.bind_label(no_realloc);
+    code.jmp_label(store_value);
+
+    // Store value and increment length.
+    code.bind_label(store_value);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr (possibly new)
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    // offset = 16 + length * 8.
+    code.mov_rr(Reg::Rdx, Reg::Rcx);
+    code.shl_r_imm8(Reg::Rdx, 3);
+    code.add_r_imm8(Reg::Rdx, 16);
+    // Store value at data + offset.
+    code.mov_rr(Reg::R10, Reg::Rax);
+    code.add_rr(Reg::R10, Reg::Rdx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16); // value
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    // Increment length.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    // Return data ptr.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.leave_ret();
+}
+
+/// `rt_vec_get(data, index) -> Int`
+/// (data at [rbp + 16], index at [rbp + 24]).
+///
+/// Bounds-checked element access. Returns the element at the given
+/// index, or triggers E-R10 (array index out of range) if invalid.
+fn emit_vec_get(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    // rax = data ptr.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    // rcx = index.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    // Bounds check: index < 0 -> error.
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    let oob = code.label();
+    code.jcc_label(0x88, oob); // js (negative)
+    // rdx = length from [data+8].
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8);
+    // index >= length -> error.
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, oob); // jge
+    // rax = data + 16 + index * 8.
+    code.mov_rr(Reg::Rdx, Reg::Rcx);
+    code.shl_r_imm8(Reg::Rdx, 3); // index * 8
+    code.add_r_imm8(Reg::Rdx, 16); // + 16
+    code.add_rr(Reg::Rax, Reg::Rdx); // data + offset
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // load element
+    code.add_rsp(8);
+    code.leave_ret();
+
+    code.bind_label(oob);
+    fail(code, 10); // E-R10 (array index out of range)
+}
+
+/// `rt_vec_len(data) -> Int` (data at [rbp + 16]).
+///
+/// Returns the current length of the Vec.
+fn emit_vec_len(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 8); // length from [data+8]
+    code.leave_ret();
+}
+
+/// `rt_vec_free(data)` (data at [rbp + 16]).
+///
+/// Frees the Vec buffer by calling rt_free on the data pointer.
+fn emit_vec_free(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(8);
     code.leave_ret();
 }
