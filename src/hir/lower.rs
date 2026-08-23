@@ -585,6 +585,47 @@ impl<'a> Lowerer<'a> {
                     .as_ref()
                     .map(|inner| Box::new(self.lower_expr(inner))),
             },
+            ExprKind::Try { operand } => {
+                // ? operator: lower the operand and pass Try to MIR.
+                let lowered_operand = self.lower_expr(operand);
+                let operand_ty = lowered_operand.ty;
+                let canon = self.table.canonical(operand_ty);
+                let try_info = if let Some(TypeKind::Enum(enum_id)) = self.table.kind(canon) {
+                    self.table.enum_info(*enum_id).and_then(|info| {
+                        if info.name == "Option" || info.name.starts_with("Option__") {
+                            Some((
+                                info.name.clone(),
+                                "Some".to_string(),
+                                "None".to_string(),
+                                false,
+                            ))
+                        } else if info.name == "Result" || info.name.starts_with("Result__") {
+                            Some((info.name.clone(), "Ok".to_string(), "Err".to_string(), true))
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+                if let Some((enum_name, ok_variant, err_variant, err_has_payload)) = try_info {
+                    return HirExpr {
+                        kind: HirExprKind::Try {
+                            operand: Box::new(lowered_operand),
+                            enum_name,
+                            ok_variant,
+                            err_variant,
+                            err_has_payload,
+                        },
+                        ty: self.expr_type(expr.span),
+                        span: expr.span,
+                    };
+                }
+                HirExprKind::Var(self.fallback_ident(&Ident {
+                    name: "?".to_string(),
+                    span: expr.span,
+                }))
+            }
             ExprKind::Group(inner) => {
                 // Syntax-only grouping: lower the inner expression and keep
                 // the parentheses' span, so the node covers the source text

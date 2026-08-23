@@ -831,6 +831,14 @@ pub enum ExprKind {
         /// The closure body (an expression or block).
         body: Box<Expr>,
     },
+    /// The `?` error-propagation operator (session 40): `expr?`.
+    /// Evaluates `expr` and, if the value is `None`/`Err`, early-returns
+    /// from the enclosing function. If the value is `Some(v)`/`Ok(v)`,
+    /// the inner value `v` is produced.
+    Try {
+        /// The expression that produces an `Option` or `Result`.
+        operand: Box<Expr>,
+    },
 }
 
 /// A closure parameter: `name` or `name: Type`.

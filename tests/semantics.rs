@@ -245,6 +245,7 @@ fn expr_idents<'a>(expr: &'a Expr, out: &mut Vec<(&'a str, Span, bool)>) {
                 expr_idents(&arm.body, out);
             }
         }
+        ExprKind::Try { operand } => expr_idents(operand, out),
         ExprKind::Closure { params, body, .. } => {
             for p in params {
                 out.push((p.name.name.as_str(), p.name.span, true));

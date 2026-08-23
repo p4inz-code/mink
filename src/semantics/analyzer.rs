@@ -808,6 +808,7 @@ impl Analyzer {
                     self.analyze_expr(elem, ctx);
                 }
             }
+            ExprKind::Try { operand } => self.analyze_expr(operand, ctx),
             ExprKind::Group(inner) => self.analyze_expr(inner, ctx),
             ExprKind::IfExpr(inner) => {
                 self.analyze_expr(&inner.cond, ctx);

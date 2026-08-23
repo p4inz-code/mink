@@ -2840,6 +2840,16 @@ impl<'a> Parser<'a> {
                         span,
                     };
                 }
+                TokenKind::Question => {
+                    let _question = self.bump();
+                    let span = self.join(expr.span, _question.span());
+                    expr = Expr {
+                        kind: ExprKind::Try {
+                            operand: Box::new(expr),
+                        },
+                        span,
+                    };
+                }
                 _ => return Ok(expr),
             }
         }

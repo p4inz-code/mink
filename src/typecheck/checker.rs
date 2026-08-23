@@ -709,6 +709,13 @@ impl<'a> Checker<'a> {
                     )
                 }
             }
+            ExprKind::Try { operand } => {
+                let (ty, recomputed) = self.resolve_deferred_expr(operand);
+                if recomputed {
+                    self.update_recorded(expr.span, ty);
+                }
+                (ty, recomputed)
+            }
             ExprKind::Group(inner) => {
                 let (ty, recomputed) = self.resolve_deferred_expr(inner);
                 if recomputed {
@@ -1541,12 +1548,22 @@ impl<'a> Checker<'a> {
     }
 
     /// Types a block and returns its value type (the trailing expression's
-    /// type, or `Unit` if there is no trailing expression).
+    /// type, `Never` if the last statement diverges, or `Unit` if there
+    /// is no trailing expression).
     fn check_block_return_type(&mut self, block: &Block) -> TypeId {
         self.check_block(block);
         match &block.result {
             Some(result) => self.expr_type(result),
-            None => self.types.push(TypeKind::Unit),
+            None => {
+                // If the last statement is a `return` or `break`, the block
+                // diverges — its type is Never (compatible with any type).
+                if let Some(last) = block.stmts.last() {
+                    if matches!(last.kind, StmtKind::Return(_) | StmtKind::Break(_)) {
+                        return self.types.push(TypeKind::Never);
+                    }
+                }
+                self.types.push(TypeKind::Unit)
+            }
         }
     }
 
@@ -3121,6 +3138,46 @@ impl<'a> Checker<'a> {
                 variant,
                 payload,
             } => self.check_enum_variant(name, variant, payload, expr.span),
+            ExprKind::Try { operand } => {
+                // ? operator: type-check the operand, which must be Option or Result.
+                // The expression type is the ok/some variant's payload type.
+                let operand_ty = self.expr_type(operand);
+                let canon = self.types.canonical(operand_ty);
+                match self.types.kind(canon) {
+                    Some(TypeKind::Enum(enum_id)) => {
+                        if let Some(info) = self.types.enum_info(*enum_id) {
+                            // For Option: first variant is Some(T) → return T.
+                            // For Result: first variant is Ok(T) → return T.
+                            // Find the first data-carrying variant (Some/Ok).
+                            for variant in &info.variants {
+                                if let Some(payload_ty) = variant.payload {
+                                    return payload_ty;
+                                }
+                            }
+                            // All variants are unit — no payload type to extract.
+                            // This is a type error (can't use ? on a unit-only enum).
+                            self.push_error(TypeError::mismatch(
+                                expr.span,
+                                "an enum with a payload variant (Some/Ok)",
+                                &format!("enum `{}` with only unit variants", info.name),
+                                None,
+                            ));
+                            self.types.push(TypeKind::Error)
+                        } else {
+                            self.types.push(TypeKind::Error)
+                        }
+                    }
+                    _ => {
+                        self.push_error(TypeError::mismatch(
+                            expr.span,
+                            "Option or Result",
+                            &self.display(canon),
+                            None,
+                        ));
+                        self.types.push(TypeKind::Error)
+                    }
+                }
+            }
             ExprKind::Group(inner) => self.expr_type(inner),
             ExprKind::IfExpr(inner) => {
                 self.check_condition(&inner.cond);
@@ -3140,7 +3197,14 @@ impl<'a> Checker<'a> {
                 self.check_block(block);
                 match &block.result {
                     Some(result) => self.expr_type(result),
-                    None => self.types.push(TypeKind::Unit),
+                    None => {
+                        if let Some(last) = block.stmts.last() {
+                            if matches!(last.kind, StmtKind::Return(_) | StmtKind::Break(_)) {
+                                return self.types.push(TypeKind::Never);
+                            }
+                        }
+                        self.types.push(TypeKind::Unit)
+                    }
                 }
             }
             ExprKind::Tuple(elems) => {

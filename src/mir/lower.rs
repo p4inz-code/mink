@@ -514,6 +514,10 @@ impl<'a> StmtEval<'a> {
                     ty: expr.ty,
                 }
             }
+            HirExprKind::Try { .. } => {
+                // Try is intercepted by FnBuilder::eval_operand.
+                unreachable!("Try should be handled by FnBuilder")
+            }
         }
     }
 
@@ -1370,6 +1374,21 @@ impl<'a> FnBuilder<'a> {
                 arms,
                 span,
             } => self.lower_match_expr(scrutinee, arms, expr.ty, *span),
+            HirExprKind::Try {
+                operand,
+                enum_name,
+                ok_variant,
+                err_variant,
+                err_has_payload,
+            } => self.lower_try_expr(
+                operand,
+                enum_name,
+                ok_variant,
+                err_variant,
+                *err_has_payload,
+                expr.ty,
+                expr.span,
+            ),
             HirExprKind::Block(block) => {
                 // A block expression in operand position: lower statements,
                 // then handle the trailing expression.
@@ -2485,6 +2504,119 @@ impl<'a> FnBuilder<'a> {
         if let Some(after) = after {
             self.start_block(after, span);
         }
+        MirOperand {
+            kind: MirOperandKind::Local(result_local),
+            span,
+            ty: result_ty,
+        }
+    }
+
+    /// Lowers a `?` operator into control flow:
+    ///
+    /// ```text
+    /// pre:     scrutinee = <operand>
+    ///          cond = tag(scrutinee) == ok_discriminant
+    ///          branch cond → ok_block, err_block
+    /// ok_block: payload = extract_payload(scrutinee)
+    ///          jump after
+    /// err_block: <construct error value>
+    ///           return error value
+    /// after:   result = payload (from ok_block)
+    /// ```
+    fn lower_try_expr(
+        &mut self,
+        operand: &HirExpr,
+        enum_name: &str,
+        ok_variant: &str,
+        _err_variant: &str,
+        _err_has_payload: bool,
+        result_ty: TypeId,
+        span: Span,
+    ) -> MirOperand {
+        self.ensure_current(span);
+        let scrutinee = self.eval_operand(operand);
+        let result_local = self
+            .eval
+            .declare_local(String::new(), None, result_ty, false, span);
+
+        let ok_block = self.alloc_block();
+        let err_block = self.alloc_block();
+        let after = self.alloc_block();
+
+        // Tag test: does the scrutinee match the ok variant?
+        let discriminant = self
+            .eval
+            .enum_variant_discriminant(enum_name, ok_variant)
+            .unwrap_or(0);
+        let tag = self.emit_temp_rvalue(
+            scrutinee.ty,
+            span,
+            MirRvalueKind::EnumTag {
+                value: scrutinee.clone(),
+            },
+        );
+        let constant = MirOperand {
+            kind: MirOperandKind::Constant(MirConstant {
+                kind: MirConstantKind::Enum {
+                    variant: discriminant,
+                },
+                span,
+                ty: scrutinee.ty,
+            }),
+            span,
+            ty: scrutinee.ty,
+        };
+        let bool_ty = self.eval.bool_ty();
+        let cond = self.emit_temp_rvalue(
+            bool_ty,
+            span,
+            MirRvalueKind::Binary {
+                op: crate::ast::BinaryOp::Eq,
+                lhs: tag,
+                rhs: constant,
+            },
+        );
+        self.terminate(MirTerminator::Branch {
+            cond,
+            then_block: ok_block,
+            else_block: err_block,
+            span,
+        });
+
+        // Ok block: extract payload and assign to result.
+        self.start_block(ok_block, span);
+        let payload = self.emit_temp_rvalue(
+            result_ty,
+            span,
+            MirRvalueKind::EnumPayload {
+                value: scrutinee.clone(),
+            },
+        );
+        self.eval.emit(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(result_local),
+                    span,
+                    ty: result_ty,
+                },
+                rvalue: use_rvalue(payload, span, result_ty),
+            },
+            span,
+        });
+        self.terminate(MirTerminator::Jump {
+            target: after,
+            span,
+        });
+
+        // Err block: return the error value.
+        self.start_block(err_block, span);
+        self.terminate(MirTerminator::Return {
+            value: Some(scrutinee),
+            span,
+        });
+
+        // After block: result is ready.
+        self.start_block(after, span);
         MirOperand {
             kind: MirOperandKind::Local(result_local),
             span,

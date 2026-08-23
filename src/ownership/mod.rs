@@ -1179,6 +1179,7 @@ impl<'a> Analyzer<'a> {
                     None => EvalValue::immutable(),
                 }
             }
+            ExprKind::Try { operand } => self.eval_expr(operand, mode),
             ExprKind::Binary { lhs, rhs, .. } => {
                 self.eval_expr(lhs, Mode::Observe);
                 self.eval_expr(rhs, Mode::Observe);

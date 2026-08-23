@@ -345,7 +345,9 @@ impl<'a> Lowerer<'a> {
             // `kind` follows resolved inference chains; an unresolved
             // variable is the only `Infer` that remains. Unit is the type
             // of intrinsics that produce no value.
-            Some(TypeKind::Infer(_)) | Some(TypeKind::Unit) => Some(BType::Unit),
+            Some(TypeKind::Infer(_)) | Some(TypeKind::Unit) | Some(TypeKind::Never) => {
+                Some(BType::Unit)
+            }
             // Function types (session 37): closures and function values are
             // represented as a single word (the function address).
             Some(TypeKind::Fn { .. }) => Some(BType::FnPtr),

@@ -1667,6 +1667,7 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
             }
             walk_expr(body, text_len, src);
         }
+        ExprKind::Try { operand } => walk_expr(operand, text_len, src),
     }
 }
 

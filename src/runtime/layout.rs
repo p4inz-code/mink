@@ -271,7 +271,7 @@ fn scalar_layout(kind: &TypeKind) -> Option<(u64, u64)> {
         // clean pipeline (they only arise from earlier diagnostics); give
         // them a zero-size layout so validation can continue reporting
         // independent problems instead of stopping.
-        TypeKind::Error | TypeKind::Infer(_) => Some((0, 1)),
+        TypeKind::Error | TypeKind::Infer(_) | TypeKind::Never => Some((0, 1)),
         TypeKind::Unit => Some((0, 1)),
         TypeKind::Enum(_)
         | TypeKind::Struct(_)

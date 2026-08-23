@@ -616,6 +616,19 @@ pub enum HirExprKind {
         /// Span.
         span: Span,
     },
+    /// The `?` operator: unwrap a payload or return early on None/Err.
+    Try {
+        /// The operand (must be Option or Result).
+        operand: Box<HirExpr>,
+        /// The name of the enum (e.g. "Option__Int").
+        enum_name: String,
+        /// The success variant name (e.g. "Some" or "Ok").
+        ok_variant: String,
+        /// The error variant name (e.g. "None" or "Err").
+        err_variant: String,
+        /// Whether the error variant carries a payload.
+        err_has_payload: bool,
+    },
     /// A closure expression (session 37): `|params| body`.
     /// Captured variables are resolved to their symbols.
     Closure {

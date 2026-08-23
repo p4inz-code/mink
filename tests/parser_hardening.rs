@@ -1421,6 +1421,7 @@ fn walk_expr(expr: &Expr, text_len: u32, src: &str) {
                 walk_expr(&arm.body, text_len, src);
             }
         }
+        ExprKind::Try { operand } => walk_expr(operand, text_len, src),
         ExprKind::Closure { body, params, .. } => {
             for p in params {
                 assert_span_ok(p.span, text_len, src);
@@ -1512,9 +1513,6 @@ fn malformed_return_type_is_rejected() {
 #[test]
 fn excluded_tokens_and_operators_are_rejected() {
     let excluded: &[(&str, ParseErrorKind)] = &[
-        // `?` optional handling: the expression ends at `?` and the missing
-        // `;` is reported at the offending token.
-        ("let z = g()?;", ParseErrorKind::ExpectedSemicolon),
         // Fat arrow (match-arm syntax).
         ("let z = a => b;", ParseErrorKind::ExpectedSemicolon),
         // Multi-segment paths: `::` forms enum variant paths (session 17),

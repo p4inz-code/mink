@@ -172,6 +172,11 @@ pub enum TypeKind {
     /// expression that produces no value cannot be used where a value is
     /// required.
     Unit,
+    /// The never / bottom type. Produced by expressions that always diverge
+    /// (e.g. `return`, `break`, infinite loops). Never unifies with every
+    /// type — it is compatible with any arm in a match expression or any
+    /// branch in an if expression.
+    Never,
     /// A range `start..end` / `start..=end` over values of `element`.
     Range(TypeId),
     /// A pointer to a value of type `element` (session 13): the type of
@@ -417,6 +422,13 @@ impl TypeTable {
             }
             return Ok(error);
         }
+        // Never unifies with every type: the result is the other type.
+        if matches!(self.kinds[a.0 as usize], TypeKind::Never) {
+            return Ok(b);
+        }
+        if matches!(self.kinds[b.0 as usize], TypeKind::Never) {
+            return Ok(a);
+        }
         let ka = self.kinds[a.0 as usize].clone();
         let kb = self.kinds[b.0 as usize].clone();
         match (&ka, &kb) {
@@ -522,6 +534,7 @@ impl TypeTable {
             Some(TypeKind::Str) => "Str".to_string(),
             Some(TypeKind::Null) => "Null".to_string(),
             Some(TypeKind::Unit) => "Unit".to_string(),
+            Some(TypeKind::Never) => "!".to_string(),
             Some(TypeKind::Range(elem)) => format!("Range<{}>", self.display(*elem)),
             Some(TypeKind::Ptr(elem)) => format!("Ptr<{}>", self.display(*elem)),
             Some(TypeKind::Ref { mutable, elem }) => {
@@ -666,7 +679,8 @@ impl TypeTable {
                 | TypeKind::Char
                 | TypeKind::Str
                 | TypeKind::Null
-                | TypeKind::Unit => kind.clone(),
+                | TypeKind::Unit
+                | TypeKind::Never => kind.clone(),
                 TypeKind::Infer(target) => {
                     TypeKind::Infer(target.and_then(|t| remap.get(&t).copied()))
                 }

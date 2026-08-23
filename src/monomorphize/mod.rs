@@ -43,6 +43,10 @@ pub struct Monomorphizer {
     synthetic_id: u32,
     /// Counter for generating unique closure names.
     closure_counter: u32,
+    /// The return type of the currently-enclosing function, if any.
+    current_fn_return_ty: Option<Ty>,
+    /// The parameter types of the currently-enclosing function, if any.
+    current_fn_params: Option<Vec<Ty>>,
 }
 
 impl Default for Monomorphizer {
@@ -65,6 +69,8 @@ impl Monomorphizer {
             closure_captures: HashMap::new(),
             synthetic_id: 0,
             closure_counter: 0,
+            current_fn_return_ty: None,
+            current_fn_params: None,
         }
     }
 
@@ -339,7 +345,14 @@ impl Monomorphizer {
                 if let Some(ret) = &mut f.return_ty {
                     self.resolve_named_app_type(ret);
                 }
+                let saved_return_ty = self.current_fn_return_ty.clone();
+                self.current_fn_return_ty = f.return_ty.clone();
+                let saved_fn_params = self.current_fn_params.clone();
+                self.current_fn_params =
+                    Some(f.params.iter().filter_map(|p| p.ty.clone()).collect());
                 self.monomorphize_block(&mut f.body);
+                self.current_fn_return_ty = saved_return_ty;
+                self.current_fn_params = saved_fn_params;
             }
             ItemKind::Let(binding) => {
                 if let Some(ty) = &mut binding.ty {
@@ -440,6 +453,7 @@ impl Monomorphizer {
             StmtKind::Match(m) => {
                 self.monomorphize_expr(&mut m.scrutinee);
                 for arm in &mut m.arms {
+                    self.resolve_pattern_enum_names(&mut arm.pattern);
                     if let Some(guard) = &mut arm.guard {
                         self.monomorphize_expr(guard);
                     }
@@ -581,6 +595,7 @@ impl Monomorphizer {
             ExprKind::MatchExpr(m) => {
                 self.monomorphize_expr(&mut m.scrutinee);
                 for arm in m.arms.iter_mut() {
+                    self.resolve_pattern_enum_names(&mut arm.pattern);
                     if let Some(guard) = &mut arm.guard {
                         self.monomorphize_expr(guard);
                     }
@@ -598,6 +613,7 @@ impl Monomorphizer {
                 self.monomorphize_expr(operand);
             }
             ExprKind::Group(inner) => self.monomorphize_expr(inner),
+            ExprKind::Try { operand } => self.monomorphize_expr(operand),
             ExprKind::Closure { params, body, .. } => {
                 // Desugar closure into a named function.
                 self.closure_counter += 1;
@@ -1052,6 +1068,9 @@ impl Monomorphizer {
             | ExprKind::Bool(_)
             | ExprKind::Null
             | ExprKind::Ident(_) => {}
+            ExprKind::Try { operand } => {
+                self.rewrite_closure_calls_in_expr(operand, var_to_closure, fn_params)
+            }
             ExprKind::Closure { .. } => {}
         }
     }
@@ -1169,7 +1188,64 @@ impl Monomorphizer {
             }
         }
 
-        // Check that all generic params were inferred.
+        // If not all generic params inferred from payload, try function context.
+        let all_inferred = generic_params
+            .iter()
+            .all(|gp| subst.contains_key(&gp.name.name));
+        if !all_inferred {
+            if let Some(ret_ty) = &self.current_fn_return_ty {
+                self.infer_from_type_context(ret_ty, &name.name, &generic_params, &mut subst);
+            }
+            if let Some(params) = &self.current_fn_params {
+                for param_ty in params {
+                    if generic_params
+                        .iter()
+                        .all(|gp| subst.contains_key(&gp.name.name))
+                    {
+                        break;
+                    }
+                    self.infer_from_type_context(param_ty, &name.name, &generic_params, &mut subst);
+                }
+            }
+        }
+
+        // Recheck after context inference.
+        let all_inferred = generic_params
+            .iter()
+            .all(|gp| subst.contains_key(&gp.name.name));
+        if !all_inferred {
+            // Last resort: if there's exactly one concrete instance, use it.
+            let prefix = format!("{}__", name.name);
+            let concrete_instances: Vec<String> = self
+                .concrete_enums
+                .keys()
+                .filter(|k| k.starts_with(&prefix))
+                .cloned()
+                .collect();
+            if concrete_instances.len() == 1 {
+                let concrete_name = &concrete_instances[0];
+                if let Some(suffix) = concrete_name.strip_prefix(&prefix) {
+                    let concrete_args: Vec<&str> = suffix.split("__").collect();
+                    for (gp, concrete_arg) in generic_params.iter().zip(concrete_args.iter()) {
+                        if !subst.contains_key(&gp.name.name) {
+                            let span = name.span;
+                            subst.insert(
+                                gp.name.name.clone(),
+                                Ty {
+                                    kind: TyKind::Named(Ident {
+                                        name: concrete_arg.to_string(),
+                                        span,
+                                    }),
+                                    span,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Final check.
         let all_inferred = generic_params
             .iter()
             .all(|gp| subst.contains_key(&gp.name.name));
@@ -1183,6 +1259,65 @@ impl Monomorphizer {
             self.concrete_enums.insert(concrete_name.clone(), concrete);
         }
         name.name = concrete_name;
+    }
+
+    // ------------------------------------------------------------------
+    // Context inference: infer type args from function signatures
+    // ------------------------------------------------------------------
+
+    fn infer_from_type_context(
+        &self,
+        ty: &Ty,
+        generic_enum_name: &str,
+        generic_params: &[GenericParam],
+        subst: &mut TypeSubstitution,
+    ) {
+        match &ty.kind {
+            TyKind::Named(ident) => {
+                if let Some(suffix) = ident.name.strip_prefix(&format!("{}__", generic_enum_name)) {
+                    let concrete_args: Vec<&str> = suffix.split("__").collect();
+                    for (gp, concrete_arg) in generic_params.iter().zip(concrete_args.iter()) {
+                        if !subst.contains_key(&gp.name.name) {
+                            let span = ty.span;
+                            subst.insert(
+                                gp.name.name.clone(),
+                                Ty {
+                                    kind: TyKind::Named(Ident {
+                                        name: concrete_arg.to_string(),
+                                        span,
+                                    }),
+                                    span,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            TyKind::NamedApp { name: ident, args } => {
+                if ident.name == generic_enum_name {
+                    let all_concrete = args.iter().all(|a| self.ty_is_concrete(a));
+                    if all_concrete {
+                        for (gp, arg) in generic_params.iter().zip(args.iter()) {
+                            if !subst.contains_key(&gp.name.name) {
+                                subst.insert(gp.name.name.clone(), arg.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            TyKind::Ref { inner, .. } => {
+                self.infer_from_type_context(inner, generic_enum_name, generic_params, subst);
+            }
+            TyKind::Array { elem, .. } => {
+                self.infer_from_type_context(elem, generic_enum_name, generic_params, subst);
+            }
+            TyKind::Tuple(elems) => {
+                for elem in elems {
+                    self.infer_from_type_context(elem, generic_enum_name, generic_params, subst);
+                }
+            }
+            _ => {}
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1623,6 +1758,7 @@ impl Monomorphizer {
                 self.resolve_names_in_expr(operand, subst);
             }
             ExprKind::Group(inner) => self.resolve_names_in_expr(inner, subst),
+            ExprKind::Try { operand } => self.resolve_names_in_expr(operand, subst),
             ExprKind::Closure { body, .. } => self.resolve_names_in_expr(body, subst),
             ExprKind::Int
             | ExprKind::Float
@@ -1776,6 +1912,7 @@ impl Monomorphizer {
                 self.resolve_all_named_app_in_expr(operand);
             }
             ExprKind::Group(inner) => self.resolve_all_named_app_in_expr(inner),
+            ExprKind::Try { operand } => self.resolve_all_named_app_in_expr(operand),
             ExprKind::Closure { body, .. } => self.resolve_all_named_app_in_expr(body),
             ExprKind::Int
             | ExprKind::Float
@@ -1962,6 +2099,7 @@ impl Monomorphizer {
                 self.substitute_expr(operand, subst);
             }
             ExprKind::Group(inner) => self.substitute_expr(inner, subst),
+            ExprKind::Try { operand } => self.substitute_expr(operand, subst),
             ExprKind::Closure { body, .. } => self.substitute_expr(body, subst),
             ExprKind::Int
             | ExprKind::Float
@@ -2165,6 +2303,7 @@ impl Monomorphizer {
                 self.reassign_expr_spans(operand);
             }
             ExprKind::Group(inner) => self.reassign_expr_spans(inner),
+            ExprKind::Try { operand } => self.reassign_expr_spans(operand),
             ExprKind::Closure { body, params, .. } => {
                 for p in params.iter_mut() {
                     p.span = self.next_span();
@@ -2178,6 +2317,44 @@ impl Monomorphizer {
             | ExprKind::Char
             | ExprKind::Bool(_)
             | ExprKind::Null => {}
+        }
+    }
+
+    fn resolve_pattern_enum_names(&mut self, pattern: &mut Pattern) {
+        match pattern {
+            Pattern::EnumVariant {
+                name,
+                variant,
+                payload,
+                ..
+            } => {
+                self.resolve_enum_variant_name(name, variant, &None);
+                if let Some(p) = payload {
+                    self.resolve_pattern_enum_names(p);
+                }
+            }
+            Pattern::Or { alternatives, .. } => {
+                for alt in alternatives.iter_mut() {
+                    self.resolve_pattern_enum_names(alt);
+                }
+            }
+            Pattern::Tuple { elements, .. } => {
+                for elem in elements.iter_mut() {
+                    self.resolve_pattern_enum_names(elem);
+                }
+            }
+            Pattern::Struct { fields, .. } => {
+                for field in fields.iter_mut() {
+                    if let Some(ref mut pat) = field.binding {
+                        self.resolve_pattern_enum_names(pat);
+                    }
+                }
+            }
+            Pattern::Range { lo, hi, .. } => {
+                self.resolve_pattern_enum_names(lo);
+                self.resolve_pattern_enum_names(hi);
+            }
+            _ => {}
         }
     }
 
@@ -2285,6 +2462,7 @@ fn collect_free_vars(
             collect_free_vars(value, bound, out);
         }
         ExprKind::Group(inner) => collect_free_vars(inner, bound, out),
+        ExprKind::Try { operand } => collect_free_vars(operand, bound, out),
         ExprKind::Block(block) => {
             let mut inner_bound = bound.clone();
             for stmt in &block.stmts {
