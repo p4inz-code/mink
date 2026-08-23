@@ -66,6 +66,8 @@ pub enum IntrinsicType {
     Char,
     /// No value (the intrinsic produces nothing).
     Unit,
+    /// A Vec<T> value: a dynamic array of word-sized elements.
+    Vec,
 }
 
 /// A declared runtime intrinsic: its reserved name and its signature.
@@ -175,26 +177,26 @@ pub const ALL: &[Intrinsic] = &[
     Intrinsic {
         name: "rt_vec_new",
         params: &[IntrinsicType::Int],
-        result: IntrinsicType::Ptr,
+        result: IntrinsicType::Vec,
     },
     Intrinsic {
         name: "rt_vec_push",
-        params: &[IntrinsicType::Ptr, IntrinsicType::Int],
-        result: IntrinsicType::Ptr,
+        params: &[IntrinsicType::Vec, IntrinsicType::Int],
+        result: IntrinsicType::Vec,
     },
     Intrinsic {
         name: "rt_vec_get",
-        params: &[IntrinsicType::Ptr, IntrinsicType::Int],
+        params: &[IntrinsicType::Vec, IntrinsicType::Int],
         result: IntrinsicType::Int,
     },
     Intrinsic {
         name: "rt_vec_len",
-        params: &[IntrinsicType::Ptr],
+        params: &[IntrinsicType::Vec],
         result: IntrinsicType::Int,
     },
     Intrinsic {
         name: "rt_vec_free",
-        params: &[IntrinsicType::Ptr],
+        params: &[IntrinsicType::Vec],
         result: IntrinsicType::Unit,
     },
 ];

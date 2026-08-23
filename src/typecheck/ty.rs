@@ -231,6 +231,12 @@ pub enum TypeKind {
         /// The number of elements.
         len: u64,
     },
+    /// A dynamic array (Vec): a heap-allocated, resizable sequence of
+    /// `elem` values (session 41-42). The element type is part of the
+    /// type identity, so `Vec<Int>` and `Vec<Bool>` are distinct types.
+    /// The runtime representation is a single word (a pointer to a
+    /// heap-allocated buffer with capacity and length headers).
+    Vec(TypeId),
     /// A tuple type (session 29): `(T1, T2, ...)` — a fixed-length,
     /// heterogeneous sequence of types. An empty tuple `()` is the unit
     /// type (equivalent to [`TypeKind::Unit`]). A single-element tuple
@@ -473,6 +479,11 @@ impl TypeTable {
                 self.unify(*ea, *eb)?;
                 Ok(a)
             }
+            // Vec types unify by element type.
+            (TypeKind::Vec(ea), TypeKind::Vec(eb)) => {
+                self.unify(*ea, *eb)?;
+                Ok(a)
+            }
             // Tuples unify element-wise: same length and same element
             // types. An empty tuple unifies only with another empty tuple
             // (or Unit, since () == Unit).
@@ -554,6 +565,9 @@ impl TypeTable {
                 .unwrap_or_else(|| format!("Enum#{}", id.raw())),
             Some(TypeKind::Array { elem, len }) => {
                 format!("Array<{}, {len}>", self.display(*elem))
+            }
+            Some(TypeKind::Vec(elem)) => {
+                format!("Vec<{}>", self.display(*elem))
             }
             Some(TypeKind::Tuple(elems)) => {
                 if elems.is_empty() {
@@ -715,6 +729,7 @@ impl TypeTable {
                     elem: remap.get(elem).copied().unwrap_or(*elem),
                     len: *len,
                 },
+                TypeKind::Vec(elem) => TypeKind::Vec(remap.get(elem).copied().unwrap_or(*elem)),
             }
         };
 

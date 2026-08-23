@@ -1,5 +1,5 @@
 //! Integration tests for the collection and iteration foundation
-//! (Session 41): array iteration, Vec<T> runtime intrinsics.
+//! (Sessions 41-42): array iteration, Vec<T> runtime intrinsics, Vec iteration.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -310,6 +310,178 @@ fn main() -> Int {
 }
 
 // ===========================================================================
+// Vec iteration: `for x in vec`
+// ===========================================================================
+
+#[test]
+fn vec_for_sum_of_elements() {
+    let src = r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(10);
+    v = rt_vec_push(v, 10);
+    v = rt_vec_push(v, 20);
+    v = rt_vec_push(v, 30);
+    let mut sum = 0;
+    for x in v {
+        sum = sum + x;
+    }
+    rt_vec_free(v);
+    return sum;
+}"#;
+    assert_eq!(native_exit_code(src), 60);
+}
+
+#[test]
+fn vec_for_product() {
+    let src = r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(5);
+    v = rt_vec_push(v, 1);
+    v = rt_vec_push(v, 2);
+    v = rt_vec_push(v, 3);
+    v = rt_vec_push(v, 4);
+    v = rt_vec_push(v, 5);
+    let mut product = 1;
+    for x in v {
+        product = product * x;
+    }
+    rt_vec_free(v);
+    return product;
+}"#;
+    assert_eq!(native_exit_code(src), 120);
+}
+
+#[test]
+fn vec_for_with_break() {
+    let src = r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(5);
+    v = rt_vec_push(v, 10);
+    v = rt_vec_push(v, 20);
+    v = rt_vec_push(v, 30);
+    v = rt_vec_push(v, 40);
+    let mut sum = 0;
+    for x in v {
+        if x == 30 {
+            break;
+        }
+        sum = sum + x;
+    }
+    rt_vec_free(v);
+    return sum;
+}"#;
+    assert_eq!(native_exit_code(src), 30);
+}
+
+#[test]
+fn vec_for_with_continue() {
+    let src = r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(5);
+    v = rt_vec_push(v, 1);
+    v = rt_vec_push(v, 2);
+    v = rt_vec_push(v, 3);
+    v = rt_vec_push(v, 4);
+    v = rt_vec_push(v, 5);
+    let mut sum = 0;
+    for x in v {
+        if x == 3 {
+            continue;
+        }
+        sum = sum + x;
+    }
+    rt_vec_free(v);
+    return sum;
+}"#;
+    assert_eq!(native_exit_code(src), 12);
+}
+
+#[test]
+fn vec_for_nested_loops() {
+    let src = r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(3);
+    v = rt_vec_push(v, 2);
+    v = rt_vec_push(v, 3);
+    v = rt_vec_push(v, 4);
+    let mut total = 0;
+    for x in v {
+        let mut j = 0;
+        while j < x {
+            total = total + 1;
+            j = j + 1;
+        }
+    }
+    rt_vec_free(v);
+    return total;
+}"#;
+    assert_eq!(native_exit_code(src), 9);
+}
+
+#[test]
+fn vec_for_with_growth() {
+    let src = r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(2);
+    v = rt_vec_push(v, 10);
+    v = rt_vec_push(v, 20);
+    v = rt_vec_push(v, 30);
+    v = rt_vec_push(v, 40);
+    let mut sum = 0;
+    for x in v {
+        sum = sum + x;
+    }
+    rt_vec_free(v);
+    return sum;
+}"#;
+    assert_eq!(native_exit_code(src), 100);
+}
+
+#[test]
+fn vec_for_type_annotation() {
+    let src = r#"
+fn sum_vec(v: Vec<Int>) -> Int {
+    let mut total = 0;
+    for x in v {
+        total = total + x;
+    }
+    rt_vec_free(v);
+    return total;
+}
+fn main() -> Int {
+    let mut v = rt_vec_new(5);
+    v = rt_vec_push(v, 10);
+    v = rt_vec_push(v, 20);
+    v = rt_vec_push(v, 30);
+    let result = sum_vec(v);
+    return result;
+}"#;
+    assert_eq!(native_exit_code(src), 60);
+}
+
+#[test]
+fn vec_for_check_passes() {
+    let src = r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(5);
+    v = rt_vec_push(v, 10);
+    v = rt_vec_push(v, 20);
+    let mut sum = 0;
+    for x in v {
+        sum = sum + x;
+    }
+    rt_vec_free(v);
+    return sum;
+}"#;
+    let report = check_source(src);
+    assert!(
+        report.errors.is_empty(),
+        "expected no errors, got {:?}",
+        report.errors
+    );
+}
+
+// ===========================================================================
 // Determinism
 // ===========================================================================
 
@@ -328,4 +500,25 @@ fn main() -> Int {
     let r2 = native_exit_code(src);
     assert_eq!(r1, 15);
     assert_eq!(r2, 15);
+}
+
+#[test]
+fn vec_iteration_deterministic() {
+    let src = r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(5);
+    v = rt_vec_push(v, 1);
+    v = rt_vec_push(v, 2);
+    v = rt_vec_push(v, 3);
+    let mut sum = 0;
+    for x in v {
+        sum = sum + x;
+    }
+    rt_vec_free(v);
+    return sum;
+}"#;
+    let r1 = native_exit_code(src);
+    let r2 = native_exit_code(src);
+    assert_eq!(r1, 6);
+    assert_eq!(r2, 6);
 }

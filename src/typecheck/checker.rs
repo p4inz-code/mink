@@ -1192,7 +1192,11 @@ impl<'a> Checker<'a> {
             }
             TyKind::NamedApp { name, args } => {
                 // A named type with generic arguments, e.g. `Pair<T, U>`.
-                // For V1, only known container types are supported.
+                // Session 42: Vec<T> is a builtin collection type.
+                if name.name == "Vec" && args.len() == 1 {
+                    let elem = self.resolve_type(&args[0]);
+                    return self.types.push(TypeKind::Vec(elem));
+                }
                 // Resolve each argument type first.
                 let _arg_tys: Vec<TypeId> = args.iter().map(|a| self.resolve_type(a)).collect();
                 // Try to resolve as a struct or enum with the given name.
@@ -1454,6 +1458,11 @@ impl<'a> Checker<'a> {
             crate::runtime::intrinsics::IntrinsicType::Float => self.types.push(TypeKind::Float),
             crate::runtime::intrinsics::IntrinsicType::Char => self.types.push(TypeKind::Char),
             crate::runtime::intrinsics::IntrinsicType::Unit => self.types.push(TypeKind::Unit),
+            // Session 42: Vec<T> — the element type is inferred from usage.
+            crate::runtime::intrinsics::IntrinsicType::Vec => {
+                let elem = self.types.push(TypeKind::Infer(None));
+                self.types.push(TypeKind::Vec(elem))
+            }
         }
     }
 
@@ -2777,6 +2786,11 @@ impl<'a> Checker<'a> {
             Some(TypeKind::Array { elem, .. }) => {
                 // Session 41: arrays are iterable — the loop variable
                 // takes the array's element type.
+                let _ = self.types.unify(var, *elem);
+            }
+            Some(TypeKind::Vec(elem)) => {
+                // Session 42: Vec<T> is iterable — the loop variable
+                // takes the Vec's element type.
                 let _ = self.types.unify(var, *elem);
             }
             Some(TypeKind::Infer(_)) => {

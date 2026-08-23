@@ -334,6 +334,8 @@ impl<'a> Lowerer<'a> {
             },
             Some(TypeKind::Struct(id)) => self.classify_struct(ty, *id),
             Some(TypeKind::Array { .. }) => self.classify_array(ty),
+            // Session 42: Vec<T> is a single-word pointer (like Ptr<Int>).
+            Some(TypeKind::Vec(_)) => Some(BType::Ptr),
             Some(TypeKind::Tuple(elems)) => self.classify_tuple(ty, elems),
             // Enums (session 17) with only unit variants are single-word
             // discriminant values. An enum with a data-carrying variant

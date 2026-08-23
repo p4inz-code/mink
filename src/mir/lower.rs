@@ -119,7 +119,11 @@ impl<'a> Lowerer<'a> {
             }
             let kind = match &item.kind {
                 HirItemKind::Fn(f) => {
-                    let builder = FnBuilder::new(&mut self.table, &self.module_symbols);
+                    let builder = FnBuilder::new(
+                        &mut self.table,
+                        &self.module_symbols,
+                        &self.hir.intrinsic_symbols,
+                    );
                     let (function, errors) = builder.lower(f);
                     self.errors.extend(errors);
                     MirItemKind::Fn(function)
@@ -1108,6 +1112,8 @@ struct LoopCtx {
 /// statements and expressions are lowered.
 struct FnBuilder<'a> {
     eval: StmtEval<'a>,
+    /// Intrinsic symbol table: SymbolId → IntrinsicId mapping.
+    intrinsic_symbols: &'a [(crate::semantics::SymbolId, crate::runtime::IntrinsicId)],
     /// The parameters as local ids (the first locals).
     params: Vec<LocalId>,
     /// Finalized blocks, ordered by id.
@@ -1125,9 +1131,14 @@ struct FnBuilder<'a> {
 }
 
 impl<'a> FnBuilder<'a> {
-    fn new(table: &'a mut TypeTable, module_symbols: &'a HashSet<SymbolId>) -> Self {
+    fn new(
+        table: &'a mut TypeTable,
+        module_symbols: &'a HashSet<SymbolId>,
+        intrinsic_symbols: &'a [(crate::semantics::SymbolId, crate::runtime::IntrinsicId)],
+    ) -> Self {
         Self {
             eval: StmtEval::new(table, module_symbols),
+            intrinsic_symbols,
             params: Vec::new(),
             blocks: Vec::new(),
             next_id: 0,
@@ -2158,13 +2169,14 @@ impl<'a> FnBuilder<'a> {
     /// exit:   ...
     /// ```
     fn lower_for(&mut self, var: &HirIdent, iterable: &HirExpr, body: &HirBlock, span: Span) {
-        let iter_kind = self.eval.table.kind(iterable.ty);
-        let array_len = match iter_kind {
+        let iter_kind = self.eval.table.kind(iterable.ty).cloned();
+        let array_len = match &iter_kind {
             Some(TypeKind::Array { len, .. }) => Some(*len),
             _ => None,
         };
-        let is_range = matches!(iter_kind, Some(TypeKind::Range(_)));
-        if !is_range && array_len.is_none() {
+        let is_vec = matches!(&iter_kind, Some(TypeKind::Vec(_)));
+        let is_range = matches!(&iter_kind, Some(TypeKind::Range(_)));
+        if !is_range && array_len.is_none() && !is_vec {
             self.eval
                 .errors
                 .push(MirError::non_range_for_iterable(iterable.span));
@@ -2173,6 +2185,13 @@ impl<'a> FnBuilder<'a> {
         // Session 41: array iteration uses an index-based loop.
         if let Some(arr_len) = array_len {
             self.lower_for_array(var, iterable, body, span, arr_len);
+            return;
+        }
+
+        // Session 42: Vec iteration uses an index-based loop with
+        // runtime intrinsics (rt_vec_len, rt_vec_get).
+        if is_vec {
+            self.lower_for_vec(var, iterable, body, span);
             return;
         }
 
@@ -2568,6 +2587,308 @@ impl<'a> FnBuilder<'a> {
         self.loops.pop();
         self.start_block(exit, span);
     }
+
+    /// Lowers `for var in vec { body }` into an index-based loop using
+    /// Vec runtime intrinsics (Session 42).
+    ///
+    /// ```text
+    /// init:   v = <vec value>
+    ///         len = rt_vec_len(v)
+    ///         idx = 0
+    ///         jump header
+    /// header: done = idx >= len
+    ///         branch done → exit, body
+    /// body:   var = rt_vec_get(v, idx)
+    ///         <body statements>
+    ///         idx = idx + 1
+    ///         jump header
+    /// exit:   ...
+    /// ```
+    fn lower_for_vec(&mut self, var: &HirIdent, iterable: &HirExpr, body: &HirBlock, span: Span) {
+        // Session 42: Vec iteration uses rt_vec_len and rt_vec_get.
+        // The Vec is a pointer; we call rt_vec_len to get the length,
+        // then loop with an index calling rt_vec_get.
+        let var_local =
+            self.eval
+                .declare_local(var.name.clone(), Some(var.symbol), var.ty, true, var.span);
+        self.eval.symbols.insert(var.symbol, var_local);
+
+        let vec_local =
+            self.eval
+                .declare_local(String::new(), None, iterable.ty, false, iterable.span);
+        let int_ty = self.eval.table.push(TypeKind::Int);
+        let len_local = self
+            .eval
+            .declare_local(String::new(), None, int_ty, false, iterable.span);
+        let idx_local = self
+            .eval
+            .declare_local(String::new(), None, int_ty, true, iterable.span);
+        let bool_ty = self.eval.bool_ty();
+        let done_local =
+            self.eval
+                .declare_local(String::new(), None, bool_ty, false, iterable.span);
+
+        // Look up the runtime intrinsics by name.
+        let rt_vec_len_id = crate::runtime::intrinsics::id_of("rt_vec_len")
+            .expect("rt_vec_len intrinsic must be registered");
+        let rt_vec_get_id = crate::runtime::intrinsics::id_of("rt_vec_get")
+            .expect("rt_vec_get intrinsic must be registered");
+        let rt_vec_len_sym = self
+            .intrinsic_symbols
+            .iter()
+            .find(|(_, id)| *id == rt_vec_len_id)
+            .map(|(sym, _)| *sym)
+            .expect("rt_vec_len symbol must be registered");
+        let rt_vec_get_sym = self
+            .intrinsic_symbols
+            .iter()
+            .find(|(_, id)| *id == rt_vec_get_id)
+            .map(|(sym, _)| *sym)
+            .expect("rt_vec_get symbol must be registered");
+
+        let init_block = self.alloc_block();
+        let header = self.alloc_block();
+        let body_block = self.alloc_block();
+        let exit = self.alloc_block();
+        self.loops.push(LoopCtx {
+            break_target: exit,
+            continue_target: header,
+            break_value_local: None,
+        });
+
+        self.ensure_current(span);
+        self.jump_to(init_block, span);
+
+        // Init: capture the vec pointer, call rt_vec_len, set idx = 0.
+        self.start_block(init_block, iterable.span);
+        let vec_value = self.eval_operand(iterable);
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(vec_local),
+                    span: iterable.span,
+                    ty: iterable.ty,
+                },
+                rvalue: use_rvalue(vec_value, iterable.span, iterable.ty),
+            },
+            span: iterable.span,
+        });
+        // len = rt_vec_len(v)
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(len_local),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Call {
+                        callee: MirOperand {
+                            kind: MirOperandKind::Static(rt_vec_len_sym),
+                            span: iterable.span,
+                            ty: int_ty, // fn type
+                        },
+                        args: vec![MirOperand {
+                            kind: MirOperandKind::Local(vec_local),
+                            span: iterable.span,
+                            ty: iterable.ty,
+                        }],
+                    },
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        // idx = 0 (using Null constant which decodes to 0).
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(idx_local),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Use(MirOperand {
+                        kind: MirOperandKind::Constant(MirConstant {
+                            kind: MirConstantKind::Null,
+                            span: iterable.span,
+                            ty: int_ty,
+                        }),
+                        span: iterable.span,
+                        ty: int_ty,
+                    }),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        self.terminate(MirTerminator::Jump {
+            target: header,
+            span,
+        });
+
+        // Header: done = idx >= len.
+        self.start_block(header, span);
+        let done_operand = MirOperand {
+            kind: MirOperandKind::Local(done_local),
+            span: iterable.span,
+            ty: bool_ty,
+        };
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(done_local),
+                    span: iterable.span,
+                    ty: bool_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Binary {
+                        op: BinaryOp::Ge,
+                        lhs: MirOperand {
+                            kind: MirOperandKind::Local(idx_local),
+                            span: iterable.span,
+                            ty: int_ty,
+                        },
+                        rhs: MirOperand {
+                            kind: MirOperandKind::Local(len_local),
+                            span: iterable.span,
+                            ty: int_ty,
+                        },
+                    },
+                    span: iterable.span,
+                    ty: bool_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        self.terminate(MirTerminator::Branch {
+            cond: done_operand,
+            then_block: exit,
+            else_block: body_block,
+            span,
+        });
+
+        // Body: var = rt_vec_get(v, idx), then body, then idx = idx + 1.
+        self.start_block(body_block, body.span);
+        let elem_local = self
+            .eval
+            .declare_local(String::new(), None, var.ty, false, var.span);
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(elem_local),
+                    span: var.span,
+                    ty: var.ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Call {
+                        callee: MirOperand {
+                            kind: MirOperandKind::Static(rt_vec_get_sym),
+                            span: iterable.span,
+                            ty: int_ty, // fn type
+                        },
+                        args: vec![
+                            MirOperand {
+                                kind: MirOperandKind::Local(vec_local),
+                                span: iterable.span,
+                                ty: iterable.ty,
+                            },
+                            MirOperand {
+                                kind: MirOperandKind::Local(idx_local),
+                                span: iterable.span,
+                                ty: int_ty,
+                            },
+                        ],
+                    },
+                    span: var.span,
+                    ty: var.ty,
+                },
+            },
+            span: var.span,
+        });
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(var_local),
+                    span: var.span,
+                    ty: var.ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Use(MirOperand {
+                        kind: MirOperandKind::Local(elem_local),
+                        span: var.span,
+                        ty: var.ty,
+                    }),
+                    span: var.span,
+                    ty: var.ty,
+                },
+            },
+            span: var.span,
+        });
+        self.lower_block(body);
+
+        // idx = idx + 1.
+        let one_operand = MirOperand {
+            kind: MirOperandKind::Constant(MirConstant {
+                kind: MirConstantKind::Enum { variant: 1 },
+                span: iterable.span,
+                ty: int_ty,
+            }),
+            span: iterable.span,
+            ty: int_ty,
+        };
+        let new_idx_local =
+            self.eval
+                .declare_local(String::new(), None, int_ty, false, iterable.span);
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(new_idx_local),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Binary {
+                        op: BinaryOp::Add,
+                        lhs: MirOperand {
+                            kind: MirOperandKind::Local(idx_local),
+                            span: iterable.span,
+                            ty: int_ty,
+                        },
+                        rhs: one_operand,
+                    },
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        self.emit_stmt(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(idx_local),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+                rvalue: MirRvalue {
+                    kind: MirRvalueKind::Use(MirOperand {
+                        kind: MirOperandKind::Local(new_idx_local),
+                        span: iterable.span,
+                        ty: int_ty,
+                    }),
+                    span: iterable.span,
+                    ty: int_ty,
+                },
+            },
+            span: iterable.span,
+        });
+        self.jump_to(header, span);
+        self.loops.pop();
+        self.start_block(exit, span);
+    }
+
     /// Lowers `loop { body }` into a single-body-block loop: the preceding
     /// block jumps into the body, the body jumps back to itself, `continue`
     /// jumps to the body start, and `break` jumps to the exit block.

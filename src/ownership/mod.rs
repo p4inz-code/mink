@@ -2289,15 +2289,45 @@ impl<'a> Analyzer<'a> {
 
     /// Evaluates an intrinsic call following its argument convention.
     fn eval_intrinsic(&mut self, intrinsic: &'static Intrinsic, args: &[Expr]) -> EvalValue {
-        let is_free = intrinsic.name == "rt_str_free";
+        let is_str_free = intrinsic.name == "rt_str_free";
         let is_set_byte = intrinsic.name == "rt_str_set_byte";
+        let is_vec_free = intrinsic.name == "rt_vec_free";
+        let is_vec_push = intrinsic.name == "rt_vec_push";
+        let is_vec_get = intrinsic.name == "rt_vec_get";
+        let is_vec_len = intrinsic.name == "rt_vec_len";
         for (index, arg) in args.iter().enumerate() {
             let is_str_arg = matches!(intrinsic.params.get(index), Some(IntrinsicType::Str));
+            let is_vec_arg = matches!(intrinsic.params.get(index), Some(IntrinsicType::Vec));
+            if is_vec_arg {
+                if is_vec_free {
+                    // Consume: the Vec is moved and freed.
+                    let value = self.eval_expr(arg, Mode::Transfer);
+                    if value.view.is_some() {
+                        self.errors.push(SemanticError::borrow_conflict_detail(
+                            arg.span,
+                            "cannot free a Vec through a reference".to_string(),
+                        ));
+                    }
+                } else if is_vec_push {
+                    // First arg (the Vec) is consumed and returned; second is read.
+                    if index == 0 {
+                        self.eval_expr(arg, Mode::Transfer);
+                    } else {
+                        self.eval_expr(arg, Mode::Observe);
+                    }
+                } else if is_vec_get || is_vec_len {
+                    // Read borrow: the Vec is borrowed, not consumed.
+                    self.eval_expr(arg, Mode::Observe);
+                } else {
+                    self.eval_expr(arg, Mode::Observe);
+                }
+                continue;
+            }
             if !is_str_arg {
                 self.eval_expr(arg, Mode::Observe);
                 continue;
             }
-            if is_free {
+            if is_str_free {
                 // Consume: the string is moved (the blob is destroyed);
                 // moving a borrowed value is a conflict (E-S12) and
                 // freeing through a reference is always a conflict.
@@ -2348,6 +2378,9 @@ impl<'a> Analyzer<'a> {
         }
         if intrinsic.result == IntrinsicType::Str {
             // Only rt_str_alloc produces a string; it is always owned.
+            EvalValue::owned()
+        } else if intrinsic.result == IntrinsicType::Vec {
+            // Vec-producing intrinsics produce owned values.
             EvalValue::owned()
         } else {
             EvalValue::copy()
