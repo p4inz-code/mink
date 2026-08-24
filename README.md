@@ -8,7 +8,7 @@
 
 ![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange)
-![Status](https://img.shields.io/badge/status-1.0.0--release--candidate-green)
+![Status](https://img.shields.io/badge/status-1.0.0--stable-brightgreen)
 ![Target](https://img.shields.io/badge/target-x86_64--windows--pe-lightgrey)
 
 Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by Northbyte Studios.
@@ -179,6 +179,18 @@ corruption, no segfault guessing games.
 
 ## Quick start
 
+### Installation
+
+Download the release ZIP for your platform, extract it, and place `mink.exe`
+on your PATH (or run it from its directory).
+
+```console
+$ mink --version
+mink 1.0.0
+```
+
+### Building from source
+
 Requirements: **Rust 1.85+** (developed against 1.97).
 
 ```console
@@ -187,33 +199,31 @@ $ cd mink
 $ cargo build --release
 ```
 
-Write a program, then validate and build it (the compiler binary lives at
-`target/release/mink` after the build above):
+### First program
+
+Write a program, then compile and run it:
 
 ```console
-$ ./target/release/mink check demo.mink   # parse, analyze, type check, lower, optimize
-$ ./target/release/mink build demo.mink   # compile the optimized MIR into demo.exe
+$ mink build demo.mink   # compile to demo.exe
 $ ./demo.exe
 ```
 
-| Task                 | Command                                          |
-| -------------------- | ------------------------------------------------ |
-| Build the compiler   | `cargo build`                                    |
-| Run the compiler     | `cargo run -- --version`                         |
-| Test                 | `cargo test`                                     |
-| Format               | `cargo fmt` / `cargo fmt --check`                |
-| Lint                 | `cargo clippy --all-targets -- -D warnings`      |
-
 ### CLI
 
-- `mink check <path>` — runs the full front end: lexical, syntactic,
-  semantic, type, HIR, and MIR analysis plus optimization. Exit 0 when the
-  program validates through MIR; exit 1 with diagnostics otherwise.
-- `mink build <path> [--target <triple>]` — compiles the optimized MIR into
-  a native executable (default `x86_64-windows-pe`).
-- `mink run`, `mink test`, `mink fmt` — recognized but not yet implemented
-  (exit 2).
-- `mink version` / `mink help` — version and usage.
+| Command | Description |
+| --- | --- |
+| `mink build <path> [--target <triple>]` | Compile a MINK source file into a native executable |
+| `mink check <path>` | Validate the front end without producing an executable |
+| `mink version` | Print the compiler version |
+| `mink help` | Show usage information |
+| `mink run`, `mink test`, `mink fmt` | Not yet implemented (exit 2) |
+
+### Deployment
+
+The generated `.exe` is a standalone Windows executable. It requires no
+external toolchain, no runtime installation, and no MINK compiler on the
+target machine. Simply copy the `.exe` to any Windows 10+ x86_64 machine
+and run it.
 
 ## Current limitations
 
@@ -317,7 +327,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1800+, all passing)
+├── tests/      Compiler tests (1928, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

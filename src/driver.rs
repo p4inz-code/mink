@@ -76,8 +76,8 @@ pub enum BuildError {
 impl fmt::Display for BuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io { path, source } => {
-                write!(f, "failed to read '{}': {source}", path.display())
+            Self::Io { path, source: _ } => {
+                write!(f, "failed to read '{}'", path.display())
             }
             Self::FrontEnd(report) => {
                 write!(f, "{} front-end error(s)", report.errors.len())
@@ -85,8 +85,8 @@ impl fmt::Display for BuildError {
             Self::Backend(errors) => {
                 write!(f, "{} backend error(s)", errors.len())
             }
-            Self::Output { path, source } => {
-                write!(f, "failed to write '{}': {source}", path.display())
+            Self::Output { path, source: _ } => {
+                write!(f, "failed to write '{}'", path.display())
             }
         }
     }
