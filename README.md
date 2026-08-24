@@ -166,7 +166,9 @@ corruption, no segfault guessing games.
   `rt_mem_store` (validated against a bounded liveness table), and the
   string intrinsics `rt_str_alloc`/`rt_str_free`/`rt_str_len`/
   `rt_str_byte`/`rt_str_set_byte`/`rt_print_str` (bounds-checked, `E-R09`),
-  plus `rt_exit` and `rt_print_int`, backed by a deterministic
+  plus `rt_str_concat`/`rt_str_eq`/`rt_str_from_int`/`rt_str_from_bool`
+  (V1 string operations),
+  `rt_exit`, `rt_print_int`, and `rt_print_char`, backed by a deterministic
   bump/free-list heap with structured `E-R01+` diagnostics.
 - **Native target** — `x86_64-windows-pe`: a self-contained code generator
   and PE container builder producing runnable Windows executables with no
@@ -239,8 +241,12 @@ Honest status, because durable engineering starts with accurate claims:
   and generics are supported for functions, structs, and enums
   (sessions 35–36) via monomorphization with optional explicit type arguments
   (`identity::<Int>(42)`).
-- **Strings are byte sequences** — literals are immutable, there is no
-  concatenation, and UTF-8 well-formedness is not validated at runtime.
+- **Strings are byte sequences** — literals are immutable, and UTF-8
+  well-formedness is not validated at runtime. V1 string operations are
+  now complete: `rt_str_concat` (concatenation), `rt_str_eq`
+  (byte-for-byte comparison), `rt_str_from_int` (decimal conversion),
+  and `rt_str_from_bool` (true/false). String interpolation, substrings,
+  and advanced string APIs remain outside V1.
 - **Borrowing is lexical, not non-lexical** — explicit references
   (`&T` / `&mut T`), borrows (`&place` / `&mut place`), and derefs (`*r`)
   are implemented (session 16) with compile-time borrow checking, but

@@ -107,6 +107,10 @@ word:    [ length (8 bytes, little-endian) ] [ data byte 0 ] [ data byte 1 ] ...
 | `rt_print_str`   | `s: Str`                 | `Unit`   | bytes + CRLF to stdout             |
 | `rt_exit`        | `code: Int`              | `Unit`   | leak check, restore stack          |
 | `rt_print_int`   | `v: Int`                 | `Unit`   | decimal digits + CRLF              |
+| `rt_str_concat`  | `a: Str, b: Str`         | `Str`    | new string = a ++ b (session 44)  |
+| `rt_str_eq`      | `a: Str, b: Str`         | `Bool`   | byte-for-byte comparison           |
+| `rt_str_from_int`| `v: Int`                 | `Str`    | decimal representation             |
+| `rt_str_from_bool`| `v: Bool`               | `Str`    | `"true"` or `"false"`              |
 
 `rt_str_len`, `rt_str_byte`, and `rt_str_set_byte` validate the string
 pointer first: heap blobs must be the exact start of a live block

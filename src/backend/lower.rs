@@ -1855,6 +1855,10 @@ impl<'a> Lowerer<'a> {
             "rt_vec_get" => RuntimeService::VecGet,
             "rt_vec_len" => RuntimeService::VecLen,
             "rt_vec_free" => RuntimeService::VecFree,
+            "rt_str_concat" => RuntimeService::StrConcat,
+            "rt_str_eq" => RuntimeService::StrEq,
+            "rt_str_from_int" => RuntimeService::StrFromInt,
+            "rt_str_from_bool" => RuntimeService::StrFromBool,
             _ => return None,
         };
         debug_assert!(service.is_callable());

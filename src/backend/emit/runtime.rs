@@ -149,6 +149,16 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::VecGet, |code, _| emit_vec_get(code));
     emit(code, RuntimeService::VecLen, |code, _| emit_vec_len(code));
     emit(code, RuntimeService::VecFree, |code, _| emit_vec_free(code));
+    emit(code, RuntimeService::StrConcat, |code, _| {
+        emit_str_concat(code)
+    });
+    emit(code, RuntimeService::StrEq, |code, _| emit_str_eq(code));
+    emit(code, RuntimeService::StrFromInt, |code, _| {
+        emit_str_from_int(code)
+    });
+    emit(code, RuntimeService::StrFromBool, |code, _| {
+        emit_str_from_bool(code)
+    });
     offsets
 }
 
@@ -1654,6 +1664,336 @@ fn emit_vec_free(code: &mut Code) {
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(8);
+    code.leave_ret();
+}
+
+// ---------------------------------------------------------------------------
+// String operations (Session 44)
+// ---------------------------------------------------------------------------
+
+/// `rt_str_concat(a, b) -> Str`
+/// (a at [rbp + 16], b at [rbp + 24]): allocate a new string containing
+/// the bytes of `a` followed by the bytes of `b`.
+///
+/// Stack layout:
+/// - `[rbp-8]`  = saved a pointer
+/// - `[rbp-16]` = saved b pointer
+/// - `[rbp-24]` = len_a
+/// - `[rbp-32]` = len_b
+/// - `[rbp-40]` = new string data pointer
+fn emit_str_concat(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(40);
+
+    // Validate and save a.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidate));
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save a
+    code.mov_r_mem(Reg::R8, Reg::Rax, 0); // len_a
+    code.mov_mem_r(Reg::Rbp, -24, Reg::R8); // save len_a
+
+    // Validate and save b.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidate));
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // save b
+    code.mov_r_mem(Reg::R9, Reg::Rax, 0); // len_b
+    code.mov_mem_r(Reg::Rbp, -32, Reg::R9); // save len_b
+
+    // total = len_a + len_b (check overflow).
+    code.movabs(Reg::R10, i64::MAX as u64);
+    code.cmp_rr(Reg::R8, Reg::R10);
+    let overflow = code.label();
+    code.jcc_label(0x87, overflow); // ja (unsigned >)
+    code.sub_rr(Reg::R10, Reg::R8); // R10 = MAX - len_a
+    code.cmp_rr(Reg::R9, Reg::R10);
+    code.jcc_label(0x87, overflow); // ja
+    code.add_rr(Reg::R8, Reg::R9); // R8 = total
+
+    // Allocate 8 + total bytes.
+    code.mov_rr(Reg::Rax, Reg::R8);
+    code.add_r_imm8(Reg::Rax, 8);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // save new data ptr
+
+    // Write length prefix: [rax] = total.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -24);
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -32);
+    code.add_rr(Reg::R8, Reg::R9);
+    code.mov_mem_r(Reg::Rax, 0, Reg::R8);
+
+    // Copy a bytes: dst = new+8, src = a+8, count = len_a.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // len_a
+    code.test_rr(Reg::R8, Reg::R8);
+    let copy_b_setup = code.label();
+    code.jcc_label(0x84, copy_b_setup); // je (len_a == 0)
+    code.mov_r32_imm32(Reg::R9, 0); // i = 0
+    let copy_a = code.label();
+    code.bind_label(copy_a);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8); // a ptr
+    code.add_r_imm8(Reg::R10, 8); // a+8 (data start)
+    code.add_rr(Reg::R10, Reg::R9); // a+8+i
+    code.movzx_byte(Reg::R10, Reg::R10, 0); // byte from a
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -40); // new ptr
+    code.add_r_imm8(Reg::R11, 8); // new+8
+    code.add_rr(Reg::R11, Reg::R9); // new+8+i
+    code.mov_mem_r8(Reg::R11, 0, Reg::R10); // store byte
+    code.add_r_imm8(Reg::R9, 1); // i++
+    code.cmp_rr(Reg::R9, Reg::R8); // i < len_a?
+    code.jcc_label(0x8C, copy_a); // jl
+
+    // Copy b bytes: dst = new+8+len_a, src = b+8, count = len_b.
+    code.bind_label(copy_b_setup);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // len_b
+    code.test_rr(Reg::R8, Reg::R8);
+    let done = code.label();
+    code.jcc_label(0x84, done); // je (len_b == 0)
+    code.mov_r32_imm32(Reg::R9, 0); // i = 0
+    let copy_b = code.label();
+    code.bind_label(copy_b);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -16); // b ptr
+    code.add_r_imm8(Reg::R10, 8); // b+8
+    code.add_rr(Reg::R10, Reg::R9); // b+8+i
+    code.movzx_byte(Reg::R10, Reg::R10, 0); // byte from b
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -40); // new ptr
+    code.add_r_imm8(Reg::R11, 8); // new+8
+    code.mov_r_mem(Reg::R12, Reg::Rbp, -24); // len_a
+    code.add_rr(Reg::R11, Reg::R12); // new+8+len_a
+    code.add_rr(Reg::R11, Reg::R9); // new+8+len_a+i
+    code.mov_mem_r8(Reg::R11, 0, Reg::R10); // store byte
+    code.add_r_imm8(Reg::R9, 1); // i++
+    code.cmp_rr(Reg::R9, Reg::R8); // i < len_b?
+    code.jcc_label(0x8C, copy_b); // jl
+
+    code.bind_label(done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40); // return new data ptr
+    code.leave_ret();
+
+    code.bind_label(overflow);
+    fail(code, 2); // E-R02 (out of memory / overflow)
+}
+
+/// `rt_str_eq(a, b) -> Bool`
+/// (a at [rbp + 16], b at [rbp + 24]): byte-for-byte comparison.
+///
+/// Returns 1 (true) when both strings have equal length and content,
+/// 0 (false) otherwise.
+fn emit_str_eq(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+
+    // Validate a.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidate));
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save a data ptr
+    code.mov_r_mem(Reg::R8, Reg::Rax, 0); // len_a
+
+    // Validate b.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidate));
+    // rax = b data ptr
+    code.mov_r_mem(Reg::R9, Reg::Rax, 0); // len_b
+
+    // Compare lengths.
+    code.cmp_rr(Reg::R8, Reg::R9);
+    let not_equal = code.label();
+    code.jcc_label(0x85, not_equal); // jne
+
+    // len_a == 0 means both are empty -> equal.
+    code.test_rr(Reg::R8, Reg::R8);
+    let equal = code.label();
+    code.jcc_label(0x84, equal); // je
+
+    // Byte-by-byte comparison.
+    // rcx = a+8 (data start of a)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rcx, 8);
+    // rdx = b+8 (data start of b)
+    code.lea_r_mem(Reg::Rdx, Reg::Rax, 8);
+    // r8 = len_a (loop counter, decrementing)
+    let cmp_loop = code.label();
+    code.bind_label(cmp_loop);
+    code.movzx_byte(Reg::R10, Reg::Rcx, 0);
+    code.movzx_byte(Reg::R11, Reg::Rdx, 0);
+    code.cmp_rr(Reg::R10, Reg::R11);
+    code.jcc_label(0x85, not_equal); // jne
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.dec_r(Reg::R8);
+    code.jcc_label(0x85, cmp_loop); // jnz
+
+    code.bind_label(equal);
+    code.add_rsp(8);
+    code.mov_r32_imm32(Reg::Rax, 1); // true
+    code.leave_ret();
+
+    code.bind_label(not_equal);
+    code.add_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax); // false
+    code.leave_ret();
+}
+
+/// `rt_str_from_int(value) -> Str`
+/// (value at [rbp + 16]): decimal representation of the signed integer.
+///
+/// Stack layout:
+/// - `[rbp-8]`  = saved length (across Alloc call)
+/// - `[rbp-16]` = saved data start pointer from print_buf
+///
+/// Strategy: use the 32-byte print_buf as scratch to build digits
+/// backwards (same approach as `emit_print_int`), then allocate a string
+/// of the correct size and copy. The minus sign is written AFTER all
+/// digits so it appears first when reading left-to-right.
+fn emit_str_from_int(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+
+    // rax = value.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+
+    // Cursor starts at print_buf + 31.
+    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.add_r_imm8(Reg::R8, 31);
+
+    // Handle zero: write '0', decrement cursor, done.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let non_zero = code.label();
+    code.jcc_label(0x85, non_zero); // jnz
+    code.mov_mem_imm8(Reg::R8, 0, b'0');
+    code.dec_r(Reg::R8); // cursor now before '0'
+    let build_done = code.label();
+    code.jmp_label(build_done);
+
+    code.bind_label(non_zero);
+    // If negative, negate for digit extraction.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let digit_loop = code.label();
+    code.jcc_label(0x89, digit_loop); // jns (not negative)
+    code.neg_r(Reg::Rax);
+
+    // Digit extraction loop: RAX = |value|, R8 = cursor (writing backwards).
+    code.bind_label(digit_loop);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.mov_r32_imm32(Reg::Rcx, 10);
+    code.div_r(Reg::Rcx); // RDX:RAX / 10 -> RAX=quot, RDX=rem
+    code.add_r_imm8(Reg::Rdx, b'0');
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rdx);
+    code.dec_r(Reg::R8);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, digit_loop); // jnz
+
+    // After the digit loop, write '-' for negative values.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // reload original value
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let after_sign = code.label();
+    code.jcc_label(0x89, after_sign); // jns
+    code.mov_mem_imm8(Reg::R8, 0, b'-');
+    code.dec_r(Reg::R8);
+    code.bind_label(after_sign);
+
+    code.bind_label(build_done);
+    // R8 points to one byte before the first character.
+    // Data start = R8 + 1. Length = (print_buf + 31) - R8.
+    code.lea_r_mem(Reg::R9, Reg::R8, 1); // data start
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.print_buf as u32));
+    code.add_r_imm8(Reg::R10, 31);
+    code.sub_rr(Reg::R10, Reg::R8); // R10 = length (use R8, not R9)
+
+    // Save length and data start before alloc (caller-saved).
+    code.mov_mem_r(Reg::Rbp, -8, Reg::R10); // save length
+    code.mov_mem_r(Reg::Rbp, -16, Reg::R9); // save data start
+
+    // Allocate 8 + length bytes.
+    code.mov_rr(Reg::Rax, Reg::R10);
+    code.add_r_imm8(Reg::Rax, 8);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    // RAX = new string data pointer.
+
+    // Reload length and data start.
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8); // length
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -16); // data start
+
+    // Write length prefix: [rax] = length.
+    code.mov_mem_r(Reg::Rax, 0, Reg::R10);
+
+    // Save block start (rax) for the return value.
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // overwrite data start slot
+
+    // Copy digits: dst = new+8, src = R9, count = R10.
+    code.add_r_imm8(Reg::Rax, 8); // data start of new string
+    code.mov_r32_imm32(Reg::R11, 0); // i = 0
+    let copy_loop = code.label();
+    code.bind_label(copy_loop);
+    code.cmp_rr(Reg::R11, Reg::R10);
+    let copy_done = code.label();
+    code.jcc_label(0x8D, copy_done); // jge
+    code.movzx_byte(Reg::R12, Reg::R9, 0); // src[i]
+    code.mov_mem_r8(Reg::Rax, 0, Reg::R12); // dst[i]
+    code.add_r_imm8(Reg::R9, 1);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.add_r_imm8(Reg::R11, 1);
+    code.jmp_label(copy_loop);
+
+    code.bind_label(copy_done);
+    // Return saved block start pointer.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_str_from_bool(value) -> Str`
+/// (value at [rbp + 16]): produce `"true"` or `"false"`.
+///
+/// Strategy: allocate a 4-byte or 5-byte string via `rt_str_alloc`, then
+/// write each byte directly to the data region (offset +8 from the block
+/// start). This avoids repeated calls to `rt_str_set_byte` and keeps the
+/// stack management simple.
+fn emit_str_from_bool(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8); // [rbp-8] = saved string ptr
+
+    // rax = value.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let emit_false = code.label();
+    code.jcc_label(0x84, emit_false); // je (false)
+
+    // true: allocate 4 bytes.
+    code.sub_rsp(8);
+    code.mov_r32_imm32(Reg::Rax, 4);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    // rax = new string ptr. Write 't','r','u','e' at data offsets 8-11.
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save
+    code.mov_mem_imm8(Reg::Rax, 8, b't');
+    code.mov_mem_imm8(Reg::Rax, 9, b'r');
+    code.mov_mem_imm8(Reg::Rax, 10, b'u');
+    code.mov_mem_imm8(Reg::Rax, 11, b'e');
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // return ptr
+    code.add_rsp(8);
+    code.leave_ret();
+
+    code.bind_label(emit_false);
+    // false: allocate 5 bytes.
+    code.sub_rsp(8);
+    code.mov_r32_imm32(Reg::Rax, 5);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    // rax = new string ptr. Write 'f','a','l','s','e' at offsets 8-12.
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save
+    code.mov_mem_imm8(Reg::Rax, 8, b'f');
+    code.mov_mem_imm8(Reg::Rax, 9, b'a');
+    code.mov_mem_imm8(Reg::Rax, 10, b'l');
+    code.mov_mem_imm8(Reg::Rax, 11, b's');
+    code.mov_mem_imm8(Reg::Rax, 12, b'e');
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // return ptr
     code.add_rsp(8);
     code.leave_ret();
 }

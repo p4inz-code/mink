@@ -143,6 +143,10 @@ The following rules are authoritative for this session.
 | `rt_str_byte` | read borrow | `Int` |
 | `rt_str_set_byte` | **mutate borrow** (requires Owned) | `Unit` |
 | `rt_print_str` | read borrow | `Unit` |
+| `rt_str_concat` | read borrow (both) | `Str` **Owned** |
+| `rt_str_eq` | read borrow (both) | `Bool` |
+| `rt_str_from_int` | — | `Str` **Owned** |
+| `rt_str_from_bool` | — | `Str` **Owned** |
 
 ## 4. Conservative decisions and known limitations
 

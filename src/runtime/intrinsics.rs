@@ -39,7 +39,15 @@
 //!   17-significant-digit expansion, fixed or scientific, with
 //!   `Inf`/`NaN`/`-0` forms);
 //! - `rt_print_char(value: Char)` — write the single byte of `value` plus
-//!   a newline to stdout.
+//!   a newline to stdout;
+//! - `rt_str_concat(a: Str, b: Str) -> Str` — allocate a new string
+//!   containing the bytes of `a` followed by the bytes of `b`;
+//! - `rt_str_eq(a: Str, b: Str) -> Bool` — byte-for-byte comparison,
+//!   returning true when both strings have equal length and content;
+//! - `rt_str_from_int(value: Int) -> Str` — allocate a string holding
+//!   the decimal representation of `value`;
+//! - `rt_str_from_bool(value: Bool) -> Str` — allocate a string holding
+//!   `"true"` or `"false"`.
 //!
 //! Addresses are typed pointers (`Ptr<Int>`), distinct from strings
 //! (`Str`). Dereferencing goes through the validated `rt_mem_load` /
@@ -64,6 +72,8 @@ pub enum IntrinsicType {
     /// A byte-sized character (a Unicode scalar value that fits in one
     /// byte; the runtime's char model is byte-sized).
     Char,
+    /// A boolean value (0 = false, 1 = true).
+    Bool,
     /// No value (the intrinsic produces nothing).
     Unit,
     /// A Vec<T> value: a dynamic array of word-sized elements.
@@ -198,6 +208,27 @@ pub const ALL: &[Intrinsic] = &[
         name: "rt_vec_free",
         params: &[IntrinsicType::Vec],
         result: IntrinsicType::Unit,
+    },
+    // --- String operations (Session 44) ---
+    Intrinsic {
+        name: "rt_str_concat",
+        params: &[IntrinsicType::Str, IntrinsicType::Str],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_str_eq",
+        params: &[IntrinsicType::Str, IntrinsicType::Str],
+        result: IntrinsicType::Bool,
+    },
+    Intrinsic {
+        name: "rt_str_from_int",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_str_from_bool",
+        params: &[IntrinsicType::Bool],
+        result: IntrinsicType::Str,
     },
 ];
 

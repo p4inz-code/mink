@@ -1457,6 +1457,7 @@ impl<'a> Checker<'a> {
             crate::runtime::intrinsics::IntrinsicType::Str => self.types.push(TypeKind::Str),
             crate::runtime::intrinsics::IntrinsicType::Float => self.types.push(TypeKind::Float),
             crate::runtime::intrinsics::IntrinsicType::Char => self.types.push(TypeKind::Char),
+            crate::runtime::intrinsics::IntrinsicType::Bool => self.types.push(TypeKind::Bool),
             crate::runtime::intrinsics::IntrinsicType::Unit => self.types.push(TypeKind::Unit),
             // Session 42: Vec<T> — the element type is inferred from usage.
             crate::runtime::intrinsics::IntrinsicType::Vec => {

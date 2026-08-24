@@ -2377,7 +2377,8 @@ impl<'a> Analyzer<'a> {
             }
         }
         if intrinsic.result == IntrinsicType::Str {
-            // Only rt_str_alloc produces a string; it is always owned.
+            // String-producing intrinsics (rt_str_alloc, rt_str_concat,
+            // rt_str_from_int, rt_str_from_bool) always produce owned strings.
             EvalValue::owned()
         } else if intrinsic.result == IntrinsicType::Vec {
             // Vec-producing intrinsics produce owned values.

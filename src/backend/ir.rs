@@ -747,6 +747,16 @@ pub enum RuntimeService {
     VecLen,
     /// `rt_vec_free(data)`: deallocate Vec buffer.
     VecFree,
+    // --- String operations (Session 44) ---
+    /// `rt_str_concat(a, b) -> Str`: allocate a new string containing
+    /// the bytes of `a` followed by the bytes of `b`.
+    StrConcat,
+    /// `rt_str_eq(a, b) -> Bool`: byte-for-byte comparison.
+    StrEq,
+    /// `rt_str_from_int(value) -> Str`: decimal representation.
+    StrFromInt,
+    /// `rt_str_from_bool(value) -> Str`: `"true"` or `"false"`.
+    StrFromBool,
 }
 
 impl RuntimeService {
@@ -775,6 +785,8 @@ impl RuntimeService {
             Self::StrSetByte => 3,
             Self::VecPush | Self::VecGet => 2,
             Self::VecNew | Self::VecLen | Self::VecFree => 1,
+            Self::StrConcat | Self::StrEq => 2,
+            Self::StrFromInt | Self::StrFromBool => 1,
         }
     }
 
@@ -802,6 +814,10 @@ impl RuntimeService {
                 | Self::VecGet
                 | Self::VecLen
                 | Self::VecFree
+                | Self::StrConcat
+                | Self::StrEq
+                | Self::StrFromInt
+                | Self::StrFromBool
         )
     }
 }
