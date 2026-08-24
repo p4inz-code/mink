@@ -1553,6 +1553,35 @@ impl<'a> Lowerer<'a> {
                 );
                 return Ok(());
             }
+            // String equality/inequality (V1): lowered to `rt_str_eq`
+            // content comparison instead of word/pointer comparison.
+            MirRvalueKind::Binary {
+                op: op @ (crate::ast::BinaryOp::Eq | crate::ast::BinaryOp::Ne),
+                lhs,
+                rhs,
+            } if self.classify(lhs.ty) == Some(BType::Str) => {
+                let lhs_val = self.eval_operand(lhs)?;
+                let rhs_val = self.eval_operand(rhs)?;
+                self.push(
+                    BInstKind::RuntimeCall {
+                        target,
+                        service: RuntimeService::StrEq,
+                        args: vec![lhs_val, rhs_val],
+                    },
+                    rvalue.span,
+                );
+                if *op == crate::ast::BinaryOp::Ne {
+                    self.push(
+                        BInstKind::Unary {
+                            target,
+                            op: crate::ast::UnaryOp::Not,
+                            src: BOperand::Local(target),
+                        },
+                        rvalue.span,
+                    );
+                }
+                return Ok(());
+            }
             _ => {}
         }
         let kind = match &rvalue.kind {
@@ -1724,8 +1753,8 @@ impl<'a> Lowerer<'a> {
                     payload_size: size,
                 }
             }
-            // Handled above (multi-instruction literal materialization and
-            // tagged-union construction).
+            // Handled above (multi-instruction literal materialization,
+            // tagged-union construction, and string equality/inequality).
             MirRvalueKind::StructLit { .. }
             | MirRvalueKind::ArrayLit { .. }
             | MirRvalueKind::TupleLit { .. }

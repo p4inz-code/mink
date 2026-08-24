@@ -2372,10 +2372,11 @@ impl<'a> FnBuilder<'a> {
         let init_block = self.alloc_block();
         let header = self.alloc_block();
         let body_block = self.alloc_block();
+        let inc_block = self.alloc_block();
         let exit = self.alloc_block();
         self.loops.push(LoopCtx {
             break_target: exit,
-            continue_target: header,
+            continue_target: inc_block,
             break_value_local: None,
         });
 
@@ -2526,8 +2527,10 @@ impl<'a> FnBuilder<'a> {
             span: var.span,
         });
         self.lower_block(body);
+        self.jump_to(inc_block, span);
 
-        // idx = idx + 1.
+        // Inc block: idx = idx + 1 (target of `continue`).
+        self.start_block(inc_block, iterable.span);
         let one_operand = MirOperand {
             kind: MirOperandKind::Constant(MirConstant {
                 kind: MirConstantKind::Enum { variant: 1 },
@@ -2649,10 +2652,11 @@ impl<'a> FnBuilder<'a> {
         let init_block = self.alloc_block();
         let header = self.alloc_block();
         let body_block = self.alloc_block();
+        let inc_block = self.alloc_block();
         let exit = self.alloc_block();
         self.loops.push(LoopCtx {
             break_target: exit,
-            continue_target: header,
+            continue_target: inc_block,
             break_value_local: None,
         });
 
@@ -2828,8 +2832,10 @@ impl<'a> FnBuilder<'a> {
             span: var.span,
         });
         self.lower_block(body);
+        self.jump_to(inc_block, span);
 
-        // idx = idx + 1.
+        // Inc block: idx = idx + 1 (target of `continue`).
+        self.start_block(inc_block, iterable.span);
         let one_operand = MirOperand {
             kind: MirOperandKind::Constant(MirConstant {
                 kind: MirConstantKind::Enum { variant: 1 },

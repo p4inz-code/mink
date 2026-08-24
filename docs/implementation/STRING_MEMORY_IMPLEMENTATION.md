@@ -207,10 +207,33 @@ Full suite after session 16: **878 tests**, all passing (see
 after session 18 (pattern matching, which adds no runtime support) it is
 **963 tests**.
 
-## 10. Known limitations
+## 10. String equality via `==` and `!=` (Session 45)
 
-- Strings are immutable values today (no built-in concatenation); the only
-  way to build a string is `rt_str_alloc` + `rt_str_set_byte`.
+The `==` and `!=` operators on `Str` values perform **byte-for-byte content
+comparison** (delegated to `rt_str_eq`), not pointer/word comparison. This is
+consistent with how `==` works for all other scalar types (`Int`, `Bool`,
+`Char`, `Null`): the operator compares values, not representations.
+
+The backend lowering detects `Eq`/`Ne` on `BType::Str` operands and emits a
+`RuntimeCall` to `StrEq` instead of a word-level `cmp`/`setcc`. For `Ne`,
+the `StrEq` result is negated with a `Not` unary operation.
+
+This means:
+- Two heap-allocated strings with identical content compare **equal**.
+- A string literal and a heap-allocated string with the same content
+  compare **equal**.
+- Two different heap-allocated strings compare **not-equal**.
+
+`rt_str_eq` remains available as an explicit intrinsic for non-operator
+call-site comparisons.
+
+## 12. Known limitations
+
+- V1 string operations include concatenation (`rt_str_concat`),
+  byte-for-byte equality (`rt_str_eq` and `==`/`!=` operators),
+  decimal conversion (`rt_str_from_int`), and boolean conversion
+  (`rt_str_from_bool`). Substring, slicing, and advanced string
+  APIs remain outside V1.
 - Only `Ptr<Int>` is instantiated; `TypeKind::Ptr<T>` exists for future
   sessions but no other element type can be produced by any intrinsic yet.
 - UTF-8 well-formedness is not validated at runtime; strings are bytes.

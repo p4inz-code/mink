@@ -245,7 +245,10 @@ Honest status, because durable engineering starts with accurate claims:
   well-formedness is not validated at runtime. V1 string operations are
   now complete: `rt_str_concat` (concatenation), `rt_str_eq`
   (byte-for-byte comparison), `rt_str_from_int` (decimal conversion),
-  and `rt_str_from_bool` (true/false). String interpolation, substrings,
+  and `rt_str_from_bool` (true/false). The `==` and `!=` operators on
+  `Str` perform byte-for-byte content comparison (via `rt_str_eq`), not
+  pointer comparison — two heap-allocated strings with identical content
+  compare equal. String interpolation, substrings,
   and advanced string APIs remain outside V1.
 - **Borrowing is lexical, not non-lexical** — explicit references
   (`&T` / `&mut T`), borrows (`&place` / `&mut place`), and derefs (`*r`)
@@ -314,7 +317,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1624, all passing)
+├── tests/      Compiler tests (1861, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```

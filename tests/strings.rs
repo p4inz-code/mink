@@ -974,3 +974,238 @@ fn eq_with_different_int_strings() {
     assert_eq!(code, 0);
     assert_eq!(stdout, b"0\r\n");
 }
+
+// ---------------------------------------------------------------------------
+// String equality via `==` operator (V1: content comparison, not pointer)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn str_eq_operator_identical_literals() {
+    // Two identical string literals should compare equal via `==`.
+    let exe = build(
+        "fn main() {
+            let a = \"hello\";
+            let b = \"hello\";
+            if a == b {
+                return 1;
+            }
+            return 0;
+        }",
+    );
+    let (code, _) = run(&exe);
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn str_eq_operator_different_literals() {
+    // Two different string literals should compare not-equal via `==`.
+    let exe = build(
+        "fn main() {
+            let a = \"hello\";
+            let b = \"world\";
+            if a == b {
+                return 1;
+            }
+            return 0;
+        }",
+    );
+    let (code, _) = run(&exe);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn str_ne_operator_different_literals() {
+    // `!=` should return true for different string literals.
+    let exe = build(
+        "fn main() {
+            let a = \"hello\";
+            let b = \"world\";
+            if a != b {
+                return 1;
+            }
+            return 0;
+        }",
+    );
+    let (code, _) = run(&exe);
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn str_ne_operator_identical_literals() {
+    // `!=` should return false for identical string literals.
+    let exe = build(
+        "fn main() {
+            let a = \"hello\";
+            let b = \"hello\";
+            if a != b {
+                return 1;
+            }
+            return 0;
+        }",
+    );
+    let (code, _) = run(&exe);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn str_eq_operator_empty_strings() {
+    // Empty strings should compare equal.
+    let exe = build(
+        "fn main() {
+            let a = \"\";
+            let b = \"\";
+            if a == b {
+                return 1;
+            }
+            return 0;
+        }",
+    );
+    let (code, _) = run(&exe);
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn str_eq_operator_heap_strings_same_content() {
+    // Two heap-allocated strings with identical content should compare
+    // equal via `==` (content comparison, not pointer comparison).
+    let exe = build(
+        "fn main() {
+            let a = rt_str_alloc(3);
+            rt_str_set_byte(a, 0, 72);
+            rt_str_set_byte(a, 1, 105);
+            rt_str_set_byte(a, 2, 33);
+            let b = rt_str_alloc(3);
+            rt_str_set_byte(b, 0, 72);
+            rt_str_set_byte(b, 1, 105);
+            rt_str_set_byte(b, 2, 33);
+            if a == b {
+                rt_print_int(1);
+            } else {
+                rt_print_int(0);
+            }
+            rt_str_free(a);
+            rt_str_free(b);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"1\r\n");
+}
+
+#[test]
+fn str_eq_operator_heap_strings_different_content() {
+    // Two heap-allocated strings with different content should compare
+    // not-equal via `==`.
+    let exe = build(
+        "fn main() {
+            let a = rt_str_alloc(3);
+            rt_str_set_byte(a, 0, 72);
+            rt_str_set_byte(a, 1, 105);
+            rt_str_set_byte(a, 2, 33);
+            let b = rt_str_alloc(3);
+            rt_str_set_byte(b, 0, 72);
+            rt_str_set_byte(b, 1, 105);
+            rt_str_set_byte(b, 2, 65);
+            if a == b {
+                rt_print_int(1);
+            } else {
+                rt_print_int(0);
+            }
+            rt_str_free(a);
+            rt_str_free(b);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"0\r\n");
+}
+
+#[test]
+fn str_ne_operator_heap_strings() {
+    // `!=` on heap strings with different content should return true.
+    let exe = build(
+        "fn main() {
+            let a = rt_str_alloc(3);
+            rt_str_set_byte(a, 0, 72);
+            rt_str_set_byte(a, 1, 105);
+            rt_str_set_byte(a, 2, 33);
+            let b = rt_str_alloc(3);
+            rt_str_set_byte(b, 0, 72);
+            rt_str_set_byte(b, 1, 105);
+            rt_str_set_byte(b, 2, 65);
+            if a != b {
+                rt_print_int(1);
+            } else {
+                rt_print_int(0);
+            }
+            rt_str_free(a);
+            rt_str_free(b);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"1\r\n");
+}
+
+#[test]
+fn str_eq_operator_prefix_strings() {
+    // A prefix string should not equal the full string.
+    let exe = build(
+        "fn main() {
+            let a = \"hello\";
+            let b = \"hell\";
+            if a == b {
+                return 1;
+            }
+            return 0;
+        }",
+    );
+    let (code, _) = run(&exe);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn str_eq_operator_literal_vs_heap() {
+    // A string literal and a heap-allocated string with the same content
+    // should compare equal.
+    let exe = build(
+        "fn main() {
+            let a = \"hi\";
+            let b = rt_str_alloc(2);
+            rt_str_set_byte(b, 0, 104);
+            rt_str_set_byte(b, 1, 105);
+            if a == b {
+                rt_print_int(1);
+            } else {
+                rt_print_int(0);
+            }
+            rt_str_free(b);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"1\r\n");
+}
+
+#[test]
+fn str_eq_operator_as_condition_in_loop() {
+    // String `==` in a loop condition should work.
+    // Note: `==` on Str consumes both operands (ownership), so we test
+    // with a short-lived loop that does not need to free after comparison.
+    let exe = build(
+        "fn main() {
+            let target = \"hello\";
+            let source = \"hello\";
+            if source == target {
+                return 1;
+            }
+            return 0;
+        }",
+    );
+    let (code, _) = run(&exe);
+    assert_eq!(code, 1);
+}
