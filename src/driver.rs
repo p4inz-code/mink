@@ -202,7 +202,7 @@ pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildE
             path: path.to_path_buf(),
             source: std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("failed to read '{}'", path.display()),
+                format!("file '{}' not found", path.display()),
             ),
         },
         // Child-module errors: report as FrontEnd.

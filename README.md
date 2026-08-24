@@ -8,7 +8,7 @@
 
 ![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange)
-![Status](https://img.shields.io/badge/status-implementation-yellow)
+![Status](https://img.shields.io/badge/status-1.0.0--release--candidate-green)
 ![Target](https://img.shields.io/badge/target-x86_64--windows--pe-lightgrey)
 
 Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by Northbyte Studios.
@@ -317,24 +317,14 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1861, all passing)
+├── tests/      Compiler tests (1800+, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```
 
 ## Contributing
 
-MINK is early and moving fast. Good first contributions:
-
-- **Tests** — more coverage of the parser, type checker, backend, and
-  runtime invariants.
-- **Documentation** — the planning docs under `docs/` are the long-term
-  spec; the implementation records under `docs/implementation/` describe
-  what is actually built. Keep the two honest.
-- **The next milestone** — see
-  [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md).
-
-The project enforces quality gates on every change:
+MINK enforces quality gates on every change:
 
 ```console
 cargo fmt --check
@@ -342,6 +332,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build
 ```
+
+See [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md)
+for the long-term plan.
 
 ## License
 

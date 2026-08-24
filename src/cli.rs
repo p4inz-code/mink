@@ -12,11 +12,11 @@ use crate::driver::{self, BuildError, CheckError, CheckReport};
 use crate::semantics::SemanticErrorKind;
 use crate::source::{SourceFile, SourceMap, Span};
 
-/// Version string from the package manifest (e.g. `0.1.0`).
+/// Version string from the package manifest (e.g. `1.0.0`).
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const USAGE: &str = "\
-MINK compiler — implementation foundation
+MINK compiler — a general-purpose systems programming language
 
 Usage:
   mink <command> [arguments]

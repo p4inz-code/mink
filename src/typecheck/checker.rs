@@ -3179,7 +3179,7 @@ impl<'a> Checker<'a> {
                             self.push_error(TypeError::mismatch(
                                 expr.span,
                                 "an enum with a payload variant (Some/Ok)",
-                                &format!("enum `{}` with only unit variants", info.name),
+                                format!("enum `{}` with only unit variants", info.name),
                                 None,
                             ));
                             self.types.push(TypeKind::Error)
@@ -3191,7 +3191,7 @@ impl<'a> Checker<'a> {
                         self.push_error(TypeError::mismatch(
                             expr.span,
                             "Option or Result",
-                            &self.display(canon),
+                            self.display(canon),
                             None,
                         ));
                         self.types.push(TypeKind::Error)
