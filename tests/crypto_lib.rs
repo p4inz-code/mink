@@ -160,7 +160,7 @@ fn h02_hmac_sha256_empty_key_empty_msg() {
 fn h03_hmac_sha256_hex_key() {
     let lib = lib_source();
     let code = format!(
-        "{lib}\nfn main() {{\n    crypto_init();\n    let key_bytes = rt_str_alloc(4);\n    rt_str_set_byte(key_bytes, 0, 0xDE);\n    rt_str_set_byte(key_bytes, 1, 0xAD);\n    rt_str_set_byte(key_bytes, 2, 0xBE);\n    rt_str_set_byte(key_bytes, 3, 0xEF);\n    let key_hex = _raw_to_hex(key_bytes);\n    let mac = hmac_sha256(key_hex, \"test\");\n    let len = rt_str_len(mac);\n    rt_print_int(len);\n    rt_str_free(mac);\n    rt_str_free(key_bytes);\n    if len == 64 {{ rt_exit(0); }}\n}}"
+        "{lib}\nfn main() {{\n    crypto_init();\n    let key_bytes = rt_str_alloc(4);\n    rt_str_set_byte(key_bytes, 0, 0xDE);\n    rt_str_set_byte(key_bytes, 1, 0xAD);\n    rt_str_set_byte(key_bytes, 2, 0xBE);\n    rt_str_set_byte(key_bytes, 3, 0xEF);\n    let key_hex = _raw_to_hex(key_bytes);\n    let mac = hmac_sha256(key_hex, \"test\");\n    let len = rt_str_len(mac);\n    rt_print_int(len);\n    rt_str_free(mac);\n\n    if len == 64 {{ rt_exit(0); }}\n}}"
     );
     let (c, out) = build_and_run(&code);
     assert!(c == 0 || c == 106, "exit: {c}, out: {out}");

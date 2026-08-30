@@ -3100,7 +3100,7 @@ fn emit_env_remove(code: &mut Code) {
 // Crypto services (Session 71)
 // ===========================================================================
 
-/// `rt_crypto_init() -> Int`: Load bcryptprimitives.dll, resolve BCryptGenRandom.
+/// `rt_crypto_init() -> Int`: Load bcrypt.dll, resolve BCryptGenRandom.
 /// Returns 0 on success, -1 on error.
 fn emit_crypto_init(code: &mut Code) {
     prologue(code);
@@ -3109,19 +3109,16 @@ fn emit_crypto_init(code: &mut Code) {
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x85, already); // jnz: already loaded
 
-    // Write "bcryptprimitives.dll\0" to temp area
+    // Write "bcrypt.dll\0" to temp area
     let dll_name = NET_RECV_BUF; // reuse temp area (crypto init happens before any recv)
-    // "bcryptpr" = 0x7063697262686372 in LE
-    code.movabs(Reg::Rax, u64::from_le_bytes(*b"bcryptpr"));
+    // "bcrypt.d" = 0x642E747079726362 in LE
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"bcrypt.d"));
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(dll_name));
-    // "imitives" = 0x7669746976697473 in LE
-    code.movabs(Reg::Rax, u64::from_le_bytes(*b"imitives"));
+    // "ll\0..." = 0x000000006C6C in LE
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"ll\0\0\0\0\0\0"));
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(dll_name + 8));
-    // ".dll\0" = 0x006C6C642E
-    code.movabs(Reg::Rax, u64::from_le_bytes(*b".dll\0\0\0\0"));
-    code.mov_rip_r(Reg::Rax, PatchKind::Bss(dll_name + 16));
 
-    // LoadLibraryA("bcryptprimitives.dll")
+    // LoadLibraryA("bcrypt.dll")
     code.lea_r_rip(Reg::Rcx, PatchKind::Bss(dll_name));
     code.sub_rsp(32);
     code.call_rip(PatchKind::Iat(32)); // LoadLibraryA
