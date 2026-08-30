@@ -214,9 +214,11 @@ $ ./demo.exe
 | --- | --- |
 | `mink build <path> [--target <triple>]` | Compile a MINK source file into a native executable |
 | `mink check <path>` | Validate the front end without producing an executable |
+| `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
 | `mink version` | Print the compiler version |
 | `mink help` | Show usage information |
-| `mink run`, `mink test`, `mink fmt` | Not yet implemented (exit 2) |
+| `mink run` | Compile and run a program (implemented in current checkout) |
+| `mink test`, `mink fmt` | Not yet implemented |
 
 ### Deployment
 
@@ -273,7 +275,12 @@ Honest status, because durable engineering starts with accurate claims:
 - **Limited native subset** — Float, Char, and Null are first-class
   native scalars (SSE2 float arithmetic and exact decimal printing), but
   function values are not representable yet.
-- **No stdlib or package manager yet** — and no IDE tooling beyond the CLI.
+- **Ecosystem libraries in progress** — a standard library covering
+  strings, collections, math, filesystem, process execution, JSON,
+  networking, HTTP, crypto, random, time/date, encoding, hashing, and
+  environment access is under active development (see `stdlib/`). The
+  committed release ships `Option<T>` and `Result<T,E>` as built-in
+  types; full stdlib coverage is not yet stable.
 
 ## Roadmap
 
@@ -327,7 +334,7 @@ and the runtime/memory model in
 ```
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1928, all passing)
+├── tests/      Compiler tests (1942 committed, all passing)
 ├── Cargo.toml  Package manifest
 └── LICENSE     Apache License 2.0
 ```
