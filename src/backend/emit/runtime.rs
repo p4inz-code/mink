@@ -778,6 +778,7 @@ fn emit_str_validate(code: &mut Code, heap_only: bool) {
     let scan = code.label();
     let next = code.label();
     let not_heap = code.label();
+    let not_heap_next = code.label();
     let fail5 = code.label();
     code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.table as u32));
     code.lea_r_mem(Reg::Rdx, Reg::Rcx, TABLE_BYTES);
@@ -800,12 +801,21 @@ fn emit_str_validate(code: &mut Code, heap_only: bool) {
     if heap_only {
         code.jmp_label(fail5);
     } else {
+        // Check BSS stdout/stderr capture buffers
+        code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.stdout_buf as u32));
+        code.cmp_rr(Reg::Rax, Reg::Rcx);
+        code.jcc_label(0x84, not_heap_next); // je — valid stdout_buf
+        code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.stderr_buf as u32));
+        code.cmp_rr(Reg::Rax, Reg::Rcx);
+        code.jcc_label(0x84, not_heap_next); // je — valid stderr_buf
+        // Check image immutable string-data region
         code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.str_data_start as u32));
         code.mov_r_rip(Reg::Rdx, PatchKind::Bss(BSS.str_data_end as u32));
         code.cmp_rr(Reg::Rax, Reg::Rcx);
         code.jcc_label(0x82, fail5); // jb
         code.cmp_rr(Reg::Rax, Reg::Rdx);
         code.jcc_label(0x83, fail5); // jae
+        code.bind_label(not_heap_next);
         code.leave_ret();
     }
 
@@ -3013,8 +3023,8 @@ fn emit_process_run(code: &mut Code) {
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax); // RSP = RBP on return
 
-    // Allocate frame
-    code.sub_rsp(512);
+    // Allocate frame (+ 32 bytes for SECURITY_ATTRIBUTES at [rbp-544])
+    code.sub_rsp(544);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // [rbp-8] = original cstr
 
     // Build "cmd.exe /c " + cmd CStr
@@ -3081,22 +3091,49 @@ fn emit_process_run(code: &mut Code) {
     code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rax);
 
-    // CreatePipeA for stdout
+    // Build SECURITY_ATTRIBUTES at [rbp-544] with bInheritHandle=TRUE
+    // SA layout (x64): nLength(4)+pad(4)+lpSecDesc(8)+bInherit(8) = 24 bytes
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -544, Reg::Rax); // zero first 8 bytes (nLength + pad)
+    code.mov_mem_r(Reg::Rbp, -536, Reg::Rax); // zero next 8 bytes (lpSecurityDescriptor)
+    code.mov_mem_r(Reg::Rbp, -528, Reg::Rax); // zero next 8 bytes (bInheritHandle + pad)
+    code.mov_r32_imm32(Reg::Rax, 24);
+    code.mov_mem_r(Reg::Rbp, -544, Reg::Rax); // nLength = 24
+    code.movabs(Reg::Rax, 1u64);
+    code.mov_mem_r(Reg::Rbp, -528, Reg::Rax); // bInheritHandle = TRUE
+
+    // CreatePipeA for stdout (with inheritable handles via SECURITY_ATTRIBUTES)
     code.sub_rsp(32);
-    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -24);
-    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -32);
-    code.xor_rr32(Reg::R8, Reg::R8);
-    code.xor_rr32(Reg::R9, Reg::R9);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -24); // &stdout_read
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -32); // &stdout_write
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -544); // &SECURITY_ATTRIBUTES
+    code.xor_rr32(Reg::R9, Reg::R9); // nSize = 0 (default)
     code.call_rip(PatchKind::Iat(IAT_CREATE_PIPE_A));
     code.add_rsp(32);
 
-    // CreatePipeA for stderr
+    // Make parent-side stdout_read non-inheritable
     code.sub_rsp(32);
-    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -40);
-    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -48);
-    code.xor_rr32(Reg::R8, Reg::R8);
-    code.xor_rr32(Reg::R9, Reg::R9);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24); // hHandle = stdout_read
+    code.movabs(Reg::Rdx, 1u64); // dwMask = HANDLE_FLAG_INHERIT (1)
+    code.xor_rr32(Reg::R8, Reg::R8); // dwFlags = 0 (remove flag)
+    code.call_rip(PatchKind::Iat(IAT_SET_HANDLE_INFORMATION));
+    code.add_rsp(32);
+
+    // CreatePipeA for stderr (with inheritable handles)
+    code.sub_rsp(32);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -40); // &stderr_read
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -48); // &stderr_write
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -544); // &SECURITY_ATTRIBUTES
+    code.xor_rr32(Reg::R9, Reg::R9); // nSize = 0 (default)
     code.call_rip(PatchKind::Iat(IAT_CREATE_PIPE_A));
+    code.add_rsp(32);
+
+    // Make parent-side stderr_read non-inheritable
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // hHandle = stderr_read
+    code.movabs(Reg::Rdx, 1u64); // dwMask = HANDLE_FLAG_INHERIT (1)
+    code.xor_rr32(Reg::R8, Reg::R8); // dwFlags = 0 (remove flag)
+    code.call_rip(PatchKind::Iat(IAT_SET_HANDLE_INFORMATION));
     code.add_rsp(32);
 
     // Zero STARTUPINFOA (104 bytes at [rbp-168])
@@ -3604,6 +3641,7 @@ const IAT_CREATE_PIPE_A: u32 = 17;
 const IAT_CREATE_PROCESS_A: u32 = 18;
 const IAT_GET_EXIT_CODE_PROCESS: u32 = 19;
 const IAT_WAIT_FOR_SINGLE_OBJECT: u32 = 20;
+const IAT_SET_HANDLE_INFORMATION: u32 = 23;
 
 /// `rt_fs_exists(path: Str) -> Bool`.
 /// GetFileAttributesA returns INVALID_HANDLE_VALUE (0xFFFFFFFF) on error.
