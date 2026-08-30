@@ -46,11 +46,22 @@ use std::collections::HashMap;
 
 use super::super::ir::RuntimeService;
 use super::x86_64::{Code, PatchKind, Reg};
-use crate::runtime::abi::{BSS, HEAP_SIZE, MAX_LIVE_ALLOCS};
+use crate::runtime::abi::{BSS, HEAP_SIZE, LIVE_TABLE_BYTES, MAX_LIVE_ALLOCS};
 use crate::runtime::error::RuntimeErrorKind;
 
 /// The liveness table size in bytes.
 const TABLE_BYTES: i32 = (MAX_LIVE_ALLOCS as u32 * 24) as i32;
+
+// --- Networking BSS (Session 67) ---
+const NET_INIT_FLAG: u32 = BSS.wsa_initialized as u32;
+const NET_DLL_HANDLE: u32 = BSS.ws2_dll_handle as u32;
+const NET_FUNC_TABLE: u32 = BSS.net_func_table as u32;
+const NET_RECV_BUF: u32 = BSS.recv_buf as u32;
+// --- Crypto BSS (Session 71) ---
+const CRYPTO_DLL: u32 = BSS.bcrypt_dll_handle as u32;
+const CRYPTO_TABLE: u32 = BSS.crypto_func_table as u32;
+const RNG_STATE: u32 = BSS.rng_state as u32;
+const ENV_STORAGE: u32 = BSS.env_storage as u32;
 
 /// The offsets of the machine services within `.text`, plus the labels
 /// the services reference (bound by [`emit_data`] and the emitter's string
@@ -127,6 +138,12 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::PrintFloat, |code, r| {
         emit_print_float(code, r);
     });
+    emit(code, RuntimeService::IntToFloat, |code, _| {
+        emit_int_to_float(code)
+    });
+    emit(code, RuntimeService::FloatToInt, |code, _| {
+        emit_float_to_int(code)
+    });
     emit(code, RuntimeService::PrintChar, |code, r| {
         emit_print_char(code, r)
     });
@@ -149,6 +166,11 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::VecGet, |code, _| emit_vec_get(code));
     emit(code, RuntimeService::VecLen, |code, _| emit_vec_len(code));
     emit(code, RuntimeService::VecFree, |code, _| emit_vec_free(code));
+    emit(code, RuntimeService::VecSet, |code, _| emit_vec_set(code));
+    emit(code, RuntimeService::VecPop, |code, _| emit_vec_pop(code));
+    emit(code, RuntimeService::VecRemove, |code, _| {
+        emit_vec_remove(code)
+    });
     emit(code, RuntimeService::StrConcat, |code, _| {
         emit_str_concat(code)
     });
@@ -159,6 +181,126 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::StrFromBool, |code, _| {
         emit_str_from_bool(code)
     });
+    // --- Networking (Session 67) ---
+    emit(code, RuntimeService::NetWsaStartup, |code, _| {
+        emit_net_wsa_startup(code)
+    });
+    emit(code, RuntimeService::NetWsaCleanup, |code, _| {
+        emit_net_wsa_cleanup(code)
+    });
+    emit(code, RuntimeService::NetWsaLastError, |code, _| {
+        emit_net_wsa_last_error(code)
+    });
+    emit(code, RuntimeService::NetSocket, |code, _| {
+        emit_net_socket(code)
+    });
+    emit(code, RuntimeService::NetConnect, |code, _| {
+        emit_net_connect(code)
+    });
+    emit(code, RuntimeService::NetBind, |code, _| emit_net_bind(code));
+    emit(code, RuntimeService::NetListen, |code, _| {
+        emit_net_listen(code)
+    });
+    emit(code, RuntimeService::NetAccept, |code, _| {
+        emit_net_accept(code)
+    });
+    emit(code, RuntimeService::NetSend, |code, _| emit_net_send(code));
+    emit(code, RuntimeService::NetRecv, |code, _| emit_net_recv(code));
+    emit(code, RuntimeService::NetClose, |code, _| {
+        emit_net_close(code)
+    });
+    emit(code, RuntimeService::NetShutdown, |code, _| {
+        emit_net_shutdown(code)
+    });
+    emit(code, RuntimeService::NetGetAddrInfo, |code, _| {
+        emit_net_get_addr_info(code)
+    });
+    emit(code, RuntimeService::NetFreeAddrInfo, |code, _| {
+        emit_net_free_addr_info(code)
+    });
+    emit(code, RuntimeService::NetGetHostName, |code, _| {
+        emit_net_get_host_name(code)
+    });
+    emit(code, RuntimeService::NetHtons, |code, _| {
+        emit_net_htons(code)
+    });
+    // --- Crypto (Session 71) ---
+    emit(code, RuntimeService::CryptoInit, |code, _| {
+        emit_crypto_init(code)
+    });
+    emit(code, RuntimeService::CryptoRandomBytes, |code, _| {
+        emit_crypto_random_bytes(code)
+    });
+    emit(code, RuntimeService::CryptoRandomInt, |code, _| {
+        emit_crypto_random_int(code)
+    });
+    emit(code, RuntimeService::CryptoSecureZero, |code, _| {
+        emit_crypto_secure_zero(code)
+    });
+    // --- Time (Session 72) ---
+    emit(code, RuntimeService::TimeNow, |code, _| emit_time_now(code));
+    emit(code, RuntimeService::TimeMillis, |code, _| {
+        emit_time_millis(code)
+    });
+    emit(code, RuntimeService::TimeTicks, |code, _| {
+        emit_time_ticks(code)
+    });
+    emit(code, RuntimeService::TimeFreq, |code, _| {
+        emit_time_freq(code)
+    });
+    emit(code, RuntimeService::TimeFiletime, |code, _| {
+        emit_time_filetime(code)
+    });
+    emit(code, RuntimeService::TimeFiletimeHigh, |code, _| {
+        emit_time_filetime_high(code)
+    });
+    // --- Process (Session 72) ---
+    emit(code, RuntimeService::ProcessId, |code, _| {
+        emit_process_id(code)
+    });
+    emit(code, RuntimeService::ProcessRun, |code, _| {
+        emit_process_run(code)
+    });
+    emit(code, RuntimeService::ProcessStdout, |code, _| {
+        emit_process_stdout(code)
+    });
+    emit(code, RuntimeService::ProcessStderr, |code, _| {
+        emit_process_stderr(code)
+    });
+    emit(code, RuntimeService::ProcessStdoutLen, |code, _| {
+        emit_process_stdout_len(code)
+    });
+    emit(code, RuntimeService::ProcessStderrLen, |code, _| {
+        emit_process_stderr_len(code)
+    });
+    // --- Random (Session 73) ---
+    emit(code, RuntimeService::RandomSeed, |code, _| {
+        emit_random_seed(code)
+    });
+    emit(code, RuntimeService::RandomNext, |code, _| {
+        emit_random_next(code)
+    });
+    // --- Environment (Session 73) ---
+    emit(code, RuntimeService::EnvGet, |code, _| emit_env_get(code));
+    emit(code, RuntimeService::EnvSet, |code, _| emit_env_set(code));
+    emit(code, RuntimeService::EnvHas, |code, _| emit_env_has(code));
+    emit(code, RuntimeService::EnvRemove, |code, _| {
+        emit_env_remove(code)
+    });
+    // --- Filesystem (Session 56) ---
+    emit(code, RuntimeService::FsRead, |code, _| emit_fs_read(code));
+    emit(code, RuntimeService::FsWrite, |code, _| emit_fs_write(code));
+    emit(code, RuntimeService::FsExists, |code, _| emit_fs_exists(code));
+    emit(code, RuntimeService::FsFileSize, |code, _| emit_fs_file_size(code));
+    emit(code, RuntimeService::FsCreateDir, |code, _| emit_fs_create_dir(code));
+    emit(code, RuntimeService::FsRemoveDir, |code, _| emit_fs_remove_dir(code));
+    emit(code, RuntimeService::FsRemoveFile, |code, _| emit_fs_remove_file(code));
+    emit(code, RuntimeService::FsCopy, |code, _| emit_fs_copy(code));
+    emit(code, RuntimeService::FsMove, |code, _| emit_fs_move(code));
+    emit(code, RuntimeService::FsGetCwd, |code, _| emit_fs_get_cwd(code));
+    emit(code, RuntimeService::FsSetCwd, |code, _| emit_fs_set_cwd(code));
+    emit(code, RuntimeService::ToCstr, |code, _| emit_to_cstr(code));
+    emit(code, RuntimeService::FreeCstr, |code, _| emit_free_cstr(code));
     offsets
 }
 
@@ -245,6 +387,9 @@ fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.str_data_start as u32));
     code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.str_data_end));
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.str_data_end as u32));
+    // Initialize RNG state (non-zero seed for xorshift64*)
+    code.movabs(Reg::Rax, 1u64);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(RNG_STATE));
     code.leave_ret();
 }
 
@@ -694,6 +839,37 @@ fn emit_print_int(code: &mut Code, offsets: &RuntimeOffsets) {
 /// `rt_print_char(value)` (value at `[rbp + 16]`): write the single byte
 /// of the character plus a CRLF to stdout. The char model is byte-sized
 /// (layout `(1, 1)`), so the low byte of the value word is the character.
+/// `rt_int_to_float(n: Int) -> Float`: convert integer to float.
+fn emit_int_to_float(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // n
+    // cvtsi2sd xmm0, [rsp] — need to put on stack first
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    // F2 REX.W 0F 2A 04 24 = cvtsi2sd xmm0, [rsp]
+    code.bytes(&[0xF2, 0x48, 0x0F, 0x2A, 0x04, 0x24]);
+    // Store xmm0 back to stack, return as Int bits
+    // F2 0F 11 04 24 = movsd [rsp], xmm0
+    code.bytes(&[0xF2, 0x0F, 0x11, 0x04, 0x24]);
+    code.mov_r_mem(Reg::Rax, Reg::Rsp, 0);
+    code.add_rsp(8);
+    code.leave_ret();
+}
+
+/// `rt_float_to_int(f: Float) -> Int`: truncate float to integer.
+fn emit_float_to_int(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // bits
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    // F2 0F 10 04 24 = movsd xmm0, [rsp]
+    code.bytes(&[0xF2, 0x0F, 0x10, 0x04, 0x24]);
+    code.add_rsp(8);
+    // F2 REX.W 0F 2C C0 = cvttsd2si rax, xmm0
+    code.bytes(&[0xF2, 0x48, 0x0F, 0x2C, 0xC0]);
+    code.leave_ret();
+}
+
 fn emit_print_char(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
     code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
@@ -1645,6 +1821,121 @@ fn emit_vec_get(code: &mut Code) {
     fail(code, 10); // E-R10 (array index out of range)
 }
 
+/// `rt_vec_set(data, index, value)` (data at [rbp+16], index at [rbp+24], value at [rbp+32]).
+/// Returns the data pointer (for chaining).
+fn emit_vec_set(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    // rax = data ptr — save it for return value.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // spill data ptr
+    // rcx = index.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    // Bounds check: index < 0 -> error.
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    let oob = code.label();
+    code.jcc_label(0x88, oob); // js (negative)
+    // rdx = length from [data+8].
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8);
+    // index >= length -> error.
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, oob); // jge
+    // Store: data + 16 + index * 8 = value.
+    code.mov_rr(Reg::Rdx, Reg::Rcx);
+    code.shl_r_imm8(Reg::Rdx, 3); // index * 8
+    code.add_r_imm8(Reg::Rdx, 16); // + 16
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 32); // value
+    code.add_rr(Reg::Rax, Reg::Rdx); // data + offset
+    code.mov_mem_r(Reg::Rax, 0, Reg::R10); // store element
+    // Return data pointer.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(8);
+    code.leave_ret();
+
+    code.bind_label(oob);
+    fail(code, 10); // E-R10 (array index out of range)
+}
+
+/// `rt_vec_pop(data) -> Int`: Pop last element. Returns the popped value.
+fn emit_vec_pop(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    // Empty check
+    let empty = code.label();
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, empty); // jz
+    // Decrement length
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    // Load last element: data + 16 + (length-1) * 8
+    code.shl_r_imm8(Reg::Rcx, 3);
+    code.add_r_imm8(Reg::Rcx, 16);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.leave_ret();
+    code.bind_label(empty);
+    fail(code, 10); // E-R10
+}
+
+/// `rt_vec_remove(data, index) -> Int`: Remove element at index, shift remaining.
+fn emit_vec_remove(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8]=data ptr, [rbp-16]=saved value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24); // index
+    // Bounds check
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    let oob = code.label();
+    code.jcc_label(0x88, oob);
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // length
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, oob);
+    // Save element value: data + 16 + index * 8
+    code.mov_rr(Reg::R10, Reg::Rcx);
+    code.shl_r_imm8(Reg::R10, 3);
+    code.add_r_imm8(Reg::R10, 16);
+    code.add_rr(Reg::Rax, Reg::R10);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // load value
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // save to stack
+    // Shift loop: copy element[i+1] to element[i]
+    code.mov_rr(Reg::R10, Reg::Rcx); // i = index
+    code.sub_r_imm32(Reg::Rdx, 1); // length - 1
+    let shift_loop = code.label();
+    let shift_done = code.label();
+    code.bind_label(shift_loop);
+    code.cmp_rr(Reg::R10, Reg::Rdx);
+    code.jcc_label(0x8D, shift_done); // jge
+    // Compute src_addr = data + 16 + (i+1)*8
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr
+    code.mov_rr(Reg::R9, Reg::R10);
+    code.shl_r_imm8(Reg::R9, 3); // i*8
+    code.add_r_imm8(Reg::R9, 24); // +24 = 16 + (i+1)*8 offset from data
+    code.add_rr(Reg::R9, Reg::Rax); // src_addr = data + 24 + i*8
+    code.mov_r_mem(Reg::R11, Reg::R9, 0); // R11 = *src_addr
+    // Compute dst_addr = data + 16 + i*8
+    code.mov_rr(Reg::R9, Reg::R10);
+    code.shl_r_imm8(Reg::R9, 3); // i*8
+    code.add_r_imm8(Reg::R9, 16); // +16
+    code.add_rr(Reg::R9, Reg::Rax); // dst_addr
+    code.mov_mem_r(Reg::R9, 0, Reg::R11); // *dst_addr = src value
+    code.add_r_imm8(Reg::R10, 1);
+    code.jmp_label(shift_loop);
+    code.bind_label(shift_done);
+    // Decrement length
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    // Return removed value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.add_rsp(16);
+    code.leave_ret();
+    code.bind_label(oob);
+    fail(code, 10);
+}
+
 /// `rt_vec_len(data) -> Int` (data at [rbp + 16]).
 ///
 /// Returns the current length of the Vec.
@@ -1995,5 +2286,1093 @@ fn emit_str_from_bool(code: &mut Code) {
     code.mov_mem_imm8(Reg::Rax, 12, b'e');
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // return ptr
     code.add_rsp(8);
+    code.leave_ret();
+}
+// ===========================================================================
+// Networking services (Session 67)
+// ===========================================================================
+
+// BSS constants for networking (defined at file top as NET_*)
+
+/// `rt_net_wsa_startup() -> Int`: Load ws2_32.dll, resolve function pointers, call WSAStartup.
+/// Returns 0 on success, -1 on error.
+fn emit_net_wsa_startup(code: &mut Code) {
+    prologue(code);
+    // Check if already initialized
+    let already = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, already); // jnz
+
+    // Load ws2_32.dll if not already loaded
+    let have_dll = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_DLL_HANDLE));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, have_dll); // jnz
+
+    // Write "ws2_32.dll\0" to temp area in recv_buf
+    // NET_RECV_BUF is used as temp during init (safe: no active sockets yet)
+    let dll_name_off = NET_RECV_BUF;
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"ws2_32.d"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(dll_name_off));
+    code.movabs(Reg::Rax, 0x0000_0000_0000_6C6Cu64); // "ll\0..."
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(dll_name_off + 8));
+    // LoadLibraryA(&dll_name)
+    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(dll_name_off));
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(32)); // LoadLibraryA
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let dll_fail = code.label();
+    code.jcc_label(0x84, dll_fail); // jz: LoadLibraryA failed
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_DLL_HANDLE));
+
+    code.bind_label(have_dll);
+
+    // Resolve 15 function pointers from ws2_32.dll
+    // Names go into recv_buf temp area (offsets 0..320, 20 bytes each)
+    // Function pointers go into NET_FUNC_TABLE (17 * 8 = 136 bytes)
+    // We'll resolve 15 unique functions, then copy htons to ntohs slot
+
+    let names: [&[u8]; 16] = [
+        b"WSAStartup\0",
+        b"WSACleanup\0",
+        b"WSAGetLastError",
+        b"WSASocketA\0\0",
+        b"connect\0\0\0",
+        b"bind\0\0\0\0",
+        b"listen\0\0\0\0",
+        b"accept\0\0\0\0",
+        b"send\0\0\0\0\0",
+        b"recv\0\0\0\0\0",
+        b"closesocket\0",
+        b"shutdown\0\0\0",
+        b"getaddrinfo\0",
+        b"freeaddrinfo\0",
+        b"gethostname\0",
+        b"htons\0\0\0\0",
+    ];
+
+    let name_size: u32 = 20;
+    // Write each name and resolve it
+    for (i, name_bytes) in names.iter().enumerate() {
+        let name_off = NET_RECV_BUF + (i as u32) * name_size;
+        // Write name in 8-byte chunks
+        for chunk_off in (0..name_bytes.len()).step_by(8) {
+            let mut buf = [0u8; 8];
+            let end = (chunk_off + 8).min(name_bytes.len());
+            buf[..end - chunk_off].copy_from_slice(&name_bytes[chunk_off..end]);
+            code.movabs(Reg::Rax, u64::from_le_bytes(buf));
+            code.mov_rip_r(Reg::Rax, PatchKind::Bss(name_off + chunk_off as u32));
+        }
+        // GetProcAddress(dll_handle, &name)
+        code.mov_r_rip(Reg::Rcx, PatchKind::Bss(NET_DLL_HANDLE));
+        code.lea_r_rip(Reg::Rdx, PatchKind::Bss(name_off));
+        code.sub_rsp(32);
+        code.call_rip(PatchKind::Iat(33)); // GetProcAddress
+        code.add_rsp(32);
+        // Store result
+        let slot = NET_FUNC_TABLE + (i as u32) * 8;
+        code.mov_rip_r(Reg::Rax, PatchKind::Bss(slot));
+    }
+
+    // Slot 16 (ntohs) = copy from slot 15 (htons) — they're the same function
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 15 * 8));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 16 * 8));
+
+    // Call WSAStartup(MAKEWORD(2,2), &wsadata)
+    // WSADATA is 408 bytes, stored at NET_RECV_BUF as temp
+    // Already cleared (zero-init BSS)
+    let wsadata_off = NET_RECV_BUF;
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(wsadata_off)); // lpWSAData
+    code.mov_r32_imm32(Reg::Rcx, 0x0202); // MAKEWORD(2,2)
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE)); // WSAStartup ptr
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+
+    // Check result (WSAStartup returns 0 on success, non-zero on error)
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let wsa_fail = code.label();
+    code.jcc_label(0x85, wsa_fail); // jnz: jump on error (non-zero return)
+
+    // Mark initialized
+    code.movabs(Reg::Rax, 1);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+
+    code.bind_label(already);
+    code.xor_rr32(Reg::Rax, Reg::Rax); // return 0
+    code.leave_ret();
+
+    // WSAStartup failed
+    code.bind_label(wsa_fail);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
+    code.leave_ret();
+
+    // LoadLibraryA failed
+    code.bind_label(dll_fail);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFEu64); // -2
+    code.leave_ret();
+}
+
+/// `rt_net_wsa_cleanup() -> Int`: WSACleanup. Returns 0 on success.
+fn emit_net_wsa_cleanup(code: &mut Code) {
+    prologue(code);
+    let skip = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, skip); // jz: not initialized
+    // WSACleanup()
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 8)); // slot 1 = WSACleanup
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG)); // clear flag
+    code.bind_label(skip);
+    code.xor_rr32(Reg::Rax, Reg::Rax); // return 0
+    code.leave_ret();
+}
+
+/// `rt_net_wsa_last_error() -> Str`: Return WSAGetLastError as a string.
+fn emit_net_wsa_last_error(code: &mut Code) {
+    prologue(code);
+    // WSAGetLastError() -> int (intrinsic returns Int)
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 16)); // slot 2
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    // Return the integer error code directly
+    code.leave_ret();
+}
+
+/// `rt_net_socket(af, ty, proto) -> Int`: WSASocketA. Returns socket handle.
+fn emit_net_socket(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // af
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 24); // type
+    code.mov_r_mem(Reg::R12, Reg::Rbp, 32); // protocol
+    // WSASocketA(af, type, protocol, NULL, 0, 0)
+    code.mov_rr(Reg::Rcx, Reg::R10); // af
+    code.mov_rr(Reg::Rdx, Reg::R11); // type
+    code.mov_rr(Reg::R8, Reg::R12); // protocol
+    code.xor_rr32(Reg::R9, Reg::R9); // lpProtocolInfo = NULL
+    // Stack args: g = 0, flags = 0
+    code.sub_rsp(48); // 32 shadow + 16 for 2 stack args
+    code.mov_mem_imm32(Reg::Rsp, 32, 0); // g = 0
+    code.mov_mem_imm32(Reg::Rsp, 40, 0); // flags = 0
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 24)); // WSASocketA
+    code.call_rax();
+    code.add_rsp(48);
+    code.leave_ret();
+}
+
+/// `rt_net_connect(sock, addr, port) -> Int`: Connect to IPv4 address.
+/// addr is a Str containing "x.x.x.x". Returns 0 on success, -1 on error.
+fn emit_net_connect(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(64); // [rbp-16]=sock, [rbp-24]=addr ptr, [rbp-32]=port, [rbp-40..56]=sockaddr_in
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    // Zero-init sockaddr_in
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax);
+    // AF_INET = 2
+    code.mov_r32_imm32(Reg::Rax, 2);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    // Parse IP: build sin_addr as single 32-bit value in R8
+    code.xor_rr32(Reg::R8, Reg::R8); // accumulator = 0
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -24);
+    code.add_r_imm8(Reg::R10, 8); // skip len prefix
+    for octet in 0..4u32 {
+        let done_label = code.label();
+        code.xor_rr32(Reg::R9, Reg::R9); // octet value = 0
+        let digit_loop = code.label();
+        code.bind_label(digit_loop);
+        code.movzx_byte(Reg::R11, Reg::R10, 0); // R11 = byte
+        code.test_rr(Reg::R11, Reg::R11);
+        code.jcc_label(0x84, done_label);
+        code.cmp_r_imm8(Reg::R11, 0x2E);
+        code.jcc_label(0x84, done_label);
+        code.sub_r_imm32(Reg::R11, '0' as u32); // R11 = digit
+        // R9 = R9 * 10 + R11
+        code.mov_r32_imm32(Reg::Rax, 10);
+        code.mul_r(Reg::R9); // RAX = 10 * R9
+        code.mov_rr(Reg::R9, Reg::Rax);
+        code.add_rr(Reg::R9, Reg::R11);
+        code.add_r_imm8(Reg::R10, 1);
+        code.jmp_label(digit_loop);
+        code.bind_label(done_label);
+        code.add_r_imm8(Reg::R10, 1);
+        // Shift octet into correct position for network byte order
+        // (little-endian store: low byte = first octet)
+        if octet > 0 {
+            code.shl_r_imm8(Reg::R9, (octet * 8) as u8);
+        }
+        code.add_rr(Reg::R8, Reg::R9);
+    }
+    // Save sin_addr before htons (R8 is volatile, clobbered by call)
+    code.mov_mem_r(Reg::Rbp, -8, Reg::R8);
+    // htons(port)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 15 * 8));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    // RAX = htons result. Restore sin_addr from spill slot.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -8);
+    // Store sin_port then sin_addr
+    code.mov_mem_r(Reg::Rbp, -38, Reg::Rax); // sin_port
+    code.mov_mem_r(Reg::Rbp, -36, Reg::R8); // sin_addr
+    // connect(sock, &addr, 16)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -40);
+    code.movabs(Reg::R8, 16);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 32));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_bind(sock, addr, port) -> Int`: Bind to IPv4 address.
+fn emit_net_bind(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(64);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // sock
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // addr ptr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // port
+
+    // Zero sockaddr_in
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax);
+    code.mov_r32_imm32(Reg::Rax, 2);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // AF_INET
+
+    // Parse IP: build sin_addr as single 32-bit value in R8
+    code.xor_rr32(Reg::R8, Reg::R8); // accumulator = 0
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -24);
+    code.add_r_imm8(Reg::R10, 8); // skip len prefix
+    for octet in 0..4u32 {
+        let done_label = code.label();
+        code.xor_rr32(Reg::R9, Reg::R9); // octet value = 0
+        let digit_loop = code.label();
+        code.bind_label(digit_loop);
+        code.movzx_byte(Reg::R11, Reg::R10, 0); // R11 = byte
+        code.test_rr(Reg::R11, Reg::R11);
+        code.jcc_label(0x84, done_label);
+        code.cmp_r_imm8(Reg::R11, 0x2E);
+        code.jcc_label(0x84, done_label);
+        code.sub_r_imm32(Reg::R11, '0' as u32); // R11 = digit
+        code.mov_r32_imm32(Reg::Rax, 10);
+        code.mul_r(Reg::R9); // RAX = 10 * R9
+        code.mov_rr(Reg::R9, Reg::Rax);
+        code.add_rr(Reg::R9, Reg::R11);
+        code.add_r_imm8(Reg::R10, 1);
+        code.jmp_label(digit_loop);
+        code.bind_label(done_label);
+        code.add_r_imm8(Reg::R10, 1);
+        // Shift octet into correct position for network byte order
+        if octet > 0 {
+            code.shl_r_imm8(Reg::R9, (octet * 8) as u8);
+        }
+        code.add_rr(Reg::R8, Reg::R9);
+    }
+    // Save sin_addr before htons (R8 is volatile, clobbered by call)
+    code.mov_mem_r(Reg::Rbp, -8, Reg::R8);
+    // htons(port)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 15 * 8));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    // RAX = htons result. Restore sin_addr from spill slot.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -8);
+    // Store sin_port then sin_addr
+    code.mov_mem_r(Reg::Rbp, -38, Reg::Rax); // sin_port
+    code.mov_mem_r(Reg::Rbp, -36, Reg::R8); // sin_addr
+
+    // bind(sock, &addr, 16)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -40);
+    code.movabs(Reg::R8, 16);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 40)); // bind
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok); // jz: jump if zero (success)
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_listen(sock, backlog) -> Int`: Start listening.
+fn emit_net_listen(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 24); // backlog
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 48)); // listen
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_accept(sock) -> Int`: Accept connection. Returns new socket or -1.
+fn emit_net_accept(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // addr = NULL
+    code.xor_rr32(Reg::R8, Reg::R8); // addrlen = NULL
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 56)); // accept
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    // accept returns INVALID_SOCKET (-1) on error
+    code.cmp_r_imm32(Reg::Rax, 0xFFFF_FFFFu32);
+    let ok = code.label();
+    code.jcc_label(0x85, ok); // jne: valid socket
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.leave_ret();
+}
+
+/// `rt_net_send(sock, data) -> Int`: Send data. Returns bytes sent or -1.
+fn emit_net_send(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
+    // data is a Str: [len:8][bytes...] at [rbp+24]
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 24); // data ptr
+    code.lea_r_mem(Reg::Rdx, Reg::R10, 8); // data+8 = byte array
+    code.mov_r_mem(Reg::R8, Reg::R10, 0); // length (first 8 bytes of Str)
+    code.xor_rr32(Reg::R9, Reg::R9); // flags = 0
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 64)); // send
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.cdqe(); // sign-extend EAX to RAX (send returns int)
+    // send returns bytes sent on success, SOCKET_ERROR on failure
+    code.cmp_r_imm32(Reg::Rax, 0xFFFF_FFFFu32);
+    let ok = code.label();
+    code.jcc_label(0x85, ok);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.leave_ret();
+}
+
+/// `rt_net_recv(sock, maxlen) -> Str`: Receive data into recv_buf, return as Str.
+fn emit_net_recv(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = bytes received, [rbp-16] = saved string ptr
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // sock
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 24); // maxlen
+    // recv(sock, recv_buf+8, maxlen, 0)
+    code.mov_rr(Reg::Rcx, Reg::R10); // sock
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(NET_RECV_BUF + 8)); // buffer (skip length prefix)
+    code.mov_rr(Reg::R8, Reg::R11); // maxlen
+    code.xor_rr32(Reg::R9, Reg::R9); // flags = 0
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 72)); // recv
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.cdqe(); // sign-extend EAX to RAX (recv returns int)
+    // RAX = bytes received, 0 on close, SOCKET_ERROR (-1) on error
+    // Store result
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // Check for SOCKET_ERROR
+    code.cmp_r_imm32(Reg::Rax, 0xFFFF_FFFFu32);
+    let is_ok = code.label();
+    let done = code.label();
+    code.jcc_label(0x85, is_ok); // jne: not SOCKET_ERROR
+    // Error: length = 0
+    code.movabs(Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.bind_label(is_ok);
+    // Check for negative or zero length
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x8E, done); // jle: zero or negative → return empty
+    // Positive length: allocate Str and copy data
+    // StrAlloc(length) - RAX already has the recv byte count
+    code.sub_rsp(8); // alignment padding
+    code.u8(0x50); // push rax (= length) as stack arg
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16); // pop arg + alignment padding
+    // RAX = allocated string ptr. Save it.
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // Copy recv_buf+8 -> string+8
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF + 8)); // source
+    code.add_r_imm8(Reg::Rax, 8); // skip length prefix
+    code.mov_rr(Reg::R8, Reg::Rax); // dest
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // count
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, copy_done);
+    code.movzx_byte(Reg::Rax, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R8, 1);
+    code.sub_r_imm32(Reg::R9, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    // Return saved string ptr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+    // Empty/error path: return allocated empty string
+    code.bind_label(done);
+    code.sub_rsp(8); // alignment padding
+    code.xor_rr32(Reg::Rax, Reg::Rax); // RAX = 0
+    code.u8(0x50); // push rax (= 0) as stack arg
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16); // pop arg + alignment padding
+    // RAX = empty string ptr (length prefix = 0)
+    code.leave_ret();
+}
+
+/// `rt_net_close(sock) -> Int`: Close socket. Returns 0 on success.
+fn emit_net_close(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 80)); // closesocket
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    // closesocket returns 0 on success
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_shutdown(sock, how) -> Int`: Shutdown socket.
+fn emit_net_shutdown(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 24); // how
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 88)); // shutdown
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_getaddrinfo(host, port) -> Str`: V1 returns host as-is.
+fn emit_net_get_addr_info(code: &mut Code) {
+    prologue(code);
+    // V1: just return the host string as-is (no allocation needed)
+    // Parameters: [rbp+16]=host ptr, [rbp+24]=port
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // host ptr
+    code.leave_ret();
+}
+
+/// `rt_net_freeaddrinfo()`: V1 no-op.
+fn emit_net_free_addr_info(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_gethostname() -> Str`: Get local hostname.
+/// Allocates a heap Str via StrAlloc and copies the hostname into it.
+fn emit_net_get_host_name(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = length, [rbp-16] = saved string ptr
+    // Use BSS recv_buf as temp buffer: gethostname(NET_RECV_BUF, 255)
+    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(NET_RECV_BUF));
+    code.movabs(Reg::Rdx, 255);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 112)); // gethostname
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    // Scan for null terminator to compute length
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF));
+    code.xor_rr32(Reg::R8, Reg::R8);
+    let scan = code.label();
+    let scan_done = code.label();
+    code.bind_label(scan);
+    code.cmp_r_imm32(Reg::R8, 255);
+    code.jcc_label(0x83, scan_done);
+    code.movzx_byte(Reg::R9, Reg::R10, 0);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, scan_done);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R8, 1);
+    code.jmp_label(scan);
+    code.bind_label(scan_done);
+    // R8 = hostname length. Store in spill slot.
+    code.mov_mem_r(Reg::Rbp, -8, Reg::R8);
+    // Allocate a Str via StrAlloc(length)
+    code.sub_rsp(8); // alignment padding
+    code.mov_rr(Reg::Rax, Reg::R8); // RAX = length (for stack arg)
+    code.u8(0x50); // push length as stack arg
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16); // pop arg + alignment padding
+    // RAX = allocated string ptr. Save it.
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // Copy hostname from NET_RECV_BUF to string+8
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF)); // source
+    code.add_r_imm8(Reg::Rax, 8); // skip length prefix
+    code.mov_rr(Reg::R8, Reg::Rax); // dest
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // count
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, copy_done);
+    code.movzx_byte(Reg::Rax, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R8, 1);
+    code.sub_r_imm32(Reg::R9, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    // Return saved string ptr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_net_htons(value) -> Int`: Host to network byte order.
+fn emit_net_htons(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // value
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 120)); // htons
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.leave_ret();
+}
+
+// ===========================================================================
+// Time services (Session 72)
+// ===========================================================================
+
+/// `rt_time_now() -> Int`: Return current Unix timestamp (seconds since epoch).
+/// Uses GetSystemTimeAsFileTime, converts from 100-ns intervals since 1601.
+fn emit_time_now(code: &mut Code) {
+    prologue(code);
+    // FILETIME is 8 bytes on stack
+    code.sub_rsp(8);
+    // GetSystemTimeAsFileTime(&ft)
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.call_rip(PatchKind::Iat(24)); // GET_SYSTEM_TIME_AS_FILE_TIME
+    // Load ft into RAX (100-ns intervals since 1601-01-01)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    // Convert: Unix timestamp = (ft - 116444736000000000) / 10000000
+    // 116444736000000000 = 0x019DB1DED53E8000
+    code.movabs(Reg::Rdx, 0x019DB1DED53E8000u64);
+    code.sub_rr(Reg::Rax, Reg::Rdx);
+    // Divide by 10000000
+    code.movabs(Reg::Rdx, 0);
+    code.movabs(Reg::R10, 10_000_000u64);
+    code.div_r(Reg::R10); // RAX = RAX / 10000000
+    code.add_rsp(8);
+    code.leave_ret();
+}
+
+/// `rt_time_millis() -> Int`: Return milliseconds since boot.
+/// Uses GetTickCount64.
+fn emit_time_millis(code: &mut Code) {
+    prologue(code);
+    code.call_rip(PatchKind::Iat(25)); // GET_TICK_COUNT_64
+    code.leave_ret();
+}
+
+/// `rt_time_ticks() -> Int`: Return QueryPerformanceCounter value.
+/// Stub: returns GetTickCount64 (close enough for V1).
+fn emit_time_ticks(code: &mut Code) {
+    prologue(code);
+    code.call_rip(PatchKind::Iat(25)); // GET_TICK_COUNT_64
+    code.leave_ret();
+}
+
+/// `rt_time_freq() -> Int`: Return QueryPerformanceFrequency.
+/// Stub: returns 1000 (millisecond resolution).
+fn emit_time_freq(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 1000);
+    code.leave_ret();
+}
+
+/// `rt_time_filetime() -> Int`: Return low 32 bits of FILETIME.
+fn emit_time_filetime(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.call_rip(PatchKind::Iat(24));
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(8);
+    code.leave_ret();
+}
+
+/// `rt_time_filetime_high() -> Int`: Return high 32 bits of FILETIME.
+fn emit_time_filetime_high(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.call_rip(PatchKind::Iat(24));
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -4); // high DWORD at offset +4
+    code.add_rsp(8);
+    code.leave_ret();
+}
+
+// ===========================================================================
+// Process services (Session 72)
+// ===========================================================================
+
+/// `rt_process_id() -> Int`: Return current process ID.
+fn emit_process_id(code: &mut Code) {
+    prologue(code);
+    code.call_rip(PatchKind::Iat(22)); // GET_CURRENT_PROCESS_ID
+    code.leave_ret();
+}
+
+/// `rt_process_run(cmd) -> Int`: V1 stub — returns -1.
+fn emit_process_run(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_process_stdout() -> Str`: V1 stub — returns empty string.
+fn emit_process_stdout(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_process_stderr() -> Str`: V1 stub — returns empty string.
+fn emit_process_stderr(code: &mut Code) {
+    emit_process_stdout(code);
+}
+
+/// `rt_process_stdout_len() -> Int`: V1 stub — returns 0.
+fn emit_process_stdout_len(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_process_stderr_len() -> Int`: V1 stub — returns 0.
+fn emit_process_stderr_len(code: &mut Code) {
+    emit_process_stdout_len(code);
+}
+
+// ===========================================================================
+// Random services (Session 73)
+// ===========================================================================
+
+/// `rt_random_seed(seed)`: Seed the xorshift64* PRNG.
+fn emit_random_seed(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // seed
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(RNG_STATE));
+    code.leave_ret();
+}
+
+/// `rt_random_next() -> Int`: Return next xorshift64* value.
+fn emit_random_next(code: &mut Code) {
+    prologue(code);
+    // x ^= x >> 12; x ^= x << 25; x ^= x >> 27; return x * 2685821657736338717
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(RNG_STATE));
+    // x ^= x >> 12
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shr_r_imm8(Reg::Rcx, 12);
+    code.xor_rr(Reg::Rax, Reg::Rcx);
+    // x ^= x << 25
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shl_r_imm8(Reg::Rcx, 25);
+    code.xor_rr(Reg::Rax, Reg::Rcx);
+    // x ^= x >> 27
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shr_r_imm8(Reg::Rcx, 27);
+    code.xor_rr(Reg::Rax, Reg::Rcx);
+    // x *= multiplier (2685821657736338717)
+    // mul_r uses RDX:RAX = RAX * r/m, clobbers RDX
+    code.movabs(Reg::Rdx, 2685821657736338717u64);
+    code.mul_r(Reg::Rdx);
+    // Store back to RNG_STATE
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(RNG_STATE));
+    code.leave_ret();
+}
+
+// ===========================================================================
+// Environment services (Session 73)
+
+// ===========================================================================
+
+// NOTE: Environment stubs return empty/error values.
+// A real implementation would use GetEnvironmentVariableA.
+
+/// `rt_env_get(key) -> Str`: V1 stub — return empty string.
+fn emit_env_get(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_env_set(key, value) -> Int`: V1 stub — return -1.
+fn emit_env_set(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_env_has(key) -> Bool`: V1 stub — return false (0).
+fn emit_env_has(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_env_remove(key) -> Int`: V1 stub — return -1.
+fn emit_env_remove(code: &mut Code) {
+    emit_env_set(code);
+}
+
+// ===========================================================================
+// Crypto services (Session 71)
+// ===========================================================================
+
+/// `rt_crypto_init() -> Int`: Load bcryptprimitives.dll, resolve BCryptGenRandom.
+/// Returns 0 on success, -1 on error.
+fn emit_crypto_init(code: &mut Code) {
+    prologue(code);
+    let already = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(CRYPTO_DLL));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, already); // jnz: already loaded
+
+    // Write "bcryptprimitives.dll\0" to temp area
+    let dll_name = NET_RECV_BUF; // reuse temp area (crypto init happens before any recv)
+    // "bcryptpr" = 0x7063697262686372 in LE
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"bcryptpr"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(dll_name));
+    // "imitives" = 0x7669746976697473 in LE
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"imitives"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(dll_name + 8));
+    // ".dll\0" = 0x006C6C642E
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b".dll\0\0\0\0"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(dll_name + 16));
+
+    // LoadLibraryA("bcryptprimitives.dll")
+    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(dll_name));
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(32)); // LoadLibraryA
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let fail = code.label();
+    code.jcc_label(0x84, fail);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(CRYPTO_DLL));
+
+    // Resolve BCryptGenRandom
+    let func_name = NET_RECV_BUF + 32;
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"BCryptGe"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(func_name));
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"nRandom\0"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(func_name + 8));
+
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(CRYPTO_DLL));
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(func_name));
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(33)); // GetProcAddress
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, fail);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(CRYPTO_TABLE));
+
+    // Return 0 (success)
+    code.bind_label(already);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+    code.bind_label(fail);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_crypto_random_bytes(buf, len) -> Int`: Fill buf with len secure random bytes.
+/// Returns 0 on success, -1 on error.
+fn emit_crypto_random_bytes(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // buf ptr
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 24); // len
+    // BCryptGenRandom(NULL, buf+8, len, BCRYPT_USE_SYSTEM_PREFERRED_RNG=0x00000002)
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // hAlgorithm = NULL
+    code.lea_r_mem(Reg::Rdx, Reg::R10, 8); // buf+8 = data area
+    code.mov_rr(Reg::R8, Reg::R11); // length
+    code.movabs(Reg::R9, 2); // flags = BCRYPT_USE_SYSTEM_PREFERRED_RNG
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(CRYPTO_TABLE));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    // NTSTATUS: 0 = success
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    // Set string length
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::R11, 0, Reg::R10);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_crypto_random_int() -> Int`: Return a cryptographically secure 64-bit random integer.
+fn emit_crypto_random_int(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    // Use [rbp-8] as the 8-byte temp buffer
+    code.mov_mem_imm32(Reg::Rbp, -8, 0);
+    // BCryptGenRandom(NULL, &buf, 8, BCRYPT_USE_SYSTEM_PREFERRED_RNG)
+    code.xor_rr32(Reg::Rcx, Reg::Rcx);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.movabs(Reg::R8, 8);
+    code.movabs(Reg::R9, 2);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(CRYPTO_TABLE));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.add_rsp(16);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_crypto_secure_zero(ptr, len)`: Securely zero memory.
+fn emit_crypto_secure_zero(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // ptr
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 24); // len
+    let loop_start = code.label();
+    let loop_done = code.label();
+    code.bind_label(loop_start);
+    code.test_rr(Reg::R11, Reg::R11);
+    code.jcc_label(0x84, loop_done);
+    code.mov_mem_imm32(Reg::R10, 0, 0);
+    code.add_r_imm8(Reg::R10, 1);
+    code.sub_r_imm32(Reg::R11, 1);
+    code.jmp_label(loop_start);
+    code.bind_label(loop_done);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+// ===========================================================================
+// Filesystem stubs (Session 56 — prevent compiler panics, real Win32 calls TBD)
+// ===========================================================================
+
+/// `rt_to_cstr(s: Str) -> Ptr<Int>`: allocate a null-terminated copy of s.
+/// The buffer is allocated on the runtime heap and must be freed with
+/// `rt_free_cstr`.
+fn emit_to_cstr(code: &mut Code) {
+    prologue(code);
+    // s at [rbp+16]
+    code.sub_rsp(8);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // s ptr
+    // len = [s]
+    code.mov_r_mem(Reg::Rcx, Reg::R10, 0);
+    // alloc(len + 1)
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(0)); // placeholder
+    code.mov_rr(Reg::Rcx, Reg::Rcx);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.u8(0x50); // push rcx (size)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    // Rax = allocated buffer
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save buf
+    // copy loop: for i in 0..len { buf[i] = s[16+i] }
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // s ptr
+    code.mov_r_mem(Reg::R11, Reg::R10, 0); // len
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // buf
+    code.mov_rr(Reg::R10, Reg::Rax); // R10 = buf cursor
+    let loop_start = code.label();
+    let loop_done = code.label();
+    code.bind_label(loop_start);
+    code.test_rr(Reg::R11, Reg::R11);
+    code.jcc_label(0x84, loop_done); // jz done
+    code.mov_r_mem(Reg::Rax, Reg::R10, 0); // load byte from buf...
+    // Actually: load from s+16+offset, store to buf+offset
+    // Simpler: use a byte loop with movzx
+    // R8 = s+16 (data start)
+    code.mov_r_mem(Reg::R8, Reg::Rbp, 16);
+    code.add_r_imm8(Reg::R8, 16);
+    // Compute offset = original_len - R11
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rdx, Reg::Rdx, 0); // original len
+    code.mov_rr(Reg::Rax, Reg::Rdx);
+    code.sub_rr(Reg::Rax, Reg::R11); // offset
+    // Load byte from s[16+offset]
+    code.add_rr(Reg::R8, Reg::Rax);
+    code.movzx_byte(Reg::Rdx, Reg::R8, 0);
+    // Store byte to buf[offset]
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8);
+    code.add_rr(Reg::R9, Reg::Rax);
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rdx);
+    code.sub_r_imm32(Reg::R11, 1);
+    code.jmp_label(loop_start);
+    code.bind_label(loop_done);
+    // null terminate
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // len
+    code.add_rr(Reg::R9, Reg::Rax);
+    code.mov_mem_imm32(Reg::R9, 0, 0); // buf[len] = 0
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.leave_ret();
+}
+
+/// `rt_free_cstr(p: Ptr<Int>)`: free a buffer allocated by `rt_to_cstr`.
+fn emit_free_cstr(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // ptr
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_fs_exists(path: Str) -> Bool`: stub — return false (0).
+fn emit_fs_exists(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_fs_file_size(path: Str) -> Int`: stub — return -1.
+fn emit_fs_file_size(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_fs_read(path: Str) -> Str`: stub — return empty string.
+fn emit_fs_read(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_fs_write(path: Str, data: Str) -> Int`: stub — return -1.
+fn emit_fs_write(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_fs_create_dir(path: Str) -> Int`: stub — return -1.
+fn emit_fs_create_dir(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_fs_remove_dir(path: Str) -> Int`: stub — return -1.
+fn emit_fs_remove_dir(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_fs_remove_file(path: Str) -> Int`: stub — return -1.
+fn emit_fs_remove_file(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_fs_copy(src: Str, dst: Str) -> Int`: stub — return -1.
+fn emit_fs_copy(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_fs_move(src: Str, dst: Str) -> Int`: stub — return -1.
+fn emit_fs_move(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_fs_get_cwd() -> Str`: stub — return empty string.
+fn emit_fs_get_cwd(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_fs_set_cwd(path: Str) -> Int`: stub — return -1.
+fn emit_fs_set_cwd(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
     code.leave_ret();
 }
