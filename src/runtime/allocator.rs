@@ -47,7 +47,8 @@ pub struct Allocator {
     /// Committed bytes from the arena base (the high-water mark).
     cursor: u64,
     /// The LIFO free list, most recently freed first.
-    free: Vec<u64>,
+    /// Each entry is (start_offset, original_aligned_size).
+    free: Vec<(u64, u64)>,
     /// The liveness table: `MAX_LIVE_ALLOCS` slots, `None` when dead.
     table: Vec<Option<LiveEntry>>,
     /// The arena contents, `HEAP_SIZE` zero-initialized bytes.
@@ -101,8 +102,19 @@ impl Allocator {
         }
         let size = align_up(size, ALLOC_ALIGNMENT);
         let start = match self.free.pop() {
-            // Reuse the most recently freed block.
-            Some(block) => block,
+            // Reuse the most recently freed block only if it is large
+            // enough for the new allocation.  A too-small block is
+            // discarded and the allocator falls back to bump.
+            Some((block, old_size)) if old_size >= size => block,
+            Some((_block, _old_size)) => {
+                // Freed block is too small — bump-allocate instead.
+                if self.cursor + size > HEAP_SIZE {
+                    return Err(RuntimeError::new(RuntimeErrorKind::OutOfMemory, Some(size)));
+                }
+                let block = self.cursor;
+                self.cursor += size;
+                block
+            }
             None => {
                 if self.cursor + size > HEAP_SIZE {
                     return Err(RuntimeError::new(RuntimeErrorKind::OutOfMemory, Some(size)));
@@ -145,7 +157,7 @@ impl Allocator {
             unreachable!("a matching slot is always live")
         };
         debug_assert_eq!(entry.start, ptr);
-        self.free.push(ptr);
+        self.free.push((ptr, entry.size));
         Ok(())
     }
 
@@ -288,7 +300,8 @@ impl Allocator {
     }
 
     /// The LIFO free list, most recently freed first.
-    pub(crate) fn free_list(&self) -> &[u64] {
+    /// Each entry is (start_offset, original_aligned_size).
+    pub(crate) fn free_list(&self) -> &[(u64, u64)] {
         &self.free
     }
 
@@ -310,7 +323,8 @@ impl Allocator {
     /// states).
     #[cfg(test)]
     pub(crate) fn corrupt_push_free(&mut self, offset: u64) {
-        self.free.push(offset);
+        // Use ALLOC_ALIGNMENT as the assumed size for corrupted entries.
+        self.free.push((offset, ALLOC_ALIGNMENT));
     }
 }
 

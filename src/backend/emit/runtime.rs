@@ -428,15 +428,24 @@ fn emit_alloc(code: &mut Code) {
     code.and_r_imm8(Reg::Rax, 0xF0); // align up to 16
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
 
-    // Reuse the most recently freed block when the free list is nonempty.
+    // Reuse the most recently freed block when the free list is nonempty
+    // AND the freed block is large enough for the new allocation.
     let bump = code.label();
     let record = code.label();
+    let too_small = code.label();
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.free_head as u32));
     code.test_rr(Reg::Rax, Reg::Rax);
-    code.jcc_label(0x84, bump); // jz
-    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // next
+    code.jcc_label(0x84, bump); // jz (empty free list)
+    // Read the saved size from [block+8] and compare with needed size.
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // Rdx = old_size
+    code.cmp_r_mem(Reg::Rdx, Reg::Rbp, -8); // compare old_size vs needed
+    code.jcc_label(0x8C, too_small); // jl (freed block too small)
+    // Block is large enough — pop and reuse.
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // next = [block]
     code.mov_rip_r(Reg::Rcx, PatchKind::Bss(BSS.free_head as u32));
     code.jmp_label(record);
+    // Freed block too small — fall through to bump allocation.
+    code.bind_label(too_small);
 
     // Otherwise bump the cursor within the arena bounds.
     code.bind_label(bump);
@@ -510,6 +519,11 @@ fn emit_free(code: &mut Code) {
     code.jcc_label(0x85, next); // jne
     code.cmp_mem_imm8(Reg::Rcx, 16, 0);
     code.jcc_label(0x84, invalid); // je (dead: double free)
+    // Save the block's original size at [block+8] for the free-list
+    // allocator to check on reuse.
+    code.mov_r_mem(Reg::Rdx, Reg::Rcx, 8); // Rdx = slot.size
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rdx); // [block+8] = size
+
     // Mark dead and push onto the LIFO free list.
     code.mov_mem_imm32(Reg::Rcx, 16, 0);
     code.mov_r_rip(Reg::Rdx, PatchKind::Bss(BSS.free_head as u32));
@@ -3028,6 +3042,12 @@ fn emit_process_stderr_len(code: &mut Code) {
 fn emit_random_seed(code: &mut Code) {
     prologue(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // seed
+    // xorshift64* requires nonzero state: map 0 -> 1.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let nonzero = code.label();
+    code.jcc_label(0x85, nonzero); // jnz
+    code.movabs(Reg::Rax, 1u64);
+    code.bind_label(nonzero);
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(RNG_STATE));
     code.leave_ret();
 }

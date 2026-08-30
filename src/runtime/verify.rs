@@ -110,7 +110,7 @@ pub fn check(heap: &Allocator) -> Vec<Violation> {
     // V-04/V-05: free-list entries are aligned, inside the committed
     // region, not live, and unique (a cycle would repeat an offset).
     let mut seen = std::collections::HashSet::new();
-    for &block in heap.free_list() {
+    for &(block, _size) in heap.free_list() {
         if block % ALLOC_ALIGNMENT != 0 {
             violations.push(Violation::new(
                 "V-04",
