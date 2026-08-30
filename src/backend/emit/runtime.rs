@@ -1944,8 +1944,8 @@ fn emit_vec_remove(code: &mut Code) {
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
     code.sub_r_imm32(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
-    // Return removed value
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    // Return data pointer (caller reassigns v = result)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.add_rsp(16);
     code.leave_ret();
     code.bind_label(oob);
