@@ -2999,39 +2999,277 @@ fn emit_process_id(code: &mut Code) {
     code.leave_ret();
 }
 
-/// `rt_process_run(cmd) -> Int`: V1 stub — returns -1.
+/// `rt_process_run(cmd) -> Int`: Run command via cmd.exe /c, capture stdout/stderr.
+/// Frame layout:
+///   [rbp-8]=cstr  [rbp-16]=cmd_cstr  [rbp-24]=stdout_read  [rbp-32]=stdout_write
+///   [rbp-40]=stderr_read  [rbp-48]=stderr_write  [rbp-52]=exit_code(DWORD)
+///   [rbp-168..rbp-64]=STARTUPINFOA(104 bytes)
+///   [rbp-192..rbp-168]=PROCESS_INFORMATION(24 bytes)
 fn emit_process_run(code: &mut Code) {
     prologue(code);
-    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    // [rbp+16] = cmd Str ptr
+
+    // Convert cmd to CStr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax); // RSP = RBP on return
+
+    // Allocate frame
+    code.sub_rsp(512);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // [rbp-8] = original cstr
+
+    // Build "cmd.exe /c " + cmd CStr
+    // Get MINK string length
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::R11, Reg::R10, 0); // R11 = len
+
+    // Allocate 12 + len bytes (11 for "cmd.exe /c ", 1 for null)
+    code.lea_r_mem(Reg::Rax, Reg::R11, 12); // RAX = len + 12
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax (push size for Alloc)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // [rbp-16] = cmd_cstr
+
+    // Copy "cmd.exe /c " (11 bytes)
+    code.movabs(Reg::R10, 0x20657865_2E64_6D63u64);
+    code.mov_mem_r(Reg::Rax, 0, Reg::R10); // "cmd.exe " (8 bytes)
+    code.movabs(Reg::R10, 0x2Fu64);
+    code.mov_mem_r8(Reg::Rax, 8, Reg::R10); // '/' at offset 8
+    code.movabs(Reg::R10, 0x63u64);
+    code.mov_mem_r8(Reg::Rax, 9, Reg::R10); // 'c' at offset 9
+    code.movabs(Reg::R10, 0x20u64);
+    code.mov_mem_r8(Reg::Rax, 10, Reg::R10); // ' ' at offset 10
+
+    // Copy original CStr to buf[11..11+len]
+    let cp_loop = code.label();
+    let cp_done = code.label();
+    code.mov_rr(Reg::R8, Reg::R11);
+    code.bind_label(cp_loop);
+    code.test_rr(Reg::R8, Reg::R8);
+    code.jcc_label(0x84, cp_done);
+    code.mov_rr(Reg::Rax, Reg::R11);
+    code.sub_rr(Reg::Rax, Reg::R8); // offset
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rdx, Reg::Rax);
+    code.movzx_byte(Reg::Rdx, Reg::Rdx, 0);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -16);
+    code.add_rr(Reg::R10, Reg::Rax);
+    code.add_r_imm8(Reg::R10, 11);
+    code.mov_mem_r8(Reg::R10, 0, Reg::Rdx);
+    code.sub_r_imm32(Reg::R8, 1);
+    code.jmp_label(cp_loop);
+    code.bind_label(cp_done);
+
+    // Null-terminate
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -16);
+    code.add_rr(Reg::R10, Reg::R11);
+    code.add_r_imm8(Reg::R10, 11);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r8(Reg::R10, 0, Reg::Rax);
+
+    // Free original CStr
+    code.sub_rsp(8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+
+    // Zero pipe handles
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax);
+
+    // CreatePipeA for stdout
+    code.sub_rsp(32);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -32);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.xor_rr32(Reg::R9, Reg::R9);
+    code.call_rip(PatchKind::Iat(IAT_CREATE_PIPE_A));
+    code.add_rsp(32);
+
+    // CreatePipeA for stderr
+    code.sub_rsp(32);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.xor_rr32(Reg::R9, Reg::R9);
+    code.call_rip(PatchKind::Iat(IAT_CREATE_PIPE_A));
+    code.add_rsp(32);
+
+    // Zero STARTUPINFOA (104 bytes at [rbp-168])
+    for i in 0..13 {
+        code.xor_rr32(Reg::Rax, Reg::Rax);
+        code.mov_mem_r(Reg::Rbp, -168 + i * 8, Reg::Rax);
+    }
+
+    // Set STARTUPINFOA.cb = 104
+    code.mov_r32_imm32(Reg::Rax, 104);
+    code.mov_mem_r(Reg::Rbp, -168, Reg::Rax);
+
+    // Set dwFlags = STARTF_USESTDHANDLES (0x100)
+    code.movabs(Reg::Rax, 0x100u64);
+    code.mov_mem_r(Reg::Rbp, -168 + 60, Reg::Rax);
+
+    // Set hStdOutput = stdout_write (offset 88 in STARTUPINFOA)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.mov_mem_r(Reg::Rbp, -168 + 88, Reg::Rax);
+
+    // Set hStdError = stderr_write (offset 96 in STARTUPINFOA)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_mem_r(Reg::Rbp, -168 + 96, Reg::Rax);
+
+    // Zero PROCESS_INFORMATION (24 bytes at [rbp-192])
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -192, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -184, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -176, Reg::Rax);
+
+    // CreateProcessA(NULL, cmd_cstr, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)
+    code.sub_rsp(80);
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // lpApplicationName = NULL
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.xor_rr32(Reg::R9, Reg::R9);
+    code.movabs(Reg::Rax, 1u64);
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax); // bInheritHandles=TRUE
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rsp, 40, Reg::Rax); // dwCreationFlags=0
+    code.mov_mem_r(Reg::Rsp, 48, Reg::Rax); // lpEnvironment=NULL
+    code.mov_mem_r(Reg::Rsp, 56, Reg::Rax); // lpCurrentDirectory=NULL
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, -168);
+    code.mov_mem_r(Reg::Rsp, 64, Reg::Rax); // &si
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, -192);
+    code.mov_mem_r(Reg::Rsp, 72, Reg::Rax); // &pi
+    code.call_rip(PatchKind::Iat(IAT_CREATE_PROCESS_A));
+    code.add_rsp(80);
+
+    // Close pipe write ends
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+
+    // WaitForSingleObject(hProcess, INFINITE) — must come BEFORE
+    // ReadFile to avoid deadlock when child fills pipe buffer.
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -192);
+    code.movabs(Reg::Rdx, 0xFFFF_FFFFu64);
+    code.call_rip(PatchKind::Iat(IAT_WAIT_FOR_SINGLE_OBJECT));
+    code.add_rsp(32);
+
+    // GetExitCodeProcess(hProcess, &exit_code)
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // zero exit_code slot
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -192);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -56);
+    code.call_rip(PatchKind::Iat(IAT_GET_EXIT_CODE_PROCESS));
+    code.add_rsp(32);
+
+    // Read stdout (single read, V1 bounded capture)
+    code.sub_rsp(48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(BSS.stdout_buf as u32 + 8));
+    code.movabs(Reg::R8, 4088u64);
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32));
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax);
+    code.call_rip(PatchKind::Iat(IAT_READ_FILE));
+    code.add_rsp(48);
+
+    // Save stdout_len and proc_stdout_ptr
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.bytes_written as u32));
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.stdout_buf as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stdout_len as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stdout_buf as u32));
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stdout_ptr as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+
+    // Read stderr
+    code.sub_rsp(48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(BSS.stderr_buf as u32 + 8));
+    code.movabs(Reg::R8, 4088u64);
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32));
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax);
+    code.call_rip(PatchKind::Iat(IAT_READ_FILE));
+    code.add_rsp(48);
+
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.bytes_written as u32));
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.stderr_buf as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stderr_len as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stderr_buf as u32));
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stderr_ptr as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+
+    // Close handles
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -192);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -184);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+
+    // Free cmd_cstr
+    code.sub_rsp(8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+
+    // Return exit_code
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
     code.leave_ret();
 }
 
-/// `rt_process_stdout() -> Str`: V1 stub — returns empty string.
+/// `rt_process_stdout() -> Str`: Return BSS stdout buffer as Str.
 fn emit_process_stdout(code: &mut Code) {
     prologue(code);
-    code.sub_rsp(8);
-    code.xor_rr32(Reg::Rax, Reg::Rax);
-    code.u8(0x50);
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
-    code.add_rsp(16);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stdout_buf as u32));
     code.leave_ret();
 }
 
-/// `rt_process_stderr() -> Str`: V1 stub — returns empty string.
+/// `rt_process_stderr() -> Str`: Return BSS stderr buffer as Str.
 fn emit_process_stderr(code: &mut Code) {
-    emit_process_stdout(code);
+    prologue(code);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stderr_buf as u32));
+    code.leave_ret();
 }
 
-/// `rt_process_stdout_len() -> Int`: V1 stub — returns 0.
+/// `rt_process_stdout_len() -> Int`: Return captured stdout length.
 fn emit_process_stdout_len(code: &mut Code) {
     prologue(code);
-    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.proc_stdout_len as u32));
     code.leave_ret();
 }
 
-/// `rt_process_stderr_len() -> Int`: V1 stub — returns 0.
+/// `rt_process_stderr_len() -> Int`: Return captured stderr length.
 fn emit_process_stderr_len(code: &mut Code) {
-    emit_process_stdout_len(code);
+    prologue(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.proc_stderr_len as u32));
+    code.leave_ret();
 }
 
 // ===========================================================================
@@ -3348,19 +3586,24 @@ fn free_cstr(code: &mut Code, cstr_reg: Reg) {
 }
 
 /// IAT indices for kernel32 filesystem functions (numeric constants).
-const IAT_GET_FILE_ATTRIBUTES_A: u32 = 5;
-const IAT_CREATE_FILE_A: u32 = 2;
-const IAT_READ_FILE: u32 = 4;
+const IAT_GET_STD_HANDLE: u32 = 0;
 const IAT_WRITE_FILE: u32 = 1;
+const IAT_CREATE_FILE_A: u32 = 2;
 const IAT_CLOSE_HANDLE: u32 = 3;
+const IAT_READ_FILE: u32 = 4;
+const IAT_GET_FILE_ATTRIBUTES_A: u32 = 5;
 const IAT_GET_FILE_SIZE: u32 = 6;
-const IAT_DELETE_FILE_A: u32 = 12;
 const IAT_CREATE_DIRECTORY_A: u32 = 10;
 const IAT_REMOVE_DIRECTORY_A: u32 = 11;
-const IAT_COPY_FILE_A: u32 = 14;
+const IAT_DELETE_FILE_A: u32 = 12;
 const IAT_MOVE_FILE_A: u32 = 13;
+const IAT_COPY_FILE_A: u32 = 14;
 const IAT_GET_CURRENT_DIRECTORY_A: u32 = 15;
 const IAT_SET_CURRENT_DIRECTORY_A: u32 = 16;
+const IAT_CREATE_PIPE_A: u32 = 17;
+const IAT_CREATE_PROCESS_A: u32 = 18;
+const IAT_GET_EXIT_CODE_PROCESS: u32 = 19;
+const IAT_WAIT_FOR_SINGLE_OBJECT: u32 = 20;
 
 /// `rt_fs_exists(path: Str) -> Bool`.
 /// GetFileAttributesA returns INVALID_HANDLE_VALUE (0xFFFFFFFF) on error.
