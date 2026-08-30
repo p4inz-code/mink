@@ -1,0 +1,23 @@
+fn check(s: Str, i: Int) -> Int {
+    return rt_str_byte(s, i);
+}
+
+fn parse_one(input: Str, pos: Int) -> Int {
+    return check(input, pos);
+}
+
+fn main() -> Int {
+    // When input comes from a literal through a function parameter:
+    let v1 = parse_one("abc", 0);
+    let v2 = parse_one("abc", 1);
+    // Both should work because "abc" is a literal (Copy)
+    rt_print_int(v1);
+    rt_print_int(v2);
+
+    // Test: pass literal directly to check twice
+    let a = check("hello", 0);
+    let b = check("hello", 1);
+    rt_print_int(a);
+    rt_print_int(b);
+    rt_exit(0);
+}

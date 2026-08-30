@@ -1,0 +1,653 @@
+// MINK JSON Library v1.0.0 — Session 52
+//
+// ARCHITECTURE: Pre-read Arena
+// Input bytes are pre-read into the arena (Ptr<Int>), then all parsing
+// operates on the arena. This avoids the V1 Str ownership limitation
+// (Str params are consumed after first use in user functions).
+// Ptr<Int> params are NOT consumed and work for recursive parsing.
+//
+// Arena layout:
+//   [0 .. input_len-1]              = input bytes (one Int per byte)
+//   [input_len]                     = separator word (0)
+//   [input_len+1 .. ]               = parsed JSON values
+//
+// Value encoding (word-offsets in the arena, starting after input):
+//   tag 0 = null                  [0]
+//   tag 1 = bool                  [1, 0_or_1]
+//   tag 2 = number                [2, length, byte0, byte1, ...]
+//   tag 3 = string                [3, length, byte0, byte1, ...]
+//   tag 4 = array                 [4, count, elem0..., elem1..., ...]
+//   tag 5 = object                [5, count, klen0, kbyte0..., val0..., ...]
+//
+// Limits: 64KB arena, ~8000-byte input, ~20 nesting depth
+
+fn _read(arena: Ptr<Int>, offset: Int) -> Int {
+    return rt_mem_load(arena + offset * 8);
+}
+
+fn _write(arena: Ptr<Int>, offset: Int, val: Int) {
+    rt_mem_store(arena + offset * 8, val);
+}
+
+fn _concat(a: Str, b: Str) -> Str {
+    return rt_str_concat(a, b);
+}
+
+// ============================================================================
+// Value size computation
+// ============================================================================
+
+fn _val_size(arena: Ptr<Int>, offset: Int) -> Int {
+    let mut tag = _read(arena, offset);
+    if tag == 0 { return 1; }
+    if tag == 1 { return 2; }
+    if tag == 2 {
+        let mut len = _read(arena, offset + 1);
+        return 2 + len;
+    }
+    if tag == 3 {
+        let mut len = _read(arena, offset + 1);
+        return 2 + len;
+    }
+    if tag == 4 {
+        let mut count = _read(arena, offset + 1);
+        let mut cur = offset + 2;
+        let mut i = 0;
+        while i < count {
+            cur = cur + _val_size(arena, cur);
+            i = i + 1;
+        }
+        return cur - offset;
+    }
+    if tag == 5 {
+        let mut count = _read(arena, offset + 1);
+        let mut cur = offset + 2;
+        let mut c = cur;
+        let mut i = 0;
+        while i < count {
+            let mut klen = _read(arena, c);
+            c = c + 1 + klen;
+            c = c + _val_size(arena, c);
+            i = i + 1;
+        }
+        return c - offset;
+    }
+    return 1;
+}
+
+// ============================================================================
+// Value constructors — write at wp, return wp
+// ============================================================================
+
+fn json_null(arena: Ptr<Int>, wp: Int) -> Int {
+    _write(arena, wp, 0);
+    return wp;
+}
+
+fn json_bool_val(arena: Ptr<Int>, wp: Int, b: Bool) -> Int {
+    _write(arena, wp, 1);
+    if b { _write(arena, wp + 1, 1); } else { _write(arena, wp + 1, 0); }
+    return wp;
+}
+
+fn json_int_val(arena: Ptr<Int>, wp: Int, n: Int) -> Int {
+    let mut s = rt_str_from_int(n);
+    let mut len = rt_str_len(s);
+    _write(arena, wp, 2);
+    _write(arena, wp + 1, len);
+    let mut i = 0;
+    while i < len {
+        _write(arena, wp + 2 + i, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    return wp;
+}
+
+fn json_num_text(arena: Ptr<Int>, wp: Int, s: Str) -> Int {
+    let mut len = rt_str_len(s);
+    _write(arena, wp, 2);
+    _write(arena, wp + 1, len);
+    let mut i = 0;
+    while i < len {
+        _write(arena, wp + 2 + i, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    return wp;
+}
+
+fn json_str_val(arena: Ptr<Int>, wp: Int, s: Str) -> Int {
+    let mut len = rt_str_len(s);
+    _write(arena, wp, 3);
+    _write(arena, wp + 1, len);
+    let mut i = 0;
+    while i < len {
+        _write(arena, wp + 2 + i, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    return wp + 2 + len;
+}
+
+fn json_arr_start(arena: Ptr<Int>, wp: Int) -> Int {
+    _write(arena, wp, 4);
+    _write(arena, wp + 1, 0);
+    return wp;
+}
+
+fn json_obj_start(arena: Ptr<Int>, wp: Int) -> Int {
+    _write(arena, wp, 5);
+    _write(arena, wp + 1, 0);
+    return wp;
+}
+
+// ============================================================================
+// Value access
+// ============================================================================
+
+fn json_tag(arena: Ptr<Int>, offset: Int) -> Int {
+    return _read(arena, offset);
+}
+
+fn json_as_bool(arena: Ptr<Int>, offset: Int) -> Bool {
+    return _read(arena, offset + 1) == 1;
+}
+
+fn json_as_int(arena: Ptr<Int>, offset: Int) -> Int {
+    let mut len = _read(arena, offset + 1);
+    let mut result = 0;
+    let mut neg = false;
+    let mut p = 0;
+    if len > 0 && _read(arena, offset + 2) == 45 {
+        neg = true;
+        p = 1;
+    }
+    while p < len {
+        result = result * 10 + _read(arena, offset + 2 + p) - 48;
+        p = p + 1;
+    }
+    if neg { return 0 - result; }
+    return result;
+}
+
+fn json_num_str(arena: Ptr<Int>, offset: Int) -> Str {
+    let mut len = _read(arena, offset + 1);
+    let mut s = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        rt_str_set_byte(s, i, _read(arena, offset + 2 + i));
+        i = i + 1;
+    }
+    return s;
+}
+
+fn json_as_str(arena: Ptr<Int>, offset: Int) -> Str {
+    let mut len = _read(arena, offset + 1);
+    let mut s = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        rt_str_set_byte(s, i, _read(arena, offset + 2 + i));
+        i = i + 1;
+    }
+    return s;
+}
+
+fn json_arr_len(arena: Ptr<Int>, offset: Int) -> Int {
+    return _read(arena, offset + 1);
+}
+
+fn json_arr_get(arena: Ptr<Int>, arr_off: Int, idx: Int) -> Int {
+    let mut count = _read(arena, arr_off + 1);
+    if idx >= count { return 0; }
+    let mut cur = arr_off + 2;
+    let mut i = 0;
+    while i < idx {
+        cur = cur + _val_size(arena, cur);
+        i = i + 1;
+    }
+    return cur;
+}
+
+fn json_obj_len(arena: Ptr<Int>, offset: Int) -> Int {
+    return _read(arena, offset + 1);
+}
+
+fn json_obj_get_key(arena: Ptr<Int>, obj_off: Int, idx: Int) -> Str {
+    let mut count = _read(arena, obj_off + 1);
+    if idx >= count { return rt_str_alloc(0); }
+    let mut c = obj_off + 2;
+    let mut i = 0;
+    while i < idx {
+        let mut klen = _read(arena, c);
+        c = c + 1 + klen;
+        c = c + _val_size(arena, c);
+        i = i + 1;
+    }
+    let mut klen = _read(arena, c);
+    let mut s = rt_str_alloc(klen);
+    let mut j = 0;
+    while j < klen {
+        rt_str_set_byte(s, j, _read(arena, c + 1 + j));
+        j = j + 1;
+    }
+    return s;
+}
+
+fn json_obj_get_val(arena: Ptr<Int>, obj_off: Int, idx: Int) -> Int {
+    let mut count = _read(arena, obj_off + 1);
+    if idx >= count { return 0; }
+    let mut c = obj_off + 2;
+    let mut i = 0;
+    while i < idx {
+        let mut klen = _read(arena, c);
+        c = c + 1 + klen;
+        c = c + _val_size(arena, c);
+        i = i + 1;
+    }
+    let mut klen = _read(arena, c);
+    return c + 1 + klen;
+}
+
+// ============================================================================
+// Parser — reads from arena[0..input_len-1], writes values starting at wp
+// Returns (value_offset, new_read_pos, new_write_pos)
+// ============================================================================
+
+fn _skip_ws(arena: Ptr<Int>, input_len: Int, pos: Int) -> Int {
+    let mut p = pos;
+    while p < input_len {
+        let mut ch = _read(arena, p);
+        if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+            p = p + 1;
+        } else {
+            return p;
+        }
+    }
+    return p;
+}
+
+fn _hex_digit(ch: Int) -> Int {
+    if ch >= 48 && ch <= 57 { return ch - 48; }
+    if ch >= 65 && ch <= 70 { return ch - 55; }
+    if ch >= 97 && ch <= 102 { return ch - 87; }
+    return 0;
+}
+
+fn _parse_string_from_arena(arena: Ptr<Int>, input_len: Int, pos: Int) -> (Str, Int) {
+    // pos points to opening quote
+    let mut start = pos + 1;
+    let mut count = 0;
+    let mut i = start;
+    while i < input_len {
+        let mut ch = _read(arena, i);
+        if ch == 34 {
+            // closing quote — build output string
+            let mut out = rt_str_alloc(count);
+            let mut j = 0;
+            let mut k = start;
+            while k < i {
+                let mut c = _read(arena, k);
+                if c == 92 && k + 1 < i {
+                    let esc = _read(arena, k + 1);
+                    if esc == 34 { rt_str_set_byte(out, j, 34); j = j + 1; }
+                    else if esc == 92 { rt_str_set_byte(out, j, 92); j = j + 1; }
+                    else if esc == 47 { rt_str_set_byte(out, j, 47); j = j + 1; }
+                    else if esc == 98 { rt_str_set_byte(out, j, 8); j = j + 1; }
+                    else if esc == 102 { rt_str_set_byte(out, j, 12); j = j + 1; }
+                    else if esc == 110 { rt_str_set_byte(out, j, 10); j = j + 1; }
+                    else if esc == 114 { rt_str_set_byte(out, j, 13); j = j + 1; }
+                    else if esc == 116 { rt_str_set_byte(out, j, 9); j = j + 1; }
+                    else if esc == 117 && k + 5 < i {
+                        let hi = _hex_digit(_read(arena, k + 2));
+                        let hi2 = _hex_digit(_read(arena, k + 3));
+                        let lo = _hex_digit(_read(arena, k + 4));
+                        let lo2 = _hex_digit(_read(arena, k + 5));
+                        let code = hi * 4096 + hi2 * 256 + lo * 16 + lo2;
+                        if code <= 127 { rt_str_set_byte(out, j, code); }
+                        else { rt_str_set_byte(out, j, 63); }
+                        j = j + 1;
+                        k = k + 6;
+                    } else {
+                        rt_str_set_byte(out, j, esc); j = j + 1;
+                    }
+                    k = k + 2;
+                } else {
+                    rt_str_set_byte(out, j, c); j = j + 1;
+                    k = k + 1;
+                }
+            }
+            return (out, i + 1);
+        }
+        if ch == 92 && i + 1 < input_len {
+            let mut esc = _read(arena, i + 1);
+            if esc == 117 && i + 5 < input_len { i = i + 6; } else { i = i + 2; }
+        } else {
+            i = i + 1;
+        }
+        count = count + 1;
+    }
+    return (rt_str_alloc(0), 0);
+}
+
+fn _parse_number_from_arena(arena: Ptr<Int>, input_len: Int, pos: Int) -> (Str, Int) {
+    let mut start = pos;
+    let mut i = pos;
+    if i < input_len && _read(arena, i) == 45 { i = i + 1; }
+    // Must have at least one digit after optional minus
+    if i >= input_len || _read(arena, i) < 48 || _read(arena, i) > 57 {
+        return (rt_str_alloc(0), 0);
+    }
+    while i < input_len {
+        let mut ch = _read(arena, i);
+        if ch >= 48 && ch <= 57 { i = i + 1; } else { break; }
+    }
+    if i < input_len && _read(arena, i) == 46 {
+        i = i + 1;
+        while i < input_len {
+            let mut ch = _read(arena, i);
+            if ch >= 48 && ch <= 57 { i = i + 1; } else { break; }
+        }
+    }
+    if i < input_len {
+        let mut ch = _read(arena, i);
+        if ch == 69 || ch == 101 {
+            i = i + 1;
+            if i < input_len { let ch2 = _read(arena, i); if ch2 == 43 || ch2 == 45 { i = i + 1; } }
+            while i < input_len {
+                let mut ch3 = _read(arena, i);
+                if ch3 >= 48 && ch3 <= 57 { i = i + 1; } else { break; }
+            }
+        }
+    }
+    let mut num_len = i - start;
+    let mut out = rt_str_alloc(num_len);
+    let mut j = 0;
+    while j < num_len {
+        rt_str_set_byte(out, j, _read(arena, start + j));
+        j = j + 1;
+    }
+    return (out, i);
+}
+
+// Main parse function — returns (value_offset, new_read_pos, new_write_pos)
+fn _parse_array(arena: Ptr<Int>, input_len: Int, pos: Int, wp: Int) -> (Int, Int, Int) {
+    let mut arr_wp = wp;
+    _write(arena, arr_wp, 4);
+    _write(arena, arr_wp + 1, 0);
+    let mut p = _skip_ws(arena, input_len, pos + 1);
+    let mut elem_wp = arr_wp + 2;
+    let mut count = 0;
+    if p < input_len && _read(arena, p) == 93 {
+        return (arr_wp, p + 1, elem_wp);
+    }
+    while p < input_len {
+        let mut result = _parse_value(arena, input_len, p, elem_wp);
+        if result.0 == 0 { return (0, result.1, result.2); }
+        p = _skip_ws(arena, input_len, result.1);
+        elem_wp = result.2;
+        count = count + 1;
+        if p < input_len && _read(arena, p) == 44 {
+            p = p + 1;
+        } else if p < input_len && _read(arena, p) == 93 {
+            _write(arena, arr_wp + 1, count);
+            return (arr_wp, p + 1, elem_wp);
+        } else {
+            return (0, p, elem_wp);
+        }
+    }
+    return (0, p, elem_wp);
+}
+
+fn _parse_object(arena: Ptr<Int>, input_len: Int, pos: Int, wp: Int) -> (Int, Int, Int) {
+    let mut obj_wp = wp;
+    _write(arena, obj_wp, 5);
+    _write(arena, obj_wp + 1, 0);
+    let mut p = _skip_ws(arena, input_len, pos + 1);
+    let mut entry_wp = obj_wp + 2;
+    let mut count = 0;
+    if p < input_len && _read(arena, p) == 125 {
+        return (obj_wp, p + 1, entry_wp);
+    }
+    while p < input_len {
+        if _read(arena, p) != 34 { return (0, p, entry_wp); }
+        let mut key_result = _parse_string_from_arena(arena, input_len, p);
+        let mut key = key_result.0;
+        p = _skip_ws(arena, input_len, key_result.1);
+        if p >= input_len || _read(arena, p) != 58 { rt_str_free(key); return (0, p, entry_wp); }
+        p = _skip_ws(arena, input_len, p + 1);
+        let mut klen = rt_str_len(key);
+        _write(arena, entry_wp, klen);
+        let mut j = 0;
+        while j < klen {
+            _write(arena, entry_wp + 1 + j, rt_str_byte(key, j));
+            j = j + 1;
+        }
+        rt_str_free(key);
+        let mut val_wp = entry_wp + 1 + klen;
+        let mut val_result = _parse_value(arena, input_len, p, val_wp);
+        if val_result.0 == 0 { return (0, val_result.1, val_result.2); }
+        p = _skip_ws(arena, input_len, val_result.1);
+        entry_wp = val_result.2;
+        count = count + 1;
+        if p < input_len && _read(arena, p) == 44 {
+            p = p + 1;
+        } else if p < input_len && _read(arena, p) == 125 {
+            _write(arena, obj_wp + 1, count);
+            return (obj_wp, p + 1, entry_wp);
+        } else {
+            return (0, p, entry_wp);
+        }
+    }
+    return (0, p, entry_wp);
+}
+
+fn _parse_value(arena: Ptr<Int>, input_len: Int, pos: Int, wp: Int) -> (Int, Int, Int) {
+    let mut p = _skip_ws(arena, input_len, pos);
+    if p >= input_len { return (0, p, wp); }
+    let mut ch = _read(arena, p);
+    // null
+    if ch == 110 && p + 3 < input_len && _read(arena,p+1)==117 && _read(arena,p+2)==108 && _read(arena,p+3)==108 {
+        _write(arena, wp, 0);
+        return (wp, p + 4, wp + 1);
+    }
+    // true
+    if ch == 116 && p + 3 < input_len && _read(arena,p+1)==114 && _read(arena,p+2)==117 && _read(arena,p+3)==101 {
+        _write(arena, wp, 1);
+        _write(arena, wp + 1, 1);
+        return (wp, p + 4, wp + 2);
+    }
+    // false
+    if ch == 102 && p + 4 < input_len && _read(arena,p+1)==97 && _read(arena,p+2)==108 && _read(arena,p+3)==115 && _read(arena,p+4)==101 {
+        _write(arena, wp, 1);
+        _write(arena, wp + 1, 0);
+        return (wp, p + 5, wp + 2);
+    }
+    // string
+    if ch == 34 {
+        let mut result = _parse_string_from_arena(arena, input_len, p);
+        if result.1 == 0 { rt_str_free(result.0); return (0, p, wp); }
+        let mut end_wp = json_str_val(arena, wp, result.0);
+        rt_str_free(result.0);
+        return (wp, result.1, end_wp);
+    }
+    // number
+    if ch == 45 || (ch >= 48 && ch <= 57) {
+        let mut result = _parse_number_from_arena(arena, input_len, p);
+        if result.1 == 0 { rt_str_free(result.0); return (0, p, wp); }
+        let mut num_len = rt_str_len(result.0);
+        _write(arena, wp, 2);
+        _write(arena, wp + 1, num_len);
+        let mut j = 0;
+        while j < num_len {
+            _write(arena, wp + 2 + j, rt_str_byte(result.0, j));
+            j = j + 1;
+        }
+        rt_str_free(result.0);
+        return (wp, result.1, wp + 2 + num_len);
+    }
+    // array
+    if ch == 91 { return _parse_array(arena, input_len, p, wp); }
+    // object
+    if ch == 123 { return _parse_object(arena, input_len, p, wp); }
+    return (0, p, wp);
+}
+
+// Public parse entry point — takes Str input, returns value offset (0 on error)
+fn json_parse(input: Str, arena: Ptr<Int>) -> Int {
+    let mut input_len = rt_str_len(input);
+    // Pre-read input bytes into arena[0..input_len-1]
+    let mut i = 0;
+    while i < input_len {
+        _write(arena, i, rt_str_byte(input, i));
+        i = i + 1;
+    }
+    // Parse starting at read position 0, write position input_len+1
+    let mut result = _parse_value(arena, input_len, 0, input_len + 1);
+    if result.0 == 0 { return 0; }
+    let mut p = _skip_ws(arena, input_len, result.1);
+    if p < input_len { return 0; }
+    return result.0;
+}
+
+// ============================================================================
+// Serializer — reads from arena, builds output string
+// ============================================================================
+
+fn _ser_escape(s: Str) -> Str {
+    let mut len = rt_str_len(s);
+    let mut out_len = 0;
+    let mut i = 0;
+    while i < len {
+        let mut ch = rt_str_byte(s, i);
+        if ch == 34 || ch == 92 || ch == 10 || ch == 13 || ch == 9 || ch == 8 || ch == 12 {
+            out_len = out_len + 2;
+        } else {
+            out_len = out_len + 1;
+        }
+        i = i + 1;
+    }
+    let mut out = rt_str_alloc(out_len);
+    let mut j = 0;
+    i = 0;
+    while i < len {
+        let mut ch = rt_str_byte(s, i);
+        if ch == 34 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 34); j = j + 2; }
+        else if ch == 92 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 92); j = j + 2; }
+        else if ch == 10 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 110); j = j + 2; }
+        else if ch == 13 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 114); j = j + 2; }
+        else if ch == 9 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 116); j = j + 2; }
+        else if ch == 8 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 98); j = j + 2; }
+        else if ch == 12 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 102); j = j + 2; }
+        else { rt_str_set_byte(out, j, ch); j = j + 1; }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn _ser_char(ch: Int) -> Str {
+    let mut s = rt_str_alloc(1);
+    rt_str_set_byte(s, 0, ch);
+    return s;
+}
+
+fn _ser_value(arena: Ptr<Int>, offset: Int) -> Str {
+    let mut tag = _read(arena, offset);
+    if tag == 0 {
+        let mut s = rt_str_alloc(4);
+        rt_str_set_byte(s, 0, 110); rt_str_set_byte(s, 1, 117);
+        rt_str_set_byte(s, 2, 108); rt_str_set_byte(s, 3, 108);
+        return s;
+    }
+    if tag == 1 {
+        if _read(arena, offset + 1) == 1 {
+            let mut s = rt_str_alloc(4);
+            rt_str_set_byte(s, 0, 116); rt_str_set_byte(s, 1, 114);
+            rt_str_set_byte(s, 2, 117); rt_str_set_byte(s, 3, 101);
+            return s;
+        }
+        let mut s = rt_str_alloc(5);
+        rt_str_set_byte(s, 0, 102); rt_str_set_byte(s, 1, 97);
+        rt_str_set_byte(s, 2, 108); rt_str_set_byte(s, 3, 115);
+        rt_str_set_byte(s, 4, 101);
+        return s;
+    }
+    if tag == 2 {
+        let mut len = _read(arena, offset + 1);
+        let mut s = rt_str_alloc(len);
+        let mut i = 0;
+        while i < len {
+            rt_str_set_byte(s, i, _read(arena, offset + 2 + i));
+            i = i + 1;
+        }
+        return s;
+    }
+    if tag == 3 {
+        let mut len = _read(arena, offset + 1);
+        let mut raw = rt_str_alloc(len);
+        let mut i = 0;
+        while i < len {
+            rt_str_set_byte(raw, i, _read(arena, offset + 2 + i));
+            i = i + 1;
+        }
+        let mut escaped = _ser_escape(raw);
+        let mut elen = rt_str_len(escaped);
+        let mut out = rt_str_alloc(2 + elen);
+        rt_str_set_byte(out, 0, 34);
+        i = 0;
+        while i < elen {
+            rt_str_set_byte(out, i + 1, rt_str_byte(escaped, i));
+            i = i + 1;
+        }
+        rt_str_set_byte(out, elen + 1, 34);
+        return out;
+    }
+    if tag == 4 {
+        let mut count = _read(arena, offset + 1);
+        if count == 0 {
+            let mut s = rt_str_alloc(2);
+            rt_str_set_byte(s, 0, 91); rt_str_set_byte(s, 1, 93);
+            return s;
+        }
+        let mut r = _ser_char(91);
+        let mut cur = offset + 2;
+        let mut i = 0;
+        while i < count {
+            if i > 0 { r = _concat(r, _ser_char(44)); }
+            r = _concat(r, _ser_value(arena, cur));
+            cur = cur + _val_size(arena, cur);
+            i = i + 1;
+        }
+        return _concat(r, _ser_char(93));
+    }
+    if tag == 5 {
+        let mut count = _read(arena, offset + 1);
+        if count == 0 {
+            let mut s = rt_str_alloc(2);
+            rt_str_set_byte(s, 0, 123); rt_str_set_byte(s, 1, 125);
+            return s;
+        }
+        let mut r = _ser_char(123);
+        let mut c = offset + 2;
+        let mut i = 0;
+        while i < count {
+            if i > 0 { r = _concat(r, _ser_char(44)); }
+            let mut klen = _read(arena, c);
+            r = _concat(r, _ser_char(34));
+            let mut j = 0;
+            while j < klen {
+                r = _concat(r, _ser_char(_read(arena, c + 1 + j)));
+                j = j + 1;
+            }
+            r = _concat(r, _ser_char(34));
+            r = _concat(r, _ser_char(58));
+            let mut val_off = c + 1 + klen;
+            r = _concat(r, _ser_value(arena, val_off));
+            c = val_off + _val_size(arena, val_off);
+            i = i + 1;
+        }
+        return _concat(r, _ser_char(125));
+    }
+    return rt_str_alloc(0);
+}
+
+fn json_to_str(arena: Ptr<Int>, offset: Int) -> Str {
+    return _ser_value(arena, offset);
+}

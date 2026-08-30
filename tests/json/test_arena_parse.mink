@@ -1,0 +1,30 @@
+fn _read(arena: Ptr<Int>, offset: Int) -> Int {
+    return rt_mem_load(arena + offset * 8);
+}
+
+fn _write(arena: Ptr<Int>, offset: Int, val: Int) {
+    rt_mem_store(arena + offset * 8, val);
+}
+
+fn parse_from_arena(arena: Ptr<Int>, start: Int, end: Int) -> Int {
+    if start >= end { return 0; }
+    let ch = _read(arena, start);
+    if ch == 110 { return 0; }  // null
+    if ch == 116 { return 1; }  // true
+    if ch == 102 { return 2; }  // false
+    return -1;
+}
+
+fn main() -> Int {
+    let arena = rt_alloc(4096);
+    let input = "true";
+    let len = rt_str_len(input);
+    let mut i = 0;
+    while i < len {
+        _write(arena, i, rt_str_byte(input, i));
+        i = i + 1;
+    }
+    let result = parse_from_arena(arena, 0, len);
+    rt_print_int(result);
+    rt_exit(0);
+}

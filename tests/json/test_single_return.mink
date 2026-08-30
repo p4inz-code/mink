@@ -1,0 +1,35 @@
+// Single return at end — only s appears in final return
+fn test_single_return(s: Str, sub: Str) -> (Int, Str) {
+    let slen = rt_str_len(s);
+    let sublen = rt_str_len(sub);
+    let mut result = -1;
+    if sublen == 0 { result = 0; }
+    if sublen > slen { result = -1; }
+    if sublen > 0 && sublen <= slen {
+        let mut i = 0;
+        let limit = slen - sublen;
+        let mut found = -1;
+        while i <= limit {
+            let mut match_found = true;
+            let mut j = 0;
+            while j < sublen {
+                if rt_str_byte(s, i + j) != rt_str_byte(sub, j) {
+                    match_found = false;
+                    j = sublen;
+                } else {
+                    j = j + 1;
+                }
+            }
+            if match_found { found = i; i = slen; }
+            if !match_found { i = i + 1; }
+        }
+        result = found;
+    }
+    return (result, s);
+}
+
+fn main() {
+    let r = test_single_return("hello world", "world");
+    rt_print_int(r.0);
+    rt_exit(0);
+}

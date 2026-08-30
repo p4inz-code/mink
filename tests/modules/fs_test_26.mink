@@ -1,0 +1,12 @@
+
+fn main() {
+    let d = fs_create_dir("test_mkdir_session56");
+    rt_print_int(d);
+    let exists = fs_exists("test_mkdir_session56");
+    if exists { rt_print_int(1); } else { rt_print_int(0); }
+    let r = fs_remove_dir("test_mkdir_session56");
+    rt_print_int(r);
+    let gone = fs_exists("test_mkdir_session56");
+    if gone { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}

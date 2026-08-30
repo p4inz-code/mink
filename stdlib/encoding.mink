@@ -1,0 +1,495 @@
+// MINK Encoding Library v1.0.0 — Session 55
+// Fourth official MINK ecosystem library.
+//
+// V1 CONSTRAINTS: User functions consume Str params. Intrinsic calls
+// (rt_str_byte, rt_str_len, rt_str_set_byte, rt_str_alloc, rt_str_free,
+// rt_str_eq, rt_str_concat) do NOT consume Str.
+// Every function has exactly one return statement.
+
+// ============================================================================
+// Hex
+// ============================================================================
+
+fn _hex_digit_lo(b: Int) -> Int {
+    if b < 10 { return b + 48; }
+    return b + 87;
+}
+
+fn _hex_digit_up(b: Int) -> Int {
+    if b < 10 { return b + 48; }
+    return b + 55;
+}
+
+fn _hex_val(b: Int) -> Int {
+    if b >= 48 && b <= 57 { return b - 48; }
+    if b >= 65 && b <= 70 { return b - 55; }
+    if b >= 97 && b <= 102 { return b - 87; }
+    return -1;
+}
+
+fn hex_encode(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let out = rt_str_alloc(len * 2);
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(s, i);
+        rt_str_set_byte(out, i * 2, _hex_digit_lo((b >> 4) & 15));
+        rt_str_set_byte(out, i * 2 + 1, _hex_digit_lo(b & 15));
+        i = i + 1;
+    }
+    return out;
+}
+
+fn hex_encode_upper(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let out = rt_str_alloc(len * 2);
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(s, i);
+        rt_str_set_byte(out, i * 2, _hex_digit_up((b >> 4) & 15));
+        rt_str_set_byte(out, i * 2 + 1, _hex_digit_up(b & 15));
+        i = i + 1;
+    }
+    return out;
+}
+
+fn hex_decode_alloc(s: Str) -> (Str, Int) {
+    let slen = rt_str_len(s);
+    if slen % 2 != 0 { return (rt_str_alloc(0), -1); }
+    // Validate all hex chars first
+    let mut valid = 1;
+    let mut vi = 0;
+    while vi < slen && valid == 1 {
+        if _hex_val(rt_str_byte(s, vi)) < 0 { valid = 0; }
+        vi = vi + 1;
+    }
+    if valid == 0 { return (rt_str_alloc(0), -1); }
+    // All valid — decode
+    let out = rt_str_alloc(slen / 2);
+    let mut i = 0;
+    while i < slen {
+        rt_str_set_byte(out, i / 2, _hex_val(rt_str_byte(s, i)) * 16 + _hex_val(rt_str_byte(s, i + 1)));
+        i = i + 2;
+    }
+    return (out, slen / 2);
+}
+
+// ============================================================================
+// Base64
+// ============================================================================
+
+fn _b64_char(v: Int) -> Int {
+    if v < 26 { return v + 65; }
+    if v < 52 { return v + 71; }
+    if v < 62 { return v - 4; }
+    if v == 62 { return 43; }
+    return 47;
+}
+
+fn _b64_char_url(v: Int) -> Int {
+    if v < 26 { return v + 65; }
+    if v < 52 { return v + 71; }
+    if v < 62 { return v - 4; }
+    if v == 62 { return 45; }
+    return 95;
+}
+
+fn _b64_val(c: Int) -> Int {
+    if c >= 65 && c <= 90 { return c - 65; }
+    if c >= 97 && c <= 122 { return c - 97; }
+    if c >= 48 && c <= 57 { return c - 48 + 52; }
+    if c == 43 || c == 45 { return 62; }
+    if c == 47 || c == 95 { return 63; }
+    return -1;
+}
+
+fn base64_encode(s: Str) -> Str {
+    let len = rt_str_len(s);
+    if len == 0 { return rt_str_alloc(0); }
+    let out_len = (len + 2) / 3 * 4;
+    let out = rt_str_alloc(out_len);
+    let mut i = 0;
+    let mut o = 0;
+    while i < len {
+        let b0 = rt_str_byte(s, i);
+        let mut b1 = 0;
+        let mut b2 = 0;
+        if i + 1 < len { b1 = rt_str_byte(s, i + 1); }
+        if i + 2 < len { b2 = rt_str_byte(s, i + 2); }
+        let n = b0 * 65536 + b1 * 256 + b2;
+        rt_str_set_byte(out, o, _b64_char((n >> 18) & 63));
+        rt_str_set_byte(out, o + 1, _b64_char((n >> 12) & 63));
+        if i + 1 < len { rt_str_set_byte(out, o + 2, _b64_char((n >> 6) & 63)); }
+        else { rt_str_set_byte(out, o + 2, 61); }
+        if i + 2 < len { rt_str_set_byte(out, o + 3, _b64_char(n & 63)); }
+        else { rt_str_set_byte(out, o + 3, 61); }
+        i = i + 3;
+        o = o + 4;
+    }
+    return out;
+}
+
+fn base64_url_encode(s: Str) -> Str {
+    let len = rt_str_len(s);
+    if len == 0 { return rt_str_alloc(0); }
+    let out_len = (len + 2) / 3 * 4;
+    let out = rt_str_alloc(out_len);
+    let mut i = 0;
+    let mut o = 0;
+    while i < len {
+        let b0 = rt_str_byte(s, i);
+        let mut b1 = 0;
+        let mut b2 = 0;
+        if i + 1 < len { b1 = rt_str_byte(s, i + 1); }
+        if i + 2 < len { b2 = rt_str_byte(s, i + 2); }
+        let n = b0 * 65536 + b1 * 256 + b2;
+        rt_str_set_byte(out, o, _b64_char_url((n >> 18) & 63));
+        rt_str_set_byte(out, o + 1, _b64_char_url((n >> 12) & 63));
+        if i + 1 < len { rt_str_set_byte(out, o + 2, _b64_char_url((n >> 6) & 63)); }
+        else { rt_str_set_byte(out, o + 2, 45); }
+        if i + 2 < len { rt_str_set_byte(out, o + 3, _b64_char_url(n & 63)); }
+        else { rt_str_set_byte(out, o + 3, 45); }
+        i = i + 3;
+        o = o + 4;
+    }
+    return out;
+}
+
+// Base64 decode: combined length check + decode to avoid consuming s twice
+fn base64_decode_alloc(s: Str) -> (Str, Int) {
+    let slen = rt_str_len(s);
+    if slen == 0 { return (rt_str_alloc(0), 0); }
+    if slen % 4 != 0 { return (rt_str_alloc(0), -1); }
+    // Validate all characters first, then allocate and decode
+    let mut valid = 1;
+    let mut vi = 0;
+    while vi < slen && valid == 1 {
+        let c0 = _b64_val(rt_str_byte(s, vi));
+        let c1 = _b64_val(rt_str_byte(s, vi + 1));
+        let c2 = _b64_val(rt_str_byte(s, vi + 2));
+        let c3 = _b64_val(rt_str_byte(s, vi + 3));
+        if c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0 { valid = 0; }
+        vi = vi + 4;
+    }
+    if valid == 0 { return (rt_str_alloc(0), -1); }
+    // All valid — compute output length and decode
+    let mut pad = 0;
+    if slen >= 2 && rt_str_byte(s, slen - 1) == 61 { pad = pad + 1; }
+    if slen >= 2 && rt_str_byte(s, slen - 2) == 61 { pad = pad + 1; }
+    let dlen = slen / 4 * 3 - pad;
+    let out = rt_str_alloc(dlen);
+    let mut out_idx = 0;
+    let mut i = 0;
+    while i < slen {
+        let val = _b64_val(rt_str_byte(s, i)) * 262144 + _b64_val(rt_str_byte(s, i + 1)) * 4096 + _b64_val(rt_str_byte(s, i + 2)) * 64 + _b64_val(rt_str_byte(s, i + 3));
+        rt_str_set_byte(out, out_idx, (val >> 16) & 255);
+        rt_str_set_byte(out, out_idx + 1, (val >> 8) & 255);
+        rt_str_set_byte(out, out_idx + 2, val & 255);
+        out_idx = out_idx + 3;
+        i = i + 4;
+    }
+    return (out, out_idx);
+}
+
+fn base64_url_decode_alloc(s: Str) -> (Str, Int) {
+    let slen = rt_str_len(s);
+    // Validate by converting URL chars and checking validity
+    let mut valid = 1;
+    let mut vi = 0;
+    while vi < slen && valid == 1 {
+        let c = rt_str_byte(s, vi);
+        let mut sc = c;
+        if c == 45 { sc = 43; }
+        if c == 95 { sc = 47; }
+        let cv = _b64_val(sc);
+        if cv < 0 { valid = 0; }
+        vi = vi + 1;
+    }
+    if valid == 0 { return (rt_str_alloc(0), -1); }
+    if slen % 4 != 0 { return (rt_str_alloc(0), -1); }
+    // All valid — decode inline
+    let mut pad = 0;
+    if slen >= 2 && rt_str_byte(s, slen - 1) == 45 { pad = pad + 1; }
+    if slen >= 2 && rt_str_byte(s, slen - 2) == 45 { pad = pad + 1; }
+    if slen >= 2 && rt_str_byte(s, slen - 1) == 61 { pad = pad + 1; }
+    if slen >= 2 && rt_str_byte(s, slen - 2) == 61 { pad = pad + 1; }
+    let dlen = slen / 4 * 3 - pad;
+    let out = rt_str_alloc(dlen);
+    let mut out_idx = 0;
+    let mut j = 0;
+    while j < slen {
+        let c0raw = rt_str_byte(s, j);
+        let c1raw = rt_str_byte(s, j + 1);
+        let c2raw = rt_str_byte(s, j + 2);
+        let c3raw = rt_str_byte(s, j + 3);
+        let mut c0v = c0raw;
+        let mut c1v = c1raw;
+        let mut c2v = c2raw;
+        let mut c3v = c3raw;
+        if c0raw == 45 { c0v = 43; }
+        if c1raw == 45 { c1v = 43; }
+        if c2raw == 45 { c2v = 43; }
+        if c3raw == 45 { c3v = 43; }
+        if c0raw == 95 { c0v = 47; }
+        if c1raw == 95 { c1v = 47; }
+        if c2raw == 95 { c2v = 47; }
+        if c3raw == 95 { c3v = 47; }
+        let val = _b64_val(c0v) * 262144 + _b64_val(c1v) * 4096 + _b64_val(c2v) * 64 + _b64_val(c3v);
+        rt_str_set_byte(out, out_idx, (val >> 16) & 255);
+        rt_str_set_byte(out, out_idx + 1, (val >> 8) & 255);
+        rt_str_set_byte(out, out_idx + 2, val & 255);
+        out_idx = out_idx + 3;
+        j = j + 4;
+    }
+    return (out, out_idx);
+}
+
+// ============================================================================
+// UTF-8
+// ============================================================================
+
+fn utf8_validate(s: Str) -> Bool {
+    let len = rt_str_len(s);
+    let mut i = 0;
+    let mut valid = 1;
+    while i < len && valid == 1 {
+        let b = rt_str_byte(s, i);
+        if b <= 127 {
+            i = i + 1;
+        } else if b >= 192 && b <= 223 {
+            if i + 1 >= len { valid = 0; }
+            else {
+                let b2 = rt_str_byte(s, i + 1);
+                if b2 < 128 || b2 > 191 { valid = 0; }
+                else { i = i + 2; }
+            }
+        } else if b >= 224 && b <= 239 {
+            if i + 2 >= len { valid = 0; }
+            else {
+                let b2 = rt_str_byte(s, i + 1);
+                let b3 = rt_str_byte(s, i + 2);
+                if b2 < 128 || b2 > 191 { valid = 0; }
+                else if b3 < 128 || b3 > 191 { valid = 0; }
+                else {
+                    let cp = (b - 224) * 4096 + (b2 - 128) * 64 + (b3 - 128);
+                    if cp < 2048 { valid = 0; }
+                    else { i = i + 3; }
+                }
+            }
+        } else if b >= 240 && b <= 244 {
+            if i + 3 >= len { valid = 0; }
+            else {
+                let b2 = rt_str_byte(s, i + 1);
+                let b3 = rt_str_byte(s, i + 2);
+                let b4 = rt_str_byte(s, i + 3);
+                if b2 < 128 || b2 > 191 { valid = 0; }
+                else if b3 < 128 || b3 > 191 { valid = 0; }
+                else if b4 < 128 || b4 > 191 { valid = 0; }
+                else {
+                    let cp = (b - 240) * 262144 + (b2 - 128) * 4096 + (b3 - 128) * 64 + (b4 - 128);
+                    if cp < 65536 || cp > 1114111 { valid = 0; }
+                    else { i = i + 4; }
+                }
+            }
+        } else {
+            valid = 0;
+        }
+    }
+    return valid == 1;
+}
+
+fn utf8_char_count(s: Str) -> Int {
+    let len = rt_str_len(s);
+    let mut count = 0;
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(s, i);
+        if b <= 127 { i = i + 1; }
+        else if b >= 192 && b <= 223 { i = i + 2; }
+        else if b >= 224 && b <= 239 { i = i + 3; }
+        else if b >= 240 && b <= 244 { i = i + 4; }
+        else { i = i + 1; }
+        count = count + 1;
+    }
+    return count;
+}
+
+// ============================================================================
+// Byte Classification
+// ============================================================================
+
+fn byte_is_digit(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn byte_is_upper(b: Int) -> Bool {
+    return b >= 65 && b <= 90;
+}
+
+fn byte_is_lower(b: Int) -> Bool {
+    return b >= 97 && b <= 122;
+}
+
+fn byte_is_alpha(b: Int) -> Bool {
+    return (b >= 65 && b <= 90) || (b >= 97 && b <= 122);
+}
+
+fn byte_is_alphanumeric(b: Int) -> Bool {
+    return (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122);
+}
+
+fn byte_is_hex(b: Int) -> Bool {
+    return (b >= 48 && b <= 57) || (b >= 65 && b <= 70) || (b >= 97 && b <= 102);
+}
+
+fn byte_is_printable(b: Int) -> Bool {
+    return b >= 32 && b <= 126;
+}
+
+fn byte_is_whitespace(b: Int) -> Bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
+}
+
+fn str_is_ascii(s: Str) -> Bool {
+    let len = rt_str_len(s);
+    let mut i = 0;
+    let mut ok = 1;
+    while i < len && ok == 1 {
+        if rt_str_byte(s, i) > 127 { ok = 0; }
+        i = i + 1;
+    }
+    return ok == 1;
+}
+
+// ============================================================================
+// Int / Hex conversions
+// ============================================================================
+
+fn int_to_hex(n: Int) -> Str {
+    if n == 0 { return "0"; }
+    let mut val = n;
+    let mut digits = 0;
+    let mut tmp = val;
+    while tmp > 0 { digits = digits + 1; tmp = tmp / 16; }
+    let out = rt_str_alloc(digits);
+    let mut i = digits;
+    while i > 0 {
+        i = i - 1;
+        let d = val % 16;
+        if d < 10 { rt_str_set_byte(out, i, d + 48); }
+        else { rt_str_set_byte(out, i, d + 87); }
+        val = val / 16;
+    }
+    return out;
+}
+
+fn hex_to_int(s: Str) -> Int {
+    let len = rt_str_len(s);
+    let mut result = 0;
+    let mut i = 0;
+    while i < len {
+        let d = _hex_val(rt_str_byte(s, i));
+        if d < 0 { return 0; }
+        result = result * 16 + d;
+        i = i + 1;
+    }
+    return result;
+}
+
+// ============================================================================
+// URL Percent Encoding
+// ============================================================================
+
+fn _is_url_unreserved(b: Int) -> Bool {
+    if b >= 65 && b <= 90 { return true; }
+    if b >= 97 && b <= 122 { return true; }
+    if b >= 48 && b <= 57 { return true; }
+    if b == 45 || b == 95 || b == 46 || b == 126 { return true; }
+    return false;
+}
+
+fn url_encode(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let mut out_len = 0;
+    let mut i = 0;
+    while i < len {
+        if _is_url_unreserved(rt_str_byte(s, i)) { out_len = out_len + 1; }
+        else { out_len = out_len + 3; }
+        i = i + 1;
+    }
+    let out = rt_str_alloc(out_len);
+    let mut o = 0;
+    i = 0;
+    while i < len {
+        let b = rt_str_byte(s, i);
+        if _is_url_unreserved(b) {
+            rt_str_set_byte(out, o, b);
+            o = o + 1;
+        } else {
+            rt_str_set_byte(out, o, 37);
+            rt_str_set_byte(out, o + 1, _hex_digit_up((b >> 4) & 15));
+            rt_str_set_byte(out, o + 2, _hex_digit_up(b & 15));
+            o = o + 3;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn _count_url_decode_len(s: Str) -> Int {
+    let slen = rt_str_len(s);
+    let mut count = 0;
+    let mut i = 0;
+    while i < slen {
+        if rt_str_byte(s, i) == 37 && i + 2 < slen { i = i + 3; }
+        else { i = i + 1; }
+        count = count + 1;
+    }
+    return count;
+}
+
+fn url_decode_alloc(s: Str) -> (Str, Int) {
+    let slen = rt_str_len(s);
+    // Validate hex sequences first
+    let mut valid = 1;
+    let mut vi = 0;
+    while vi < slen && valid == 1 {
+        let b = rt_str_byte(s, vi);
+        if b == 37 && vi + 2 < slen {
+            if _hex_val(rt_str_byte(s, vi + 1)) < 0 { valid = 0; }
+            else if _hex_val(rt_str_byte(s, vi + 2)) < 0 { valid = 0; }
+            else { vi = vi + 3; }
+        } else {
+            vi = vi + 1;
+        }
+    }
+    if valid == 0 { return (rt_str_alloc(0), -1); }
+    // All valid — compute length and decode
+    let mut dlen = 0;
+    let mut ti = 0;
+    while ti < slen {
+        if rt_str_byte(s, ti) == 37 && ti + 2 < slen { ti = ti + 3; }
+        else { ti = ti + 1; }
+        dlen = dlen + 1;
+    }
+    let out = rt_str_alloc(dlen);
+    let mut o = 0;
+    let mut i = 0;
+    while i < slen {
+        let b = rt_str_byte(s, i);
+        if b == 37 {
+            let hi = _hex_val(rt_str_byte(s, i + 1));
+            let lo = _hex_val(rt_str_byte(s, i + 2));
+            rt_str_set_byte(out, o, hi * 16 + lo);
+            i = i + 3;
+        } else if b == 43 {
+            rt_str_set_byte(out, o, 32);
+            i = i + 1;
+        } else {
+            rt_str_set_byte(out, o, b);
+            i = i + 1;
+        }
+        o = o + 1;
+    }
+    return (out, o);
+}

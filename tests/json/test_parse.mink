@@ -1,0 +1,104 @@
+mod json;
+
+fn do_parse(input: Str, arena: Ptr<Int>) -> Int {
+    return json_parse(input, arena);
+}
+
+fn do_tag(arena: Ptr<Int>, v: Int) -> Int {
+    return json_tag(arena, v);
+}
+
+fn do_as_bool(arena: Ptr<Int>, v: Int) -> Bool {
+    return json_as_bool(arena, v);
+}
+
+fn do_arr_len(arena: Ptr<Int>, v: Int) -> Int {
+    return json_arr_len(arena, v);
+}
+
+fn do_obj_len(arena: Ptr<Int>, v: Int) -> Int {
+    return json_obj_len(arena, v);
+}
+
+fn main() -> Int {
+    let arena = rt_alloc(65536);
+    let mut err = 0;
+
+    // 1: null
+    let v = do_parse("null", arena);
+    if v == 0 { err = 1; }
+    if err == 0 && do_tag(arena, v) != 0 { err = 2; }
+
+    // 2: true
+    let v2 = do_parse("true", arena);
+    if err == 0 && v2 == 0 { err = 3; }
+    if err == 0 && do_tag(arena, v2) != 1 { err = 4; }
+    if err == 0 && do_as_bool(arena, v2) != true { err = 5; }
+
+    // 3: false
+    let v3 = do_parse("false", arena);
+    if err == 0 && v3 == 0 { err = 6; }
+    if err == 0 && do_tag(arena, v3) != 1 { err = 7; }
+    if err == 0 && do_as_bool(arena, v3) != false { err = 8; }
+
+    // 4: integer
+    let v4 = do_parse("42", arena);
+    if err == 0 && v4 == 0 { err = 9; }
+    if err == 0 && do_tag(arena, v4) != 2 { err = 10; }
+
+    // 5: string
+    let v6 = do_parse("\"hello\"", arena);
+    if err == 0 && v6 == 0 { err = 11; }
+    if err == 0 && do_tag(arena, v6) != 3 { err = 12; }
+
+    // 6: empty array
+    let v8 = do_parse("[]", arena);
+    if err == 0 && v8 == 0 { err = 13; }
+    if err == 0 && do_tag(arena, v8) != 4 { err = 14; }
+    if err == 0 && do_arr_len(arena, v8) != 0 { err = 15; }
+
+    // 7: array [1,2,3]
+    let v9 = do_parse("[1, 2, 3]", arena);
+    if err == 0 && v9 == 0 { err = 16; }
+    if err == 0 && do_tag(arena, v9) != 4 { err = 17; }
+    if err == 0 && do_arr_len(arena, v9) != 3 { err = 18; }
+
+    // 8: empty object
+    let v10 = do_parse("{}", arena);
+    if err == 0 && v10 == 0 { err = 19; }
+    if err == 0 && do_tag(arena, v10) != 5 { err = 20; }
+    if err == 0 && do_obj_len(arena, v10) != 0 { err = 21; }
+
+    // 9: object {"x": 99}
+    let v11 = do_parse("{\"x\": 99}", arena);
+    if err == 0 && v11 == 0 { err = 22; }
+    if err == 0 && do_tag(arena, v11) != 5 { err = 23; }
+    if err == 0 && do_obj_len(arena, v11) != 1 { err = 24; }
+
+    // 10: whitespace
+    let v12 = do_parse("  \n  true  \n  ", arena);
+    if err == 0 && v12 == 0 { err = 25; }
+    if err == 0 && do_tag(arena, v12) != 1 { err = 26; }
+
+    // 11: negative int
+    let v13 = do_parse("-7", arena);
+    if err == 0 && v13 == 0 { err = 27; }
+    if err == 0 && do_tag(arena, v13) != 2 { err = 28; }
+
+    // 12: string with escape
+    let v14 = do_parse("\"a\\nb\"", arena);
+    if err == 0 && v14 == 0 { err = 29; }
+    if err == 0 && do_tag(arena, v14) != 3 { err = 30; }
+
+    // 13: mixed array
+    let v15 = do_parse("[1, \"two\", true, null]", arena);
+    if err == 0 && v15 == 0 { err = 31; }
+    if err == 0 && do_arr_len(arena, v15) != 4 { err = 32; }
+
+    if err == 0 {
+        rt_print_str("all parse tests passed");
+    } else {
+        rt_print_int(err);
+    }
+    rt_exit(0);
+}

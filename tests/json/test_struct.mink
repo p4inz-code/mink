@@ -1,0 +1,11 @@
+struct StrBox {
+    tag: Int,
+    val: Str,
+}
+
+fn main() -> Int {
+    let b: StrBox = StrBox { tag: 3, val: "hello" };
+    rt_print_int(b.tag);
+    rt_print_int(rt_str_len(b.val));
+    rt_exit(0);
+}

@@ -1,0 +1,87 @@
+// ==========================================================================
+// MINK Process Library — Session 59
+//
+// Process execution, output capture, and environment utilities.
+// Built on runtime intrinsics that call Windows kernel32 APIs.
+//
+// API:
+//   process_run(cmd: Str) -> Int       Run a command, return exit code.
+//                                       Captures stdout/stderr (up to 4088 bytes each).
+//   process_stdout() -> Str            Get stdout from the last process_run.
+//   process_stderr() -> Str            Get stderr from the last process_run.
+//   process_stdout_len() -> Int        Length of captured stdout.
+//   process_stderr_len() -> Int        Length of captured stderr.
+//   process_id() -> Int                Current process ID.
+//
+// Error model:
+//   process_run returns the child process exit code.
+//   A failed launch (bad path) typically returns exit code 1.
+//   Stdout/stderr are empty strings if the process produced no output.
+//
+// Memory:
+//   stdout/stderr are stored in fixed BSS buffers (no heap allocation).
+//   The contents are overwritten by each process_run call.
+//   Max capture: 4088 bytes per stream (excess truncated).
+//
+// Platform:
+//   Currently Windows-only via kernel32 CreateProcessA.
+//   Future: Linux/macOS via posix_spawn or fork+exec.
+// ==========================================================================
+
+// Run an external command and return its exit code.
+// stdout and stderr are captured (up to 4088 bytes each) and available
+// via process_stdout() and process_stderr().
+fn process_run(cmd: Str) -> Int {
+    return rt_process_run(cmd);
+}
+
+// Get the stdout output from the last process_run call.
+fn process_stdout() -> Str {
+    return rt_process_stdout();
+}
+
+// Get the stderr output from the last process_run call.
+fn process_stderr() -> Str {
+    return rt_process_stderr();
+}
+
+// Get the length of the stdout output from the last process_run call.
+fn process_stdout_len() -> Int {
+    return rt_process_stdout_len();
+}
+
+// Get the length of the stderr output from the last process_run call.
+fn process_stderr_len() -> Int {
+    return rt_process_stderr_len();
+}
+
+// Get the current process ID.
+fn process_id() -> Int {
+    return rt_process_id();
+}
+
+// Check if a command string is non-empty and likely valid.
+fn process_is_valid_cmd(cmd: Str) -> Bool {
+    if rt_str_len(cmd) == 0 {
+        return false;
+    }
+    return true;
+}
+
+// Run a command and return true if it succeeded (exit code 0).
+fn process_run_ok(cmd: Str) -> Bool {
+    let code = process_run(cmd);
+    if code == 0 {
+        return true;
+    }
+    return false;
+}
+
+// Run a command and check if stdout is non-empty.
+fn process_has_output(cmd: Str) -> Bool {
+    process_run(cmd);
+    if process_stdout_len() > 0 {
+        return true;
+    }
+    return false;
+}

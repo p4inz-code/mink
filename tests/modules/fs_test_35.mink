@@ -1,0 +1,21 @@
+
+fn main() {
+    let path = "test_cycles.txt";
+    let d1 = rt_str_from_int(1);
+    fs_write(path, d1);
+    let r1 = fs_read(path);
+    let l1 = rt_str_len(r1);
+    rt_print_int(l1);
+    let d2 = rt_str_from_int(22);
+    fs_write(path, d2);
+    let r2 = fs_read(path);
+    let l2 = rt_str_len(r2);
+    rt_print_int(l2);
+    let d3 = rt_str_from_int(333);
+    fs_write(path, d3);
+    let r3 = fs_read(path);
+    let l3 = rt_str_len(r3);
+    rt_print_int(l3);
+    fs_remove_file(path);
+    rt_exit(0);
+}

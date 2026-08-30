@@ -1,0 +1,53 @@
+fn main() {
+    // Test Float division
+    let a: Float = 10.0;
+    let b: Float = 3.0;
+    let c: Float = a / b;
+    rt_print_float(c);
+    
+    // Test Float comparison
+    if a > b {
+        rt_print_int(1);
+    } else {
+        rt_print_int(0);
+    }
+    
+    // Test Float equality
+    if a == a {
+        rt_print_int(1);
+    } else {
+        rt_print_int(0);
+    }
+    
+    // Test Float negate
+    let d: Float = 0.0 - a;
+    rt_print_float(d);
+    
+    // Test nested
+    let e: Float = (a + b) * 2.0;
+    rt_print_float(e);
+    
+    // Test Int operations (baseline)
+    let x: Int = 10;
+    let y: Int = 3;
+    rt_print_int(x / y);
+    rt_print_int(x % y);
+    
+    // Test absolute via comparison
+    let f: Float = 0.0 - 5.0;
+    if f < 0.0 {
+        let g: Float = 0.0 - f;
+        rt_print_float(g);
+    }
+    
+    // Test min/max manually
+    let h: Float = 3.0;
+    let i: Float = 7.0;
+    if h < i {
+        rt_print_float(h);
+    } else {
+        rt_print_float(i);
+    }
+    
+    rt_exit(0);
+}

@@ -1,0 +1,14 @@
+
+fn main() {
+    let src = "test_cpy_src.txt";
+    let dst = "test_cpy_dst.txt";
+    let data = rt_str_from_int(99);
+    fs_write(src, data);
+    let c = fs_copy_file(src, dst);
+    rt_print_int(c);
+    let sz = fs_file_size(dst);
+    rt_print_int(sz);
+    fs_remove_file(src);
+    fs_remove_file(dst);
+    rt_exit(0);
+}

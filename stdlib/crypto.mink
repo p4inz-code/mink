@@ -1,0 +1,354 @@
+// MINK Cryptography Library (Session 71)
+// Primitives: HMAC-SHA256, HKDF-SHA256, secure random
+// Secure random: backed by Windows BCryptGenRandom (CSPRNG)
+// All string operations use rt_str_alloc + rt_str_set_byte (no leaks)
+//
+// DEPENDENCIES: stdlib/hashing.mink (SHA-256, hex_encode, digest_equal)
+//
+// MINK OWNERSHIP RULES:
+//   Runtime intrinsics (rt_str_byte, rt_str_len, rt_str_set_byte, rt_str_free,
+//   rt_str_alloc, rt_mem_store, rt_mem_load) do NOT consume Str parameters.
+//   User-defined functions DO consume Str parameters (MINK move semantics).
+//   This library is carefully structured to only pass freshly-allocated strings
+//   to user functions.
+
+// ============================================================
+// CRYPTO INIT
+// ============================================================
+
+fn crypto_init() -> Int {
+    return rt_crypto_init();
+}
+
+// ============================================================
+// SECURE RANDOM
+// ============================================================
+
+fn crypto_random_bytes(count: Int) -> Str {
+    let buf = rt_str_alloc(count);
+    let result = rt_crypto_random_bytes(buf, count);
+    if result != 0 {
+        let mut i = 0;
+        while i < count {
+            rt_str_set_byte(buf, i, 0);
+            i = i + 1;
+        }
+    }
+    return buf;
+}
+
+fn crypto_random_int() -> Int {
+    return rt_crypto_random_int();
+}
+
+fn crypto_random_hex(count: Int) -> Str {
+    let bytes = crypto_random_bytes(count);
+    let len = rt_str_len(bytes);
+    let result = rt_str_alloc(len * 2);
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(bytes, i);
+        let hi = (b >> 4) & 15;
+        let lo = b & 15;
+        let mut hi_digit = 48;
+        if hi >= 10 {
+            hi_digit = 87;
+        }
+        let mut lo_digit = 48;
+        if lo >= 10 {
+            lo_digit = 87;
+        }
+        rt_str_set_byte(result, i * 2, hi + hi_digit);
+        rt_str_set_byte(result, i * 2 + 1, lo + lo_digit);
+        i = i + 1;
+    }
+    rt_str_free(bytes);
+    return result;
+}
+
+// ============================================================
+// CONSTANT-TIME COMPARISON
+// ============================================================
+
+fn crypto_verify(a: Str, b: Str) -> Bool {
+    let len_a = rt_str_len(a);
+    let len_b = rt_str_len(b);
+    let mut diff = len_a ^ len_b;
+    let mut min_len = len_a;
+    if len_b < min_len {
+        min_len = len_b;
+    }
+    let mut i = 0;
+    while i < min_len {
+        let ba = rt_str_byte(a, i);
+        let bb = rt_str_byte(b, i);
+        diff = diff | (ba ^ bb);
+        i = i + 1;
+    }
+    if diff == 0 {
+        return true;
+    }
+    return false;
+}
+
+// ============================================================
+// HEX/RAW HELPERS
+// ============================================================
+
+fn _hex_to_raw(hex_str: Str) -> Str {
+    let hex_len = rt_str_len(hex_str);
+    let raw_len = hex_len / 2;
+    let raw = rt_str_alloc(raw_len);
+    let mut i = 0;
+    while i < raw_len {
+        let hi_ch = rt_str_byte(hex_str, i * 2);
+        let lo_ch = rt_str_byte(hex_str, i * 2 + 1);
+        let mut hi = hi_ch - 48;
+        if hi > 9 {
+            hi = hi - 39;
+        }
+        let mut lo = lo_ch - 48;
+        if lo > 9 {
+            lo = lo - 39;
+        }
+        rt_str_set_byte(raw, i, hi * 16 + lo);
+        i = i + 1;
+    }
+    return raw;
+}
+
+fn _raw_to_hex(raw_str: Str) -> Str {
+    let raw_len = rt_str_len(raw_str);
+    let hex = rt_str_alloc(raw_len * 2);
+    let mut i = 0;
+    while i < raw_len {
+        let b = rt_str_byte(raw_str, i);
+        let hi = (b >> 4) & 15;
+        let lo = b & 15;
+        let mut hi_digit = 48;
+        if hi >= 10 {
+            hi_digit = 87;
+        }
+        let mut lo_digit = 48;
+        if lo >= 10 {
+            lo_digit = 87;
+        }
+        rt_str_set_byte(hex, i * 2, hi + hi_digit);
+        rt_str_set_byte(hex, i * 2 + 1, lo + lo_digit);
+        i = i + 1;
+    }
+    return hex;
+}
+
+// ============================================================
+// HMAC-SHA256 (RFC 2104)
+// ============================================================
+// Uses raw key bytes via intrinsics (non-consuming).
+
+fn hmac_sha256(key: Str, message: Str) -> Str {
+    let key_len = rt_str_len(key);
+
+    // Build 64-byte key block.
+    // ALWAYS copy key bytes first via intrinsics (non-consuming).
+    // If key > 64, hash it and use the hash result instead.
+    let key_block = rt_str_alloc(64);
+    let mut i = 0;
+    while i < 64 {
+        if i < key_len {
+            rt_str_set_byte(key_block, i, rt_str_byte(key, i));
+        } else {
+            rt_str_set_byte(key_block, i, 0);
+        }
+        i = i + 1;
+    }
+    // Now handle key > 64: hash key, then copy hash into key_block
+    if key_len > 64 {
+        // key consumed by hash_sha256
+        let key_hex = hash_sha256(key);
+        let hashed_raw = _hex_to_raw(key_hex);
+        i = 0;
+        while i < 32 {
+            rt_str_set_byte(key_block, i, rt_str_byte(hashed_raw, i));
+            i = i + 1;
+        }
+        rt_str_free(hashed_raw);
+        i = 32;
+        while i < 64 {
+            rt_str_set_byte(key_block, i, 0);
+            i = i + 1;
+        }
+    }
+
+    // Inner hash: SHA-256((K XOR ipad) || message)
+    let msg_len = rt_str_len(message);
+    let inner = rt_str_alloc(64 + msg_len);
+    i = 0;
+    while i < 64 {
+        rt_str_set_byte(inner, i, rt_str_byte(key_block, i) ^ 0x36);
+        i = i + 1;
+    }
+    i = 0;
+    while i < msg_len {
+        rt_str_set_byte(inner, 64 + i, rt_str_byte(message, i));
+        i = i + 1;
+    }
+    // hash_sha256 consumes inner (freshly allocated, fine)
+    // message consumed by rt_str_byte calls? No - intrinsics don't consume.
+    // message consumed here:
+    let inner_hex = hash_sha256(inner);
+    // inner consumed
+
+    // Convert inner to raw
+    let inner_raw = _hex_to_raw(inner_hex);
+
+    // Outer hash: SHA-256((K XOR opad) || inner_raw)
+    let outer = rt_str_alloc(64 + 32);
+    i = 0;
+    while i < 64 {
+        rt_str_set_byte(outer, i, rt_str_byte(key_block, i) ^ 0x5C);
+        i = i + 1;
+    }
+    i = 0;
+    while i < 32 {
+        rt_str_set_byte(outer, 64 + i, rt_str_byte(inner_raw, i));
+        i = i + 1;
+    }
+    rt_str_free(key_block);
+    rt_str_free(inner_raw);
+
+    // hash_sha256 consumes outer
+    let result = hash_sha256(outer);
+    return result;
+}
+
+// ============================================================
+// HKDF-SHA256 (RFC 5869)
+// ============================================================
+
+// hkdf_extract(salt, ikm) -> 32-byte raw Str
+fn hkdf_extract(salt: Str, ikm: Str) -> Str {
+    let prk_hex = hmac_sha256(salt, ikm);
+    // salt and ikm consumed by hmac_sha256
+    let prk_raw = _hex_to_raw(prk_hex);
+    // prk_hex consumed by _hex_to_raw
+    return prk_raw;
+}
+
+// hkdf_expand(prk_raw, info, length) -> raw bytes Str
+// Inlines HMAC-SHA256 entirely using only intrinsics on prk_raw.
+// This avoids MINK move-semantics: prk_raw is never passed to a user function.
+fn hkdf_expand(prk_raw: Str, info: Str, length: Int) -> Str {
+    let n = (length + 31) / 32;
+    let result = rt_str_alloc(length);
+    let mut offset = 0;
+    let mut block = 1;
+    let mut prev_raw = rt_str_alloc(0);
+    let mut prev_len = 0;
+
+    while block <= n {
+        // Build HMAC input: T(i-1) || info || block_byte
+        let info_len = rt_str_len(info);
+        let input_len = prev_len + info_len + 1;
+        let hmac_input = rt_str_alloc(input_len);
+        let mut k = 0;
+        while k < prev_len {
+            rt_str_set_byte(hmac_input, k, rt_str_byte(prev_raw, k));
+            k = k + 1;
+        }
+        k = 0;
+        while k < info_len {
+            rt_str_set_byte(hmac_input, prev_len + k, rt_str_byte(info, k));
+            k = k + 1;
+        }
+        rt_str_set_byte(hmac_input, prev_len + info_len, block);
+
+        // Build 64-byte key block from prk_raw (all intrinsics, non-consuming)
+        let key_block = rt_str_alloc(64);
+        k = 0;
+        while k < 64 {
+            if k < 32 {
+                rt_str_set_byte(key_block, k, rt_str_byte(prk_raw, k));
+            } else {
+                rt_str_set_byte(key_block, k, 0);
+            }
+            k = k + 1;
+        }
+
+        // Inner hash: SHA-256((K XOR ipad) || hmac_input)
+        let msg_len = rt_str_len(hmac_input);
+        let inner = rt_str_alloc(64 + msg_len);
+        k = 0;
+        while k < 64 {
+            rt_str_set_byte(inner, k, rt_str_byte(key_block, k) ^ 0x36);
+            k = k + 1;
+        }
+        k = 0;
+        while k < msg_len {
+            rt_str_set_byte(inner, 64 + k, rt_str_byte(hmac_input, k));
+            k = k + 1;
+        }
+        rt_str_free(hmac_input);
+        // hmac_input consumed? No - intrinsics don't consume.
+        // But we're done with it, free it.
+        let inner_hex = hash_sha256(inner);
+        // inner consumed by hash_sha256
+        let inner_raw = _hex_to_raw(inner_hex);
+
+        // Outer hash: SHA-256((K XOR opad) || inner_raw)
+        let outer = rt_str_alloc(64 + 32);
+        k = 0;
+        while k < 64 {
+            rt_str_set_byte(outer, k, rt_str_byte(key_block, k) ^ 0x5C);
+            k = k + 1;
+        }
+        k = 0;
+        while k < 32 {
+            rt_str_set_byte(outer, 64 + k, rt_str_byte(inner_raw, k));
+            k = k + 1;
+        }
+        rt_str_free(key_block);
+        rt_str_free(inner_raw);
+
+        let t_hex = hash_sha256(outer);
+        // outer consumed by hash_sha256
+        let new_t_raw = _hex_to_raw(t_hex);
+
+        // Copy T(i) into result
+        let copy_len = rt_str_len(new_t_raw);
+        let mut j = 0;
+        while j < copy_len && offset + j < length {
+            rt_str_set_byte(result, offset + j, rt_str_byte(new_t_raw, j));
+            j = j + 1;
+        }
+        offset = offset + copy_len;
+
+        rt_str_free(prev_raw);
+        prev_raw = new_t_raw;
+        prev_len = rt_str_len(prev_raw);
+        block = block + 1;
+    }
+    rt_str_free(prev_raw);
+    return result;
+}
+
+// hkdf_sha256(ikm, salt, info, length) -> raw bytes Str
+fn hkdf_sha256(ikm: Str, salt: Str, info: Str, length: Int) -> Str {
+    let prk_raw = hkdf_extract(salt, ikm);
+    // prk_raw consumed by hkdf_expand
+    let okm = hkdf_expand(prk_raw, info, length);
+    return okm;
+}
+
+// ============================================================
+// UTILITY
+// ============================================================
+
+fn crypto_secure_zero_str(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let mut i = 0;
+    while i < len {
+        rt_str_set_byte(s, i, 0);
+        i = i + 1;
+    }
+    return s;
+}

@@ -1,0 +1,31 @@
+fn main() {
+    // Test Int-to-Float conversion
+    let a: Int = 5;
+    let b: Float = a as Float;
+    rt_print_float(b);
+    
+    // Test Float-to-Int conversion
+    let c: Float = 3.7;
+    let d: Int = c as Int;
+    rt_print_int(d);
+    
+    // Test Float comparison
+    let e: Float = 1.5;
+    let f: Float = 2.5;
+    if e < f {
+        rt_print_int(1);
+    }
+    if e > f {
+        rt_print_int(0);
+    }
+    if e == e {
+        rt_print_int(1);
+    }
+    
+    // Test Int comparison ops (baseline)
+    if 5 < 10 {
+        rt_print_int(1);
+    }
+    
+    rt_exit(0);
+}

@@ -1,0 +1,15 @@
+fn get_b(s: Str, i: Int) -> Int {
+    return rt_str_byte(s, i);
+}
+
+fn parse_value(input: Str, pos: Int) -> Int {
+    let a = get_b(input, pos);
+    let b = get_b(input, pos + 1);
+    return a + b;
+}
+
+fn main() -> Int {
+    let result = parse_value("hello", 0);
+    rt_print_int(result);
+    rt_exit(0);
+}

@@ -1,0 +1,6 @@
+
+fn main() {
+    let f = path_filename("foo/bar.txt");
+    rt_print_int(rt_str_len(f));
+    rt_exit(0);
+}

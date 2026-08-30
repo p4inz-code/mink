@@ -1,0 +1,5 @@
+
+fn main() {
+    if path_is_absolute("/foo") { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}

@@ -1409,6 +1409,148 @@ impl<'a> FnBuilder<'a> {
                 // Non-loop trailing expression: fall through to StmtEval.
                 self.eval.eval_operand(expr)
             }
+            HirExprKind::Binary {
+                op: BinaryOp::And,
+                lhs,
+                rhs,
+            } => {
+                // Short-circuit a && b: evaluate a, if false skip b.
+                self.ensure_current(expr.span);
+                let lhs_val = self.eval_operand(lhs);
+                let bool_ty = self.eval.bool_ty();
+                let result_local = self.eval.temp(bool_ty, expr.span);
+                let rhs_block = self.alloc_block();
+                let false_block = self.alloc_block();
+                let merge_block = self.alloc_block();
+                self.terminate(MirTerminator::Branch {
+                    cond: lhs_val.clone(),
+                    then_block: rhs_block,
+                    else_block: false_block,
+                    span: expr.span,
+                });
+                // RHS block: evaluate b and store result.
+                self.start_block(rhs_block, expr.span);
+                let rhs_val = self.eval_operand(rhs);
+                let rhs_result = self.eval.temp_rvalue(
+                    expr,
+                    MirRvalueKind::Binary {
+                        op: BinaryOp::And,
+                        lhs: lhs_val.clone(),
+                        rhs: rhs_val,
+                    },
+                );
+                self.emit_stmt(MirStmt {
+                    kind: MirStmtKind::Assign {
+                        target: MirTarget {
+                            kind: MirTargetKind::Local(result_local),
+                            span: expr.span,
+                            ty: bool_ty,
+                        },
+                        rvalue: use_rvalue(rhs_result, expr.span, bool_ty),
+                    },
+                    span: expr.span,
+                });
+                self.terminate(MirTerminator::Jump {
+                    target: merge_block,
+                    span: expr.span,
+                });
+                // False block: result is false.
+                self.start_block(false_block, expr.span);
+                let false_val = self.eval.temp_rvalue(expr, MirRvalueKind::Use(lhs_val));
+                self.emit_stmt(MirStmt {
+                    kind: MirStmtKind::Assign {
+                        target: MirTarget {
+                            kind: MirTargetKind::Local(result_local),
+                            span: expr.span,
+                            ty: bool_ty,
+                        },
+                        rvalue: use_rvalue(false_val, expr.span, bool_ty),
+                    },
+                    span: expr.span,
+                });
+                self.terminate(MirTerminator::Jump {
+                    target: merge_block,
+                    span: expr.span,
+                });
+                // Merge block: read from result local.
+                self.start_block(merge_block, expr.span);
+                MirOperand {
+                    kind: MirOperandKind::Local(result_local),
+                    span: expr.span,
+                    ty: bool_ty,
+                }
+            }
+            HirExprKind::Binary {
+                op: BinaryOp::Or,
+                lhs,
+                rhs,
+            } => {
+                // Short-circuit a || b: evaluate a, if true skip b.
+                self.ensure_current(expr.span);
+                let lhs_val = self.eval_operand(lhs);
+                let bool_ty = self.eval.bool_ty();
+                let result_local = self.eval.temp(bool_ty, expr.span);
+                let rhs_block = self.alloc_block();
+                let true_block = self.alloc_block();
+                let merge_block = self.alloc_block();
+                self.terminate(MirTerminator::Branch {
+                    cond: lhs_val.clone(),
+                    then_block: true_block,
+                    else_block: rhs_block,
+                    span: expr.span,
+                });
+                // RHS block: evaluate b and store result.
+                self.start_block(rhs_block, expr.span);
+                let rhs_val = self.eval_operand(rhs);
+                let rhs_result = self.eval.temp_rvalue(
+                    expr,
+                    MirRvalueKind::Binary {
+                        op: BinaryOp::Or,
+                        lhs: lhs_val.clone(),
+                        rhs: rhs_val,
+                    },
+                );
+                self.emit_stmt(MirStmt {
+                    kind: MirStmtKind::Assign {
+                        target: MirTarget {
+                            kind: MirTargetKind::Local(result_local),
+                            span: expr.span,
+                            ty: bool_ty,
+                        },
+                        rvalue: use_rvalue(rhs_result, expr.span, bool_ty),
+                    },
+                    span: expr.span,
+                });
+                self.terminate(MirTerminator::Jump {
+                    target: merge_block,
+                    span: expr.span,
+                });
+                // True block: result is true.
+                self.start_block(true_block, expr.span);
+                let true_val = self.eval.temp_rvalue(expr, MirRvalueKind::Use(lhs_val));
+                self.emit_stmt(MirStmt {
+                    kind: MirStmtKind::Assign {
+                        target: MirTarget {
+                            kind: MirTargetKind::Local(result_local),
+                            span: expr.span,
+                            ty: bool_ty,
+                        },
+                        rvalue: use_rvalue(true_val, expr.span, bool_ty),
+                    },
+                    span: expr.span,
+                });
+                self.terminate(MirTerminator::Jump {
+                    target: merge_block,
+                    span: expr.span,
+                });
+                // Merge block: read from result local.
+                self.start_block(merge_block, expr.span);
+                MirOperand {
+                    kind: MirOperandKind::Local(result_local),
+                    span: expr.span,
+                    ty: bool_ty,
+                }
+            }
             _ => self.eval.eval_operand(expr),
         }
     }

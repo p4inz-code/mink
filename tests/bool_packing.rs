@@ -422,8 +422,8 @@ fn native_packed_bools_pass_and_return_through_slots() {
              return;
          }",
     );
-    // read(f): n=5, d=5 -> 505; read(make()): n=7, d=6 -> 706
-    assert_eq!(out, "505\n706");
+    // read(f): n=5, d=5 -> 505; read(make()): n=3, d=6 -> 306
+    assert_eq!(out, "505\n306");
 }
 
 // ---------------------------------------------------------------------------

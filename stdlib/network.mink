@@ -1,0 +1,233 @@
+// ==========================================================================
+// MINK Networking Library — Session 67
+//
+// TCP/UDP socket networking via Windows Winsock2 API.
+// Functions are loaded dynamically via LoadLibraryA/GetProcAddress.
+//
+// API:
+//   net_init() -> Int                 Initialize Winsock2 (0=ok, non-zero=error).
+//   net_cleanup() -> Int              Clean up Winsock2 (0=ok).
+//   net_last_error() -> Int           Get last Winsock error code.
+//   net_socket(af, ty, proto) -> Int  Create a socket (-1 on error).
+//   net_connect(sock, addr, port) -> Int   Connect (0=ok, -1=error).
+//   net_bind(sock, addr, port) -> Int      Bind (0=ok, -1=error).
+//   net_listen(sock, backlog) -> Int       Listen (0=ok, -1=error).
+//   net_accept(sock) -> Int               Accept (new socket or -1).
+//   net_send(sock, data) -> Int            Send data (bytes sent or -1).
+//   net_recv(sock, maxlen) -> Str          Receive data.
+//   net_close(sock) -> Int                 Close socket (0=ok, -1=error).
+//   net_shutdown(sock, how) -> Int         Shutdown (0=ok, -1=error).
+//   net_resolve(host, port) -> Str         Resolve host (V1: returns host as-is).
+//   net_hostname() -> Str                  Get local hostname.
+//   net_htons(value) -> Int                Host-to-network byte order.
+//
+// Constants:
+//   AF_INET = 2, SOCK_STREAM = 1, SOCK_DGRAM = 2
+//   IPPROTO_TCP = 6, IPPROTO_UDP = 17
+//   SD_RECEIVE = 0, SD_SEND = 1, SD_BOTH = 2
+//
+// Ownership:
+//   net_init() must be called before any other networking function.
+//   net_recv() returns a Str pointing to a fixed BSS buffer (overwritten
+//   by each call; caller should copy if persistence is needed).
+//
+// Platform:
+//   Currently Windows-only via Winsock2 (ws2_32.dll).
+//   Future: Linux/macOS via POSIX sockets.
+// ==========================================================================
+
+// --- Constants ---
+
+fn AF_INET() -> Int { return 2; }
+fn SOCK_STREAM() -> Int { return 1; }
+fn SOCK_DGRAM() -> Int { return 2; }
+fn IPPROTO_TCP() -> Int { return 6; }
+fn IPPROTO_UDP() -> Int { return 17; }
+fn SD_RECEIVE() -> Int { return 0; }
+fn SD_SEND() -> Int { return 1; }
+fn SD_BOTH() -> Int { return 2; }
+
+// --- Core initialization ---
+
+// Initialize Winsock2. Must be called before any other networking function.
+// Returns 0 on success, non-zero on error.
+fn net_init() -> Int {
+    return rt_net_wsa_startup();
+}
+
+// Clean up Winsock2. Call when networking is no longer needed.
+fn net_cleanup() -> Int {
+    return rt_net_wsa_cleanup();
+}
+
+// Get the last Winsock error code.
+fn net_last_error() -> Int {
+    return rt_net_wsa_last_error();
+}
+
+// --- Socket operations ---
+
+// Create a TCP socket. Returns socket handle or -1 on error.
+fn net_tcp_socket() -> Int {
+    return rt_net_socket(AF_INET(), SOCK_STREAM(), IPPROTO_TCP());
+}
+
+// Create a UDP socket. Returns socket handle or -1 on error.
+fn net_udp_socket() -> Int {
+    return rt_net_socket(AF_INET(), SOCK_DGRAM(), IPPROTO_UDP());
+}
+
+// Create a raw socket with specified parameters.
+fn net_socket(af: Int, ty: Int, proto: Int) -> Int {
+    return rt_net_socket(af, ty, proto);
+}
+
+// Connect to an IPv4 address and port.
+// addr is an IPv4 string like "127.0.0.1".
+// Returns 0 on success, -1 on error.
+fn net_connect(sock: Int, addr: Str, port: Int) -> Int {
+    return rt_net_connect(sock, addr, port);
+}
+
+// Bind to an address and port.
+// addr is an IPv4 string like "0.0.0.0" for all interfaces.
+// Returns 0 on success, -1 on error.
+fn net_bind(sock: Int, addr: Str, port: Int) -> Int {
+    return rt_net_bind(sock, addr, port);
+}
+
+// Start listening for connections.
+// backlog is the maximum pending connection queue length.
+// Returns 0 on success, -1 on error.
+fn net_listen(sock: Int, backlog: Int) -> Int {
+    return rt_net_listen(sock, backlog);
+}
+
+// Accept an incoming connection.
+// Returns a new socket handle for the connection, or -1 on error.
+fn net_accept(sock: Int) -> Int {
+    return rt_net_accept(sock);
+}
+
+// --- Data transfer ---
+
+// Send data over a connected socket.
+// Returns the number of bytes sent, or -1 on error.
+fn net_send(sock: Int, data: Str) -> Int {
+    return rt_net_send(sock, data);
+}
+
+// Receive data from a connected socket.
+// maxlen is the maximum bytes to receive.
+// Returns a string with received data (empty on error/close).
+// NOTE: The returned string points to a fixed BSS buffer that is
+// overwritten by each net_recv call. Copy it if you need persistence.
+fn net_recv(sock: Int, maxlen: Int) -> Str {
+    return rt_net_recv(sock, maxlen);
+}
+
+// --- Lifecycle ---
+
+// Close a socket. Returns 0 on success, -1 on error.
+fn net_close(sock: Int) -> Int {
+    return rt_net_close(sock);
+}
+
+// Shutdown a socket connection.
+// how: 0=SD_RECEIVE, 1=SD_SEND, 2=SD_BOTH.
+// Returns 0 on success, -1 on error.
+fn net_shutdown(sock: Int, how: Int) -> Int {
+    return rt_net_shutdown(sock, how);
+}
+
+// --- Address resolution ---
+
+// Resolve a hostname to an IP address string.
+// V1: Returns the host string as-is (full DNS via getaddrinfo is V2).
+fn net_resolve(host: Str, port: Int) -> Str {
+    return rt_net_getaddrinfo(host, port);
+}
+
+// Free a resolved address (no-op in V1).
+fn net_free_resolve() {
+    rt_net_freeaddrinfo();
+}
+
+// Get the local hostname.
+fn net_hostname() -> Str {
+    return rt_net_gethostname();
+}
+
+// --- Byte order ---
+
+// Convert host byte order to network byte order (16-bit).
+fn net_htons(value: Int) -> Int {
+    return rt_net_htons(value);
+}
+
+// Convert network byte order to host byte order (16-bit).
+// Same as htons (byte swap is symmetric).
+fn net_ntohs(value: Int) -> Int {
+    return rt_net_htons(value);
+}
+
+// --- Convenience helpers ---
+
+// Check if a socket handle is valid (not -1).
+fn net_is_valid_socket(sock: Int) -> Bool {
+    if sock == -1 {
+        return false;
+    }
+    return true;
+}
+
+// Check if an operation succeeded (result is 0).
+fn net_is_ok(result: Int) -> Bool {
+    if result == 0 {
+        return true;
+    }
+    return false;
+}
+
+// Simple TCP connect helper: init + connect in one call.
+// Returns the connected socket, or -1 on error.
+fn net_dial(addr: Str, port: Int) -> Int {
+    let init_result = net_init();
+    if init_result != 0 {
+        return -1;
+    }
+    let sock = net_tcp_socket();
+    if sock == -1 {
+        return -1;
+    }
+    let conn_result = net_connect(sock, addr, port);
+    if conn_result != 0 {
+        net_close(sock);
+        return -1;
+    }
+    return sock;
+}
+
+// Simple TCP listen helper: init + bind + listen in one call.
+// Returns the listening socket, or -1 on error.
+fn net_listen_on(addr: Str, port: Int, backlog: Int) -> Int {
+    let init_result = net_init();
+    if init_result != 0 {
+        return -1;
+    }
+    let sock = net_tcp_socket();
+    if sock == -1 {
+        return -1;
+    }
+    let bind_result = net_bind(sock, addr, port);
+    if bind_result != 0 {
+        net_close(sock);
+        return -1;
+    }
+    let listen_result = net_listen(sock, backlog);
+    if listen_result != 0 {
+        net_close(sock);
+        return -1;
+    }
+    return sock;
+}

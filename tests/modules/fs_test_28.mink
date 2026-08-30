@@ -1,0 +1,7 @@
+
+fn main() {
+    if path_has_extension("foo.txt", ".txt") { rt_print_int(1); } else { rt_print_int(0); }
+    if path_has_extension("foo.txt", ".rs") { rt_print_int(1); } else { rt_print_int(0); }
+    if path_has_extension("foo", ".txt") { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}

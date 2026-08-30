@@ -1,0 +1,10 @@
+fn test_len(s: Str) -> Int {
+    let mut n = rt_str_len(s);
+    let mut m = rt_str_len(s);
+    rt_exit(0);
+}
+
+fn main() {
+    let n = test_len("hello");
+    rt_exit(1);
+}

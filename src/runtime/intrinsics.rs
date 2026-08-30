@@ -209,6 +209,22 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Vec],
         result: IntrinsicType::Unit,
     },
+    // --- Vec operations (Session 57) ---
+    Intrinsic {
+        name: "rt_vec_set",
+        params: &[IntrinsicType::Vec, IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Vec,
+    },
+    Intrinsic {
+        name: "rt_vec_pop",
+        params: &[IntrinsicType::Vec],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_vec_remove",
+        params: &[IntrinsicType::Vec, IntrinsicType::Int],
+        result: IntrinsicType::Vec,
+    },
     // --- String operations (Session 44) ---
     Intrinsic {
         name: "rt_str_concat",
@@ -229,6 +245,279 @@ pub const ALL: &[Intrinsic] = &[
         name: "rt_str_from_bool",
         params: &[IntrinsicType::Bool],
         result: IntrinsicType::Str,
+    },
+    // --- Numeric conversion (Session 54) ---
+    Intrinsic {
+        name: "rt_int_to_float",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Float,
+    },
+    Intrinsic {
+        name: "rt_float_to_int",
+        params: &[IntrinsicType::Float],
+        result: IntrinsicType::Int,
+    },
+    // --- Filesystem (Session 56) ---
+    Intrinsic {
+        name: "rt_fs_read",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_fs_write",
+        params: &[IntrinsicType::Str, IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_fs_exists",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Bool,
+    },
+    Intrinsic {
+        name: "rt_fs_file_size",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_fs_create_dir",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_fs_remove_dir",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_fs_remove_file",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_fs_copy",
+        params: &[IntrinsicType::Str, IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_fs_move",
+        params: &[IntrinsicType::Str, IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_fs_get_cwd",
+        params: &[],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_fs_set_cwd",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_to_cstr",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Ptr,
+    },
+    Intrinsic {
+        name: "rt_free_cstr",
+        params: &[IntrinsicType::Ptr],
+        result: IntrinsicType::Unit,
+    },
+    // --- Process (Session 59) ---
+    Intrinsic {
+        name: "rt_process_run",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_process_stdout",
+        params: &[],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_process_stderr",
+        params: &[],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_process_stdout_len",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_process_stderr_len",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_process_id",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    // --- Time (Session 60) ---
+    Intrinsic {
+        name: "rt_time_now",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_time_millis",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_time_ticks",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_time_freq",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_time_filetime",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_time_filetime_high",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    // --- Random (Session 61) ---
+    Intrinsic {
+        name: "rt_random_seed",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_random_next",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    // --- Environment (Session 65) ---
+    Intrinsic {
+        name: "rt_env_get",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_env_set",
+        params: &[IntrinsicType::Str, IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_env_has",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Bool,
+    },
+    Intrinsic {
+        name: "rt_env_remove",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    // --- Networking (Session 67) ---
+    Intrinsic {
+        name: "rt_net_wsa_startup",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_wsa_cleanup",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_wsa_last_error",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_socket",
+        params: &[IntrinsicType::Int, IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_connect",
+        params: &[IntrinsicType::Int, IntrinsicType::Str, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_bind",
+        params: &[IntrinsicType::Int, IntrinsicType::Str, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_listen",
+        params: &[IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_accept",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_send",
+        params: &[IntrinsicType::Int, IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_recv",
+        params: &[IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_net_close",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_shutdown",
+        params: &[IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_getaddrinfo",
+        params: &[IntrinsicType::Str, IntrinsicType::Int],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_net_freeaddrinfo",
+        params: &[],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_net_gethostname",
+        params: &[],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_net_htons",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    // --- Crypto (Session 71) ---
+    Intrinsic {
+        name: "rt_crypto_init",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_crypto_random_bytes",
+        params: &[IntrinsicType::Str, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_crypto_random_int",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_crypto_secure_zero",
+        params: &[IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Unit,
     },
 ];
 

@@ -1,0 +1,13 @@
+fn main() {
+    rt_print_str("A\n");
+    let pid = rt_process_id();
+    rt_print_int(pid);
+    rt_print_str("\nB\n");
+    // Try rt_to_cstr directly
+    let cmd = "echo hi";
+    let cstr = rt_to_cstr(cmd);
+    rt_print_str("C\n");
+    rt_free_cstr(cstr);
+    rt_print_str("D\n");
+    rt_exit(0);
+}

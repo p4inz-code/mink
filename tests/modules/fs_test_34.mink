@@ -1,0 +1,13 @@
+
+fn main() {
+    let path = "test_is_file.txt";
+    fs_write(path, "x");
+    if fs_is_file(path) { rt_print_int(1); } else { rt_print_int(0); }
+    if fs_is_dir(path) { rt_print_int(1); } else { rt_print_int(0); }
+    fs_remove_file(path);
+    fs_create_dir("test_is_dir_dir");
+    if fs_is_file("test_is_dir_dir") { rt_print_int(1); } else { rt_print_int(0); }
+    if fs_is_dir("test_is_dir_dir") { rt_print_int(1); } else { rt_print_int(0); }
+    fs_remove_dir("test_is_dir_dir");
+    rt_exit(0);
+}

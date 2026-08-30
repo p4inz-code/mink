@@ -1,0 +1,588 @@
+// MINK Math Library v1.0.0 — Session 54
+// Third official MINK ecosystem library.
+//
+// Provides integer math, float math, trigonometry, logarithms, and constants.
+// All float functions use Taylor series / iterative approximations since
+// MINK V1 has no math intrinsics beyond SSE2 arithmetic.
+//
+// V1 OWNERSHIP CONSTRAINT: Functions with Str params use single-return pattern.
+// Pure numeric functions (Int/Float params) have straightforward returns.
+
+// ============================================================================
+// Constants (computed at init time via int_to_float)
+// ============================================================================
+
+fn math_pi() -> Float {
+    return rt_int_to_float(0) + 3.141592653589793;
+}
+
+fn math_e() -> Float {
+    return rt_int_to_float(0) + 2.718281828459045;
+}
+
+fn math_tau() -> Float {
+    return rt_int_to_float(0) + 6.283185307179586;
+}
+
+fn math_sqrt2() -> Float {
+    return rt_int_to_float(0) + 1.414213562373095;
+}
+
+fn math_ln2() -> Float {
+    return rt_int_to_float(0) + 0.693147180559945;
+}
+
+fn math_ln10() -> Float {
+    return rt_int_to_float(0) + 2.302585092994046;
+}
+
+fn math_inf() -> Float {
+    return rt_int_to_float(0) / rt_int_to_float(0);
+}
+
+// ============================================================================
+// Integer: Basic
+// ============================================================================
+
+fn math_abs(n: Int) -> Int {
+    if n < 0 { return 0 - n; }
+    return n;
+}
+
+fn math_min(a: Int, b: Int) -> Int {
+    if a < b { return a; }
+    return b;
+}
+
+fn math_max(a: Int, b: Int) -> Int {
+    if a > b { return a; }
+    return b;
+}
+
+fn math_clamp(v: Int, lo: Int, hi: Int) -> Int {
+    if v < lo { return lo; }
+    if v > hi { return hi; }
+    return v;
+}
+
+fn math_sign(n: Int) -> Int {
+    if n > 0 { return 1; }
+    if n < 0 { return -1; }
+    return 0;
+}
+
+// ============================================================================
+// Integer: Power / Factorial
+// ============================================================================
+
+fn math_pow(base: Int, exp: Int) -> Int {
+    if exp < 0 { return 0; }
+    let mut result = 1;
+    let mut b = base;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 { result = result * b; }
+        b = b * b;
+        e = e / 2;
+    }
+    return result;
+}
+
+fn math_factorial(n: Int) -> Int {
+    if n < 0 { return 0; }
+    if n > 20 { return 0; }
+    let mut result = 1;
+    let mut i = 2;
+    while i <= n {
+        result = result * i;
+        i = i + 1;
+    }
+    return result;
+}
+
+// ============================================================================
+// Integer: Square root (Newton's method)
+// ============================================================================
+
+fn math_isqrt(n: Int) -> Int {
+    if n < 0 { return 0; }
+    if n == 0 { return 0; }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    return x;
+}
+
+// ============================================================================
+// Integer: GCD / LCM
+// ============================================================================
+
+fn math_gcd(a: Int, b: Int) -> Int {
+    let mut x = math_abs(a);
+    let mut y = math_abs(b);
+    while y != 0 {
+        let temp = y;
+        y = x % y;
+        x = temp;
+    }
+    return x;
+}
+
+fn math_lcm(a: Int, b: Int) -> Int {
+    if a == 0 || b == 0 { return 0; }
+    return math_abs(a) / math_gcd(a, b) * math_abs(b);
+}
+
+// ============================================================================
+// Integer: Bit helpers
+// ============================================================================
+
+fn math_popcount(n: Int) -> Int {
+    let mut x = n;
+    let mut count = 0;
+    while x != 0 {
+        if (x & 1) == 1 { count = count + 1; }
+        x = x >> 1;
+    }
+    return count;
+}
+
+fn math_is_power_of_two(n: Int) -> Bool {
+    if n <= 0 { return false; }
+    if (n & (n - 1)) == 0 { return true; }
+    return false;
+}
+
+fn math_next_power_of_two(n: Int) -> Int {
+    if n <= 1 { return 1; }
+    let mut p = 1;
+    while p < n {
+        p = p * 2;
+    }
+    return p;
+}
+
+// ============================================================================
+// Float: Conversion (delegates to intrinsics)
+// ============================================================================
+
+fn math_int_to_float(n: Int) -> Float {
+    return rt_int_to_float(n);
+}
+
+fn math_float_to_int(f: Float) -> Int {
+    return rt_float_to_int(f);
+}
+
+// ============================================================================
+// Float: Basic
+// ============================================================================
+
+fn math_float_abs(f: Float) -> Float {
+    if f < 0.0 { return 0.0 - f; }
+    return f;
+}
+
+fn math_float_min(a: Float, b: Float) -> Float {
+    if a < b { return a; }
+    return b;
+}
+
+fn math_float_max(a: Float, b: Float) -> Float {
+    if a > b { return a; }
+    return b;
+}
+
+fn math_float_sign(f: Float) -> Float {
+    if f > 0.0 { return 1.0; }
+    if f < 0.0 { return -1.0; }
+    return 0.0;
+}
+
+// ============================================================================
+// Float: Rounding
+// ============================================================================
+
+fn math_float_floor(f: Float) -> Float {
+    let i = rt_float_to_int(f);
+    let result = rt_int_to_float(i);
+    if f < 0.0 && result > f { return result - 1.0; }
+    return result;
+}
+
+fn math_float_ceil(f: Float) -> Float {
+    let i = rt_float_to_int(f);
+    let result = rt_int_to_float(i);
+    if f > 0.0 && result < f { return result + 1.0; }
+    return result;
+}
+
+fn math_float_round(f: Float) -> Float {
+    return math_float_floor(f + 0.5);
+}
+
+fn math_float_trunc(f: Float) -> Float {
+    return rt_int_to_float(rt_float_to_int(f));
+}
+
+// ============================================================================
+// Float: Power
+// ============================================================================
+
+fn math_float_pow(base: Float, exp: Float) -> Float {
+    // Integer exponent fast path
+    let exp_i = rt_float_to_int(exp);
+    let exp_f = rt_int_to_float(exp_i);
+    if exp_f == exp {
+        if exp_i == 0 { return 1.0; }
+        if exp_i < 0 {
+            let mut result = 1.0;
+            let mut b = base;
+            let mut e = 0 - exp_i;
+            while e > 0 {
+                if e % 2 == 1 { result = result * b; }
+                b = b * b;
+                e = e / 2;
+            }
+            return 1.0 / result;
+        }
+        let mut result = 1.0;
+        let mut b = base;
+        let mut e = exp_i;
+        while e > 0 {
+            if e % 2 == 1 { result = result * b; }
+            b = b * b;
+            e = e / 2;
+        }
+        return result;
+    }
+    // General case: exp(x * ln(base))
+    return math_float_exp(exp * math_float_ln(base));
+}
+
+// ============================================================================
+// Float: Square root (Newton's method)
+// ============================================================================
+
+fn math_float_sqrt(n: Float) -> Float {
+    if n < 0.0 {
+        // NaN
+        return 0.0 / 0.0;
+    }
+    if n == 0.0 { return 0.0; }
+    let mut x = n;
+    let mut guess = n;
+    if guess > 1.0 { guess = guess / 2.0; } else { guess = (guess + 1.0) / 2.0; }
+    let mut i = 0;
+    while i < 100 {
+        guess = (guess + n / guess) / 2.0;
+        i = i + 1;
+    }
+    return guess;
+}
+
+// ============================================================================
+// Float: Logarithms
+// ============================================================================
+
+fn math_float_ln(x: Float) -> Float {
+    // ln(x) using reduction: x = m * 2^k, 1 <= m < 2
+    if x <= 0.0 {
+        // Return -inf
+        return 0.0 - math_float_pow(10.0, 308.0);
+    }
+    // Reduce to [1, 2) range
+    let mut val = x;
+    let mut k = 0;
+    while val >= 2.0 {
+        val = val / 2.0;
+        k = k + 1;
+    }
+    while val < 1.0 {
+        val = val * 2.0;
+        k = k - 1;
+    }
+    // Now val is in [1, 2). Use ln(val) via Taylor series.
+    // ln(1 + t) where t = val - 1, t in [0, 1)
+    let t = val - 1.0;
+    let mut result = 0.0;
+    let mut term = t;
+    let mut i = 1;
+    while i < 50 {
+        if i % 2 == 1 {
+            result = result + term;
+        } else {
+            result = result - term;
+        }
+        term = term * t;
+        let denom = rt_int_to_float(i + 1);
+        term = term / denom;
+        i = i + 1;
+    }
+    // ln(x) = ln(val) + k * ln(2)
+    let ln2 = math_ln2();
+    return result + rt_int_to_float(k) * ln2;
+}
+
+fn math_float_log2(x: Float) -> Float {
+    return math_float_ln(x) / math_ln2();
+}
+
+fn math_float_log10(x: Float) -> Float {
+    return math_float_ln(x) / math_ln10();
+}
+
+fn math_float_log(base: Float, x: Float) -> Float {
+    return math_float_ln(x) / math_float_ln(base);
+}
+
+// ============================================================================
+// Float: Exponential
+// ============================================================================
+
+fn math_float_exp(x: Float) -> Float {
+    // Reduce: e^x = e^(k + r) = e^k * e^r, where r in [0, ln2)
+    let ln2 = math_ln2();
+    let mut k = 0;
+    let mut val = x;
+    if x < 0.0 {
+        while val < 0.0 {
+            val = val + ln2;
+            k = k - 1;
+        }
+    } else {
+        while val >= ln2 {
+            val = val - ln2;
+            k = k + 1;
+        }
+    }
+    // val is in [0, ln2). Compute e^val via Taylor series.
+    let mut result = 1.0;
+    let mut term = 1.0;
+    let mut i = 1;
+    while i < 30 {
+        term = term * val;
+        term = term / rt_int_to_float(i);
+        result = result + term;
+        i = i + 1;
+    }
+    // Multiply by 2^k
+    let mut pow2k = 1.0;
+    let mut j = 0;
+    let abs_k = math_abs(k);
+    while j < abs_k {
+        if k > 0 {
+            pow2k = pow2k * 2.0;
+        } else {
+            pow2k = pow2k / 2.0;
+        }
+        j = j + 1;
+    }
+    return result * pow2k;
+}
+
+// ============================================================================
+// Float: Trigonometry
+// ============================================================================
+
+fn _wrap_angle(x: Float) -> Float {
+    // Wrap to [-pi, pi]
+    let pi = math_pi();
+    let tau = math_tau();
+    let mut val = x;
+    // Reduce to [-tau, tau]
+    while val > pi { val = val - tau; }
+    while val < (0.0 - pi) { val = val + tau; }
+    return val;
+}
+
+fn math_float_sin(x: Float) -> Float {
+    let val = _wrap_angle(x);
+    // Taylor: sin(x) = x - x^3/3! + x^5/5! - ...
+    let mut result = val;
+    let mut term = val;
+    let x2 = val * val;
+    let mut i = 1;
+    while i < 20 {
+        term = term * x2;
+        term = term / rt_int_to_float((2 * i) * (2 * i + 1));
+        if i % 2 == 1 {
+            result = result - term;
+        } else {
+            result = result + term;
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn math_float_cos(x: Float) -> Float {
+    let val = _wrap_angle(x);
+    // Taylor: cos(x) = 1 - x^2/2! + x^4/4! - ...
+    let mut result = 1.0;
+    let mut term = 1.0;
+    let x2 = val * val;
+    let mut i = 1;
+    while i < 20 {
+        term = term * x2;
+        term = term / rt_int_to_float((2 * i - 1) * (2 * i));
+        if i % 2 == 1 {
+            result = result - term;
+        } else {
+            result = result + term;
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn math_float_tan(x: Float) -> Float {
+    let c = math_float_cos(x);
+    if c == 0.0 {
+        // tan(pi/2) is undefined; return large value
+        return math_float_sin(x) * math_float_pow(10.0, 15.0);
+    }
+    return math_float_sin(x) / c;
+}
+
+// ============================================================================
+// Float: Inverse trigonometry
+// ============================================================================
+
+fn math_float_asin(x: Float) -> Float {
+    // asin(x) using polynomial approximation for |x| < 0.5
+    // For larger values: asin(x) = pi/2 - 2*asin(sqrt((1-x)/2))
+    if x < -1.0 || x > 1.0 {
+        return 0.0 / 0.0;
+    }
+    if x > 0.5 {
+        let pi_half = math_pi() / 2.0;
+        return pi_half - 2.0 * math_float_asin(math_float_sqrt((1.0 - x) / 2.0));
+    }
+    if x < -0.5 {
+        let pi_half = math_pi() / 2.0;
+        return (0.0 - pi_half) - 2.0 * math_float_asin(math_float_sqrt((1.0 + x) / 2.0));
+    }
+    // Polynomial approximation for |x| < 0.5
+    // asin(x) ≈ x + x^3/(2*3) + (1*3)x^5/(2*4*5) + (1*3*5)x^7/(2*4*6*7) + ...
+    let mut result = x;
+    let mut term = x;
+    let x2 = x * x;
+    let mut i = 1;
+    while i < 25 {
+        let num = rt_int_to_float(2 * i - 1);
+        let den1 = rt_int_to_float(2 * i);
+        let den2 = rt_int_to_float(2 * i + 1);
+        term = term * x2 * num / den1;
+        result = result + term / den2;
+        i = i + 1;
+    }
+    return result;
+}
+
+fn math_float_acos(x: Float) -> Float {
+    let pi_half = math_pi() / 2.0;
+    return pi_half - math_float_asin(x);
+}
+
+fn math_float_atan(x: Float) -> Float {
+    // atan(x) using reduction and polynomial
+    // For |x| > 1: atan(x) = pi/2 - atan(1/x)
+    if x > 1.0 {
+        return math_pi() / 2.0 - math_float_atan(1.0 / x);
+    }
+    if x < -1.0 {
+        return (0.0 - math_pi()) / 2.0 - math_float_atan(1.0 / x);
+    }
+    // For |x| <= 1: atan(x) ≈ x - x^3/3 + x^5/5 - x^7/7 + ...
+    let mut result = x;
+    let mut term = x;
+    let x2 = x * x;
+    let mut i = 1;
+    while i < 40 {
+        term = term * x2;
+        let denom = rt_int_to_float(2 * i + 1);
+        if i % 2 == 1 {
+            result = result - term / denom;
+        } else {
+            result = result + term / denom;
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn math_float_atan2(y: Float, x: Float) -> Float {
+    if x > 0.0 {
+        return math_float_atan(y / x);
+    }
+    if x < 0.0 {
+        if y >= 0.0 {
+            return math_float_atan(y / x) + math_pi();
+        } else {
+            return math_float_atan(y / x) - math_pi();
+        }
+    }
+    // x == 0
+    if y > 0.0 {
+        return math_pi() / 2.0;
+    }
+    if y < 0.0 {
+        return (0.0 - math_pi()) / 2.0;
+    }
+    return 0.0;
+}
+
+// ============================================================================
+// Float: Hyperbolic
+// ============================================================================
+
+fn math_float_sinh(x: Float) -> Float {
+    return (math_float_exp(x) - math_float_exp(0.0 - x)) / 2.0;
+}
+
+fn math_float_cosh(x: Float) -> Float {
+    return (math_float_exp(x) + math_float_exp(0.0 - x)) / 2.0;
+}
+
+fn math_float_tanh(x: Float) -> Float {
+    let e2x = math_float_exp(2.0 * x);
+    return (e2x - 1.0) / (e2x + 1.0);
+}
+
+// ============================================================================
+// Utility
+// ============================================================================
+
+fn math_lerp(a: Float, b: Float, t: Float) -> Float {
+    return a + (b - a) * t;
+}
+
+fn math_inverse_lerp(a: Float, b: Float, v: Float) -> Float {
+    if b == a { return 0.0; }
+    return (v - a) / (b - a);
+}
+
+fn math_remap(value: Float, in_min: Float, in_max: Float, out_min: Float, out_max: Float) -> Float {
+    let t = math_inverse_lerp(in_min, in_max, value);
+    return math_lerp(out_min, out_max, t);
+}
+
+fn math_degrees(rad: Float) -> Float {
+    return rad * 180.0 / math_pi();
+}
+
+fn math_radians(deg: Float) -> Float {
+    return deg * math_pi() / 180.0;
+}
+
+fn math_approximately_equal(a: Float, b: Float, epsilon: Float) -> Bool {
+    let diff = a - b;
+    if diff < 0.0 {
+        return (0.0 - diff) < epsilon;
+    }
+    return diff < epsilon;
+}

@@ -1,0 +1,40 @@
+fn json_null() -> Ptr<Int> {
+    let p = rt_alloc(16);
+    rt_mem_store(p, 0);
+    rt_mem_store(p + 8, 0);
+    return p;
+}
+
+fn json_bool(b: Bool) -> Ptr<Int> {
+    let p = rt_alloc(16);
+    rt_mem_store(p, 1);
+    if b {
+        rt_mem_store(p + 8, 1);
+    } else {
+        rt_mem_store(p + 8, 0);
+    }
+    return p;
+}
+
+fn json_tag(v: Ptr<Int>) -> Int {
+    return rt_mem_load(v);
+}
+
+fn json_as_bool(v: Ptr<Int>) -> Bool {
+    return rt_mem_load(v + 8) == 1;
+}
+
+fn main() -> Int {
+    let n = json_null();
+    if json_tag(n) == 0 {
+        rt_print_int(1);
+    }
+    let b = json_bool(true);
+    if json_tag(b) == 1 {
+        rt_print_int(2);
+    }
+    if json_as_bool(b) == true {
+        rt_print_int(3);
+    }
+    return 0;
+}

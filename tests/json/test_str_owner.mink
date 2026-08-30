@@ -1,0 +1,11 @@
+fn test_order(s: Str) -> Int {
+    let len = rt_str_len(s);
+    let b = rt_str_byte(s, 0);
+    return len + b;
+}
+
+fn main() -> Int {
+    let r = test_order("abc");
+    rt_print_int(r);
+    rt_exit(0);
+}

@@ -1,0 +1,7 @@
+fn main() {
+    let s = str_to_upper("hello");
+    let r = str_index_of(s, "HELLO");
+    rt_print_int(r.0);
+    rt_str_free(r.1);
+    rt_exit(0);
+}

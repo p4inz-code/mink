@@ -1,0 +1,61 @@
+fn _read(arena: Ptr<Int>, offset: Int) -> Int {
+    return rt_mem_load(arena + offset * 8);
+}
+
+fn _write(arena: Ptr<Int>, offset: Int, val: Int) {
+    rt_mem_store(arena + offset * 8, val);
+}
+
+// Recursive function taking Ptr<Int> — should not have ownership issues
+fn count_nodes(arena: Ptr<Int>, offset: Int) -> Int {
+    let tag = _read(arena, offset);
+    if tag == 4 {
+        // array
+        let count = _read(arena, offset + 1);
+        let mut total = 1;
+        let mut cur = offset + 2;
+        let mut i = 0;
+        while i < count {
+            total = total + count_nodes(arena, cur);
+            cur = _skip(arena, cur);
+            i = i + 1;
+        }
+        return total;
+    }
+    return 1;
+}
+
+fn _skip(arena: Ptr<Int>, offset: Int) -> Int {
+    let tag = _read(arena, offset);
+    if tag == 0 { return offset + 1; }
+    if tag == 1 { return offset + 2; }
+    if tag == 2 { return offset + 2; }
+    if tag == 3 {
+        let len = _read(arena, offset + 1);
+        return offset + 2 + len;
+    }
+    return offset + 1;
+}
+
+fn main() -> Int {
+    let arena = rt_alloc(4096);
+    // Build a simple array: [1, [2, 3]]
+    // Layout: [4, 2, <int 1>, <array [2,3]>]
+    // Array header at 0
+    _write(arena, 0, 4); // tag=array
+    _write(arena, 1, 2); // count=2
+    // Element 0: int 1 at position 2
+    _write(arena, 2, 2); // tag=int
+    _write(arena, 3, 1); // value=1
+    // Element 1: array [2,3] at position 4
+    _write(arena, 4, 4); // tag=array
+    _write(arena, 5, 2); // count=2
+    _write(arena, 6, 2); // tag=int
+    _write(arena, 7, 2); // value=2
+    _write(arena, 8, 2); // tag=int
+    _write(arena, 9, 3); // value=3
+
+    let total = count_nodes(arena, 0);
+    rt_print_int(total);
+    rt_exit(0);
+}

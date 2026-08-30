@@ -290,17 +290,33 @@ pub(crate) fn emit_services(
     // --- Filesystem (Session 56) ---
     emit(code, RuntimeService::FsRead, |code, _| emit_fs_read(code));
     emit(code, RuntimeService::FsWrite, |code, _| emit_fs_write(code));
-    emit(code, RuntimeService::FsExists, |code, _| emit_fs_exists(code));
-    emit(code, RuntimeService::FsFileSize, |code, _| emit_fs_file_size(code));
-    emit(code, RuntimeService::FsCreateDir, |code, _| emit_fs_create_dir(code));
-    emit(code, RuntimeService::FsRemoveDir, |code, _| emit_fs_remove_dir(code));
-    emit(code, RuntimeService::FsRemoveFile, |code, _| emit_fs_remove_file(code));
+    emit(code, RuntimeService::FsExists, |code, _| {
+        emit_fs_exists(code)
+    });
+    emit(code, RuntimeService::FsFileSize, |code, _| {
+        emit_fs_file_size(code)
+    });
+    emit(code, RuntimeService::FsCreateDir, |code, _| {
+        emit_fs_create_dir(code)
+    });
+    emit(code, RuntimeService::FsRemoveDir, |code, _| {
+        emit_fs_remove_dir(code)
+    });
+    emit(code, RuntimeService::FsRemoveFile, |code, _| {
+        emit_fs_remove_file(code)
+    });
     emit(code, RuntimeService::FsCopy, |code, _| emit_fs_copy(code));
     emit(code, RuntimeService::FsMove, |code, _| emit_fs_move(code));
-    emit(code, RuntimeService::FsGetCwd, |code, _| emit_fs_get_cwd(code));
-    emit(code, RuntimeService::FsSetCwd, |code, _| emit_fs_set_cwd(code));
+    emit(code, RuntimeService::FsGetCwd, |code, _| {
+        emit_fs_get_cwd(code)
+    });
+    emit(code, RuntimeService::FsSetCwd, |code, _| {
+        emit_fs_set_cwd(code)
+    });
     emit(code, RuntimeService::ToCstr, |code, _| emit_to_cstr(code));
-    emit(code, RuntimeService::FreeCstr, |code, _| emit_free_cstr(code));
+    emit(code, RuntimeService::FreeCstr, |code, _| {
+        emit_free_cstr(code)
+    });
     offsets
 }
 

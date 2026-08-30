@@ -1,0 +1,6 @@
+
+fn main() {
+    let j = path_join("", "");
+    rt_print_int(rt_str_len(j));
+    rt_exit(0);
+}

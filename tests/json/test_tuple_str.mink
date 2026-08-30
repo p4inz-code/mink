@@ -1,0 +1,13 @@
+fn test_tuple_str(s: Str) -> (Int, Str) {
+    let len = rt_str_len(s);
+    return (len, s);
+}
+
+fn main() {
+    let r = test_tuple_str("hello");
+    let n = r.0;
+    let s2 = r.1;
+    let len2 = rt_str_len(s2);
+    rt_print_int(len2);
+    rt_exit(0);
+}

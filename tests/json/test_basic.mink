@@ -1,0 +1,70 @@
+mod json;
+use json::json_null;
+use json::json_bool;
+use json::json_int;
+use json::json_str;
+use json::json_tag;
+use json::json_is_null;
+use json::json_is_bool;
+use json::json_is_int;
+use json::json_is_str;
+use json::json_as_bool;
+use json::json_as_str;
+use json::json_arr;
+use json::json_arr_push;
+use json::json_arr_len;
+use json::json_arr_get;
+use json::json_obj;
+use json::json_obj_push;
+use json::json_obj_len;
+use json::json_obj_get_key;
+use json::json_obj_get_val;
+use json::json_parse;
+
+fn main() -> Int {
+    // Test null
+    let n = json_null();
+    if json_tag(n) != 0 { return 1; }
+
+    // Test bool
+    let b1 = json_bool(true);
+    if json_tag(b1) != 1 { return 2; }
+    if json_as_bool(b1) != true { return 3; }
+
+    let b2 = json_bool(false);
+    if json_as_bool(b2) != false { return 4; }
+
+    // Test int
+    let i1 = json_int(42);
+    if json_tag(i1) != 2 { return 5; }
+
+    // Test string
+    let s1 = json_str("hello");
+    if json_tag(s1) != 3 { return 6; }
+
+    // Test array
+    let a = json_arr();
+    if json_arr_len(a) != 0 { return 7; }
+    json_arr_push(a, n);
+    json_arr_push(a, b1);
+    if json_arr_len(a) != 2 { return 8; }
+
+    // Test object
+    let o = json_obj();
+    if json_obj_len(o) != 0 { return 9; }
+    json_obj_push(o, "key1", i1);
+    if json_obj_len(o) != 1 { return 10; }
+
+    // Test parse null
+    let parsed = json_parse("null");
+    if parsed == 0 { return 11; }
+    if json_tag(parsed) != 0 { return 12; }
+
+    // Test parse bool
+    let parsed2 = json_parse("true");
+    if parsed2 == 0 { return 13; }
+    if json_tag(parsed2) != 1 { return 14; }
+    if json_as_bool(parsed2) != true { return 15; }
+
+    return 0;
+}

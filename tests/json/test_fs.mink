@@ -1,0 +1,18 @@
+fn main() {
+    // Test get_cwd
+    let cwd = rt_fs_get_cwd();
+    rt_print_str(cwd);
+
+    // Test exists with get_cwd result
+    let e1 = rt_fs_exists(cwd);
+    if e1 {
+        rt_print_int(1);
+    } else {
+        rt_print_int(0);
+    }
+
+    // Note: cwd is consumed by rt_fs_exists, can't free it
+    // This is a V1 limitation - Str params are consumed
+
+    rt_exit(0);
+}

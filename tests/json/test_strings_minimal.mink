@@ -1,0 +1,9 @@
+mod strings;
+use strings::str_index_of;
+
+fn main() {
+    let r = str_index_of("hello world", "world");
+    let idx = r.0;
+    rt_print_int(idx);
+    rt_exit(0);
+}

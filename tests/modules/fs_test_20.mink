@@ -1,0 +1,6 @@
+
+fn main() {
+    let sz = fs_file_size("Cargo.toml");
+    rt_print_int(sz);
+    rt_exit(0);
+}

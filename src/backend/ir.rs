@@ -747,6 +747,12 @@ pub enum RuntimeService {
     VecLen,
     /// `rt_vec_free(data)`: deallocate Vec buffer.
     VecFree,
+    /// `rt_vec_set(data, index, value) -> Ptr<Int>`: set element at index.
+    VecSet,
+    /// `rt_vec_pop(data) -> (Int, Ptr<Int>)`: pop last element, return value.
+    VecPop,
+    /// `rt_vec_remove(data, index) -> Ptr<Int>`: remove element at index.
+    VecRemove,
     // --- String operations (Session 44) ---
     /// `rt_str_concat(a, b) -> Str`: allocate a new string containing
     /// the bytes of `a` followed by the bytes of `b`.
@@ -757,6 +763,119 @@ pub enum RuntimeService {
     StrFromInt,
     /// `rt_str_from_bool(value) -> Str`: `"true"` or `"false"`.
     StrFromBool,
+    // --- Numeric conversion (Session 54) ---
+    /// `rt_int_to_float(value: Int) -> Float`: signed 64-bit int to double.
+    IntToFloat,
+    /// `rt_float_to_int(value: Float) -> Int`: double to signed 64-bit int (truncation).
+    FloatToInt,
+    // --- Filesystem services (Session 56) ---
+    /// `rt_fs_read(path) -> Str`: read entire file contents.
+    FsRead,
+    /// `rt_fs_write(path, data) -> Int`: write data to file (truncating), bytes written.
+    FsWrite,
+    /// `rt_fs_exists(path) -> Bool`: check if file or directory exists.
+    FsExists,
+    /// `rt_fs_file_size(path) -> Int`: get file size in bytes (-1 on error).
+    FsFileSize,
+    /// `rt_fs_create_dir(path) -> Int`: create directory, 0=ok, -1=error.
+    FsCreateDir,
+    /// `rt_fs_remove_dir(path) -> Int`: remove empty directory, 0=ok, -1=error.
+    FsRemoveDir,
+    /// `rt_fs_remove_file(path) -> Int`: delete file, 0=ok, -1=error.
+    FsRemoveFile,
+    /// `rt_fs_copy(src, dst) -> Int`: copy file, 0=ok, -1=error.
+    FsCopy,
+    /// `rt_fs_move(src, dst) -> Int`: rename/move file, 0=ok, -1=error.
+    FsMove,
+    /// `rt_fs_get_cwd() -> Str`: get current working directory.
+    FsGetCwd,
+    /// `rt_fs_set_cwd(path) -> Int`: set current working directory, 0=ok, -1=error.
+    FsSetCwd,
+    /// `rt_to_cstr(s) -> Ptr<Int>`: allocate null-terminated copy of Str for Win32.
+    ToCstr,
+    /// `rt_free_cstr(p) -> Unit`: free a null-terminated buffer from rt_to_cstr.
+    FreeCstr,
+    // --- Process (Session 59) ---
+    /// `rt_process_run(cmd: Str) -> Int`: run command, return exit code.
+    ProcessRun,
+    /// `rt_process_stdout() -> Str`: get captured stdout of last process.
+    ProcessStdout,
+    /// `rt_process_stderr() -> Str`: get captured stderr of last process.
+    ProcessStderr,
+    /// `rt_process_stdout_len() -> Int`: get length of captured stdout.
+    ProcessStdoutLen,
+    /// `rt_process_stderr_len() -> Int`: get length of captured stderr.
+    ProcessStderrLen,
+    /// `rt_process_id() -> Int`: get current process ID.
+    ProcessId,
+    /// `rt_time_now() -> Int`: current Unix timestamp (seconds since 1970-01-01).
+    TimeNow,
+    /// `rt_time_millis() -> Int`: milliseconds since boot (QueryPerformanceCounter).
+    TimeMillis,
+    /// `rt_time_ticks() -> Int`: high-resolution ticks (QueryPerformanceCounter).
+    TimeTicks,
+    /// `rt_time_freq() -> Int`: QueryPerformanceFrequency.
+    TimeFreq,
+    /// `rt_time_filetime() -> Int`: FILETIME low 32 bits (100ns intervals since 1601).
+    TimeFiletime,
+    /// `rt_time_filetime_high() -> Int`: FILETIME high 32 bits.
+    TimeFiletimeHigh,
+    /// `rt_random_seed(seed)`: seed the PRNG state.
+    RandomSeed,
+    /// `rt_random_next() -> Int`: next random 64-bit value.
+    RandomNext,
+    // --- Environment (Session 65) ---
+    /// `rt_env_get(name: Str) -> Str`: get environment variable value.
+    EnvGet,
+    /// `rt_env_set(name: Str, value: Str) -> Int`: set environment variable.
+    EnvSet,
+    /// `rt_env_has(name: Str) -> Bool`: check if environment variable exists.
+    EnvHas,
+    /// `rt_env_remove(name: Str) -> Int`: remove environment variable.
+    EnvRemove,
+    // --- Networking (Session 67) ---
+    /// `rt_net_wsa_startup() -> Int`: initialize Winsock2 (0=ok, non-zero=error).
+    NetWsaStartup,
+    /// `rt_net_wsa_cleanup() -> Int`: clean up Winsock2.
+    NetWsaCleanup,
+    /// `rt_net_wsa_last_error() -> Int`: get last Winsock error code.
+    NetWsaLastError,
+    /// `rt_net_socket(af: Int, ty: Int, proto: Int) -> Int`: create socket (returns socket handle or -1).
+    NetSocket,
+    /// `rt_net_connect(sock: Int, addr: Str, port: Int) -> Int`: connect to host:port (0=ok, -1=error).
+    NetConnect,
+    /// `rt_net_bind(sock: Int, addr: Str, port: Int) -> Int`: bind to address (0=ok, -1=error).
+    NetBind,
+    /// `rt_net_listen(sock: Int, backlog: Int) -> Int`: start listening (0=ok, -1=error).
+    NetListen,
+    /// `rt_net_accept(sock: Int) -> Int`: accept connection (returns new socket or -1).
+    NetAccept,
+    /// `rt_net_send(sock: Int, data: Str) -> Int`: send data (bytes sent or -1).
+    NetSend,
+    /// `rt_net_recv(sock: Int, maxlen: Int) -> Str`: receive data into string.
+    NetRecv,
+    /// `rt_net_close(sock: Int) -> Int`: close socket (0=ok, -1=error).
+    NetClose,
+    /// `rt_net_shutdown(sock: Int, how: Int) -> Int`: shutdown socket (0=ok, -1=error).
+    NetShutdown,
+    /// `rt_net_getaddrinfo(host: Str, port: Int) -> Str`: resolve host to IP string.
+    NetGetAddrInfo,
+    /// `rt_net_freeaddrinfo() -> Unit`: free addrinfo result.
+    NetFreeAddrInfo,
+    /// `rt_net_gethostname() -> Str`: get local hostname.
+    NetGetHostName,
+    /// `rt_net_htons(value: Int) -> Int`: host-to-network byte order.
+    NetHtons,
+    // --- Crypto (Session 71) ---
+    /// `rt_crypto_init() -> Int`: load bcryptprimitives.dll and resolve BCryptGenRandom. Returns 0 on success.
+    CryptoInit,
+    /// `rt_crypto_random_bytes(buf: Str, len: Int) -> Int`: fill buf with `len` cryptographically
+    /// secure random bytes from the OS CSPRNG. Returns 0 on success, -1 on failure.
+    CryptoRandomBytes,
+    /// `rt_crypto_random_int() -> Int`: return a cryptographically secure 64-bit random integer.
+    CryptoRandomInt,
+    /// `rt_crypto_secure_zero(ptr: Ptr<Int>, len: Int)`: securely zero `len` bytes at `ptr`.
+    CryptoSecureZero,
 }
 
 impl RuntimeService {
@@ -784,9 +903,55 @@ impl RuntimeService {
             Self::MemStore | Self::StrByte => 2,
             Self::StrSetByte => 3,
             Self::VecPush | Self::VecGet => 2,
-            Self::VecNew | Self::VecLen | Self::VecFree => 1,
+            Self::VecSet => 3,
+            Self::VecNew | Self::VecLen | Self::VecFree | Self::VecPop => 1,
+            Self::VecRemove => 2,
             Self::StrConcat | Self::StrEq => 2,
             Self::StrFromInt | Self::StrFromBool => 1,
+            Self::IntToFloat | Self::FloatToInt => 1,
+            Self::FsRead
+            | Self::FsExists
+            | Self::FsFileSize
+            | Self::FsCreateDir
+            | Self::FsRemoveDir
+            | Self::FsRemoveFile
+            | Self::FsSetCwd => 1,
+            Self::FsWrite | Self::FsCopy | Self::FsMove => 2,
+            Self::FsGetCwd => 0,
+            Self::ToCstr => 1,
+            Self::FreeCstr => 1,
+            Self::ProcessRun => 1,
+            Self::ProcessStdout => 0,
+            Self::ProcessStderr => 0,
+            Self::ProcessStdoutLen => 0,
+            Self::ProcessStderrLen => 0,
+            Self::ProcessId => 0,
+            Self::TimeNow
+            | Self::TimeMillis
+            | Self::TimeTicks
+            | Self::TimeFreq
+            | Self::TimeFiletime
+            | Self::TimeFiletimeHigh => 0,
+            Self::RandomNext => 0,
+            Self::RandomSeed => 1,
+            // --- Environment (Session 65) ---
+            Self::EnvGet | Self::EnvHas | Self::EnvRemove => 1,
+            Self::EnvSet => 2,
+            // --- Networking (Session 67) ---
+            Self::NetWsaStartup
+            | Self::NetWsaCleanup
+            | Self::NetWsaLastError
+            | Self::NetFreeAddrInfo
+            | Self::NetGetHostName => 0,
+            Self::NetAccept | Self::NetClose | Self::NetHtons => 1,
+            Self::NetListen | Self::NetShutdown | Self::NetSend | Self::NetRecv => 2,
+            Self::NetSocket | Self::NetConnect | Self::NetBind => 3,
+            Self::NetGetAddrInfo => 2,
+            // --- Crypto (Session 71) ---
+            Self::CryptoInit => 0,
+            Self::CryptoRandomBytes => 2,
+            Self::CryptoRandomInt => 0,
+            Self::CryptoSecureZero => 2,
         }
     }
 
@@ -813,11 +978,67 @@ impl RuntimeService {
                 | Self::VecPush
                 | Self::VecGet
                 | Self::VecLen
+                | Self::VecSet
+                | Self::VecPop
+                | Self::VecRemove
                 | Self::VecFree
                 | Self::StrConcat
                 | Self::StrEq
                 | Self::StrFromInt
                 | Self::StrFromBool
+                | Self::IntToFloat
+                | Self::FloatToInt
+                | Self::FsRead
+                | Self::FsWrite
+                | Self::FsExists
+                | Self::FsFileSize
+                | Self::FsCreateDir
+                | Self::FsRemoveDir
+                | Self::FsRemoveFile
+                | Self::FsCopy
+                | Self::FsMove
+                | Self::FsGetCwd
+                | Self::FsSetCwd
+                | Self::ToCstr
+                | Self::FreeCstr
+                | Self::ProcessRun
+                | Self::ProcessStdout
+                | Self::ProcessStderr
+                | Self::ProcessStdoutLen
+                | Self::ProcessStderrLen
+                | Self::ProcessId
+                | Self::TimeNow
+                | Self::TimeMillis
+                | Self::TimeTicks
+                | Self::TimeFreq
+                | Self::TimeFiletime
+                | Self::TimeFiletimeHigh
+                | Self::RandomSeed
+                | Self::RandomNext
+                | Self::EnvGet
+                | Self::EnvSet
+                | Self::EnvHas
+                | Self::EnvRemove
+                | Self::NetWsaStartup
+                | Self::NetWsaCleanup
+                | Self::NetWsaLastError
+                | Self::NetSocket
+                | Self::NetConnect
+                | Self::NetBind
+                | Self::NetListen
+                | Self::NetAccept
+                | Self::NetSend
+                | Self::NetRecv
+                | Self::NetClose
+                | Self::NetShutdown
+                | Self::NetGetAddrInfo
+                | Self::NetFreeAddrInfo
+                | Self::NetGetHostName
+                | Self::NetHtons
+                | Self::CryptoInit
+                | Self::CryptoRandomBytes
+                | Self::CryptoRandomInt
+                | Self::CryptoSecureZero
         )
     }
 }

@@ -1,0 +1,182 @@
+// MINK Standard Library — Collections
+// Session 57: Production collections library
+//
+// Provides Vec operations built on top of rt_vec_* intrinsics.
+
+// ============================================================
+// VECTOR CREATION / DESTRUCTION
+// ============================================================
+
+fn vec_new(capacity) {
+    return rt_vec_new(capacity);
+}
+
+fn vec_free(v) {
+    rt_vec_free(v);
+}
+
+// ============================================================
+// VECTOR INFO
+// ============================================================
+
+fn vec_len(v) {
+    return rt_vec_len(v);
+}
+
+fn vec_is_empty(v) {
+    return rt_vec_len(v) == 0;
+}
+
+// ============================================================
+// VECTOR ACCESS
+// ============================================================
+
+fn vec_get(v, index) {
+    return rt_vec_get(v, index);
+}
+
+fn vec_set(v, index, value) {
+    return rt_vec_set(v, index, value);
+}
+
+fn vec_first(v) {
+    return rt_vec_get(v, 0);
+}
+
+fn vec_last(v) {
+    let len = rt_vec_len(v);
+    return rt_vec_get(v, len - 1);
+}
+
+// ============================================================
+// VECTOR MUTATION
+// ============================================================
+
+fn vec_push(v, value) {
+    return rt_vec_push(v, value);
+}
+
+fn vec_pop(v) {
+    return rt_vec_pop(v);
+}
+
+fn vec_remove(v, index) {
+    return rt_vec_remove(v, index);
+}
+
+fn vec_insert(v, index, value) {
+    let len = rt_vec_len(v);
+    let mut result = rt_vec_push(v, 0);
+    let mut i = len;
+    while i > index {
+        let val = rt_vec_get(result, i - 1);
+        result = rt_vec_set(result, i, val);
+        i = i - 1;
+    }
+    result = rt_vec_set(result, index, value);
+    return result;
+}
+
+// ============================================================
+// VECTOR SEARCH
+// ============================================================
+
+fn vec_contains(v, value) {
+    let len = rt_vec_len(v);
+    let mut i = 0;
+    while i < len {
+        if rt_vec_get(v, i) == value {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn vec_index_of(v, value) {
+    let len = rt_vec_len(v);
+    let mut i = 0;
+    while i < len {
+        if rt_vec_get(v, i) == value {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn vec_count(v, value) {
+    let len = rt_vec_len(v);
+    let mut count = 0;
+    let mut i = 0;
+    while i < len {
+        if rt_vec_get(v, i) == value {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    return count;
+}
+
+// ============================================================
+// VECTOR AGGREGATES
+// ============================================================
+
+fn vec_sum(v) {
+    let len = rt_vec_len(v);
+    let mut total = 0;
+    let mut i = 0;
+    while i < len {
+        total = total + rt_vec_get(v, i);
+        i = i + 1;
+    }
+    return total;
+}
+
+fn vec_min(v) {
+    let len = rt_vec_len(v);
+    let mut result = rt_vec_get(v, 0);
+    let mut i = 1;
+    while i < len {
+        let val = rt_vec_get(v, i);
+        if val < result {
+            result = val;
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn vec_max(v) {
+    let len = rt_vec_len(v);
+    let mut result = rt_vec_get(v, 0);
+    let mut i = 1;
+    while i < len {
+        let val = rt_vec_get(v, i);
+        if val > result {
+            result = val;
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+// ============================================================
+// VECTOR TRANSFORMATIONS
+// ============================================================
+
+fn vec_reverse(v) {
+    let len = rt_vec_len(v);
+    let mut result = v;
+    let mut left = 0;
+    let mut right = len - 1;
+    while left < right {
+        let lv = rt_vec_get(result, left);
+        let rv = rt_vec_get(result, right);
+        result = rt_vec_set(result, left, rv);
+        result = rt_vec_set(result, right, lv);
+        left = left + 1;
+        right = right - 1;
+    }
+    return result;
+}

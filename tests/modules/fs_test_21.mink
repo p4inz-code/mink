@@ -1,0 +1,6 @@
+
+fn main() {
+    let sz = fs_file_size("no_such_file_xyz.txt");
+    rt_print_int(sz);
+    rt_exit(0);
+}

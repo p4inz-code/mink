@@ -1,0 +1,6 @@
+
+fn main() {
+    let p = path_parent("/foo");
+    rt_print_int(rt_str_len(p));
+    rt_exit(0);
+}

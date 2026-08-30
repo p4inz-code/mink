@@ -1,0 +1,31 @@
+fn main() {
+    // IEEE-754: 1.0 = 0x3FF0000000000000 (64-bit double)
+    // Test bit ops on Int
+    let a: Int = 1023;
+    let b: Int = a << 52;
+    rt_print_int(b);
+    
+    // 52-bit shift of 1023
+    let c: Int = 1023 << 52;
+    rt_print_int(c);
+    
+    // 0x3FF0000000000000 = 1023 << 52
+    // Let's also verify via OR
+    let d: Int = 1023;
+    let e: Int = d << 52;
+    rt_print_int(e);
+    
+    // Int max for IEEE-754 1.0
+    let f: Int = 4607182418800017408;
+    rt_print_int(f);
+    
+    // Shift 1 left by 52: that's the mantissa bit
+    let g: Int = 1 << 52;
+    rt_print_int(g);
+    
+    // 1.0 = (1023 << 52) | (1 << 52) = exponent + mantissa
+    let h: Int = (1023 << 52) | (1 << 52);
+    rt_print_int(h);
+    
+    rt_exit(0);
+}

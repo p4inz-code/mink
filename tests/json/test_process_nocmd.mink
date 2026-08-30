@@ -1,0 +1,5 @@
+fn main() {
+    let pid = rt_process_id();
+    rt_print_int(pid);
+    rt_exit(0);
+}

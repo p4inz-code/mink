@@ -1,0 +1,13 @@
+fn main() {
+    let x: Float = 3.14;
+    rt_print_float(x);
+    let y: Float = 2.0;
+    rt_print_float(y);
+    let z: Float = x + y;
+    rt_print_float(z);
+    let w: Float = x * y;
+    rt_print_float(w);
+    let neg: Float = 0.0 - x;
+    rt_print_float(neg);
+    rt_exit(0);
+}

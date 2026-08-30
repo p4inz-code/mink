@@ -1,0 +1,19 @@
+
+fn main() {
+    let path = "test_many.txt";
+    let data = rt_str_from_int(42);
+    // Write and verify
+    fs_write(path, data);
+    let s1 = fs_file_size(path);
+    rt_print_int(s1);
+    // Write again
+    let data2 = rt_str_from_int(9999);
+    fs_write(path, data2);
+    let s2 = fs_file_size(path);
+    rt_print_int(s2);
+    // Delete
+    fs_remove_file(path);
+    let s3 = fs_file_size(path);
+    rt_print_int(s3);
+    rt_exit(0);
+}

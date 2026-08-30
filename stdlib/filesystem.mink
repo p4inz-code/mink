@@ -1,0 +1,365 @@
+// MINK Standard Library — Filesystem
+// Session 56: Production filesystem library
+//
+// V1 RULES:
+// - NO short-circuit evaluation: `&&` and `||` evaluate both sides.
+//   Must use nested `if` for conditional intrinsic calls on bounds.
+// - Intrinsic calls (rt_str_byte, rt_str_len, rt_str_alloc, rt_str_set_byte,
+//   rt_str_eq, rt_fs_*) do NOT consume Str arguments.
+// - User function calls DO consume Str arguments.
+// - One `return` per function at the end.
+
+// ============================================================
+// PATH OPERATIONS
+// ============================================================
+
+/// path_join(a, b): join two path components with '/' separator.
+fn path_join(a: Str, b: Str) -> Str {
+    let mut blen = rt_str_len(b);
+    let mut alen = rt_str_len(a);
+    let mut mode = 0; // 0=normal-join, 1=copy-a, 2=copy-b, 3=join-with-slash
+    // Empty b -> copy a
+    if blen == 0 {
+        mode = 1;
+    }
+    // b starts with '/' -> copy b
+    if mode == 0 {
+        if blen > 0 {
+            if rt_str_byte(b, 0) == 47 {
+                mode = 2;
+            }
+        }
+    }
+    // b has drive letter -> copy b
+    if mode == 0 {
+        if blen >= 2 {
+            if rt_str_byte(b, 1) == 58 {
+                mode = 2;
+            }
+        }
+    }
+    // Empty a -> copy b
+    if mode == 0 {
+        if alen == 0 {
+            mode = 2;
+        }
+    }
+    // a ends with slash -> concat without extra slash
+    if mode == 0 {
+        if alen > 0 {
+            if rt_str_byte(a, alen - 1) == 47 {
+                mode = 3;
+            }
+        }
+    }
+    // a doesn't end with slash -> join with slash
+    if mode == 0 {
+        mode = 3;
+    }
+
+    let mut total = alen + blen;
+    if mode == 1 {
+        total = alen;
+    }
+    if mode == 2 {
+        total = blen;
+    }
+    if mode == 3 {
+        total = alen + 1 + blen;
+    }
+    if mode == 3 {
+        if alen > 0 {
+            if rt_str_byte(a, alen - 1) == 47 {
+                total = alen + blen;
+            }
+        }
+    }
+
+    let result = rt_str_alloc(total);
+    if mode == 1 {
+        let mut i = 0;
+        while i < alen {
+            rt_str_set_byte(result, i, rt_str_byte(a, i));
+            i = i + 1;
+        }
+    }
+    if mode == 2 {
+        let mut i = 0;
+        while i < blen {
+            rt_str_set_byte(result, i, rt_str_byte(b, i));
+            i = i + 1;
+        }
+    }
+    if mode == 3 {
+        let mut need_slash = 1;
+        if alen > 0 {
+            if rt_str_byte(a, alen - 1) == 47 {
+                need_slash = 0;
+            }
+        }
+        let mut i = 0;
+        while i < alen {
+            rt_str_set_byte(result, i, rt_str_byte(a, i));
+            i = i + 1;
+        }
+        if need_slash == 1 {
+            rt_str_set_byte(result, alen, 47);
+        }
+        let mut j = 0;
+        while j < blen {
+            rt_str_set_byte(result, alen + need_slash + j, rt_str_byte(b, j));
+            j = j + 1;
+        }
+    }
+    return result;
+}
+
+/// path_parent(p): return parent directory (before last '/'). Returns "." if no '/'.
+fn path_parent(p: Str) -> Str {
+    let mut len = rt_str_len(p);
+    let mut idx = -1;
+    let mut i = 0;
+    while i < len {
+        if rt_str_byte(p, i) == 47 {
+            idx = i;
+        }
+        i = i + 1;
+    }
+    let mut out_len = 1;
+    let mut mode = 0; // 0=dot, 1=slash, 2=copy
+    if idx == 0 {
+        mode = 1;
+    }
+    if idx > 0 {
+        out_len = idx;
+        mode = 2;
+    }
+    let result = rt_str_alloc(out_len);
+    if mode == 0 {
+        rt_str_set_byte(result, 0, 46);
+    }
+    if mode == 1 {
+        rt_str_set_byte(result, 0, 47);
+    }
+    if mode == 2 {
+        let mut j = 0;
+        while j < idx {
+            rt_str_set_byte(result, j, rt_str_byte(p, j));
+            j = j + 1;
+        }
+    }
+    return result;
+}
+
+/// path_filename(p): return component after last '/'.
+fn path_filename(p: Str) -> Str {
+    let mut len = rt_str_len(p);
+    let mut last_slash = -1;
+    let mut i = 0;
+    while i < len {
+        if rt_str_byte(p, i) == 47 {
+            last_slash = i;
+        }
+        i = i + 1;
+    }
+    let mut start = last_slash + 1;
+    let mut result_len = len - start;
+    let result = rt_str_alloc(result_len);
+    let mut j = 0;
+    while j < result_len {
+        rt_str_set_byte(result, j, rt_str_byte(p, start + j));
+        j = j + 1;
+    }
+    return result;
+}
+
+/// path_extension(p): return extension including the '.'. Returns "" if none.
+fn path_extension(p: Str) -> Str {
+    let mut len = rt_str_len(p);
+    let mut last_slash = -1;
+    let mut last_dot = -1;
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(p, i);
+        if b == 47 { last_slash = i; }
+        if b == 46 { last_dot = i; }
+        i = i + 1;
+    }
+    let mut ext_start = len;
+    let mut ext_len = 0;
+    if last_dot > last_slash {
+        ext_start = last_dot;
+        ext_len = len - last_dot;
+    }
+    let result = rt_str_alloc(ext_len);
+    let mut j = 0;
+    while j < ext_len {
+        rt_str_set_byte(result, j, rt_str_byte(p, ext_start + j));
+        j = j + 1;
+    }
+    return result;
+}
+
+/// path_stem(p): return filename without extension.
+fn path_stem(p: Str) -> Str {
+    let mut len = rt_str_len(p);
+    let mut last_slash = -1;
+    let mut last_dot = -1;
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(p, i);
+        if b == 47 { last_slash = i; }
+        if b == 46 { last_dot = i; }
+        i = i + 1;
+    }
+    let mut actual_end = len;
+    if last_dot > last_slash {
+        actual_end = last_dot;
+    }
+    let result = rt_str_alloc(actual_end);
+    let mut j = 0;
+    while j < actual_end {
+        rt_str_set_byte(result, j, rt_str_byte(p, j));
+        j = j + 1;
+    }
+    return result;
+}
+
+/// path_has_extension(p, ext): check if path has the given extension.
+fn path_has_extension(p: Str, ext: Str) -> Bool {
+    let pe = path_extension(p);
+    return rt_str_eq(pe, ext);
+}
+
+/// path_is_absolute(p): true if starts with '/' or has ':' at position 1.
+fn path_is_absolute(p: Str) -> Bool {
+    let mut len = rt_str_len(p);
+    if len == 0 { return false; }
+    if rt_str_byte(p, 0) == 47 { return true; }
+    if len >= 2 {
+        if rt_str_byte(p, 1) == 58 { return true; }
+    }
+    return false;
+}
+
+/// path_is_relative(p): true if NOT absolute.
+fn path_is_relative(p: Str) -> Bool {
+    return !path_is_absolute(p);
+}
+
+/// path_with_extension(p, ext): replace extension.
+fn path_with_extension(p: Str, ext: Str) -> Str {
+    let mut len = rt_str_len(p);
+    let mut last_slash = -1;
+    let mut last_dot = -1;
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(p, i);
+        if b == 47 { last_slash = i; }
+        if b == 46 { last_dot = i; }
+        i = i + 1;
+    }
+    let mut stem_end = len;
+    if last_dot > last_slash {
+        stem_end = last_dot;
+    }
+    let ext_len = rt_str_len(ext);
+    let result = rt_str_alloc(stem_end + ext_len);
+    let mut j = 0;
+    while j < stem_end {
+        rt_str_set_byte(result, j, rt_str_byte(p, j));
+        j = j + 1;
+    }
+    j = 0;
+    while j < ext_len {
+        rt_str_set_byte(result, stem_end + j, rt_str_byte(ext, j));
+        j = j + 1;
+    }
+    return result;
+}
+
+/// path_normalize(p): return path as-is for V1 (copies to new allocation).
+fn path_normalize(p: Str) -> Str {
+    let mut len = rt_str_len(p);
+    let result = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        rt_str_set_byte(result, i, rt_str_byte(p, i));
+        i = i + 1;
+    }
+    return result;
+}
+
+// ============================================================
+// FILE OPERATIONS
+// ============================================================
+
+fn fs_exists(path: Str) -> Bool {
+    return rt_fs_exists(path);
+}
+
+fn fs_file_size(path: Str) -> Int {
+    return rt_fs_file_size(path);
+}
+
+fn fs_read(path: Str) -> Str {
+    return rt_fs_read(path);
+}
+
+fn fs_write(path: Str, data: Str) -> Int {
+    return rt_fs_write(path, data);
+}
+
+fn fs_copy_file(src: Str, dst: Str) -> Int {
+    return rt_fs_copy(src, dst);
+}
+
+fn fs_move(src: Str, dst: Str) -> Int {
+    return rt_fs_move(src, dst);
+}
+
+fn fs_remove_file(path: Str) -> Int {
+    return rt_fs_remove_file(path);
+}
+
+// ============================================================
+// DIRECTORY OPERATIONS
+// ============================================================
+
+fn fs_create_dir(path: Str) -> Int {
+    return rt_fs_create_dir(path);
+}
+
+fn fs_remove_dir(path: Str) -> Int {
+    return rt_fs_remove_dir(path);
+}
+
+fn fs_get_cwd() -> Str {
+    return rt_fs_get_cwd();
+}
+
+fn fs_set_cwd(path: Str) -> Int {
+    return rt_fs_set_cwd(path);
+}
+
+// ============================================================
+// UTILITY
+// ============================================================
+
+fn fs_is_file(path: Str) -> Bool {
+    if !rt_fs_exists(path) { return false; }
+    let sz = rt_fs_file_size(path);
+    return sz >= 0;
+}
+
+fn fs_is_dir(path: Str) -> Bool {
+    if !rt_fs_exists(path) { return false; }
+    let sz = rt_fs_file_size(path);
+    return sz < 0;
+}
+
+fn fs_file_size_or(path: Str, default: Int) -> Int {
+    let sz = rt_fs_file_size(path);
+    if sz < 0 { return default; }
+    return sz;
+}

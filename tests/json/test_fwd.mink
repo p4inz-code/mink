@@ -1,0 +1,98 @@
+// Test forward reference: fn_b is called before it's defined
+fn fn_a() -> Int {
+    return fn_b();
+}
+
+fn fn_b() -> Int {
+    return 42;
+}
+
+fn json_int(n: Int) -> Ptr<Int> {
+    let p = rt_alloc(16);
+    rt_mem_store(p, 2);
+    rt_mem_store(p + 8, n);
+    return p;
+}
+
+fn json_num_str(s: Str) -> Ptr<Int> {
+    let p = rt_alloc(16);
+    rt_mem_store(p, 2);
+    rt_mem_store(p + 8, s);
+    return p;
+}
+
+fn json_tag(v: Ptr<Int>) -> Int {
+    return rt_mem_load(v);
+}
+
+fn json_payload_int(v: Ptr<Int>) -> Int {
+    return rt_mem_load(v + 8);
+}
+
+fn json_arr() -> Ptr<Int> {
+    let block = rt_alloc(16);
+    rt_mem_store(block, 0);
+    let p = rt_alloc(16);
+    rt_mem_store(p, 4);
+    rt_mem_store(p + 8, block);
+    return p;
+}
+
+fn json_arr_len(a: Ptr<Int>) -> Int {
+    let block = rt_mem_load(a + 8);
+    return rt_mem_load(block);
+}
+
+fn json_arr_push(a: Ptr<Int>, val: Ptr<Int>) -> Ptr<Int> {
+    let old_block = rt_mem_load(a + 8);
+    let old_len = rt_mem_load(old_block);
+    let new_len = old_len + 1;
+    let new_block = rt_alloc(16 + new_len * 8);
+    rt_mem_store(new_block, new_len);
+    let i = 0;
+    while i < old_len {
+        rt_mem_store(new_block + 16 + i * 8, rt_mem_load(old_block + 16 + i * 8));
+        i = i + 1;
+    }
+    rt_mem_store(new_block + 16 + old_len * 8, val);
+    rt_mem_store(a + 8, new_block);
+    return a;
+}
+
+fn json_arr_get(a: Ptr<Int>, i: Int) -> Ptr<Int> {
+    let block = rt_mem_load(a + 8);
+    return rt_mem_load(block + 16 + i * 8);
+}
+
+fn main() -> Int {
+    // Test forward reference
+    let v = fn_a();
+    if v != 42 { return 1; }
+
+    // Test json_int
+    let ji = json_int(99);
+    if json_tag(ji) != 2 { return 2; }
+    if json_payload_int(ji) != 99 { return 3; }
+
+    // Test json_arr
+    let a = json_arr();
+    if json_arr_len(a) != 0 { return 4; }
+    json_arr_push(a, ji);
+    json_arr_push(a, json_int(77));
+    if json_arr_len(a) != 2 { return 5; }
+
+    let got = json_arr_get(a, 0);
+    if json_payload_int(got) != 99 { return 6; }
+    let got2 = json_arr_get(a, 1);
+    if json_payload_int(got2) != 77 { return 7; }
+
+    // Test string literal parsing
+    let js = json_num_str("12345");
+    let payload = rt_mem_load(js + 8);
+    let len = rt_str_len(payload);
+    if len != 5 { return 8; }
+    if rt_str_byte(payload, 0) != 49 { return 9; }
+
+    rt_print_int(100);
+    rt_exit(0);
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let code = rt_process_run("echo test");
+    rt_print_int(code);
+    rt_exit(0);
+}

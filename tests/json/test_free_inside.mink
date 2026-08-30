@@ -1,0 +1,30 @@
+fn my_upper(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let out = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(s, i);
+        if b >= 97 && b <= 122 {
+            rt_str_set_byte(out, i, b - 32);
+        } else {
+            rt_str_set_byte(out, i, b);
+        }
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return out;
+}
+
+fn main() {
+    let t = rt_str_alloc(5);
+    rt_str_set_byte(t, 0, 104);
+    rt_str_set_byte(t, 1, 101);
+    rt_str_set_byte(t, 2, 108);
+    rt_str_set_byte(t, 3, 108);
+    rt_str_set_byte(t, 4, 111);
+    let s = my_upper(t);
+    let r = rt_str_len(s);
+    rt_print_int(r);
+    rt_str_free(s);
+    rt_exit(0);
+}

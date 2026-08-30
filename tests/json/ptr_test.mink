@@ -1,0 +1,24 @@
+fn make_box(val: Int) -> Ptr<Int> {
+    let p = rt_alloc(16);
+    rt_mem_store(p, val);
+    rt_mem_store(p + 8, 42);
+    return p;
+}
+
+fn read_box(p: Ptr<Int>) -> Int {
+    return rt_mem_load(p);
+}
+
+fn read_offset(p: Ptr<Int>) -> Int {
+    return rt_mem_load(p + 8);
+}
+
+fn main() -> Int {
+    let p = make_box(99);
+    let v = read_box(p);
+    let o = read_offset(p);
+    rt_print_int(v);
+    rt_print_int(o);
+    rt_free(p);
+    return v;
+}

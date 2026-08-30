@@ -1,0 +1,24 @@
+fn main() {
+    // Test bitwise ops
+    let a: Int = 12;
+    let b: Int = 10;
+    rt_print_int(a & b);    // 8
+    rt_print_int(a | b);    // 14
+    rt_print_int(a ^ b);    // 6
+    rt_print_int(a << 1);   // 24
+    rt_print_int(a >> 1);   // 6
+    
+    // Test negation
+    let c: Int = 0 - 5;
+    rt_print_int(c);
+    
+    // Test mod
+    let d: Int = 17;
+    rt_print_int(d % 5);    // 2
+    
+    // Test division
+    let e: Int = 17;
+    rt_print_int(e / 5);    // 3
+    
+    rt_exit(0);
+}

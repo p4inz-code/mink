@@ -1,0 +1,13 @@
+fn test_cond_return(s: Str) -> (Int, Str) {
+    let len = rt_str_len(s);
+    let mut result = -1;
+    if len == 0 { result = 0; }
+    if len != 0 { result = len; }
+    return (result, s);
+}
+
+fn main() {
+    let r = test_cond_return("hello");
+    rt_print_int(r.0);
+    rt_exit(0);
+}

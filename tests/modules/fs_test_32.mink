@@ -1,0 +1,12 @@
+
+fn main() {
+    // Create a JSON-like string and write it to a file
+    let json_str = str_join_3("{\"key\":", "42", "}");
+    let path = "test_json_fs.txt";
+    fs_write(path, json_str);
+    let content = fs_read(path);
+    let len = rt_str_len(content);
+    rt_print_int(len);
+    fs_remove_file(path);
+    rt_exit(0);
+}

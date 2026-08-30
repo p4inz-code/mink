@@ -1,0 +1,12 @@
+
+fn main() {
+    // Write hex-encoded data and read it back
+    let original = "Hello";
+    let path = "test_enc_fs.txt";
+    fs_write(path, original);
+    let read_back = fs_read(path);
+    let len = rt_str_len(read_back);
+    rt_print_int(len);
+    fs_remove_file(path);
+    rt_exit(0);
+}

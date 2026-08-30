@@ -1,0 +1,7 @@
+fn main() {
+    // Test just creating a process with hardcoded CSTR
+    rt_print_str("A\n");
+    let code = rt_process_run("echo hi");
+    rt_print_str("B\n");
+    rt_exit(code);
+}

@@ -457,6 +457,16 @@ impl Code {
         self.bytes(&[0x66, 0x48, 0x0F, 0x7E, 0xC0]);
     }
 
+    /// `cvtsi2sd xmm0, rax` (signed 64-bit int → double).
+    pub(crate) fn cvtsi2sd_xmm0_rax(&mut self) {
+        self.bytes(&[0xF2, 0x48, 0x0F, 0x2A, 0xC0]);
+    }
+
+    /// `cvttsd2si rax, xmm0` (double → signed 64-bit int, truncation toward zero).
+    pub(crate) fn cvttsd2si_rax_xmm0(&mut self) {
+        self.bytes(&[0xF2, 0x48, 0x0F, 0x2C, 0xC0]);
+    }
+
     /// `setcc al` (sets the low byte of `rax`; no REX).
     pub(crate) fn setcc_al(&mut self, condition: u8) {
         self.bytes(&[0x0F, condition, 0xC0]);
@@ -811,6 +821,14 @@ impl Code {
     pub(crate) fn call_rax(&mut self) {
         self.u8(0xFF);
         self.u8(0xD0); // ModRM: 11_010_000
+    }
+
+    /// `cdqe` — sign-extend EAX into RAX.
+    /// Used after 32-bit WinAPI calls that return signed int values
+    /// (send, recv, etc.) to ensure the upper 32 bits are correctly set.
+    /// Encoding: REX.W + 0x98
+    pub(crate) fn cdqe(&mut self) {
+        self.bytes(&[0x48, 0x98]);
     }
 
     /// `jmp rel32` to a runtime label (patched later).
@@ -1242,7 +1260,17 @@ fn emit_runtime_call(
     if words + pad > 0 {
         code.add_rsp((8 * (words + pad)) as i32);
     }
-    code.mov_rbp_rax(slots[target.raw() as usize].0);
+    // Float-returning intrinsics store the result in xmm0;
+    // Int/Bool-returning intrinsics store the result in rax.
+    let target_is_float = f
+        .local(target)
+        .map(|local| local.ty == BType::Float)
+        .unwrap_or(false);
+    if target_is_float {
+        code.movsd_mem_xmm0(Reg::Rbp, slots[target.raw() as usize].0);
+    } else {
+        code.mov_rbp_rax(slots[target.raw() as usize].0);
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // the emitter context is threaded per instruction
@@ -1456,8 +1484,12 @@ fn emit_inst(
                 push_operand(code, f, slots, *arg);
             }
             code.call(*callee);
-            if total > 0 {
-                code.add_rsp((8 * total) as i32);
+            // Clean up both arguments AND alignment padding.
+            // `pad` bytes were subtracted via sub_rsp before the pushes,
+            // so the total bytes to reclaim is (total + pad) * 8.
+            let cleanup = total + pad;
+            if cleanup > 0 {
+                code.add_rsp((8 * cleanup) as i32);
             }
             if !aggregate {
                 code.mov_rbp_rax(slots[target.raw() as usize].0);
@@ -1506,8 +1538,10 @@ fn emit_inst(
                 }
             }
             code.call_rax();
-            if total > 0 {
-                code.add_rsp((8 * total) as i32);
+            // Clean up both arguments AND alignment padding.
+            let cleanup = total + pad;
+            if cleanup > 0 {
+                code.add_rsp((8 * cleanup) as i32);
             }
             if !aggregate {
                 code.mov_rbp_rax(slots[target.raw() as usize].0);

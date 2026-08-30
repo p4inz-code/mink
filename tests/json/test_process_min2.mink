@@ -1,0 +1,7 @@
+fn main() {
+    rt_print_str("before\n");
+    let code = rt_process_run("echo hi");
+    rt_print_str("after\n");
+    rt_print_int(code);
+    rt_exit(0);
+}

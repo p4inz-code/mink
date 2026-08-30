@@ -1,0 +1,15 @@
+
+fn main() {
+    let src = "test_mv_src.txt";
+    let dst = "test_mv_dst.txt";
+    let data = rt_str_from_int(77);
+    fs_write(src, data);
+    let m = fs_move(src, dst);
+    rt_print_int(m);
+    let src_exists = fs_exists(src);
+    if src_exists { rt_print_int(1); } else { rt_print_int(0); }
+    let dst_exists = fs_exists(dst);
+    if dst_exists { rt_print_int(1); } else { rt_print_int(0); }
+    fs_remove_file(dst);
+    rt_exit(0);
+}

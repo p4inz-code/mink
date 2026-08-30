@@ -1,0 +1,542 @@
+// MINK Strings Library v1.1.0 — Session 53
+// Second official MINK ecosystem library.
+//
+// V1 OWNERSHIP CONSTRAINT: Str parameters are consumed by user functions.
+// MINK V1 does NOT have NLL — if `s` appears in any return statement,
+// it is marked as moved for the ENTIRE function. Therefore:
+//   - Every function must have EXACTLY ONE return statement
+//   - `s` can appear in intrinsic calls (rt_str_len, rt_str_byte, etc.)
+//   - `s` can appear in the FINAL return statement
+//   - `s` must NOT appear in any conditional return
+//
+// API patterns:
+//   - Search/inspection: fn f(s, ...) -> (result, Str)  [s returned at end]
+//   - Transformation: fn f(s, ...) -> Str  [new string returned, s consumed]
+//   - Validation: fn f(s) -> (Bool, Str)  [s returned at end]
+
+// ============================================================================
+// Comparison
+// ============================================================================
+
+fn str_cmp(a: Str, b: Str) -> Int {
+    let alen = rt_str_len(a);
+    let blen = rt_str_len(b);
+    let mut minlen = alen;
+    if blen < minlen { minlen = blen; }
+    let mut result = 0;
+    let mut i = 0;
+    let mut done = 0;
+    while i < minlen && done == 0 {
+        let ca = rt_str_byte(a, i);
+        let cb = rt_str_byte(b, i);
+        if ca < cb { result = -1; done = 1; }
+        if ca > cb { result = 1; done = 1; }
+        i = i + 1;
+    }
+    if done == 0 && alen < blen { result = -1; }
+    if done == 0 && alen > blen { result = 1; }
+    return result;
+}
+
+// ============================================================================
+// Search — single return with (result, s) at end
+// ============================================================================
+
+fn str_index_of(s: Str, sub: Str) -> (Int, Str) {
+    let slen = rt_str_len(s);
+    let sublen = rt_str_len(sub);
+    let mut result = -1;
+    if sublen == 0 { result = 0; }
+    if sublen > slen { result = -1; }
+    if sublen > 0 && sublen <= slen {
+        let mut i = 0;
+        let limit = slen - sublen;
+        while i <= limit && result == -1 {
+            let mut match_found = true;
+            let mut j = 0;
+            while j < sublen && match_found {
+                if rt_str_byte(s, i + j) != rt_str_byte(sub, j) {
+                    match_found = false;
+                }
+                j = j + 1;
+            }
+            if match_found { result = i; }
+            i = i + 1;
+        }
+    }
+    return (result, s);
+}
+
+fn str_last_index_of(s: Str, sub: Str) -> (Int, Str) {
+    let slen = rt_str_len(s);
+    let sublen = rt_str_len(sub);
+    let mut result = -1;
+    if sublen == 0 { result = slen; }
+    if sublen > slen { result = -1; }
+    if sublen > 0 && sublen <= slen {
+        let mut i = slen - sublen;
+        let mut done = 0;
+        while i >= 0 && done == 0 {
+            let mut match_found = true;
+            let mut j = 0;
+            while j < sublen && match_found {
+                if rt_str_byte(s, i + j) != rt_str_byte(sub, j) {
+                    match_found = false;
+                }
+                j = j + 1;
+            }
+            if match_found { result = i; done = 1; }
+            if i == 0 { done = 1; }
+            if done == 0 { i = i - 1; }
+        }
+    }
+    return (result, s);
+}
+
+fn str_contains(s: Str, sub: Str) -> (Bool, Str) {
+    let r = str_index_of(s, sub);
+    return (r.0 >= 0, r.1);
+}
+
+fn str_starts_with(s: Str, prefix: Str) -> (Bool, Str) {
+    let slen = rt_str_len(s);
+    let plen = rt_str_len(prefix);
+    let mut result = true;
+    if plen > slen { result = false; }
+    if plen <= slen {
+        let mut i = 0;
+        while i < plen && result {
+            if rt_str_byte(s, i) != rt_str_byte(prefix, i) { result = false; }
+            i = i + 1;
+        }
+    }
+    return (result, s);
+}
+
+fn str_ends_with(s: Str, suffix: Str) -> (Bool, Str) {
+    let slen = rt_str_len(s);
+    let slen2 = rt_str_len(suffix);
+    let mut result = true;
+    if slen2 > slen { result = false; }
+    if slen2 <= slen {
+        let mut i = 0;
+        while i < slen2 && result {
+            if rt_str_byte(s, slen - slen2 + i) != rt_str_byte(suffix, i) { result = false; }
+            i = i + 1;
+        }
+    }
+    return (result, s);
+}
+
+fn str_count(s: Str, sub: Str) -> (Int, Str) {
+    let sublen = rt_str_len(sub);
+    let slen = rt_str_len(s);
+    let mut count = 0;
+    if sublen > 0 && sublen <= slen {
+        let mut pos = 0;
+        while pos <= slen - sublen {
+            let mut match_found = true;
+            let mut j = 0;
+            while j < sublen {
+                if rt_str_byte(s, pos + j) != rt_str_byte(sub, j) {
+                    match_found = false;
+                    j = sublen;
+                } else {
+                    j = j + 1;
+                }
+            }
+            if match_found { count = count + 1; }
+            if match_found { pos = pos + sublen; }
+            if !match_found { pos = pos + 1; }
+        }
+    }
+    return (count, s);
+}
+
+// ============================================================================
+// Validation — single return
+// ============================================================================
+
+fn str_is_numeric(s: Str) -> (Bool, Str) {
+    let len = rt_str_len(s);
+    let mut result = true;
+    if len == 0 { result = false; }
+    let mut i = 0;
+    while i < len && result {
+        let b = rt_str_byte(s, i);
+        if b < 48 || b > 57 { result = false; }
+        i = i + 1;
+    }
+    return (result, s);
+}
+
+fn str_is_alpha(s: Str) -> (Bool, Str) {
+    let len = rt_str_len(s);
+    let mut result = true;
+    if len == 0 { result = false; }
+    let mut i = 0;
+    while i < len && result {
+        let b = rt_str_byte(s, i);
+        if !(b >= 65 && b <= 90) && !(b >= 97 && b <= 122) { result = false; }
+        i = i + 1;
+    }
+    return (result, s);
+}
+
+fn str_is_alphanumeric(s: Str) -> (Bool, Str) {
+    let len = rt_str_len(s);
+    let mut result = true;
+    if len == 0 { result = false; }
+    let mut i = 0;
+    while i < len && result {
+        let b = rt_str_byte(s, i);
+        if !(b >= 48 && b <= 57) && !(b >= 65 && b <= 90) && !(b >= 97 && b <= 122) {
+            result = false;
+        }
+        i = i + 1;
+    }
+    return (result, s);
+}
+
+// ============================================================================
+// Substring — consumes input, produces new string
+// ============================================================================
+
+fn str_sub(s: Str, start_in: Int, end_in: Int) -> Str {
+    let len = rt_str_len(s);
+    let mut start = start_in;
+    let mut end = end_in;
+    if start < 0 { start = 0; }
+    if end > len { end = len; }
+    let sublen = end - start;
+    let out = rt_str_alloc(sublen);
+    let mut i = 0;
+    while i < sublen {
+        rt_str_set_byte(out, i, rt_str_byte(s, start + i));
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================================
+// Trimming — consumes input, produces new string
+// ============================================================================
+
+fn _is_whitespace(b: Int) -> Bool {
+    if b == 32 { return true; }
+    if b == 9 { return true; }
+    if b == 10 { return true; }
+    if b == 13 { return true; }
+    if b == 11 { return true; }
+    if b == 12 { return true; }
+    return false;
+}
+
+fn str_trim(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let mut start = 0;
+    while start < len {
+        if !_is_whitespace(rt_str_byte(s, start)) { start = len; }
+        if _is_whitespace(rt_str_byte(s, start)) { start = start + 1; }
+    }
+    let mut end = len;
+    while end > start {
+        if !_is_whitespace(rt_str_byte(s, end - 1)) { end = 0; }
+        if _is_whitespace(rt_str_byte(s, end - 1)) { end = end - 1; }
+    }
+    return str_sub(s, start, end);
+}
+
+fn str_trim_start(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let mut start = 0;
+    while start < len {
+        if !_is_whitespace(rt_str_byte(s, start)) { start = len; }
+        if _is_whitespace(rt_str_byte(s, start)) { start = start + 1; }
+    }
+    return str_sub(s, start, len);
+}
+
+fn str_trim_end(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let mut end = len;
+    while end > 0 {
+        if !_is_whitespace(rt_str_byte(s, end - 1)) { end = 0; }
+        if _is_whitespace(rt_str_byte(s, end - 1)) { end = end - 1; }
+    }
+    return str_sub(s, 0, end);
+}
+
+// ============================================================================
+// Case conversion (ASCII only) — consumes input, produces new string
+// ============================================================================
+
+fn str_to_upper(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let out = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(s, i);
+        if b >= 97 && b <= 122 {
+            rt_str_set_byte(out, i, b - 32);
+        } else {
+            rt_str_set_byte(out, i, b);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn str_to_lower(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let out = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(s, i);
+        if b >= 65 && b <= 90 {
+            rt_str_set_byte(out, i, b + 32);
+        } else {
+            rt_str_set_byte(out, i, b);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================================
+// Repeat / Padding — consumes input, produces new string
+// ============================================================================
+
+fn str_repeat(s: Str, count: Int) -> Str {
+    if count <= 0 { return rt_str_alloc(0); }
+    let slen = rt_str_len(s);
+    let total = slen * count;
+    let out = rt_str_alloc(total);
+    let mut i = 0;
+    while i < count {
+        let mut j = 0;
+        while j < slen {
+            rt_str_set_byte(out, i * slen + j, rt_str_byte(s, j));
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn str_pad_left(s: Str, target_len: Int, pad_byte: Int) -> Str {
+    let slen = rt_str_len(s);
+    if slen >= target_len {
+        let out = rt_str_alloc(slen);
+        let mut i = 0;
+        while i < slen {
+            rt_str_set_byte(out, i, rt_str_byte(s, i));
+            i = i + 1;
+        }
+        return out;
+    }
+    let pad_len = target_len - slen;
+    let out = rt_str_alloc(target_len);
+    let mut i = 0;
+    while i < pad_len {
+        rt_str_set_byte(out, i, pad_byte);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < slen {
+        rt_str_set_byte(out, pad_len + j, rt_str_byte(s, j));
+        j = j + 1;
+    }
+    return out;
+}
+
+fn str_pad_right(s: Str, target_len: Int, pad_byte: Int) -> Str {
+    let slen = rt_str_len(s);
+    if slen >= target_len {
+        let out = rt_str_alloc(slen);
+        let mut i = 0;
+        while i < slen {
+            rt_str_set_byte(out, i, rt_str_byte(s, i));
+            i = i + 1;
+        }
+        return out;
+    }
+    let out = rt_str_alloc(target_len);
+    let mut i = 0;
+    while i < slen {
+        rt_str_set_byte(out, i, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    while i < target_len {
+        rt_str_set_byte(out, i, pad_byte);
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================================
+// Reverse — consumes input, produces new string
+// ============================================================================
+
+fn str_reverse(s: Str) -> Str {
+    let len = rt_str_len(s);
+    let out = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        rt_str_set_byte(out, i, rt_str_byte(s, len - 1 - i));
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================================
+// Replace — consumes inputs, produces new string
+// ============================================================================
+
+fn str_replace(s: Str, old: Str, new: Str) -> Str {
+    let slen = rt_str_len(s);
+    let oldlen = rt_str_len(old);
+    let newlen = rt_str_len(new);
+    let r = str_index_of(s, old);
+    let idx = r.0;
+    let s2 = r.1;
+    let mut result_len = slen;
+    if idx >= 0 { result_len = slen - oldlen + newlen; }
+    let out = rt_str_alloc(result_len);
+    if idx < 0 {
+        let mut ci = 0;
+        while ci < slen {
+            rt_str_set_byte(out, ci, rt_str_byte(s2, ci));
+            ci = ci + 1;
+        }
+    }
+    if idx >= 0 {
+        let mut i = 0;
+        while i < idx {
+            rt_str_set_byte(out, i, rt_str_byte(s2, i));
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < newlen {
+            rt_str_set_byte(out, idx + j, rt_str_byte(new, j));
+            j = j + 1;
+        }
+        let mut k = idx + oldlen;
+        while k < slen {
+            rt_str_set_byte(out, idx + newlen + (k - idx - oldlen), rt_str_byte(s2, k));
+            k = k + 1;
+        }
+    }
+    return out;
+}
+
+fn str_replace_all(s: Str, old: Str, new: Str) -> Str {
+    let oldlen = rt_str_len(old);
+    let slen = rt_str_len(s);
+    let newlen = rt_str_len(new);
+    if oldlen == 0 {
+        let out = rt_str_alloc(slen);
+        let mut ci = 0;
+        while ci < slen {
+            rt_str_set_byte(out, ci, rt_str_byte(s, ci));
+            ci = ci + 1;
+        }
+        return out;
+    }
+    // First pass: count occurrences
+    let mut count = 0;
+    let mut pos = 0;
+    while pos <= slen - oldlen {
+        let mut match_found = true;
+        let mut j = 0;
+        while j < oldlen {
+            if rt_str_byte(s, pos + j) != rt_str_byte(old, j) {
+                match_found = false;
+                j = oldlen;
+            } else {
+                j = j + 1;
+            }
+        }
+        if match_found { count = count + 1; }
+        if match_found { pos = pos + oldlen; }
+        if !match_found { pos = pos + 1; }
+    }
+    if count == 0 {
+        let out = rt_str_alloc(slen);
+        let mut ci = 0;
+        while ci < slen {
+            rt_str_set_byte(out, ci, rt_str_byte(s, ci));
+            ci = ci + 1;
+        }
+        return out;
+    }
+    // Second pass: build result
+    let result_len = slen + count * (newlen - oldlen);
+    let out = rt_str_alloc(result_len);
+    let mut out_pos = 0;
+    let mut src_pos = 0;
+    let mut replacements_done = 0;
+    while replacements_done < count {
+        let mut next_pos = src_pos;
+        let mut found = 0;
+        while next_pos <= slen - oldlen && found == 0 {
+            let mut mf = true;
+            let mut j2 = 0;
+            while j2 < oldlen {
+                if rt_str_byte(s, next_pos + j2) != rt_str_byte(old, j2) {
+                    mf = false;
+                    j2 = oldlen;
+                } else {
+                    j2 = j2 + 1;
+                }
+            }
+            if mf { found = 1; }
+            if found == 0 { next_pos = next_pos + 1; }
+        }
+        if found == 0 { replacements_done = count; }
+        if found == 1 {
+            let mut ci = src_pos;
+            while ci < next_pos {
+                rt_str_set_byte(out, out_pos, rt_str_byte(s, ci));
+                out_pos = out_pos + 1;
+                ci = ci + 1;
+            }
+            let mut cj = 0;
+            while cj < newlen {
+                rt_str_set_byte(out, out_pos, rt_str_byte(new, cj));
+                out_pos = out_pos + 1;
+                cj = cj + 1;
+            }
+            src_pos = next_pos + oldlen;
+            replacements_done = replacements_done + 1;
+        }
+    }
+    // Copy rest
+    while src_pos < slen {
+        rt_str_set_byte(out, out_pos, rt_str_byte(s, src_pos));
+        out_pos = out_pos + 1;
+        src_pos = src_pos + 1;
+    }
+    return out;
+}
+
+// ============================================================================
+// Join
+// ============================================================================
+
+fn str_join_2(a: Str, b: Str) -> Str {
+    return rt_str_concat(a, b);
+}
+
+fn str_join_3(a: Str, b: Str, c: Str) -> Str {
+    return rt_str_concat(rt_str_concat(a, b), c);
+}
+
+// ============================================================================
+// Char at position — returns byte value
+// ============================================================================
+
+fn str_char_at(s: Str, index: Int) -> (Int, Str) {
+    return (rt_str_byte(s, index), s);
+}
+

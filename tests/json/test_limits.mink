@@ -1,0 +1,72 @@
+// Test 1: Can we store Str via rt_mem_store?
+fn test_store_str() -> Int {
+    let p = rt_alloc(16);
+    // This should fail to compile — Str != Int
+    // rt_mem_store(p + 8, "hello");
+    return 1;
+}
+
+// Test 2: Can we use a struct with Str field?
+struct StrBox {
+    tag: Int,
+    val: Str,
+}
+
+fn test_struct_str() -> Int {
+    let b: StrBox = StrBox { tag: 3, val: "hello" };
+    if b.tag != 3 { return 2; }
+    if rt_str_len(b.val) != 5 { return 3; }
+    return 0;
+}
+
+// Test 3: Can we store Int-encoded values in Vec?
+fn test_vec_int() -> Int {
+    let v = rt_vec_new(4);
+    rt_vec_push(v, 42);
+    rt_vec_push(v, 99);
+    if rt_vec_len(v) != 2 { return 4; }
+    if rt_vec_get(v, 0) != 42 { return 5; }
+    if rt_vec_get(v, 1) != 99 { return 6; }
+    return 0;
+}
+
+// Test 4: Can we encode tag+value in a single Int?
+fn test_encode() -> Int {
+    // Encode: null=0, true=1, false=2, int=(value+1000)
+    let null_val = 0;
+    let true_val = 1;
+    let false_val = 2;
+    let int_val = 42 + 1000;  // 1042
+
+    // Decode
+    let mut tag = 0;
+    let mut decoded = 0;
+    if null_val == 0 {
+        tag = 0;
+    } else if true_val == 1 {
+        tag = 1;
+    } else if false_val == 2 {
+        tag = 2;
+    } else {
+        tag = 3;
+        decoded = int_val - 1000;
+    }
+
+    if tag != 3 { return 7; }
+    if decoded != 42 { return 8; }
+    return 0;
+}
+
+fn main() -> Int {
+    let r1 = test_struct_str();
+    if r1 != 0 { return r1; }
+
+    let r2 = test_vec_int();
+    if r2 != 0 { return r2; }
+
+    let r3 = test_encode();
+    if r3 != 0 { return r3; }
+
+    rt_print_str("all limits tests passed");
+    rt_exit(0);
+}

@@ -132,21 +132,26 @@ fn cli_nonexistent_file() {
 }
 
 #[test]
-fn cli_run_not_implemented() {
-    let output = mink().arg("run").arg("foo.mink").output().unwrap();
-    assert_eq!(output.status.code(), Some(2));
+fn cli_run_compiles_and_executes() {
+    let path =
+        std::env::temp_dir().join(format!("mink_release_test_{}_run.mink", std::process::id()));
+    std::fs::write(&path, "fn main() { return 99; }\n").unwrap();
+    let output = mink().arg("run").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(output.status.code(), Some(99));
 }
 
 #[test]
-fn cli_test_not_implemented() {
-    let output = mink().arg("test").output().unwrap();
-    assert_eq!(output.status.code(), Some(2));
-}
-
-#[test]
-fn cli_fmt_not_implemented() {
-    let output = mink().arg("fmt").output().unwrap();
-    assert_eq!(output.status.code(), Some(2));
+fn cli_unknown_commands_rejected() {
+    for command in ["test", "fmt"] {
+        let output = mink().arg(command).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "for command '{command}'");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unknown command"),
+            "for command '{command}': {stderr}"
+        );
+    }
 }
 
 // =========================================================================
@@ -292,7 +297,7 @@ fn release_binary_version_works() {
     let output = mink().arg("--version").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("1.0.0"));
+    assert!(stdout.contains("1.0.1"));
 }
 
 // =========================================================================

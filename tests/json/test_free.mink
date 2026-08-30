@@ -1,0 +1,8 @@
+fn main() -> Int {
+    let p = rt_alloc(65536);
+    rt_mem_store(p, 42);
+    let v = rt_mem_load(p);
+    rt_print_int(v);
+    rt_free(p);
+    rt_exit(0);
+}

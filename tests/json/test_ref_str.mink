@@ -1,0 +1,12 @@
+fn get_byte_from_ref(s: &Str, i: Int) -> Int {
+    return rt_str_byte(s, i);
+}
+
+fn main() -> Int {
+    let input = "hello";
+    let a = get_byte_from_ref(&input, 0);
+    let b = get_byte_from_ref(&input, 1);
+    rt_print_int(a);
+    rt_print_int(b);
+    rt_exit(0);
+}

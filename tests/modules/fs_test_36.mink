@@ -1,0 +1,9 @@
+
+fn main() {
+    let a = path_join("src", "lib");
+    let b = path_join(a, "core");
+    let c = path_join(b, "main.mink");
+    // Count total length: src/lib/core/main.mink
+    rt_print_int(rt_str_len(c));
+    rt_exit(0);
+}

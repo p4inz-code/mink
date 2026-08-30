@@ -42,7 +42,7 @@ fn help_flag_lists_commands_and_succeeds() {
 
     assert!(output.status.success());
     assert_eq!(output.status.code(), Some(0));
-    for command in ["build", "check", "run", "test", "fmt", "version"] {
+    for command in ["build", "check", "run", "version", "explain"] {
         assert!(stdout.contains(command), "help should mention '{command}'");
     }
 }
@@ -91,13 +91,13 @@ fn build_with_valid_source_produces_executable() {
 }
 
 #[test]
-fn recognized_commands_report_not_implemented() {
-    for command in ["run", "test", "fmt"] {
+fn recognized_commands_require_arguments() {
+    for command in ["run", "build", "check"] {
         let output = mink().arg(command).output().unwrap();
-        assert_eq!(output.status.code(), Some(2), "for command '{command}'");
+        assert_eq!(output.status.code(), Some(1), "for command '{command}'");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("not yet implemented"),
+            stderr.contains("missing"),
             "for command '{command}': {stderr}"
         );
     }
@@ -1045,5 +1045,187 @@ fn check_with_early_stage_error_does_not_claim_optimization() {
     assert!(
         !stdout.contains("MIR optimization"),
         "stdout must not claim MIR optimization, was: {stdout}"
+    );
+}
+
+// =========================================================================
+// mink check --json
+// =========================================================================
+
+#[test]
+fn check_json_success() {
+    let path = temp_source("json_ok.mink", "fn main() { return 0; }");
+    let output = mink()
+        .arg("check")
+        .arg(&path)
+        .arg("--json")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"success\": true"),
+        "expected success:true in: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"errors\": []"),
+        "expected empty errors in: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"warnings\": []"),
+        "expected empty warnings in: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"token_count\""),
+        "expected token_count in: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"files_checked\""),
+        "expected files_checked in: {stdout}"
+    );
+}
+
+#[test]
+fn check_json_error() {
+    let path = temp_source("json_err.mink", "fn f( { }");
+    let output = mink()
+        .arg("check")
+        .arg(&path)
+        .arg("--json")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"success\": false"),
+        "expected success:false in: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"code\""),
+        "expected error code in: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"severity\": \"error\""),
+        "expected severity:error in: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"message\""),
+        "expected message in: {stdout}"
+    );
+    assert!(stdout.contains("\"span\""), "expected span in: {stdout}");
+}
+
+#[test]
+fn check_json_multiple_errors() {
+    // Two duplicate definitions should produce two errors.
+    let path = temp_source(
+        "json_multi.mink",
+        "fn f() { return 1; }\nfn f() { return 2; }",
+    );
+    let output = mink()
+        .arg("check")
+        .arg(&path)
+        .arg("--json")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"success\": false"));
+    // Should have at least one error.
+    assert!(stdout.contains("\"E-S02\""), "expected E-S02 in: {stdout}");
+}
+
+// =========================================================================
+// mink explain
+// =========================================================================
+
+#[test]
+fn explain_known_code() {
+    let output = mink().arg("explain").arg("E-T01").output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Error E-T01"),
+        "expected error header in: {stdout}"
+    );
+    assert!(
+        stdout.contains("Type Mismatch"),
+        "expected title in: {stdout}"
+    );
+    assert!(
+        stdout.contains("Common causes:"),
+        "expected causes section in: {stdout}"
+    );
+    assert!(
+        stdout.contains("Suggested fixes:"),
+        "expected fixes section in: {stdout}"
+    );
+}
+
+#[test]
+fn explain_unknown_code() {
+    let output = mink().arg("explain").arg("E-XXXX").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown error code"),
+        "expected error message in: {stderr}"
+    );
+}
+
+#[test]
+fn explain_missing_code() {
+    let output = mink().arg("explain").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("missing error code"),
+        "expected error message in: {stderr}"
+    );
+}
+
+#[test]
+fn help_includes_explain() {
+    let output = mink().arg("help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("explain"),
+        "help should mention explain command"
+    );
+    assert!(stdout.contains("--json"), "help should mention --json flag");
+}
+
+#[test]
+fn check_json_deterministic() {
+    // Same input should produce identical JSON output.
+    let src = "fn main() { return 0; }";
+    let path1 = temp_source("det1.mink", src);
+    let path2 = temp_source("det2.mink", src);
+    let out1 = mink()
+        .arg("check")
+        .arg(&path1)
+        .arg("--json")
+        .output()
+        .unwrap();
+    let out2 = mink()
+        .arg("check")
+        .arg(&path2)
+        .arg("--json")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path1);
+    let _ = std::fs::remove_file(&path2);
+
+    assert_eq!(out1.status.code(), Some(0));
+    assert_eq!(out2.status.code(), Some(0));
+    assert_eq!(
+        out1.stdout, out2.stdout,
+        "JSON output should be deterministic"
     );
 }

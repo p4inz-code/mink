@@ -1,0 +1,219 @@
+// ============================================================
+// MINK Time/Date Library (Session 60)
+// ============================================================
+//
+// Provides Unix timestamps, high-resolution timing, and
+// date component extraction. All timestamps are i64 Unix
+// seconds since 1970-01-01 00:00:00 UTC.
+//
+// Platform: Windows (GetSystemTimeAsFileTime, QueryPerformanceCounter)
+// ============================================================
+
+// ---- Core time functions ----
+
+fn time_now() -> Int {
+    return rt_time_now();
+}
+
+fn time_millis() -> Int {
+    return rt_time_millis();
+}
+
+fn time_ticks() -> Int {
+    return rt_time_ticks();
+}
+
+fn time_freq() -> Int {
+    return rt_time_freq();
+}
+
+// ---- Duration helpers ----
+
+fn duration_ms(start_ticks: Int, end_ticks: Int) -> Int {
+    let freq = rt_time_freq();
+    let elapsed = end_ticks - start_ticks;
+    return (elapsed * 1000) / freq;
+}
+
+fn duration_us(start_ticks: Int, end_ticks: Int) -> Int {
+    let freq = rt_time_freq();
+    let elapsed = end_ticks - start_ticks;
+    return (elapsed * 1000000) / freq;
+}
+
+// ---- Date component extraction (UTC) ----
+// Uses Howard Hinnant's algorithm for civil date from day count.
+
+fn time_year(ts: Int) -> Int {
+    let days = ts / 86400 + 719468;
+    let z = days;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let mut m = mp + 3;
+    if mp >= 10 {
+        m = mp - 9;
+    }
+    let mut yy = y;
+    if m <= 2 {
+        yy = y + 1;
+    }
+    return yy;
+}
+
+fn time_month(ts: Int) -> Int {
+    let days = ts / 86400 + 719468;
+    let z = days;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let mut m = mp + 3;
+    if mp >= 10 {
+        m = mp - 9;
+    }
+    return m;
+}
+
+fn time_day(ts: Int) -> Int {
+    let days = ts / 86400 + 719468;
+    let z = days;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    return d;
+}
+
+fn time_hour(ts: Int) -> Int {
+    let secs = ts - (ts / 86400) * 86400;
+    if secs < 0 {
+        return (secs + 86400) / 3600;
+    }
+    return secs / 3600;
+}
+
+fn time_minute(ts: Int) -> Int {
+    let secs = ts - (ts / 86400) * 86400;
+    let mut s = secs;
+    if secs < 0 {
+        s = secs + 86400;
+    }
+    let h = s / 3600;
+    return (s - h * 3600) / 60;
+}
+
+fn time_second(ts: Int) -> Int {
+    let secs = ts - (ts / 86400) * 86400;
+    let mut s = secs;
+    if secs < 0 {
+        s = secs + 86400;
+    }
+    let m = s / 60;
+    return s - m * 60;
+}
+
+fn time_weekday(ts: Int) -> Int {
+    let days = ts / 86400 + 4;
+    let wd = days - (days / 7) * 7;
+    if wd < 0 {
+        return wd + 7;
+    }
+    return wd;
+}
+
+// ---- Calendar helpers ----
+
+fn time_is_leap_year(year: Int) -> Int {
+    if year - (year / 4) * 4 != 0 {
+        return 0;
+    }
+    if year - (year / 100) * 100 != 0 {
+        return 1;
+    }
+    if year - (year / 400) * 400 != 0 {
+        return 0;
+    }
+    return 1;
+}
+
+fn time_days_in_month(year: Int, month: Int) -> Int {
+    if month == 1 { return 31; }
+    if month == 3 { return 31; }
+    if month == 5 { return 31; }
+    if month == 7 { return 31; }
+    if month == 8 { return 31; }
+    if month == 10 { return 31; }
+    if month == 12 { return 31; }
+    if month == 4 { return 30; }
+    if month == 6 { return 30; }
+    if month == 9 { return 30; }
+    if month == 11 { return 30; }
+    if month == 2 {
+        if time_is_leap_year(year) != 0 {
+            return 29;
+        }
+        return 28;
+    }
+    return 0;
+}
+
+fn time_diff(ts1: Int, ts2: Int) -> Int {
+    let d = ts1 - ts2;
+    if d < 0 {
+        return 0 - d;
+    }
+    return d;
+}
+
+fn time_add(ts: Int, seconds: Int) -> Int {
+    return ts + seconds;
+}
+
+// ---- Formatting helpers ----
+
+fn _pad2(n: Int) -> Str {
+    let tens = n / 10;
+    let ones = n - tens * 10;
+    let t = rt_str_from_int(tens);
+    let o = rt_str_from_int(ones);
+    return rt_str_concat(t, o);
+}
+
+fn time_format(ts: Int) -> Str {
+    let y = time_year(ts);
+    let m = time_month(ts);
+    let d = time_day(ts);
+    let h = time_hour(ts);
+    let mi = time_minute(ts);
+    let s = time_second(ts);
+
+    // Build "YYYY-MM-DD HH:MM:SS"
+    let y1 = rt_str_from_int(y / 1000);
+    let y2v = (y / 100) - (y / 1000) * 10;
+    let y2 = rt_str_from_int(y2v);
+    let y3v = (y / 10) - (y / 100) * 10;
+    let y3 = rt_str_from_int(y3v);
+    let y4v = y - (y / 10) * 10;
+    let y4 = rt_str_from_int(y4v);
+    let p1 = rt_str_concat(y1, y2);
+    let p2 = rt_str_concat(p1, y3);
+    let p3 = rt_str_concat(p2, y4);
+    let p4 = rt_str_concat(p3, "-");
+    let p5 = rt_str_concat(p4, _pad2(m));
+    let p6 = rt_str_concat(p5, "-");
+    let p7 = rt_str_concat(p6, _pad2(d));
+    let p8 = rt_str_concat(p7, " ");
+    let p9 = rt_str_concat(p8, _pad2(h));
+    let p10 = rt_str_concat(p9, ":");
+    let p11 = rt_str_concat(p10, _pad2(mi));
+    let p12 = rt_str_concat(p11, ":");
+    let p13 = rt_str_concat(p12, _pad2(s));
+    return p13;
+}

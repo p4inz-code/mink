@@ -1,0 +1,7 @@
+fn main() {
+    let h1 = hash_fnv1a("abc");
+    let h2 = hash_djb2("abc");
+    rt_print_int(h1);
+    rt_print_int(h2);
+    rt_exit(0);
+}

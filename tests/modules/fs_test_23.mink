@@ -1,0 +1,14 @@
+
+fn main() {
+    let path = "test_large.txt";
+    let part1 = rt_str_from_int(111);
+    let part2 = rt_str_from_int(222);
+    let data = str_join_3(part1, "-", part2);
+    let w = fs_write(path, data);
+    rt_print_int(w);
+    let content = fs_read(path);
+    let len = rt_str_len(content);
+    rt_print_int(len);
+    fs_remove_file(path);
+    rt_exit(0);
+}

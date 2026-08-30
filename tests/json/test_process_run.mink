@@ -1,0 +1,11 @@
+fn main() {
+    let code = rt_process_run("echo hello");
+    rt_print_int(code);
+    let stdout = rt_process_stdout();
+    let len = rt_process_stdout_len();
+    rt_print_str("\n");
+    rt_print_str(stdout);
+    rt_print_str("\nlen=");
+    rt_print_int(len);
+    rt_exit(0);
+}

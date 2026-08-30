@@ -1,0 +1,17 @@
+
+fn main() {
+    let path = "test_rw.txt";
+    let data = rt_str_from_int(42);
+    let w = fs_write(path, data);
+    rt_print_int(w);
+    let sz = fs_file_size(path);
+    rt_print_int(sz);
+    let content = fs_read(path);
+    let len = rt_str_len(content);
+    rt_print_int(len);
+    let d = fs_remove_file(path);
+    rt_print_int(d);
+    let gone = fs_exists(path);
+    if gone { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}

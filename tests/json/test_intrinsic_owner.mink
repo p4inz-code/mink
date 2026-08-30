@@ -1,0 +1,12 @@
+fn parse_value(input: Str, pos: Int) -> Int {
+    let a = rt_str_byte(input, pos);
+    let b = rt_str_byte(input, pos + 1);
+    let c = rt_str_len(input);
+    return a + b + c;
+}
+
+fn main() -> Int {
+    let result = parse_value("hello", 0);
+    rt_print_int(result);
+    rt_exit(0);
+}

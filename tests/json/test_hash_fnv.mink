@@ -1,0 +1,25 @@
+fn _hex_digit(v: Int) -> Int {
+    if v < 10 {
+        return v + 48;
+    }
+    return v + 87;
+}
+
+fn hash_fnv1a(s: Str) -> Int {
+    let mut hash = 2166136261;
+    let len = rt_str_len(s);
+    let mut i = 0;
+    while i < len {
+        let byte = rt_str_byte(s, i);
+        hash = hash ^ byte;
+        hash = hash * 16777619;
+        i = i + 1;
+    }
+    return hash;
+}
+
+fn main() {
+    let h = hash_fnv1a("abc");
+    rt_print_int(h);
+    rt_exit(0);
+}

@@ -1,0 +1,6 @@
+mod json;
+
+fn main() -> Int {
+    rt_print_int(42);
+    rt_exit(0);
+}

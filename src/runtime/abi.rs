@@ -115,11 +115,44 @@ pub struct RuntimeLayout {
     pub str_data_start: u64,
     /// One past the end of the image's immutable string-data region.
     pub str_data_end: u64,
+    // --- Process output storage (Session 59) ---
+    /// Pointer to last process stdout (BSS Str, or 0).
+    pub proc_stdout_ptr: u64,
+    /// Length of last process stdout.
+    pub proc_stdout_len: u64,
+    /// Pointer to last process stderr (BSS Str, or 0).
+    pub proc_stderr_ptr: u64,
+    /// Length of last process stderr.
+    pub proc_stderr_len: u64,
     /// The heap arena, 16-byte aligned.
     pub arena: u64,
     /// The liveness table: `MAX_LIVE_ALLOCS` entries of
     /// `LIVE_ENTRY_BYTES` bytes each.
     pub table: u64,
+    /// Fixed BSS buffer for process stdout [len:u64][bytes;4088].
+    pub stdout_buf: u64,
+    /// Fixed BSS buffer for process stderr [len:u64][bytes;4088].
+    pub stderr_buf: u64,
+    // --- Networking (Session 67) ---
+    /// Winsock2 initialized flag.
+    pub wsa_initialized: u64,
+    /// ws2_32.dll handle from LoadLibraryA.
+    pub ws2_dll_handle: u64,
+    /// Function pointer table for ws2_32 functions (17 × 8 = 136 bytes).
+    pub net_func_table: u64,
+    /// Buffer for received data [len:u64][bytes;4088].
+    pub recv_buf: u64,
+    // --- Crypto (Session 71) ---
+    /// bcryptprimitives.dll handle from LoadLibraryA.
+    pub bcrypt_dll_handle: u64,
+    /// Function pointer table for bcrypt functions (3 × 8 = 24 bytes).
+    pub crypto_func_table: u64,
+    // --- Random (Session 73) ---
+    /// xorshift64* PRNG state (8 bytes).
+    pub rng_state: u64,
+    // --- Environment (Session 73) ---
+    /// Simple env key-value storage (4096 bytes).
+    pub env_storage: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -137,9 +170,29 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
     dtoa_digits: 400,
     str_data_start: 1424,
     str_data_end: 1432,
-    arena: 1440,
-    table: 1440 + HEAP_SIZE,
-    size: 1440 + HEAP_SIZE + LIVE_TABLE_BYTES,
+    // Process output storage at 1440..1472 (4 qwords)
+    proc_stdout_ptr: 1440,
+    proc_stdout_len: 1448,
+    proc_stderr_ptr: 1456,
+    proc_stderr_len: 1464,
+    arena: 1488,
+    table: 1488 + HEAP_SIZE,
+    // Output buffers after liveness table (Session 62)
+    stdout_buf: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES,
+    stderr_buf: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096,
+    // --- Networking (Session 67) ---
+    wsa_initialized: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2,
+    ws2_dll_handle: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 8,
+    net_func_table: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16,
+    recv_buf: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8,
+    // Crypto BSS after networking
+    bcrypt_dll_handle: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096,
+    crypto_func_table: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8,
+    // --- Random (Session 73) ---
+    rng_state: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24,
+    // --- Environment (Session 73) ---
+    env_storage: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24 + 8,
+    size: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24 + 8 + 4096,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

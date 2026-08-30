@@ -1,0 +1,5 @@
+
+fn main() {
+    if fs_exists("no_such_file_xyz.txt") { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}
