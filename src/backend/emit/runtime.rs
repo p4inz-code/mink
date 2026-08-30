@@ -3273,7 +3273,8 @@ fn emit_to_cstr(code: &mut Code) {
     code.add_rsp(16);
     // Rax = allocated buffer
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save buf
-    // copy loop: for i in 0..len { buf[i] = s[16+i] }
+    // copy loop: for i in 0..len { buf[i] = s[8+i] }
+    // String layout: [8-byte length prefix][data bytes]. Data starts at s+8.
     code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // s ptr
     code.mov_r_mem(Reg::R11, Reg::R10, 0); // len
     code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // buf
@@ -3283,18 +3284,15 @@ fn emit_to_cstr(code: &mut Code) {
     code.bind_label(loop_start);
     code.test_rr(Reg::R11, Reg::R11);
     code.jcc_label(0x84, loop_done); // jz done
-    code.mov_r_mem(Reg::Rax, Reg::R10, 0); // load byte from buf...
-    // Actually: load from s+16+offset, store to buf+offset
-    // Simpler: use a byte loop with movzx
-    // R8 = s+16 (data start)
+    // R8 = s+8 (data start)
     code.mov_r_mem(Reg::R8, Reg::Rbp, 16);
-    code.add_r_imm8(Reg::R8, 16);
+    code.add_r_imm8(Reg::R8, 8);
     // Compute offset = original_len - R11
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, 16);
     code.mov_r_mem(Reg::Rdx, Reg::Rdx, 0); // original len
     code.mov_rr(Reg::Rax, Reg::Rdx);
     code.sub_rr(Reg::Rax, Reg::R11); // offset
-    // Load byte from s[16+offset]
+    // Load byte from s[8+offset]
     code.add_rr(Reg::R8, Reg::Rax);
     code.movzx_byte(Reg::Rdx, Reg::R8, 0);
     // Store byte to buf[offset]
@@ -3321,7 +3319,6 @@ fn emit_free_cstr(code: &mut Code) {
     code.u8(0x50); // push rax
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
     code.add_rsp(8);
-    code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
 }
 
@@ -3369,29 +3366,49 @@ const IAT_SET_CURRENT_DIRECTORY_A: u32 = 16;
 /// GetFileAttributesA returns INVALID_HANDLE_VALUE (0xFFFFFFFF) on error.
 fn emit_fs_exists(code: &mut Code) {
     prologue(code);
-    // RSP = RBP (16-aligned after prologue)
     // [rbp+16] = path Str ptr. Convert to C string.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
-    to_cstr(code, Reg::Rax); // RSP = RBP on return (aligned)
-    code.sub_rsp(48); // RSP = RBP-48 (aligned). [rbp-8]=cstr, [RSP..RSP+31]=shadow
-    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // [rbp-8] = cstr (above shadow)
-    // GetFileAttributesA(cstr) -> DWORD
-    code.mov_rr(Reg::Rcx, Reg::Rax); // lpFileName = cstr
-    code.call_rip(PatchKind::Iat(IAT_GET_FILE_ATTRIBUTES_A));
-    // Rax = attributes. INVALID = 0xFFFFFFFF means not found.
+    to_cstr(code, Reg::Rax);
+    // Spill: [rbp-8]=cstr, [rbp-16]=handle (32 bytes for alignment)
+    code.sub_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // [rbp-8] = cstr
+    // CreateFileA(cstr, GENERIC_READ=0x80000000, FILE_SHARE_READ=1, NULL,
+    //             OPEN_EXISTING=3, 0, NULL)
+    // 4 reg args + 3 stack args. Need 32 shadow + 24 stack + 8 pad = 64
+    code.sub_rsp(64); // RSP = RBP-96
+    code.mov_rr(Reg::Rcx, Reg::Rax); // lpFileName
+    code.movabs(Reg::Rdx, 0x8000_0000u64); // dwDesiredAccess = GENERIC_READ
+    code.mov_r32_imm32(Reg::R8, 1); // dwShareMode = FILE_SHARE_READ
+    code.xor_rr32(Reg::R9, Reg::R9); // lpSecurityAttributes = NULL
+    code.mov_mem_imm32(Reg::Rsp, 32, 3); // dwCreationDisposition = OPEN_EXISTING
+    code.mov_mem_imm32(Reg::Rsp, 40, 0x0200_0000); // dwFlagsAndAttributes = FILE_FLAG_BACKUP_SEMANTICS (allows dirs)
+    code.mov_mem_imm32(Reg::Rsp, 48, 0);
+    code.call_rip(PatchKind::Iat(IAT_CREATE_FILE_A));
+    code.add_rsp(64); // cleanup: RSP = RBP-32
+    // Rax = HANDLE
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // [rbp-16] = handle
+    // Check INVALID_HANDLE_VALUE (0xFFFFFFFFFFFFFFFF)
     code.cmp_r_imm32(Reg::Rax, 0xFF_FF_FF_FFu32);
     let not_found = code.label();
-    code.jcc_label(0x84, not_found); // je
-    code.mov_r32_imm32(Reg::Rax, 1); // exists
+    code.jcc_label(0x84, not_found); // je: invalid handle => not found
+    // File exists - close the handle
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // handle
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+    code.movabs(Reg::Rax, 1u64); // exists = 1
     let done = code.label();
     code.jmp_label(done);
     code.bind_label(not_found);
-    code.xor_rr32(Reg::Rax, Reg::Rax); // not exists
+    code.movabs(Reg::Rax, 0u64); // not exists = 0
     code.bind_label(done);
-    code.add_rsp(48); // RSP = RBP (aligned)
+    // Save return value before free_cstr clobbers RAX
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
     // Free CStr
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
-    free_cstr(code, Reg::Rcx); // RSP = RBP on return
+    free_cstr(code, Reg::Rcx);
+    // Restore return value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
     code.leave_ret();
 }
 
@@ -3402,41 +3419,40 @@ fn emit_fs_file_size(code: &mut Code) {
     // [rbp+16] = path Str ptr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(32); // spill slots: [rbp-8]=cstr, [rbp-16]=handle, [rbp-24]=saved size
+    // Spill: [rbp-8]=cstr, [rbp-16]=handle, [rbp-24]=saved size (32 bytes, 16-aligned)
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // [rbp-8] = cstr
     // CreateFileA(cstr, GENERIC_READ=0x80000000, FILE_SHARE_READ=1, NULL, OPEN_EXISTING=3, 0, NULL)
-    code.sub_rsp(8); // alignment
+    // Win64: 4 reg args + 3 stack args. Need 32 shadow + 24 stack + 8 pad = 64 bytes
+    code.sub_rsp(64); // RSP = RBP-96 ≡ 0 mod 16
     code.mov_rr(Reg::Rcx, Reg::Rax); // lpFileName
     code.movabs(Reg::Rdx, 0x8000_0000u64); // dwDesiredAccess = GENERIC_READ
     code.mov_r32_imm32(Reg::R8, 1); // dwShareMode = FILE_SHARE_READ
     code.xor_rr32(Reg::R9, Reg::R9); // lpSecurityAttributes = NULL
-    // Stack args: dwCreationDisposition=3, dwFlagsAndAttributes=0, hTemplateFile=NULL
-    code.sub_rsp(32); // 32 shadow + 3 stack args + 1 padding = 40 → 48 total, but we need 16-alignment at call
-    // Stack layout after sub_rsp(32): [shadow 32 bytes][arg5=3][arg6=0][arg7=0][pad]
     code.mov_mem_imm32(Reg::Rsp, 32, 3); // dwCreationDisposition = OPEN_EXISTING
     code.mov_mem_imm32(Reg::Rsp, 40, 0); // dwFlagsAndAttributes = 0
-    code.mov_mem_imm32(Reg::Rsp, 48, 0); // hTemplateFile = NULL (clear high 32)
+    code.mov_mem_imm32(Reg::Rsp, 48, 0); // hTemplateFile = NULL
     code.call_rip(PatchKind::Iat(IAT_CREATE_FILE_A));
-    code.add_rsp(40); // cleanup shadow + stack args
+    code.add_rsp(64); // cleanup: RSP = RBP-32
     // Rax = HANDLE
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // [rbp-16] = handle
     // Check INVALID_HANDLE_VALUE (0xFFFFFFFFFFFFFFFF)
     code.cmp_r_imm32(Reg::Rax, 0xFF_FF_FF_FFu32);
     let err = code.label();
-    code.jcc_label(0x84, err); // je (lower 32 bits match, need to check high)
-    // GetFileSize(handle, NULL)
-    code.sub_rsp(24); // shadow + alignment
+    code.jcc_label(0x84, err); // je
+    // GetFileSize(handle, NULL) — 2 reg args, 0 stack args
+    code.sub_rsp(32); // shadow only: RSP = RBP-64 ≡ 0 mod 16
     code.mov_rr(Reg::Rcx, Reg::Rax); // hFile
     code.xor_rr32(Reg::Rdx, Reg::Rdx); // lpFileSizeHigh = NULL
     code.call_rip(PatchKind::Iat(IAT_GET_FILE_SIZE));
-    code.add_rsp(24);
-    // Rax = size (DWORD). Sign-extend to 64-bit for MINK Int.
+    code.add_rsp(32);
+    // Rax = size (DWORD)
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // save size
-    // CloseHandle
-    code.sub_rsp(24);
+    // CloseHandle — 1 reg arg, 0 stack args
+    code.sub_rsp(32);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // handle
     code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
-    code.add_rsp(24);
+    code.add_rsp(32);
     // Return saved size
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
     let end = code.label();
@@ -3444,9 +3460,13 @@ fn emit_fs_file_size(code: &mut Code) {
     code.bind_label(err);
     code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
     code.bind_label(end);
+    // Save return value before free_cstr clobbers RAX
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
     // Free CStr
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
+    // Restore return value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
     code.leave_ret();
 }
 
@@ -3457,31 +3477,31 @@ fn emit_fs_read(code: &mut Code) {
     // [rbp+16] = path Str ptr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(40); // spill: [rbp-8]=cstr [rbp-16]=handle [rbp-24]=size [rbp-32]=result_ptr
+    // Spill: [rbp-8]=cstr [rbp-16]=handle [rbp-24]=size [rbp-32]=result_ptr
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr
     // CreateFileA(cstr, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
-    code.sub_rsp(8);
+    code.sub_rsp(64); // 32 shadow + 24 stack args + 8 pad = 64
     code.mov_rr(Reg::Rcx, Reg::Rax);
     code.movabs(Reg::Rdx, 0x8000_0000u64);
     code.mov_r32_imm32(Reg::R8, 1);
     code.xor_rr32(Reg::R9, Reg::R9);
-    code.sub_rsp(32);
     code.mov_mem_imm32(Reg::Rsp, 32, 3); // OPEN_EXISTING
     code.mov_mem_imm32(Reg::Rsp, 40, 0);
     code.mov_mem_imm32(Reg::Rsp, 48, 0);
     code.call_rip(PatchKind::Iat(IAT_CREATE_FILE_A));
-    code.add_rsp(40);
+    code.add_rsp(64);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // handle
     // Check INVALID_HANDLE_VALUE
     code.cmp_r_imm32(Reg::Rax, 0xFF_FF_FF_FFu32);
     let err = code.label();
     code.jcc_label(0x84, err);
     // GetFileSize(handle, NULL)
-    code.sub_rsp(24);
+    code.sub_rsp(32);
     code.mov_rr(Reg::Rcx, Reg::Rax);
     code.xor_rr32(Reg::Rdx, Reg::Rdx);
     code.call_rip(PatchKind::Iat(IAT_GET_FILE_SIZE));
-    code.add_rsp(24);
+    code.add_rsp(32);
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // size
     // StrAlloc(size)
     code.sub_rsp(8);
@@ -3490,7 +3510,8 @@ fn emit_fs_read(code: &mut Code) {
     code.add_rsp(16);
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // result ptr
     // ReadFile(handle, result+8, size, &bytes_read, NULL)
-    code.sub_rsp(32); // shadow + lpOverlapped on stack
+    // 5 args: 4 reg + 1 stack. Need 32 shadow + 8 stack + 8 pad = 48
+    code.sub_rsp(48);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // handle
     code.mov_rr(Reg::Rdx, Reg::Rax); // lpBuffer = result
     code.add_r_imm8(Reg::Rdx, 8); // skip length prefix
@@ -3498,12 +3519,12 @@ fn emit_fs_read(code: &mut Code) {
     code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32)); // reuse bytes_written for bytes_read
     code.mov_mem_imm32(Reg::Rsp, 32, 0); // lpOverlapped = NULL
     code.call_rip(PatchKind::Iat(IAT_READ_FILE));
-    code.add_rsp(32);
+    code.add_rsp(48);
     // CloseHandle
-    code.sub_rsp(24);
+    code.sub_rsp(32);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
     code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
-    code.add_rsp(24);
+    code.add_rsp(32);
     // Return result
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
     let end = code.label();
@@ -3516,9 +3537,13 @@ fn emit_fs_read(code: &mut Code) {
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
     code.add_rsp(16);
     code.bind_label(end);
+    // Save return value before free_cstr clobbers RAX
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
     // Free CStr
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
+    // Restore return value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
     code.leave_ret();
 }
 
@@ -3529,29 +3554,30 @@ fn emit_fs_write(code: &mut Code) {
     // [rbp+16] = path, [rbp+24] = data
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(40); // spill: [rbp-8]=cstr [rbp-16]=handle [rbp-24]=bytes_written [rbp-32]=data_ptr
+    // Spill: [rbp-8]=cstr [rbp-16]=handle [rbp-24]=bytes_written [rbp-32]=data_ptr
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // data ptr
     // CreateFileA(cstr, GENERIC_WRITE=0x40000000, 0, NULL, CREATE_ALWAYS=2, 0, NULL)
-    code.sub_rsp(8);
+    code.sub_rsp(64); // 32 shadow + 24 stack args + 8 pad
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     code.movabs(Reg::Rdx, 0x4000_0000u64); // GENERIC_WRITE
     code.xor_rr32(Reg::R8, Reg::R8); // dwShareMode = 0
     code.xor_rr32(Reg::R9, Reg::R9); // lpSecurityAttributes = NULL
-    code.sub_rsp(32);
     code.mov_mem_imm32(Reg::Rsp, 32, 2); // CREATE_ALWAYS
     code.mov_mem_imm32(Reg::Rsp, 40, 0);
     code.mov_mem_imm32(Reg::Rsp, 48, 0);
     code.call_rip(PatchKind::Iat(IAT_CREATE_FILE_A));
-    code.add_rsp(40);
+    code.add_rsp(64);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // handle
     // Check INVALID_HANDLE_VALUE
     code.cmp_r_imm32(Reg::Rax, 0xFF_FF_FF_FFu32);
     let err = code.label();
     code.jcc_label(0x84, err);
     // WriteFile(handle, data+8, [data], &bytes_written, NULL)
-    code.sub_rsp(32);
+    // 5 args: 4 reg + 1 stack. 32 shadow + 8 stack + 8 pad = 48
+    code.sub_rsp(48);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // handle
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32); // data ptr
     code.add_r_imm8(Reg::Rdx, 8); // skip length prefix
@@ -3560,12 +3586,12 @@ fn emit_fs_write(code: &mut Code) {
     code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32));
     code.mov_mem_imm32(Reg::Rsp, 32, 0); // lpOverlapped = NULL
     code.call_rip(PatchKind::Iat(IAT_WRITE_FILE));
-    code.add_rsp(32);
+    code.add_rsp(48);
     // CloseHandle
-    code.sub_rsp(24);
+    code.sub_rsp(32);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
     code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
-    code.add_rsp(24);
+    code.add_rsp(32);
     // Return bytes_written
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.bytes_written as u32));
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // save
@@ -3589,18 +3615,32 @@ fn emit_fs_create_dir(code: &mut Code) {
     prologue(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(8);
-    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr (reuse prologue's rbp)
-    // CreateDirectoryA(cstr, NULL)
-    code.sub_rsp(24); // shadow
+    // Spill: cstr at [rbp-8], needs to be OUTSIDE shadow space
+    code.sub_rsp(32); // [rbp-8]=cstr; shadow will be at [rbp-40..rbp-9]
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr
+    // CreateDirectoryA(cstr, NULL) — 2 reg args, 0 stack args
+    code.sub_rsp(32); // shadow: RSP = RBP-64 ≡ 0 mod 16
     code.mov_rr(Reg::Rcx, Reg::Rax);
     code.xor_rr32(Reg::Rdx, Reg::Rdx); // lpSecurityAttributes = NULL
     code.call_rip(PatchKind::Iat(IAT_CREATE_DIRECTORY_A));
-    code.add_rsp(24);
-    // Rax = BOOL. Return as-is (0=fail, nonzero=success)
+    code.add_rsp(32);
+    // Rax = BOOL (nonzero=success). Invert: 0=success, nonzero=error.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let is_ok = code.label();
+    code.jcc_label(0x85, is_ok); // jnz: nonzero=Win32 success
+    code.mov_r32_imm32(Reg::Rax, 1); // error = 1
+    let end = code.label();
+    code.jmp_label(end);
+    code.bind_label(is_ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax); // success = 0
+    code.bind_label(end);
+    // Save return value before free_cstr clobbers RAX
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
     // Free CStr
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
+    // Restore return value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
     code.leave_ret();
 }
 
@@ -3609,14 +3649,30 @@ fn emit_fs_remove_dir(code: &mut Code) {
     prologue(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(8);
+    // Spill: cstr at [rbp-8]
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
-    code.sub_rsp(24);
+    // RemoveDirectoryA(cstr) — 1 reg arg, 0 stack args
+    code.sub_rsp(32); // shadow: RSP = RBP-64 ≡ 0 mod 16
     code.mov_rr(Reg::Rcx, Reg::Rax);
     code.call_rip(PatchKind::Iat(IAT_REMOVE_DIRECTORY_A));
-    code.add_rsp(24);
+    code.add_rsp(32);
+    // Invert BOOL: 0=success, nonzero=error
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let is_ok = code.label();
+    code.jcc_label(0x85, is_ok); // jnz
+    code.mov_r32_imm32(Reg::Rax, 1);
+    let end = code.label();
+    code.jmp_label(end);
+    code.bind_label(is_ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(end);
+    // Save return value before free_cstr clobbers RAX
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
+    // Restore return value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
     code.leave_ret();
 }
 
@@ -3625,14 +3681,30 @@ fn emit_fs_remove_file(code: &mut Code) {
     prologue(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(8);
+    // Spill: cstr at [rbp-8]
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
-    code.sub_rsp(24);
+    // DeleteFileA(cstr) — 1 reg arg, 0 stack args
+    code.sub_rsp(32); // shadow: RSP = RBP-64 ≡ 0 mod 16
     code.mov_rr(Reg::Rcx, Reg::Rax);
     code.call_rip(PatchKind::Iat(IAT_DELETE_FILE_A));
-    code.add_rsp(24);
+    code.add_rsp(32);
+    // Invert BOOL: 0=success, nonzero=error
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let is_ok = code.label();
+    code.jcc_label(0x85, is_ok); // jnz
+    code.mov_r32_imm32(Reg::Rax, 1);
+    let end = code.label();
+    code.jmp_label(end);
+    code.bind_label(is_ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(end);
+    // Save return value before free_cstr clobbers RAX
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
+    // Restore return value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
     code.leave_ret();
 }
 
@@ -3642,20 +3714,32 @@ fn emit_fs_copy(code: &mut Code) {
     // Convert src to CStr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(24); // spill: [rbp-8]=src_cstr [rbp-16]=dst_cstr [rbp-24]=result
+    // Spill: [rbp-8]=src_cstr [rbp-16]=dst_cstr [rbp-24]=result (32 bytes for alignment)
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // src_cstr
     // Convert dst to CStr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
     to_cstr(code, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // dst_cstr
     // CopyFileA(src_cstr, dst_cstr, FALSE=0) -> BOOL
-    code.sub_rsp(24);
+    // 3 reg args, 0 stack args. 32 shadow + 32 pad = 64
+    code.sub_rsp(64);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // lpExistingFileName
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // lpNewFileName
     code.xor_rr32(Reg::R8, Reg::R8); // bFailIfExists = FALSE
     code.call_rip(PatchKind::Iat(IAT_COPY_FILE_A));
-    code.add_rsp(24);
-    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // save BOOL result
+    code.add_rsp(64);
+    // Invert BOOL: 0=success, nonzero=error
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let is_ok = code.label();
+    code.jcc_label(0x85, is_ok); // jnz
+    code.mov_r32_imm32(Reg::Rax, 1);
+    let end = code.label();
+    code.jmp_label(end);
+    code.bind_label(is_ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(end);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // save result
     // Free both CStrs
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
@@ -3670,17 +3754,29 @@ fn emit_fs_move(code: &mut Code) {
     prologue(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(24);
+    // Spill: [rbp-8]=src_cstr [rbp-16]=dst_cstr [rbp-24]=result
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // src_cstr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
     to_cstr(code, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // dst_cstr
     // MoveFileA(src, dst) -> BOOL
-    code.sub_rsp(24);
+    // 2 reg args, 0 stack args. 32 shadow + 32 pad = 64
+    code.sub_rsp(64);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
     code.call_rip(PatchKind::Iat(IAT_MOVE_FILE_A));
-    code.add_rsp(24);
+    code.add_rsp(64);
+    // Invert BOOL: 0=success, nonzero=error
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let is_ok = code.label();
+    code.jcc_label(0x85, is_ok); // jnz
+    code.mov_r32_imm32(Reg::Rax, 1);
+    let end = code.label();
+    code.jmp_label(end);
+    code.bind_label(is_ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(end);
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
@@ -3694,13 +3790,14 @@ fn emit_fs_move(code: &mut Code) {
 /// Gets the current working directory as a MINK Str.
 fn emit_fs_get_cwd(code: &mut Code) {
     prologue(code);
-    code.sub_rsp(8); // [rbp-8] = result ptr
+    // Spill: [rbp-8] = result ptr
+    code.sub_rsp(32); // 32 bytes for alignment
     // GetCurrentDirectoryA(0, NULL) to get required size
-    code.sub_rsp(24); // 32-byte shadow (24 + 8 above = 32)
+    code.sub_rsp(32); // shadow: RSP = RBP-64 ≡ 0 mod 16
     code.xor_rr32(Reg::Rcx, Reg::Rcx); // nBufferLength = 0
     code.xor_rr32(Reg::Rdx, Reg::Rdx); // lpBuffer = NULL
     code.call_rip(PatchKind::Iat(IAT_GET_CURRENT_DIRECTORY_A));
-    code.add_rsp(24);
+    code.add_rsp(32);
     // Rax = required size (including null terminator)
     // StrAlloc(size)
     code.sub_rsp(8); // alignment for 1-arg call
@@ -3713,10 +3810,10 @@ fn emit_fs_get_cwd(code: &mut Code) {
     code.mov_rr(Reg::Rdx, Reg::Rax); // lpBuffer = result+8
     code.add_r_imm8(Reg::Rdx, 8);
     code.mov_r_mem(Reg::R8, Reg::Rax, 0); // nBufferLength = length from prefix
-    code.sub_rsp(24); // shadow
+    code.sub_rsp(32); // shadow: RSP = RBP-64 ≡ 0 mod 16
     code.mov_rr(Reg::Rcx, Reg::R8); // nBufferLength
     code.call_rip(PatchKind::Iat(IAT_GET_CURRENT_DIRECTORY_A));
-    code.add_rsp(24);
+    code.add_rsp(32);
     // Rax = bytes written. Return result.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.leave_ret();
@@ -3727,13 +3824,19 @@ fn emit_fs_set_cwd(code: &mut Code) {
     prologue(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
-    code.sub_rsp(8);
+    // Spill: cstr at [rbp-8]
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
-    code.sub_rsp(24);
+    // SetCurrentDirectoryA(cstr) — 1 reg arg, 0 stack args
+    code.sub_rsp(32); // shadow: RSP = RBP-64 ≡ 0 mod 16
     code.mov_rr(Reg::Rcx, Reg::Rax);
     code.call_rip(PatchKind::Iat(IAT_SET_CURRENT_DIRECTORY_A));
-    code.add_rsp(24);
+    code.add_rsp(32);
+    // Save return value before free_cstr clobbers RAX
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
+    // Restore return value
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
     code.leave_ret();
 }
