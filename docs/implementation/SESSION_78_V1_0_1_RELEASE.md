@@ -4,8 +4,10 @@ MINK v1.0.1 Release
 Release Identity
 -----------------
 - Tag: v1.0.1
+- Commit: 3e6a7a6
 - Branch: main
 - Platform: x86-64 Windows PE
+- GitHub Release: https://github.com/p4inz-code/mink/releases/tag/v1.0.1
 
 What Changed Since v1.0.0
 --------------------------
