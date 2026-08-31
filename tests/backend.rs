@@ -743,10 +743,13 @@ fn unsupported_target_is_rejected() {
     let report = driver::check(&mut sources, &path).unwrap();
     let _ = std::fs::remove_file(&path);
     let mir = report.mir.expect("clean program");
-    let errors = backend::compile(&mir, &sources, Target::X86_64LinuxElf).unwrap_err();
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].kind(), BackendErrorKind::UnsupportedTarget);
-    assert_eq!(errors[0].code(), "E-B11");
+    // X86_64LinuxElf is now implemented — compilation should succeed.
+    let result = backend::compile(&mir, &sources, Target::X86_64LinuxElf);
+    assert!(
+        result.is_ok(),
+        "Linux ELF compilation should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]

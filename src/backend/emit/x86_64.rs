@@ -52,11 +52,14 @@
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::mir::BlockId;
+use crate::runtime::abi::BSS;
 
 use super::super::ir::{
     BInstKind, BOperand, BProgram, BTerminator, BType, PlaceAddrStep, RuntimeService,
 };
 use super::EmittedImage;
+use super::elf;
+use super::linux_runtime;
 use super::pe;
 use super::runtime;
 
@@ -679,15 +682,6 @@ impl Code {
     // ------------------------------------------------------------------
 
     /// `mov rax, imm64`.
-    fn movabs_rax(&mut self, value: i64) {
-        self.movabs(Reg::Rax, value as u64);
-    }
-
-    /// `mov rcx, imm64`.
-    fn movabs_rcx(&mut self, value: i64) {
-        self.movabs(Reg::Rcx, value as u64);
-    }
-
     /// `mov rax, [rbp + disp]` (disp8 when it fits, else disp32).
     fn mov_rax_rbp(&mut self, disp: i32) {
         self.mov_r_mem(Reg::Rax, Reg::Rbp, disp);
@@ -706,11 +700,6 @@ impl Code {
     /// `mov [rip + disp32], rax` (patched later).
     fn mov_rip_rax(&mut self, static_index: usize) {
         self.mov_rip_r(Reg::Rax, PatchKind::Static(static_index));
-    }
-
-    /// `push rax`.
-    fn push_rax(&mut self) {
-        self.u8(0x50);
     }
 
     /// `xor eax, eax`.
@@ -767,11 +756,6 @@ impl Code {
     /// `shl/shr/sar rax, cl`.
     fn shift_rax_cl(&mut self, opcode: u8) {
         self.bytes(&[0x48, 0xD3, opcode]);
-    }
-
-    /// `neg rax`.
-    fn neg_rax(&mut self) {
-        self.neg_r(Reg::Rax);
     }
 
     /// `not rax`.
@@ -856,6 +840,132 @@ impl Code {
     /// `leave; ret`.
     pub(crate) fn leave_ret(&mut self) {
         self.bytes(&[0xC9, 0xC3]);
+    }
+
+    // ------------------------------------------------------------------
+    // Linux syscall helpers
+    // ------------------------------------------------------------------
+
+    /// `mov rdi, imm32` — set first syscall argument.
+    pub(crate) fn mov_rdi_imm32(&mut self, imm: u32) {
+        self.mov_r32_imm32(Reg::Rdi, imm);
+    }
+
+    /// `mov rsi, rax` — set second syscall argument.
+    pub(crate) fn mov_rsi_rax(&mut self) {
+        self.mov_rr(Reg::Rsi, Reg::Rax);
+    }
+
+    /// `mov rdi, rax` — copy rax to rdi.
+    pub(crate) fn mov_rdi_rax(&mut self) {
+        self.mov_rr(Reg::Rdi, Reg::Rax);
+    }
+
+    /// `mov rdi, r10` — copy r10 to rdi.
+    pub(crate) fn mov_rdi_r10(&mut self) {
+        self.mov_rr(Reg::Rdi, Reg::R10);
+    }
+
+    /// `mov rsi, r10` — copy r10 to rsi.
+    pub(crate) fn mov_rsi_r10(&mut self) {
+        self.mov_rr(Reg::Rsi, Reg::R10);
+    }
+
+    /// `mov rdx, rax` — copy rax to rdx.
+    pub(crate) fn mov_rdx_rax(&mut self) {
+        self.mov_rr(Reg::Rdx, Reg::Rax);
+    }
+
+    /// `mov r10, rax` — copy rax to r10 (third syscall arg on Linux).
+    pub(crate) fn mov_r10_rax(&mut self) {
+        self.mov_rr(Reg::R10, Reg::Rax);
+    }
+
+    /// `xor edx, edx` — clear rdx (zero-extends to rdx).
+    pub(crate) fn xor_rdx(&mut self) {
+        self.xor_rr32(Reg::Rdx, Reg::Rdx);
+    }
+
+    /// `neg rax`.
+    pub(crate) fn neg_rax(&mut self) {
+        self.neg_r(Reg::Rax);
+    }
+
+    /// `pop rax`.
+    pub(crate) fn pop_rax(&mut self) {
+        self.u8(0x58);
+    }
+
+    /// `add r64, imm32`.
+    pub(crate) fn add_r_imm32(&mut self, a: Reg, imm: u32) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0x81);
+        self.u8(0xC0 | (a as u8 & 7)); // /0
+        self.i32_le(imm as i32);
+    }
+
+    /// `sub r64, imm8`.
+    pub(crate) fn sub_r_imm8(&mut self, a: Reg, imm: u8) {
+        self.rex_w(Reg::Rax, a);
+        self.u8(0x83);
+        self.u8(0xE8 | (a as u8 & 7)); // /5
+        self.u8(imm);
+    }
+
+    /// `cmp rdi, rax`.
+    pub(crate) fn cmp_rdi_rax(&mut self) {
+        self.cmp_rr(Reg::Rdi, Reg::Rax);
+    }
+
+    /// `syscall` — invoke Linux syscall.
+    pub(crate) fn syscall(&mut self) {
+        self.u8(0x0F);
+        self.u8(0x05);
+    }
+
+    /// `int3` — debug breakpoint (safety trap).
+    pub(crate) fn int3(&mut self) {
+        self.u8(0xCC);
+    }
+
+    /// `push rax`.
+    pub(crate) fn push_rax(&mut self) {
+        self.u8(0x50);
+    }
+
+    /// `mov rsi, rsp`.
+    pub(crate) fn mov_rsi_rsp(&mut self) {
+        self.mov_rr(Reg::Rsi, Reg::Rsp);
+    }
+
+    /// `movabs rax, imm64`.
+    pub(crate) fn movabs_rax(&mut self, value: i64) {
+        self.movabs(Reg::Rax, value as u64);
+    }
+
+    /// `movabs rcx, imm64`.
+    pub(crate) fn movabs_rcx(&mut self, value: i64) {
+        self.movabs(Reg::Rcx, value as u64);
+    }
+
+    /// `mov [base + index*1], src` — store to indexed memory.
+    pub(crate) fn mov_mem_r_idx(&mut self, base: Reg, index: Reg, src: Reg, scale: u8) {
+        self.rex_w(src, base);
+        self.u8(0x89);
+        // ModRM: mod=00, reg=src, rm=100 (SIB follows)
+        self.u8(0x04 | ((src as u8 & 7) << 3));
+        // SIB: scale=index, index=index, base=base
+        self.u8((scale << 6) | ((index as u8 & 7) << 3) | (base as u8 & 7));
+    }
+
+    /// `mov dst, [base + index*1]` — load from indexed memory.
+    pub(crate) fn mov_r_mem_idx(&mut self, dst: Reg, base: Reg, index: Reg, scale: u8) {
+        self.rex_w(dst, base);
+        self.u8(0x8B);
+        // ModRM: mod=00, reg=dst, rm=100 (SIB follows)
+        self.u8(0x04 | ((dst as u8 & 7) << 3));
+        // SIB: scale=index, index=index, base=base
+        self.u8((scale << 6) | ((index as u8 & 7) << 3) | (base as u8 & 7));
     }
 }
 
@@ -1018,6 +1128,133 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
         &reloc,
         entry_offset as u32,
     );
+    EmittedImage {
+        bytes,
+        functions: program.functions.len(),
+        statics: program.statics.len(),
+        entry: "main".to_string(),
+    }
+}
+
+/// Emits an ELF64 executable for Linux x86_64.
+pub(crate) fn emit_elf(program: &BProgram, entry: usize) -> EmittedImage {
+    let mut code = Code::new();
+
+    // ------------------------------------------------------------------
+    // Labels for string data.
+    // ------------------------------------------------------------------
+    let string_labels: Vec<u32> = (0..program.strings.len()).map(|_| code.label()).collect();
+    let str_data_start_label = code.label();
+    let str_data_end_label = code.label();
+
+    // ------------------------------------------------------------------
+    // Entry-point stub (Linux _start).
+    // Same structure as Windows: save RSP, init, call main, exit.
+    // ------------------------------------------------------------------
+    let entry_offset = 0usize;
+    code.mov_rip_r(
+        Reg::Rsp,
+        PatchKind::Bss(crate::runtime::abi::BSS.entry_rsp as u32),
+    );
+    code.sub_rsp(8); // align
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Init));
+    code.call(entry);
+    // Exit with main's result: push result, call Exit service
+    code.sub_rsp(8);
+    code.push_rax();
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Exit));
+    code.add_rsp(16);
+    code.int3(); // unreachable
+
+    // ------------------------------------------------------------------
+    // Functions, in source order.
+    // ------------------------------------------------------------------
+    let mut function_starts = Vec::with_capacity(program.functions.len());
+    let mut function_block_starts = Vec::with_capacity(program.functions.len());
+    for (index, f) in program.functions.iter().enumerate() {
+        let (start, block_starts) =
+            emit_function(&mut code, f, index, &string_labels, &program.statics);
+        function_starts.push(start);
+        function_block_starts.push(block_starts);
+    }
+
+    // ------------------------------------------------------------------
+    // Embedded runtime: services, then the message data.
+    // ------------------------------------------------------------------
+    let runtime_offsets =
+        linux_runtime::emit_services(&mut code, str_data_start_label, str_data_end_label);
+    linux_runtime::emit_data(&mut code, &runtime_offsets);
+
+    // ------------------------------------------------------------------
+    // Immutable string data.
+    // ------------------------------------------------------------------
+    code.bind_label(str_data_start_label);
+    for (index, string) in program.strings.iter().enumerate() {
+        code.bind_label(string_labels[index]);
+        code.bytes(&(string.bytes.len() as u64).to_le_bytes());
+        code.bytes(&string.bytes);
+    }
+    code.bind_label(str_data_end_label);
+
+    // ------------------------------------------------------------------
+    // Module bindings: each binding's value image region.
+    // ------------------------------------------------------------------
+    let mut static_bases = Vec::with_capacity(program.statics.len());
+    let mut data = Vec::new();
+    for s in &program.statics {
+        static_bases.push(data.len());
+        data.extend_from_slice(&s.bytes);
+    }
+
+    // ------------------------------------------------------------------
+    // Patch resolution for ELF.
+    // All addresses are RIP-relative (same as PE). The text base is
+    // at 0x400000 + 0x1000 = 0x401000.
+    // ------------------------------------------------------------------
+    let text_rva = 0x1000u64; // offset within the ELF image
+    let data_rva = ((text_rva as usize + code.len() + 0xFFF) & !0xFFF) as u64;
+    let bss_rva = data_rva + data.len() as u64;
+
+    for patch in &code.patches {
+        let disp = match &patch.kind {
+            PatchKind::Block { function, block } => {
+                let target = function_starts[*function] as i64
+                    + function_block_starts[*function][*block as usize] as i64;
+                target - (patch.offset as i64 + 4)
+            }
+            PatchKind::Function(index) => {
+                function_starts[*index] as i64 - (patch.offset as i64 + 4)
+            }
+            PatchKind::Static(index) => {
+                (data_rva as i64 + static_bases[*index] as i64)
+                    - (text_rva as i64 + patch.offset as i64 + 4)
+            }
+            PatchKind::RuntimeService(service) => {
+                runtime_offsets.of(*service) as i64 - (patch.offset as i64 + 4)
+            }
+            PatchKind::Bss(offset) => {
+                (bss_rva as i64 + *offset as i64) - (text_rva as i64 + patch.offset as i64 + 4)
+            }
+            PatchKind::Iat(_) => {
+                // Not used on Linux — IAT is Windows-specific
+                panic!("IAT patch not supported on Linux target");
+            }
+            PatchKind::Label(id) => {
+                let target = code.labels[*id as usize]
+                    .expect("runtime labels are bound before patch resolution")
+                    as i64;
+                target - (patch.offset as i64 + 4)
+            }
+        };
+        code.buf[patch.offset..patch.offset + 4].copy_from_slice(&(disp as i32).to_le_bytes());
+    }
+
+    // ------------------------------------------------------------------
+    // Build the ELF image.
+    // ------------------------------------------------------------------
+    let bss_size = crate::runtime::abi::BSS.size as u32;
+    let bytes = elf::build_elf(&code.buf, &data, bss_size, entry_offset as u32);
+
     EmittedImage {
         bytes,
         functions: program.functions.len(),

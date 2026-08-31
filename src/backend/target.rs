@@ -39,7 +39,11 @@ impl Target {
     /// host. On non-Windows hosts the emitted image is a Windows PE and
     /// must be run on a Windows system; `--target` selects explicitly.
     pub fn native() -> Self {
-        Self::X86_64WindowsPe
+        if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
+            Self::X86_64LinuxElf
+        } else {
+            Self::X86_64WindowsPe
+        }
     }
 
     /// Parses a target name (the `--target` CLI argument) into a
@@ -68,7 +72,7 @@ impl Target {
 
     /// Whether this target has an emitter implementation in this milestone.
     pub fn is_implemented(self) -> bool {
-        matches!(self, Self::X86_64WindowsPe)
+        matches!(self, Self::X86_64WindowsPe | Self::X86_64LinuxElf)
     }
 }
 
@@ -81,6 +85,6 @@ impl fmt::Display for Target {
 /// The recognized target names, for CLI help and diagnostics.
 pub const TARGET_NAMES: &[&str] = &[
     "x86_64-windows-pe (implemented)",
-    "x86_64-linux-elf (not yet implemented)",
+    "x86_64-linux-elf (implemented)",
     "aarch64-linux-elf (not yet implemented)",
 ];

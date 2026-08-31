@@ -8,6 +8,8 @@
 //! machine code in a Windows PE container — and reports every other target
 //! with a structured error instead of emitting the wrong output.
 
+pub(crate) mod elf;
+pub(crate) mod linux_runtime;
 pub(crate) mod pe;
 pub(crate) mod runtime;
 pub(crate) mod x86_64;
@@ -46,6 +48,7 @@ pub(crate) fn emit(
 ) -> Result<EmittedImage, Vec<BackendError>> {
     match target {
         Target::X86_64WindowsPe => Ok(x86_64::emit_pe(program, entry)),
+        Target::X86_64LinuxElf => Ok(x86_64::emit_elf(program, entry)),
         other => Err(vec![BackendError::unsupported_target(
             no_location(),
             format!(

@@ -650,7 +650,11 @@ fn discover_modules_recursive(
 // ======================================================================
 
 fn executable_path(path: &Path) -> PathBuf {
-    let exe = path.with_extension("exe");
+    let exe = if cfg!(target_os = "windows") {
+        path.with_extension("exe")
+    } else {
+        path.with_extension("")
+    };
     // On Windows, std::process::Command does not search the current
     // directory for relative paths.  Resolve to an absolute path so
     // `mink run hello.mink` works without requiring `./hello.mink`.
