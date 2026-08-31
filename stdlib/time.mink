@@ -183,7 +183,10 @@ fn _pad2(n: Int) -> Str {
     let ones = n - tens * 10;
     let t = rt_str_from_int(tens);
     let o = rt_str_from_int(ones);
-    return rt_str_concat(t, o);
+    let result = rt_str_concat(t, o);
+    rt_str_free(t);
+    rt_str_free(o);
+    return result;
 }
 
 fn time_format(ts: Int) -> Str {
@@ -194,26 +197,65 @@ fn time_format(ts: Int) -> Str {
     let mi = time_minute(ts);
     let s = time_second(ts);
 
-    // Build "YYYY-MM-DD HH:MM:SS"
+    // Build "YYYY-MM-DD HH:MM:SS" — free every intermediate string
     let y1 = rt_str_from_int(y / 1000);
     let y2v = (y / 100) - (y / 1000) * 10;
     let y2 = rt_str_from_int(y2v);
+    let p1 = rt_str_concat(y1, y2);
+    rt_str_free(y1);
+    rt_str_free(y2);
+
     let y3v = (y / 10) - (y / 100) * 10;
     let y3 = rt_str_from_int(y3v);
+    let p2 = rt_str_concat(p1, y3);
+    rt_str_free(p1);
+    rt_str_free(y3);
+
     let y4v = y - (y / 10) * 10;
     let y4 = rt_str_from_int(y4v);
-    let p1 = rt_str_concat(y1, y2);
-    let p2 = rt_str_concat(p1, y3);
     let p3 = rt_str_concat(p2, y4);
+    rt_str_free(p2);
+    rt_str_free(y4);
+
     let p4 = rt_str_concat(p3, "-");
-    let p5 = rt_str_concat(p4, _pad2(m));
+    rt_str_free(p3);
+
+    let pad_m = _pad2(m);
+    let p5 = rt_str_concat(p4, pad_m);
+    rt_str_free(p4);
+    rt_str_free(pad_m);
+
     let p6 = rt_str_concat(p5, "-");
-    let p7 = rt_str_concat(p6, _pad2(d));
+    rt_str_free(p5);
+
+    let pad_d = _pad2(d);
+    let p7 = rt_str_concat(p6, pad_d);
+    rt_str_free(p6);
+    rt_str_free(pad_d);
+
     let p8 = rt_str_concat(p7, " ");
-    let p9 = rt_str_concat(p8, _pad2(h));
+    rt_str_free(p7);
+
+    let pad_h = _pad2(h);
+    let p9 = rt_str_concat(p8, pad_h);
+    rt_str_free(p8);
+    rt_str_free(pad_h);
+
     let p10 = rt_str_concat(p9, ":");
-    let p11 = rt_str_concat(p10, _pad2(mi));
+    rt_str_free(p9);
+
+    let pad_mi = _pad2(mi);
+    let p11 = rt_str_concat(p10, pad_mi);
+    rt_str_free(p10);
+    rt_str_free(pad_mi);
+
     let p12 = rt_str_concat(p11, ":");
-    let p13 = rt_str_concat(p12, _pad2(s));
+    rt_str_free(p11);
+
+    let pad_s = _pad2(s);
+    let p13 = rt_str_concat(p12, pad_s);
+    rt_str_free(p12);
+    rt_str_free(pad_s);
+
     return p13;
 }

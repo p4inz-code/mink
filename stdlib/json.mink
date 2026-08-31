@@ -499,11 +499,21 @@ fn json_parse(input: Str, arena: Ptr<Int>) -> Int {
         _write(arena, i, rt_str_byte(input, i));
         i = i + 1;
     }
-    // Parse starting at read position 0, write position input_len+1
-    let mut result = _parse_value(arena, input_len, 0, input_len + 1);
+    // Use a persistent write pointer stored at arena[8191] so that
+    // multiple json_parse() calls into the same arena do not overwrite
+    // each other's parsed values.
+    let mut wp = _read(arena, 8191);
+    if wp == 0 {
+        wp = input_len + 1;
+    }
+    // Parse starting at read position 0, write position wp
+    let mut result = _parse_value(arena, input_len, 0, wp);
     if result.0 == 0 { return 0; }
     let mut p = _skip_ws(arena, input_len, result.1);
     if p < input_len { return 0; }
+    // Advance the write pointer past the newly written value
+    let mut val_size = _val_size(arena, result.0);
+    _write(arena, 8191, result.0 + val_size);
     return result.0;
 }
 

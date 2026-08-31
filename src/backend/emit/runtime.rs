@@ -2511,17 +2511,18 @@ fn emit_net_socket(code: &mut Code) {
 /// addr is a Str containing "x.x.x.x". Returns 0 on success, -1 on error.
 fn emit_net_connect(code: &mut Code) {
     prologue(code);
-    code.sub_rsp(64); // [rbp-16]=sock, [rbp-24]=addr ptr, [rbp-32]=port, [rbp-40..56]=sockaddr_in
+    code.sub_rsp(64); // [rbp-16]=sock, [rbp-24]=addr ptr, [rbp-40..56]=sockaddr_in, [rbp-56]=port
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    // Store port at [rbp-56] (outside sockaddr_in to avoid overwrite)
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
-    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
-    // Zero-init sockaddr_in
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax);
+    // Zero-init sockaddr_in (16 bytes at [rbp-40])
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
-    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
     // AF_INET = 2
     code.mov_r32_imm32(Reg::Rax, 2);
     code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
@@ -2529,9 +2530,19 @@ fn emit_net_connect(code: &mut Code) {
     code.xor_rr32(Reg::R8, Reg::R8); // accumulator = 0
     code.mov_r_mem(Reg::R10, Reg::Rbp, -24);
     code.add_r_imm8(Reg::R10, 8); // skip len prefix
+    // Compute end-of-string pointer for bounds checking.
+    // MINK strings are length-prefixed, NOT NUL-terminated.
+    // end_ptr = addr_ptr + 8 (skip length prefix) + length
+    code.mov_r_mem(Reg::R12, Reg::Rbp, -24); // R12 = addr ptr
+    code.mov_r_mem(Reg::R11, Reg::R12, 0); // R11 = string length
+    code.add_r_imm8(Reg::R12, 8); // R12 = data start
+    code.add_rr(Reg::R12, Reg::R11); // R12 = end_ptr
     for octet in 0..4u32 {
         let done_label = code.label();
         code.xor_rr32(Reg::R9, Reg::R9); // octet value = 0
+        // Bounds check: if current pos >= end_ptr, treat octet as 0
+        code.cmp_rr(Reg::R10, Reg::R12);
+        code.jcc_label(0x83, done_label); // jae: jump if R10 >= end_ptr
         let digit_loop = code.label();
         code.bind_label(digit_loop);
         code.movzx_byte(Reg::R11, Reg::R10, 0); // R11 = byte
@@ -2546,6 +2557,9 @@ fn emit_net_connect(code: &mut Code) {
         code.mov_rr(Reg::R9, Reg::Rax);
         code.add_rr(Reg::R9, Reg::R11);
         code.add_r_imm8(Reg::R10, 1);
+        // Bounds check after advancing: if past end, stop
+        code.cmp_rr(Reg::R10, Reg::R12);
+        code.jcc_label(0x83, done_label); // jae
         code.jmp_label(digit_loop);
         code.bind_label(done_label);
         code.add_r_imm8(Reg::R10, 1);
@@ -2558,8 +2572,8 @@ fn emit_net_connect(code: &mut Code) {
     }
     // Save sin_addr before htons (R8 is volatile, clobbered by call)
     code.mov_mem_r(Reg::Rbp, -8, Reg::R8);
-    // htons(port)
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    // htons(port) — port stored at [rbp-56]
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 15 * 8));
     code.sub_rsp(32);
     code.call_rax();
@@ -2595,14 +2609,14 @@ fn emit_net_bind(code: &mut Code) {
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // sock
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // addr ptr
+    // Store port at [rbp-56] (outside sockaddr_in to avoid overwrite)
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
-    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // port
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // port
 
-    // Zero sockaddr_in
+    // Zero-init sockaddr_in (16 bytes at [rbp-40])
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
-    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax);
-    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
     code.mov_r32_imm32(Reg::Rax, 2);
     code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // AF_INET
 
@@ -2610,9 +2624,17 @@ fn emit_net_bind(code: &mut Code) {
     code.xor_rr32(Reg::R8, Reg::R8); // accumulator = 0
     code.mov_r_mem(Reg::R10, Reg::Rbp, -24);
     code.add_r_imm8(Reg::R10, 8); // skip len prefix
+    // Compute end-of-string pointer for bounds checking.
+    code.mov_r_mem(Reg::R12, Reg::Rbp, -24);
+    code.mov_r_mem(Reg::R11, Reg::R12, 0); // R11 = string length
+    code.add_r_imm8(Reg::R12, 8);
+    code.add_rr(Reg::R12, Reg::R11); // R12 = end_ptr
     for octet in 0..4u32 {
         let done_label = code.label();
         code.xor_rr32(Reg::R9, Reg::R9); // octet value = 0
+        // Bounds check
+        code.cmp_rr(Reg::R10, Reg::R12);
+        code.jcc_label(0x83, done_label); // jae
         let digit_loop = code.label();
         code.bind_label(digit_loop);
         code.movzx_byte(Reg::R11, Reg::R10, 0); // R11 = byte
@@ -2626,6 +2648,9 @@ fn emit_net_bind(code: &mut Code) {
         code.mov_rr(Reg::R9, Reg::Rax);
         code.add_rr(Reg::R9, Reg::R11);
         code.add_r_imm8(Reg::R10, 1);
+        // Bounds check after advancing
+        code.cmp_rr(Reg::R10, Reg::R12);
+        code.jcc_label(0x83, done_label); // jae
         code.jmp_label(digit_loop);
         code.bind_label(done_label);
         code.add_r_imm8(Reg::R10, 1);
@@ -2637,8 +2662,8 @@ fn emit_net_bind(code: &mut Code) {
     }
     // Save sin_addr before htons (R8 is volatile, clobbered by call)
     code.mov_mem_r(Reg::Rbp, -8, Reg::R8);
-    // htons(port)
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    // htons(port) — port stored at [rbp-56]
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 15 * 8));
     code.sub_rsp(32);
     code.call_rax();
@@ -4069,10 +4094,12 @@ fn emit_fs_move(code: &mut Code) {
 
 /// `rt_fs_get_cwd() -> Str`.
 /// Gets the current working directory as a MINK Str.
+/// Fix: GetCurrentDirectoryA returns size including null terminator;
+/// subtract 1 so the MINK string length excludes the trailing NUL.
 fn emit_fs_get_cwd(code: &mut Code) {
     prologue(code);
-    // Spill: [rbp-8] = result ptr
-    code.sub_rsp(32); // 32 bytes for alignment
+    // Spill: [rbp-8] = result ptr, [rbp-16] = raw size from API
+    code.sub_rsp(32);
     // GetCurrentDirectoryA(0, NULL) to get required size
     code.sub_rsp(32); // shadow: RSP = RBP-64 ≡ 0 mod 16
     code.xor_rr32(Reg::Rcx, Reg::Rcx); // nBufferLength = 0
@@ -4080,22 +4107,24 @@ fn emit_fs_get_cwd(code: &mut Code) {
     code.call_rip(PatchKind::Iat(IAT_GET_CURRENT_DIRECTORY_A));
     code.add_rsp(32);
     // Rax = required size (including null terminator)
-    // StrAlloc(size)
+    // Save raw size for the second GetCurrentDirectoryA call
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // StrAlloc(size - 1): exclude null terminator from MINK string length
+    code.sub_r_imm32(Reg::Rax, 1);
     code.sub_rsp(8); // alignment for 1-arg call
-    code.u8(0x50); // push rax (size)
+    code.u8(0x50); // push rax (size - 1)
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
     code.add_rsp(16);
     // Rax = result Str ptr (length prefix at [rax], data at [rax+8])
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save result ptr
-    // GetCurrentDirectoryA(size, result+8)
+    // GetCurrentDirectoryA(raw_size, result+8)
     code.mov_rr(Reg::Rdx, Reg::Rax); // lpBuffer = result+8
     code.add_r_imm8(Reg::Rdx, 8);
-    code.mov_r_mem(Reg::R8, Reg::Rax, 0); // nBufferLength = length from prefix
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // nBufferLength = raw size
     code.sub_rsp(32); // shadow: RSP = RBP-64 ≡ 0 mod 16
-    code.mov_rr(Reg::Rcx, Reg::R8); // nBufferLength
     code.call_rip(PatchKind::Iat(IAT_GET_CURRENT_DIRECTORY_A));
     code.add_rsp(32);
-    // Rax = bytes written. Return result.
+    // Rax = bytes written (includes NUL). Return result.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.leave_ret();
 }
