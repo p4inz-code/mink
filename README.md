@@ -147,8 +147,8 @@ mink explain E-T01             # explain a type mismatch error
 - **Strings** — concatenation, comparison, integer/boolean conversion
 - **Math** — abs, min, max, clamp, pow, sqrt, div/mod, sign
 - **Encoding** — Base64, hex, URL encoding/decoding
-- **Time** — current time, formatting, epoch, monotonic clock
-- **Environment** — get/set environment variables
+- **Time** — current time, formatting, epoch *(high-res timing partial)*
+- **Environment** — get/set environment variables (V1 stubs — API exists but not yet wired to Windows API)
 
 ## What's Next
 
@@ -182,9 +182,9 @@ MINK ships with a growing standard library covering common development needs:
 | `crypto` | HMAC-SHA256, HKDF-SHA256, secure random |
 | `hashing` | FNV-1a, DJB2, SHA-256, hex encoding |
 | `encoding` | Base64, hex, URL encoding/decoding |
-| `time` | Current time, formatting, epoch, monotonic clock |
+| `time` | Current time, formatting, epoch *(high-res timing partial)* |
 | `random` | Random integers, bytes, boolean |
-| `environment` | Get/set environment variables |
+| `environment` | Get/set environment variables *(V1 stubs)* |
 
 Standard library files live in the `stdlib/` directory and are imported with `use`.
 
