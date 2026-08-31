@@ -6,3 +6,6 @@ Thumbs.db
 /dist/
 /out/
 /target/
+
+# npm package artifacts
+npm/mink/*.tgz

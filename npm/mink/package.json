@@ -1,0 +1,26 @@
+{
+  "name": "@p4inz/mink",
+  "version": "1.0.1",
+  "description": "MINK programming language compiler for Windows x64",
+  "bin": {
+    "mink": "bin/mink.exe"
+  },
+  "files": [
+    "bin/mink.exe"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/p4inz-code/mink.git"
+  },
+  "homepage": "https://github.com/p4inz-code/mink",
+  "engines": {
+    "node": ">=18"
+  }
+}
