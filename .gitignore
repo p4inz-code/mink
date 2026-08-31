@@ -9,3 +9,6 @@ Thumbs.db
 
 # npm package artifacts
 npm/mink/*.tgz
+
+# temporary test artifacts
+tmp/

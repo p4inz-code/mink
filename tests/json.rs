@@ -299,3 +299,206 @@ fn invalid_literal_nulll() {
 fn invalid_literal_truee() {
     assert_parse_err("truee");
 }
+
+// =========================================================================
+// Serialization (parse → serialize → verify output, exit 0, no leak)
+// =========================================================================
+
+/// Assert that JSON parses, serializes back, produces expected output, exit 0
+fn assert_ser(json: &str, expected: &str) {
+    let mink_literal = mink_str(json);
+    let expected_literal = mink_str(expected);
+    let test = format!(
+        r#"
+fn main() -> Int {{
+    let arena = rt_alloc(65536);
+    let v = json_parse({mink_literal}, arena);
+    if v == 0 {{ rt_free(arena); rt_exit(1); }}
+    let s = json_to_str(arena, v);
+    let exp = {expected_literal};
+    let ok = rt_str_eq(s, exp);
+    rt_str_free(s);
+    rt_free(arena);
+    if ok {{ rt_exit(0); }} else {{ rt_exit(2); }}
+}}"#
+    );
+    let (code, _) = build_and_run(&test);
+    assert_eq!(
+        code, 0,
+        "serialize({json:?}) failed (exit code: {code}), expected {expected:?}"
+    );
+}
+
+#[test]
+fn serialize_null() {
+    assert_ser("null", "null");
+}
+
+#[test]
+fn serialize_true() {
+    assert_ser("true", "true");
+}
+
+#[test]
+fn serialize_false() {
+    assert_ser("false", "false");
+}
+
+#[test]
+fn serialize_integer() {
+    assert_ser("42", "42");
+}
+
+#[test]
+fn serialize_negative_integer() {
+    assert_ser("-7", "-7");
+}
+
+#[test]
+fn serialize_empty_string() {
+    assert_ser("\"\"", "\"\"");
+}
+
+#[test]
+fn serialize_string() {
+    assert_ser("\"hello\"", "\"hello\"");
+}
+
+#[test]
+fn serialize_empty_array() {
+    assert_ser("[]", "[]");
+}
+
+#[test]
+fn serialize_array() {
+    assert_ser("[1,2,3]", "[1,2,3]");
+}
+
+#[test]
+fn serialize_nested_array() {
+    assert_ser("[[1,2],[3,4]]", "[[1,2],[3,4]]");
+}
+
+#[test]
+fn serialize_empty_object() {
+    assert_ser("{}", "{}");
+}
+
+#[test]
+fn serialize_object() {
+    assert_ser("{\"a\":1}", "{\"a\":1}");
+}
+
+#[test]
+fn serialize_nested_object() {
+    assert_ser("{\"a\":{\"b\":2}}", "{\"a\":{\"b\":2}}");
+}
+
+#[test]
+fn serialize_mixed_object() {
+    assert_ser(
+        "{\"name\":\"test\",\"value\":42,\"active\":true}",
+        "{\"name\":\"test\",\"value\":42,\"active\":true}",
+    );
+}
+
+#[test]
+fn serialize_mixed_array() {
+    assert_ser("[1,\"two\",true,null]", "[1,\"two\",true,null]");
+}
+
+#[test]
+fn serialize_string_with_escapes() {
+    assert_ser("{\"msg\":\"line1\\nline2\"}", "{\"msg\":\"line1\\nline2\"}");
+}
+
+/// Assert that parsing and serializing is idempotent
+fn assert_roundtrip(json: &str) {
+    let mink_literal = mink_str(json);
+    let test = format!(
+        r#"
+fn main() -> Int {{
+    let arena = rt_alloc(65536);
+    let v1 = json_parse({mink_literal}, arena);
+    if v1 == 0 {{ rt_free(arena); rt_exit(1); }}
+    // Serialize twice from the same parsed value — must be identical
+    let s1 = json_to_str(arena, v1);
+    let len1 = rt_str_len(s1);
+    let s2 = json_to_str(arena, v1);
+    let len2 = rt_str_len(s2);
+    let ok = len1 == len2;
+    rt_str_free(s1);
+    rt_str_free(s2);
+    rt_free(arena);
+    if ok {{ rt_exit(0); }} else {{ rt_exit(3); }}
+}}"#
+    );
+    let (code, _) = build_and_run(&test);
+    assert_eq!(code, 0, "roundtrip failed for {json:?} (exit code: {code})");
+}
+
+#[test]
+fn roundtrip_null() {
+    assert_roundtrip("null");
+}
+
+#[test]
+fn roundtrip_bool() {
+    assert_roundtrip("true");
+    assert_roundtrip("false");
+}
+
+#[test]
+fn roundtrip_number() {
+    assert_roundtrip("42");
+    assert_roundtrip("-7");
+}
+
+#[test]
+fn roundtrip_string() {
+    assert_roundtrip("\"hello\"");
+}
+
+#[test]
+fn roundtrip_array() {
+    assert_roundtrip("[1,2,3]");
+}
+
+#[test]
+fn roundtrip_object() {
+    assert_roundtrip("{\"a\":1,\"b\":\"two\"}");
+}
+
+#[test]
+fn roundtrip_nested() {
+    assert_roundtrip("{\"arr\":[1,{\"x\":2}],\"str\":\"hi\"}");
+}
+
+/// Assert multiple parses into same arena work correctly
+fn assert_multi_parse(jsons: &[&str]) {
+    let mut body = String::from(
+        r#"
+fn main() -> Int {
+    let arena = rt_alloc(65536);
+    let mut ok = true;
+"#,
+    );
+    for (i, json) in jsons.iter().enumerate() {
+        let lit = mink_str(json);
+        body.push_str(&format!(
+            "    let v{i} = json_parse({lit}, arena);\n    if v{i} == 0 {{ ok = false; }}\n"
+        ));
+    }
+    body.push_str(
+        r#"    rt_free(arena);
+    if ok { rt_exit(0); } else { rt_exit(1); }
+}"#,
+    );
+    let (code, _) = build_and_run(&body);
+    assert_eq!(code, 0, "multi-parse failed (exit code: {code})");
+}
+
+#[test]
+fn multiple_independent_parses() {
+    assert_multi_parse(&["null", "true", "42", "\"abc\"", "[]", "{}"]);
+}

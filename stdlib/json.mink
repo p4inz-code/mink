@@ -518,15 +518,15 @@ fn json_parse(input: Str, arena: Ptr<Int>) -> Int {
 }
 
 // ============================================================================
-// Serializer — reads from arena, builds output string
+// Serializer — zero-leak: compute size first, then write once
 // ============================================================================
 
-fn _ser_escape(s: Str) -> Str {
-    let mut len = rt_str_len(s);
+// Compute the escaped byte-length of a raw string stored in the arena.
+fn _escaped_len_from_arena(arena: Ptr<Int>, raw_off: Int, raw_len: Int) -> Int {
     let mut out_len = 0;
     let mut i = 0;
-    while i < len {
-        let mut ch = rt_str_byte(s, i);
+    while i < raw_len {
+        let mut ch = _read(arena, raw_off + i);
         if ch == 34 || ch == 92 || ch == 10 || ch == 13 || ch == 9 || ch == 8 || ch == 12 {
             out_len = out_len + 2;
         } else {
@@ -534,130 +534,191 @@ fn _ser_escape(s: Str) -> Str {
         }
         i = i + 1;
     }
-    let mut out = rt_str_alloc(out_len);
-    let mut j = 0;
-    i = 0;
-    while i < len {
-        let mut ch = rt_str_byte(s, i);
-        if ch == 34 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 34); j = j + 2; }
-        else if ch == 92 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 92); j = j + 2; }
-        else if ch == 10 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 110); j = j + 2; }
-        else if ch == 13 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 114); j = j + 2; }
-        else if ch == 9 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 116); j = j + 2; }
-        else if ch == 8 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 98); j = j + 2; }
-        else if ch == 12 { rt_str_set_byte(out, j, 92); rt_str_set_byte(out, j+1, 102); j = j + 2; }
-        else { rt_str_set_byte(out, j, ch); j = j + 1; }
-        i = i + 1;
-    }
-    return out;
+    return out_len;
 }
 
-fn _ser_char(ch: Int) -> Str {
-    let mut s = rt_str_alloc(1);
-    rt_str_set_byte(s, 0, ch);
-    return s;
-}
-
-fn _ser_value(arena: Ptr<Int>, offset: Int) -> Str {
+// Compute total serialized size without any heap allocation.
+fn _ser_size(arena: Ptr<Int>, offset: Int) -> Int {
     let mut tag = _read(arena, offset);
-    if tag == 0 {
-        let mut s = rt_str_alloc(4);
-        rt_str_set_byte(s, 0, 110); rt_str_set_byte(s, 1, 117);
-        rt_str_set_byte(s, 2, 108); rt_str_set_byte(s, 3, 108);
-        return s;
-    }
+    if tag == 0 { return 4; }
     if tag == 1 {
-        if _read(arena, offset + 1) == 1 {
-            let mut s = rt_str_alloc(4);
-            rt_str_set_byte(s, 0, 116); rt_str_set_byte(s, 1, 114);
-            rt_str_set_byte(s, 2, 117); rt_str_set_byte(s, 3, 101);
-            return s;
-        }
-        let mut s = rt_str_alloc(5);
-        rt_str_set_byte(s, 0, 102); rt_str_set_byte(s, 1, 97);
-        rt_str_set_byte(s, 2, 108); rt_str_set_byte(s, 3, 115);
-        rt_str_set_byte(s, 4, 101);
-        return s;
+        if _read(arena, offset + 1) == 1 { return 4; }
+        return 5;
     }
     if tag == 2 {
-        let mut len = _read(arena, offset + 1);
-        let mut s = rt_str_alloc(len);
-        let mut i = 0;
-        while i < len {
-            rt_str_set_byte(s, i, _read(arena, offset + 2 + i));
-            i = i + 1;
-        }
-        return s;
+        return _read(arena, offset + 1);
     }
     if tag == 3 {
-        let mut len = _read(arena, offset + 1);
-        let mut raw = rt_str_alloc(len);
-        let mut i = 0;
-        while i < len {
-            rt_str_set_byte(raw, i, _read(arena, offset + 2 + i));
-            i = i + 1;
-        }
-        let mut escaped = _ser_escape(raw);
-        let mut elen = rt_str_len(escaped);
-        let mut out = rt_str_alloc(2 + elen);
-        rt_str_set_byte(out, 0, 34);
-        i = 0;
-        while i < elen {
-            rt_str_set_byte(out, i + 1, rt_str_byte(escaped, i));
-            i = i + 1;
-        }
-        rt_str_set_byte(out, elen + 1, 34);
-        return out;
+        let mut raw_len = _read(arena, offset + 1);
+        return 2 + _escaped_len_from_arena(arena, offset + 2, raw_len);
     }
     if tag == 4 {
         let mut count = _read(arena, offset + 1);
-        if count == 0 {
-            let mut s = rt_str_alloc(2);
-            rt_str_set_byte(s, 0, 91); rt_str_set_byte(s, 1, 93);
-            return s;
-        }
-        let mut r = _ser_char(91);
+        if count == 0 { return 2; }
+        let mut total = 2 + (count - 1); // brackets + commas
         let mut cur = offset + 2;
         let mut i = 0;
         while i < count {
-            if i > 0 { r = _concat(r, _ser_char(44)); }
-            r = _concat(r, _ser_value(arena, cur));
+            total = total + _ser_size(arena, cur);
             cur = cur + _val_size(arena, cur);
             i = i + 1;
         }
-        return _concat(r, _ser_char(93));
+        return total;
     }
     if tag == 5 {
         let mut count = _read(arena, offset + 1);
-        if count == 0 {
-            let mut s = rt_str_alloc(2);
-            rt_str_set_byte(s, 0, 123); rt_str_set_byte(s, 1, 125);
-            return s;
-        }
-        let mut r = _ser_char(123);
+        if count == 0 { return 2; }
+        let mut total = 2 + (count - 1); // braces + commas
         let mut c = offset + 2;
         let mut i = 0;
         while i < count {
-            if i > 0 { r = _concat(r, _ser_char(44)); }
             let mut klen = _read(arena, c);
-            r = _concat(r, _ser_char(34));
-            let mut j = 0;
-            while j < klen {
-                r = _concat(r, _ser_char(_read(arena, c + 1 + j)));
-                j = j + 1;
-            }
-            r = _concat(r, _ser_char(34));
-            r = _concat(r, _ser_char(58));
+            total = total + 2 + klen + 1; // "key":
             let mut val_off = c + 1 + klen;
-            r = _concat(r, _ser_value(arena, val_off));
+            total = total + _ser_size(arena, val_off);
             c = val_off + _val_size(arena, val_off);
             i = i + 1;
         }
-        return _concat(r, _ser_char(125));
+        return total;
     }
-    return rt_str_alloc(0);
+    return 0;
+}
+
+// --- Arena-based output buffer ---
+// We write serialized bytes into the arena starting at offset _SER_OUT_BASE,
+// one byte per Int slot. This avoids passing Str to recursive functions
+// (which would consume it). At the end, we copy to a Str.
+
+fn _ser_out_base(arena_size: Int) -> Int {
+    // Use the last 1024 slots of a 64KB arena (slots 7168..8191).
+    return 7168;
+}
+
+fn _ser_put(arena: Ptr<Int>, pos: Int, byte: Int) {
+    _write(arena, pos, byte);
+}
+
+fn _ser_put2(arena: Ptr<Int>, pos: Int, b1: Int, b2: Int) {
+    _write(arena, pos, b1);
+    _write(arena, pos + 1, b2);
+}
+
+// Write escaped raw bytes from src arena into output area of dst arena.
+fn _ser_write_escaped(arena: Ptr<Int>, raw_off: Int, raw_len: Int, out_base: Int, pos: Int) -> Int {
+    let mut p = pos;
+    let mut i = 0;
+    while i < raw_len {
+        let mut ch = _read(arena, raw_off + i);
+        if ch == 34 { _ser_put2(arena, out_base + p, 92, 34); p = p + 2; }
+        else if ch == 92 { _ser_put2(arena, out_base + p, 92, 92); p = p + 2; }
+        else if ch == 10 { _ser_put2(arena, out_base + p, 92, 110); p = p + 2; }
+        else if ch == 13 { _ser_put2(arena, out_base + p, 92, 114); p = p + 2; }
+        else if ch == 9 { _ser_put2(arena, out_base + p, 92, 116); p = p + 2; }
+        else if ch == 8 { _ser_put2(arena, out_base + p, 92, 98); p = p + 2; }
+        else if ch == 12 { _ser_put2(arena, out_base + p, 92, 102); p = p + 2; }
+        else { _ser_put(arena, out_base + p, ch); p = p + 1; }
+        i = i + 1;
+    }
+    return p;
+}
+
+// Write serialized bytes into the arena output area starting at pos.
+// Returns new position.
+fn _ser_write(arena: Ptr<Int>, offset: Int, out_base: Int, pos: Int) -> Int {
+    let mut tag = _read(arena, offset);
+    if tag == 0 {
+        _ser_put2(arena, out_base + pos, 110, 117);
+        _ser_put2(arena, out_base + pos + 2, 108, 108);
+        return pos + 4;
+    }
+    if tag == 1 {
+        if _read(arena, offset + 1) == 1 {
+            _ser_put2(arena, out_base + pos, 116, 114);
+            _ser_put2(arena, out_base + pos + 2, 117, 101);
+            return pos + 4;
+        }
+        _ser_put2(arena, out_base + pos, 102, 97);
+        _ser_put2(arena, out_base + pos + 2, 108, 115);
+        _ser_put(arena, out_base + pos + 4, 101);
+        return pos + 5;
+    }
+    if tag == 2 {
+        let mut len = _read(arena, offset + 1);
+        let mut i = 0;
+        while i < len {
+            _ser_put(arena, out_base + pos + i, _read(arena, offset + 2 + i));
+            i = i + 1;
+        }
+        return pos + len;
+    }
+    if tag == 3 {
+        let mut raw_len = _read(arena, offset + 1);
+        _ser_put(arena, out_base + pos, 34);
+        let mut p = _ser_write_escaped(arena, offset + 2, raw_len, out_base, pos + 1);
+        _ser_put(arena, out_base + p, 34);
+        return p + 1;
+    }
+    if tag == 4 {
+        let mut count = _read(arena, offset + 1);
+        _ser_put(arena, out_base + pos, 91);
+        if count == 0 {
+            _ser_put(arena, out_base + pos + 1, 93);
+            return pos + 2;
+        }
+        let mut p = pos + 1;
+        let mut cur = offset + 2;
+        let mut i = 0;
+        while i < count {
+            if i > 0 { _ser_put(arena, out_base + p, 44); p = p + 1; }
+            p = _ser_write(arena, cur, out_base, p);
+            cur = cur + _val_size(arena, cur);
+            i = i + 1;
+        }
+        _ser_put(arena, out_base + p, 93);
+        return p + 1;
+    }
+    if tag == 5 {
+        let mut count = _read(arena, offset + 1);
+        _ser_put(arena, out_base + pos, 123);
+        if count == 0 {
+            _ser_put(arena, out_base + pos + 1, 125);
+            return pos + 2;
+        }
+        let mut p = pos + 1;
+        let mut c = offset + 2;
+        let mut i = 0;
+        while i < count {
+            if i > 0 { _ser_put(arena, out_base + p, 44); p = p + 1; }
+            let mut klen = _read(arena, c);
+            _ser_put(arena, out_base + p, 34); p = p + 1;
+            let mut j = 0;
+            while j < klen {
+                _ser_put(arena, out_base + p, _read(arena, c + 1 + j)); p = p + 1;
+                j = j + 1;
+            }
+            _ser_put(arena, out_base + p, 34); p = p + 1;
+            _ser_put(arena, out_base + p, 58); p = p + 1;
+            let mut val_off = c + 1 + klen;
+            p = _ser_write(arena, val_off, out_base, p);
+            c = val_off + _val_size(arena, val_off);
+            i = i + 1;
+        }
+        _ser_put(arena, out_base + p, 125);
+        return p + 1;
+    }
+    return pos;
 }
 
 fn json_to_str(arena: Ptr<Int>, offset: Int) -> Str {
-    return _ser_value(arena, offset);
+    let mut size = _ser_size(arena, offset);
+    let mut out_base = _ser_out_base(65536);
+    let mut end = _ser_write(arena, offset, out_base, 0);
+    // Copy from arena output area to a Str
+    let mut buf = rt_str_alloc(end);
+    let mut i = 0;
+    while i < end {
+        rt_str_set_byte(buf, i, _read(arena, out_base + i));
+        i = i + 1;
+    }
+    return buf;
 }
