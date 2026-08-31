@@ -2,14 +2,11 @@
 
 # MINK
 
-**A general-purpose programming language — built from first principles.**
+**A compiled general-purpose programming language — from lexer to native executable.**
 
-*Fast. Fewer errors. Durable. Flexible.*
-
-![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange)
-![Status](https://img.shields.io/badge/status-1.0.0--stable-brightgreen)
-![Target](https://img.shields.io/badge/target-x86_64--windows--pe-lightgrey)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.1-brightgreen)
+![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
 Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by Northbyte Studios.
 
@@ -19,30 +16,211 @@ Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarde
 
 ## What is MINK?
 
-MINK is a compiled, general-purpose programming language being built **from
-the ground up** — its own lexer, parser, type system, intermediate
-representations (HIR/MIR), optimizer, native code generator, and runtime.
-Nothing is borrowed from another language's toolchain: the compiler
-assembles a complete native executable with **no external toolchain** (no C
-compiler, assembler, or linker).
+MINK is a compiled, general-purpose programming language built from the ground up — its own lexer, parser, type system, intermediate representations, optimizer, native code generator, and runtime. No external toolchain required: the compiler produces standalone Windows executables with zero dependencies.
 
-It is designed for systems programming, backend development, and application
-development — with a strong emphasis on catching errors early and on durable,
-predictable behavior.
+MINK is designed for systems programming and application development, with a focus on catching errors early and providing predictable, deterministic behavior.
 
-## Why MINK?
+## Install MINK
 
-| Pillar        | What it means                                                                 |
-| ------------- | ----------------------------------------------------------------------------- |
-| ⚡ **Speed**      | Native performance, no garbage collector, small and deterministic runtime. |
-| 🛡️ **Less Errors** | Invalid memory operations are detected and reported with structured diagnostics instead of silently corrupting memory. |
-| 🏗️ **Durability**  | A stable, documented memory model and architecture designed so safety features can be layered on later. |
-| 🧩 **Flexibility** | A general-purpose language for systems, backend, and application work. |
+**MINK requires Windows x64.** Linux and macOS are not currently supported.
 
-The project is built **in the open** — the language model is validated by a
-real, working compiler and runtime, not by marketing.
+MINK is distributed through npm. You need **Node.js 18 or newer** (which includes npm).
 
-## A taste of MINK
+### Already have Node.js / npm?
+
+```bash
+npm install -g @p4inz-code/mink
+```
+
+Verify:
+
+```bash
+mink --version
+```
+
+Expected output:
+
+```text
+mink 1.0.1
+```
+
+### Don't have Node.js / npm?
+
+1. Install Node.js 18+ from the [official Node.js website](https://nodejs.org/). npm is included — no separate install needed.
+2. Open a **new terminal** (or restart your current one).
+3. Verify:
+
+```bash
+node --version
+npm --version
+```
+
+4. Install MINK:
+
+```bash
+npm install -g @p4inz-code/mink
+```
+
+5. Verify:
+
+```bash
+mink --version
+```
+
+> **Do I need Rust?** No. The npm package ships a pre-built compiler binary. You do not need Rust, Cargo, or any build tools.
+>
+> **Do I need to download `mink.exe` manually?** No. `npm install` handles everything.
+
+## Quick Start
+
+### First Program
+
+Create a file called `hello.mink`:
+
+```mink
+fn main() {
+    rt_print_int(42);
+    return 0;
+}
+```
+
+Run it:
+
+```bash
+mink run hello.mink
+```
+
+Expected output:
+
+```text
+42
+```
+
+That's it — no build step, no configuration, no runtime installation on the target machine.
+
+### Build and Run
+
+```bash
+mink build hello.mink    # creates hello.exe
+./hello.exe               # runs the executable
+```
+
+The generated `.exe` is a standalone Windows executable. Copy it to any Windows 10+ x86_64 machine and run it — no MINK compiler needed on the target.
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| `mink run <file>` | Compile and execute a MINK source file |
+| `mink build <file>` | Compile to a native Windows executable |
+| `mink check <file>` | Analyze source for errors without producing output |
+| `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
+| `mink version` | Print the compiler version |
+| `mink help` | Show usage information |
+
+All commands accept `--help` and `--version` flags.
+
+### Examples
+
+```bash
+mink check hello.mink          # check for errors
+mink build hello.mink          # compile to hello.exe
+mink run hello.mink            # compile and run
+mink explain E-T01             # explain a type mismatch error
+```
+
+## What's New
+
+### MINK 1.0.1
+
+- **npm distribution** — install with `npm install -g @p4inz-code/mink`, no manual download needed
+- **`mink run`** — compile and execute in one step
+- **Static CRT** — generated executables have no external DLL dependencies
+- **Filesystem library** — path operations, file read/write/copy/move, directory operations
+- **Process execution** — spawn and manage external processes
+- **Networking** — TCP/UDP sockets via Winsock2
+- **HTTP client** — HTTP/1.1 request/response, GET/POST, header parsing
+- **Crypto** — HMAC-SHA256, HKDF-SHA256, secure random via Windows BCrypt
+- **Hashing** — FNV-1a, DJB2, SHA-256, hex encoding
+- **JSON** — parse and serialize JSON data
+- **Collections** — dynamic vectors with push/pop/search/transform
+- **Strings** — concatenation, comparison, integer/boolean conversion
+- **Math** — abs, min, max, clamp, pow, sqrt, div/mod, sign
+- **Encoding** — Base64, hex, URL encoding/decoding
+- **Time** — current time, formatting, epoch, monotonic clock
+- **Environment** — get/set environment variables
+
+## What's Next
+
+MINK currently targets **Windows x64**. The next major platform expansion is **Linux**.
+
+| Area | Status |
+| --- | --- |
+| Windows x64 | Available |
+| npm distribution | Available |
+| Linux | Next major platform target |
+| macOS | Future / TBD |
+| Package manager | Future |
+| Concurrency / threading | Future |
+
+The project will continue expanding platform support, ecosystem libraries, and production capabilities. See the [Implementation Roadmap](docs/roadmap/IMPLEMENTATION_ROADMAP.md) for the full plan.
+
+## Standard Library
+
+MINK ships with a growing standard library covering common development needs:
+
+| Library | Capabilities |
+| --- | --- |
+| `strings` | Concatenation, comparison, integer/boolean conversion, length |
+| `collections` | Dynamic vectors: push, pop, search, transform |
+| `math` | abs, min, max, clamp, pow, sqrt, div/mod, sign |
+| `filesystem` | Path ops, file read/write/copy/move/remove, directories |
+| `process` | Spawn processes, capture output, manage exit codes |
+| `network` | TCP/UDP sockets, connect, bind, listen, send, receive |
+| `http` | HTTP/1.1 client, GET/POST, headers, response parsing |
+| `json` | Parse and serialize JSON |
+| `crypto` | HMAC-SHA256, HKDF-SHA256, secure random |
+| `hashing` | FNV-1a, DJB2, SHA-256, hex encoding |
+| `encoding` | Base64, hex, URL encoding/decoding |
+| `time` | Current time, formatting, epoch, monotonic clock |
+| `random` | Random integers, bytes, boolean |
+| `environment` | Get/set environment variables |
+
+Standard library files live in the `stdlib/` directory and are imported with `use`.
+
+## Language Features
+
+MINK supports a rich feature set for a language built from scratch:
+
+- **Types** — `Int`, `Bool`, `Str`, `Float`, `Char`, `Null`, `Ptr<T>`
+- **Structs** — `struct Point { x: Int, y: Int }` with field access and destructuring
+- **Enums** — unit variants, data-carrying variants, sum types, explicit discriminants
+- **Generics** — `fn id<T>(x: T) -> T` with monomorphization
+- **Pattern matching** — `match` with literals, variants, bindings, wildcards, or-patterns, range patterns, guards
+- **Control flow** — `if`/`else`, `while`, `for` ranges, `loop` with `break`
+- **Closures** — `|x: Int| x + 1` with capture semantics
+- **Ownership** — move semantics, `&`/`&mut` borrows, compile-time borrow checking
+- **Modules** — `mod`/`use`/`pub` with multi-file compilation
+- **Tuples** — `(Int, Bool)`, field access, destructuring
+- **Arrays** — fixed-size with bounds checking
+
+## Examples
+
+### Hello World
+
+```mink
+fn main() {
+    rt_print_int(42);
+    return 0;
+}
+```
+
+```bash
+$ mink run hello.mink
+42
+```
+
+### Sum 1 to 10
 
 ```mink
 fn main() {
@@ -55,35 +233,18 @@ fn main() {
 }
 ```
 
-```console
-$ mink build demo.mink
-mink: build: 'demo.mink' -> 'demo.exe' (target: x86_64-windows-pe, 1 function(s), 0 binding(s))
-
-$ ./demo.exe
+```bash
+$ mink run sum.mink
 55
 $ echo $?
 1
 ```
 
-MINK ships strings and typed pointers on top of the deterministic,
-leak-checked runtime heap:
+### Strings and Heap
 
 ```mink
 fn main() {
-    let p = rt_alloc(24);          // zero-initialized heap block
-    rt_mem_store(p, 7);
-    rt_mem_store(p + 8, 35);
-    let x = rt_mem_load(p);
-    let y = rt_mem_load(p + 8);
-    rt_print_int(x * 10 + y);      // prints: 105
-    rt_free(p);
-    return 0;
-}
-```
-
-```mink
-fn main() {
-    let s = rt_str_alloc(5);
+    let s = rt_str_alloc(3);
     rt_str_set_byte(s, 0, 104);
     rt_str_set_byte(s, 1, 105);
     rt_str_set_byte(s, 2, 33);
@@ -94,265 +255,74 @@ fn main() {
 }
 ```
 
-Access a freed or never-allocated block and the runtime traps with a
-structured `E-R05` diagnostic; index past a string's end and it traps with
-`E-R09`; index past an array's end and it traps with `E-R10` — no silent
-corruption, no segfault guessing games.
+### Structs and Enums
 
-## What works today
+```mink
+struct Point { x: Int, y: Int }
 
-- **Complete pipeline** — parsing → semantic analysis → type checking and
-  inference → HIR → MIR → deterministic optimization (boolean constant
-  folding, copy propagation, CFG simplification, unreachable-block
-  elimination, dead-code elimination) → native code generation → embedded
-  runtime.
-- **Language subset** — integers, booleans, **strings** (`Str`),
-  **typed pointers** (`Ptr<Int>`), **structs** (`struct P { x: Int }` with
-  `P { x: 1 }` literals and `p.x` access), **fixed-size arrays**
-  (`[1, 2, 3]`, `a[i]`, with compile-time constant-index and runtime
-  bounds checks), **enums** (`enum D { A, B }` with `D::A` variant paths,
-  nominal enum typing, and single-word discriminant values), **sum
-  types** (data-carrying variants `enum Shape { Circle(Int), Nothing }`
-  with `E::V(expr)` construction, `E::V(x)` payload patterns, and
-  tagged-union layout), **explicit discriminants** (`enum E { A = 5, B }`
-  with implicit continuation and duplicate/overflow rejection `E-T31`/
-  `E-T32`), **pattern matching** (`match` over `Int`, `Bool`,
-  and enums with literal, variant, binding, and `_` wildcard patterns,
-  compile-time exhaustiveness `E-T24` and unreachable-arm `E-T25`
-  rejection, recursive payload coverage, **richer patterns**
-  (or-patterns `1 | 2 | 3` and `E::A(x) | E::B(x)` with shared
-  bindings `E-T34`, integer range patterns `1..=5`/`1..5` with
-  interval-based exhaustiveness, and guarded arms `pat if cond =>`
-  whose guards read the pattern's bindings), comparisons, logical and
-  bitwise operators,
-  `if`/`while`/`for`/`loop` control flow, **block expressions**
-  (`{ stmts; expr }` producing a value), **if-as-expression**
-  (`if cond { a } else { b }` with required `else`), **while/loop as expressions**
-  (`let x = loop { break 42; };` with `break expr;` carrying a value;
-  type inferred from break values; `E-T36` on missing break value), **tuples**
-  (`(Int, Bool)`, tuple expressions, `x.0` field access, tuple types in
-  annotations and struct fields, **tuple destructuring** `let (a, b) = x;`
-  with type annotations, nested patterns, and wildcards, **struct destructuring**
-  `let Point { x, y } = p;` with shorthand and explicit field bindings,
-  field existence validation (`E-T39`), missing field rejection (`E-T40`),
-  struct type name validation (`E-T41`), and nested struct patterns), **match
-  expressions** (`let x = match e { pat => expr, ... }` producing a value with
-  result-type unification across arms, exhaustive pattern matching, and
-  support for all existing pattern forms), direct function
-  calls, module bindings, **function signature type annotations** (`fn add(x: Int, y: Int) -> Int { ... }`
-  with optional parameter types and return type, enforced by the type checker;
-  unannotated parameters and return types remain inferred), **let/const
-  binding type annotations** (`let x: Int = 1;` with optional `: Type`,
-  enforced by the type checker; unannotated bindings remain inferred),
-  `Null` as a named type in annotations, integer results becoming
-  process exit codes, **closures/lambdas** (`|x: Int| x + 1`, `|a, b| a + b`, `| | 42`
-  with by-value capture of free variables, desugaring to named functions,
-  indirect calls via function pointers, and deterministic capture ordering),
-  **generics** (`fn id<T>(x: T) -> T`, generic structs/enums with
-  monomorphization and explicit type arguments), and **modules** (`mod`/`use`/`pub`
-  with multi-file compilation and cross-module symbol resolution).
-- **Ownership & borrow checking** — compile-time move semantics for
-  heap-owning values (`Str`, structs/arrays containing them): owned
-  values move on transfer (use-after-move is `E-S10`), string literals
-  copy freely, immutable strings reject mutation (`E-S11`), and
-  compile-time borrow checking on top of it: shared (`&`) and exclusive
-  (`&mut`) borrows, conflicting-borrow rejection (`E-S12`), and
-  dangling-reference rejection (`E-S14`) — invalid programs fail before
-  code generation, with no runtime cost (see
-  [`OWNERSHIP_IMPLEMENTATION.md`](docs/implementation/OWNERSHIP_IMPLEMENTATION.md)
-  and
-  [`REFERENCES_BORROWING_IMPLEMENTATION.md`](docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md)).
-- **Runtime intrinsics** — `rt_alloc`, `rt_free`, `rt_mem_load`,
-  `rt_mem_store` (validated against a bounded liveness table), and the
-  string intrinsics `rt_str_alloc`/`rt_str_free`/`rt_str_len`/
-  `rt_str_byte`/`rt_str_set_byte`/`rt_print_str` (bounds-checked, `E-R09`),
-  plus `rt_str_concat`/`rt_str_eq`/`rt_str_from_int`/`rt_str_from_bool`
-  (V1 string operations),
-  `rt_exit`, `rt_print_int`, and `rt_print_char`, backed by a deterministic
-  bump/free-list heap with structured `E-R01+` diagnostics.
-- **Native target** — `x86_64-windows-pe`: a self-contained code generator
-  and PE container builder producing runnable Windows executables with no
-  external toolchain.
-- **Honest errors** — everything outside the supported subset (function
-  values, `Range` in a single-word position, …) is rejected with
-  structured diagnostics instead of being miscompiled.
+enum Shape {
+    Circle(Int),
+    Square(Int),
+    Empty,
+}
 
-## Quick start
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    let c = Shape::Circle(5);
 
-### Installation
+    match c {
+        Shape::Circle(radius) => { rt_print_int(radius); },
+        Shape::Square(side) => { rt_print_int(side); },
+        Shape::Empty => { rt_print_int(0); },
+    }
 
-Download the release ZIP for your platform, extract it, and place `mink.exe`
-on your PATH (or run it from its directory).
-
-```console
-$ mink --version
-mink 1.0.0
+    return 0;
+}
 ```
-
-### Building from source
-
-Requirements: **Rust 1.85+** (developed against 1.97).
-
-```console
-$ git clone https://github.com/p4inz-code/mink.git
-$ cd mink
-$ cargo build --release
-```
-
-### First program
-
-Write a program, then compile and run it:
-
-```console
-$ mink build demo.mink   # compile to demo.exe
-$ ./demo.exe
-```
-
-### CLI
-
-| Command | Description |
-| --- | --- |
-| `mink build <path> [--target <triple>]` | Compile a MINK source file into a native executable |
-| `mink check <path>` | Validate the front end without producing an executable |
-| `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
-| `mink version` | Print the compiler version |
-| `mink help` | Show usage information |
-| `mink run` | Compile and run a program (implemented in current checkout) |
-| `mink test`, `mink fmt` | Not yet implemented |
-
-### Deployment
-
-The generated `.exe` is a standalone Windows executable. It requires no
-external toolchain, no runtime installation, and no MINK compiler on the
-target machine. Simply copy the `.exe` to any Windows 10+ x86_64 machine
-and run it.
-
-## Current limitations
-
-Honest status, because durable engineering starts with accurate claims:
-
-- **Single target** — `x86_64-windows-pe` is implemented;
-  `x86_64-linux-elf` and `aarch64-linux-elf` are recognized but rejected
-  (`E-B11`).
-- **Fixed 1 MiB heap** — exhaustion is a structured error (`E-R02`).
-- **Single-threaded runtime** — no concurrency primitives yet.
-- **Aggregate limits** — structs, arrays, and tagged-union enums are
-  values with deterministic C-style layout; they can be returned from
-  functions and stored at module scope through a caller-allocated return
-  slot and constant-evaluated data images (session 22), and booleans
-  packed at any byte offset coexist correctly with the integer fields
-  that follow them (session 23). Since session 24, `Float`, `Char`, and
-  `Null` are first-class native scalars (SSE2 float arithmetic and exact
-  decimal printing; `rt_print_char`). `main` still cannot return an
-  aggregate or a `Float`/`Char`/`Null` (its result is the exit code,
-  `E-B09`). Tagged-union enums cannot be
-  compared with `==`/`!=` (  `E-T30`); there
-  is no enum-to-`Int` conversion; pattern matching covers
-  `Int`/`Bool`/enum scrutinees only (no struct/array destructuring
-  yet, though or-patterns, ranges, and guards landed in session 27),
-  and generics are supported for functions, structs, and enums
-  (sessions 35–36) via monomorphization with optional explicit type arguments
-  (`identity::<Int>(42)`).
-- **Strings are byte sequences** — literals are immutable, and UTF-8
-  well-formedness is not validated at runtime. V1 string operations are
-  now complete: `rt_str_concat` (concatenation), `rt_str_eq`
-  (byte-for-byte comparison), `rt_str_from_int` (decimal conversion),
-  and `rt_str_from_bool` (true/false). The `==` and `!=` operators on
-  `Str` perform byte-for-byte content comparison (via `rt_str_eq`), not
-  pointer comparison — two heap-allocated strings with identical content
-  compare equal. String interpolation, substrings,
-  and advanced string APIs remain outside V1.
-- **Borrowing is lexical, not non-lexical** — explicit references
-  (`&T` / `&mut T`), borrows (`&place` / `&mut place`), and derefs (`*r`)
-  are implemented (session 16) with compile-time borrow checking, but
-  lifetimes are lexical (a borrow lives until its binding dies), there is
-  no reborrowing, disjoint-field borrows are conservatively rejected,
-  enums are not borrowable (`&enum` is `E-T19`), and only whole-value
-  deref assignment (`*r = v`) is supported — member/element assignment
-  through a deref (`(*r).x = v`) is `E-T33` (see
-  [`REFERENCES_BORROWING_IMPLEMENTATION.md`](docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md)).
-- **No garbage collector** — allocation is explicit and leak-checked on exit.
-- **Limited native subset** — Float, Char, and Null are first-class
-  native scalars (SSE2 float arithmetic and exact decimal printing), but
-  function values are not representable yet.
-- **Ecosystem libraries in progress** — a standard library covering
-  strings, collections, math, filesystem, process execution, JSON,
-  networking, HTTP, crypto, random, time/date, encoding, hashing, and
-  environment access is under active development (see `stdlib/`). The
-  committed release ships `Option<T>` and `Result<T,E>` as built-in
-  types; full stdlib coverage is not yet stable.
-
-## Roadmap
-
-The long-term plan lives in
-[`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md):
-memory/ownership, the standard library, package/build system, developer
-tooling, web/backend and desktop ecosystems, optimization, security
-hardening, and release engineering. Future work is intentionally **not**
-claimed as implemented — the "What works today" section is the only status
-that matters.
 
 ## Documentation
 
-- [`docs/implementation/`](docs/implementation/) — implementation records
-  for every stage: lexer, parser, semantic analysis, type system and
-  inference, HIR, MIR, optimization, native backend, runtime, the string +
-  memory type foundation
-  ([`STRING_MEMORY_IMPLEMENTATION.md`](docs/implementation/STRING_MEMORY_IMPLEMENTATION.md)),
-  the aggregate (struct/array) foundation
-  ([`AGGREGATE_TYPES_IMPLEMENTATION.md`](docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md)),
-  the reference/borrowing foundation
-  ([`REFERENCES_BORROWING_IMPLEMENTATION.md`](docs/implementation/REFERENCES_BORROWING_IMPLEMENTATION.md)),
-  the enum foundation
-  ([`ENUM_TYPES_IMPLEMENTATION.md`](docs/implementation/ENUM_TYPES_IMPLEMENTATION.md)),
-  the pattern-matching foundation
-  ([`PATTERN_MATCHING_IMPLEMENTATION.md`](docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md)),
-  the sum-types foundation
-  ([`SUM_TYPES_IMPLEMENTATION.md`](docs/implementation/SUM_TYPES_IMPLEMENTATION.md)),
-  the explicit-discriminants foundation
-  ([`DISCRIMINANTS_IMPLEMENTATION.md`](docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md)),
-  and the richer-patterns (or/range/guard) foundation
-  ([`RICHER_PATTERNS_IMPLEMENTATION.md`](docs/implementation/RICHER_PATTERNS_IMPLEMENTATION.md)),
-  and the tuples foundation
-  ([`TUPLES_IMPLEMENTATION.md`](docs/implementation/TUPLES_IMPLEMENTATION.md)).
-- [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md)
-  — compiler architecture and pipeline.
-- [`docs/language/`](docs/language/) — language specifications; the frozen
-  core grammar is in
-  [`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md).
-- [`docs/core/`](docs/core/) — master specification and design rules.
+- [`docs/implementation/`](docs/implementation/) — implementation records for every compiler stage
+- [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md) — compiler architecture and pipeline
+- [`docs/language/`](docs/language/) — language specifications
+- [`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md) — core grammar
+- [`docs/core/`](docs/core/) — master specification and design rules
 - [`docs/runtime/`](docs/runtime/) — runtime, memory, and concurrency model
-  planning.
+- [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md) — implementation roadmap
 
-The native backend design is in
-[`docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`](docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md)
-and the runtime/memory model in
-[`docs/implementation/RUNTIME_IMPLEMENTATION.md`](docs/implementation/RUNTIME_IMPLEMENTATION.md).
+## Development
 
-## Repository layout
+Building from source requires **Rust 1.85+**.
 
-```
-├── docs/       Language & architecture specifications + implementation records
-├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
-├── tests/      Compiler tests (1942 committed, all passing)
-├── Cargo.toml  Package manifest
-└── LICENSE     Apache License 2.0
+```bash
+git clone https://github.com/p4inz-code/mink.git
+cd mink
+cargo build --release
 ```
 
-## Contributing
+Quality gates:
 
-MINK enforces quality gates on every change:
-
-```console
+```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build
 ```
 
-See [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md)
-for the long-term plan.
+## Repository Layout
+
+```
+├── docs/       Language & architecture specifications + implementation records
+├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
+├── stdlib/     Standard library (MINK source)
+├── tests/      Compiler tests
+├── npm/        npm distribution package
+├── Cargo.toml  Package manifest
+└── LICENSE     Apache License 2.0
+```
 
 ## License
 
 Apache License 2.0 — see [`LICENSE`](LICENSE).
+
+Copyright (c) 2026 Atharva Patil.
