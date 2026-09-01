@@ -429,3 +429,336 @@ fn main() {
     let (code, _) = run_ok(test);
     assert_eq!(code, 0, "high exit code should be preserved");
 }
+
+// =========================================================================
+// Linux x86_64 Process Runtime Regression Tests (Session 88)
+//
+// These tests build MINK programs targeting Linux ELF, then execute them
+// via WSL2. They are skipped on machines without WSL.
+// =========================================================================
+
+/// Check if WSL2 Ubuntu is available on this machine.
+fn wsl_available() -> bool {
+    Command::new("wsl.exe")
+        .args(["-d", "Ubuntu", "--", "echo", "ok"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Build a MINK source for the Linux ELF target.
+fn build_linux_elf(source: &str) -> std::path::PathBuf {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("mink_linux_test_{n}.mink"));
+    std::fs::write(&path, source.replace("\r\n", "\n")).unwrap();
+    // On Windows, the compiler always produces .exe extension regardless of target
+    let exe = path.with_extension("exe");
+    let output = mink()
+        .args([
+            "build",
+            "--target",
+            "x86_64-linux-elf",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run mink build");
+    assert!(
+        output.status.success(),
+        "Linux ELF build failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(exe.exists(), "Linux ELF binary not produced");
+    // Verify it is actually an ELF
+    let file_output = Command::new("file")
+        .arg(exe.to_str().unwrap())
+        .output()
+        .expect("file command failed");
+    let file_stdout = String::from_utf8_lossy(&file_output.stdout);
+    assert!(
+        file_stdout.contains("ELF"),
+        "Output is not an ELF: {}",
+        file_stdout
+    );
+    exe
+}
+
+/// Run a Linux ELF binary via WSL and return exit code.
+fn run_linux_elf(exe: &std::path::Path) -> i32 {
+    // Convert Windows path to WSL mount path.
+    // Normalize to forward slashes, then convert C:/ to /mnt/c/
+    let wsl_path = {
+        let p = exe.to_str().expect("path must be valid UTF-8");
+        let normalized = p.replace("\\", "/");
+        if let Some(rest) = normalized.strip_prefix("C:/") {
+            format!("/mnt/c/{}", rest)
+        } else if let Some(rest) = normalized.strip_prefix("c:/") {
+            format!("/mnt/c/{}", rest)
+        } else {
+            normalized
+        }
+    };
+
+    let output = Command::new("wsl.exe")
+        .args([
+            "-d",
+            "Ubuntu",
+            "--",
+            "bash",
+            "-c",
+            &format!("chmod +x '{}' && '{}'", wsl_path, wsl_path),
+        ])
+        .output()
+        .expect("failed to run WSL");
+    let code = output.status.code().unwrap_or(-1);
+    if code != 0 {
+        eprintln!("[Linux test debug] wsl_path: {}", wsl_path);
+        eprintln!("[Linux test debug] exit code: {}", code);
+        eprintln!(
+            "[Linux test debug] stdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        eprintln!(
+            "[Linux test debug] stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    code
+}
+
+/// Build and run a MINK program on Linux via WSL.
+/// Returns (build_ok, exit_code).
+fn build_and_run_linux(test_body: &str) -> (bool, i32) {
+    let lib = process_lib();
+    let source = format!("{}\n{}", lib, test_body);
+    let exe = build_linux_elf(&source);
+    let code = run_linux_elf(&exe);
+    let _ = std::fs::remove_file(&exe);
+    (true, code)
+}
+
+macro_rules! linux_test {
+    ($name:ident, $body:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            if !wsl_available() {
+                eprintln!("skipping: WSL not available");
+                return;
+            }
+            let (build_ok, code) = build_and_run_linux($body);
+            assert!(build_ok, "Linux ELF build failed");
+            assert_eq!(
+                code, $expected,
+                "Linux process runtime returned wrong exit code"
+            );
+        }
+    };
+}
+
+// --- Linux process_id ---
+linux_test!(
+    linux_p01_process_id,
+    r#"
+fn main() {
+    let pid = process_id();
+    if pid <= 0 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux process_run echo ---
+linux_test!(
+    linux_p02_run_echo,
+    r#"
+fn main() {
+    let code = process_run("echo hello");
+    if code != 0 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux nonzero exit propagation ---
+linux_test!(
+    linux_p03_exit_code_42,
+    r#"
+fn main() {
+    let code = process_run("exit 42");
+    if code != 42 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux invalid command returns nonzero ---
+linux_test!(
+    linux_p04_invalid_command,
+    r#"
+fn main() {
+    let code = process_run("nonexistent_program_xyz_12345");
+    if code == 0 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux stdout capture ---
+linux_test!(
+    linux_p05_stdout_capture,
+    r#"
+fn main() {
+    process_run("echo hello_linux_test");
+    let len = process_stdout_len();
+    if len == 0 { rt_exit(1); }
+    let s = process_stdout();
+    let b0 = rt_str_byte(s, 0);
+    let b1 = rt_str_byte(s, 1);
+    let b2 = rt_str_byte(s, 2);
+    let b3 = rt_str_byte(s, 3);
+    let b4 = rt_str_byte(s, 4);
+    // h=104, e=101, l=108, l=108, o=111
+    if b0 != 104 { rt_exit(10); }
+    if b1 != 101 { rt_exit(11); }
+    if b2 != 108 { rt_exit(12); }
+    if b3 != 108 { rt_exit(13); }
+    if b4 != 111 { rt_exit(14); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux repeated execution ---
+linux_test!(
+    linux_p06_repeated_execution,
+    r#"
+fn main() {
+    let c1 = process_run("echo first");
+    if c1 != 0 { rt_exit(1); }
+    let c2 = process_run("echo second");
+    if c2 != 0 { rt_exit(2); }
+    let c3 = process_run("echo third");
+    if c3 != 0 { rt_exit(3); }
+    let len = process_stdout_len();
+    if len == 0 { rt_exit(4); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux process_run_ok helper ---
+linux_test!(
+    linux_p07_run_ok_helper,
+    r#"
+fn main() {
+    let ok = process_run_ok("echo test");
+    if ok != true { rt_exit(1); }
+    let ok2 = process_run_ok("nonexistent_program_xyz_12345");
+    if ok2 != false { rt_exit(2); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux process with arguments ---
+linux_test!(
+    linux_p08_command_with_args,
+    r#"
+fn main() {
+    let code = process_run("echo arg1 arg2 arg3");
+    if code != 0 { rt_exit(1); }
+    let len = process_stdout_len();
+    if len == 0 { rt_exit(2); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux exit code 100 ---
+linux_test!(
+    linux_p09_exit_code_100,
+    r#"
+fn main() {
+    let code = process_run("exit 100");
+    if code != 100 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux stderr capture (no crash) ---
+linux_test!(
+    linux_p10_stderr_capture,
+    r#"
+fn main() {
+    process_run("echo error_msg 1>&2");
+    let len = process_stderr_len();
+    // Just verify it doesn't crash
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux empty command (no crash) ---
+linux_test!(
+    linux_p11_empty_command,
+    r#"
+fn main() {
+    let code = process_run("");
+    // Empty command may return nonzero — that's fine
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux process_id is callable as intrinsic ---
+linux_test!(
+    linux_p12_direct_process_id,
+    r#"
+fn main() {
+    let pid = rt_process_id();
+    if pid <= 0 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux direct process_run intrinsic ---
+linux_test!(
+    linux_p13_direct_process_run,
+    r#"
+fn main() {
+    let code = rt_process_run("echo test");
+    if code != 0 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux string operations on process output ---
+linux_test!(
+    linux_p14_string_ops_on_output,
+    r#"
+fn main() {
+    process_run("echo test_data");
+    let len = process_stdout_len();
+    if len <= 0 { rt_exit(1); }
+    let s = process_stdout();
+    let b0 = rt_str_byte(s, 0);
+    // 't' = 116
+    if b0 != 116 { rt_exit(2); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- Linux high exit code preserved ---
+linux_test!(
+    linux_p15_high_exit_code,
+    r#"
+fn main() {
+    let code = process_run("exit 200");
+    if code != 200 { rt_exit(99); }
+    rt_exit(0);
+}"#,
+    0
+);

@@ -16,8 +16,11 @@
 //! - FsRead, FsWrite, FsExists, FsFileSize, FsCreateDir, FsRemoveDir,
 //!   FsRemoveFile, FsCopy, FsMove, FsGetCwd, FsSetCwd
 //!
+//! - ProcessId, ProcessRun (fork+execve+wait4 with pipe capture),
+//!   ProcessStdout, ProcessStderr, ProcessStdoutLen, ProcessStderrLen
+//!
 //! Stub services (emit a trap for unimplemented subsystems):
-//! - Vec*, Process*, Time*, Random*, Env*, Net*, Crypto*
+//! - Vec*, Time*, Random*, Env*, Net*, Crypto*
 
 use std::collections::HashMap;
 
@@ -44,6 +47,12 @@ const SYS_MKDIR: u64 = 83;
 const SYS_RMDIR: u64 = 84;
 const SYS_UNLINK: u64 = 87;
 const SYS_EXIT: u64 = 60;
+const SYS_PIPE: u64 = 22;
+const SYS_DUP2: u64 = 33;
+const SYS_GETPID: u64 = 39;
+const SYS_FORK: u64 = 57;
+const SYS_EXECVE: u64 = 59;
+const SYS_WAIT4: u64 = 61;
 
 // ===========================================================================
 // Linux file constants
@@ -1796,6 +1805,294 @@ fn emit_fs_set_cwd(code: &mut Code) {
 }
 
 // ===========================================================================
+// Process services
+// ===========================================================================
+
+/// `rt_process_id() -> Int`: Return current process ID via getpid().
+fn emit_process_id(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, SYS_GETPID);
+    code.syscall();
+    code.leave_ret();
+}
+/// `rt_process_run(cmd: Str) -> Int`: Run command via /bin/sh -c, capture
+/// stdout/stderr into BSS buffers, return child exit code.
+///
+/// Uses fork/execve/wait4 with pipe-based output capture.
+/// MINK Str is [u64 len][bytes]; converted to NUL-terminated CStr for
+/// execve. Child argv: ["/bin/sh", "-c", cmd, NULL].
+///
+/// Stack frame (112 bytes, keeps RSP 16-byte aligned after push rbp):
+///   [rbp-8]   = cmd_cstr ptr
+///   [rbp-16]  = stdout pipe fds (int[2]: read at -16, write at -12)
+///   [rbp-24]  = stderr pipe fds (int[2]: read at -24, write at -20)
+///   [rbp-32]  = child pid
+///   [rbp-40]  = wait4 status
+///   [rbp-48]  = exit code
+///   [rbp-56]  = "/bin/sh\0" (8 bytes)
+///   [rbp-64]  = "-c\0" (8 bytes)
+///   [rbp-112] = argv[0] = &"/bin/sh" (at rbp-56) -- array grows UPWARD
+///   [rbp-104] = argv[1] = &"-c" (at rbp-64)
+///   [rbp-96]  = argv[2] = cmd_cstr
+///   [rbp-88]  = argv[3] = NULL
+fn emit_process_run(code: &mut Code) {
+    prologue(code);
+    // [rbp+16] = cmd Str ptr
+
+    // Allocate frame: 112 bytes (112%16==0, so after push rbp: RSP 16-aligned)
+    code.sub_rsp(112);
+
+    // --- Convert cmd Str to NUL-terminated C string ---
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // [rbp-8] = cmd_cstr
+
+    // --- Set up "/bin/sh\0" and "-c\0" on stack (BELOW argv to avoid overlap) ---
+    // "/bin/sh\0" = 0x0068732F6E69622F little-endian
+    code.movabs(Reg::Rax, 0x0068732F6E69622Fu64);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax);
+    // "-c\0" = 0x000000000000632D little-endian
+    code.movabs(Reg::Rax, 0x000000000000632Du64);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+
+    // --- Set up argv array growing UPWARD from rbp-112 ---
+    // execve reads argv[0] at rsi, argv[1] at rsi+8, etc.
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, -56); // &"/bin/sh"
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rax); // argv[0]
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, -64); // &"-c"
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // argv[1]
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // cmd_cstr
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // argv[2]
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // argv[3] = NULL
+
+    // --- Create stdout pipe ---
+    code.lea_r_mem(Reg::Rdi, Reg::Rbp, -16); // &stdout_fds
+    code.movabs(Reg::Rax, SYS_PIPE);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let pipe1_err = code.label();
+    code.jcc_label(0x85, pipe1_err); // jnz = error
+
+    // --- Create stderr pipe ---
+    code.lea_r_mem(Reg::Rdi, Reg::Rbp, -24); // &stderr_fds
+    code.movabs(Reg::Rax, SYS_PIPE);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let pipe2_err = code.label();
+    code.jcc_label(0x85, pipe2_err); // jnz = error
+
+    // --- fork() ---
+    code.movabs(Reg::Rax, SYS_FORK);
+    code.syscall();
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // save pid
+
+    // Check fork error (negative)
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let fork_err = code.label();
+    code.jcc_label(0x88, fork_err); // js = negative = error
+
+    // Check if child (pid == 0)
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let parent = code.label();
+    code.jcc_label(0x85, parent); // jnz = parent
+
+    // ================================================================
+    // CHILD PROCESS
+    // ================================================================
+
+    // Close read ends of both pipes
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -16); // stdout_read
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -24); // stderr_read
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+
+    // dup2(stdout_write, 1) - redirect stdout to pipe
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -12); // stdout_write
+    code.mov_r32_imm32(Reg::Rsi, 1);
+    code.movabs(Reg::Rax, SYS_DUP2);
+    code.syscall();
+
+    // dup2(stderr_write, 2) - redirect stderr to pipe
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -20); // stderr_write
+    code.mov_r32_imm32(Reg::Rsi, 2);
+    code.movabs(Reg::Rax, SYS_DUP2);
+    code.syscall();
+
+    // Close original write ends (now duplicated to 1 and 2)
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -12);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -20);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+
+    // execve("/bin/sh", argv, NULL)
+    code.lea_r_mem(Reg::Rdi, Reg::Rbp, -56); // rdi = &"/bin/sh" (filename)
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -112); // rsi = argv pointer (rbp-112)
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // envp = NULL (inherit parent env)
+    code.movabs(Reg::Rax, SYS_EXECVE);
+    code.syscall();
+    // If execve returns, it failed. _exit(127).
+    code.mov_r32_imm32(Reg::Rdi, 127);
+    code.movabs(Reg::Rax, SYS_EXIT);
+    code.syscall();
+    code.int3(); // unreachable
+
+    // ================================================================
+    // PARENT PROCESS
+    // ================================================================
+    code.bind_label(parent);
+
+    // Close write ends of both pipes (parent doesn't write)
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -12); // stdout_write
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -20); // stderr_write
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+
+    // Read stdout from pipe into BSS stdout_buf+8 (max 4088 bytes)
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -16); // stdout_read fd
+    code.lea_r_rip(Reg::Rsi, PatchKind::Bss(BSS.stdout_buf as u32 + 8));
+    code.movabs(Reg::Rdx, 4088u64);
+    code.movabs(Reg::Rax, SYS_READ);
+    code.syscall();
+    // rax = bytes read; if negative, treat as 0
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let stdout_ok = code.label();
+    code.jcc_label(0x89, stdout_ok); // jns
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(stdout_ok);
+    // Store stdout length in BSS
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.stdout_buf as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax); // [stdout_buf] = len
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stdout_len as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stdout_buf as u32));
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stdout_ptr as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+
+    // Read stderr from pipe into BSS stderr_buf+8 (max 4088 bytes)
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -24); // stderr_read fd
+    code.lea_r_rip(Reg::Rsi, PatchKind::Bss(BSS.stderr_buf as u32 + 8));
+    code.movabs(Reg::Rdx, 4088u64);
+    code.movabs(Reg::Rax, SYS_READ);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let stderr_ok = code.label();
+    code.jcc_label(0x89, stderr_ok); // jns
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(stderr_ok);
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.stderr_buf as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stderr_len as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stderr_buf as u32));
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stderr_ptr as u32));
+    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+
+    // wait4(child_pid, &status, 0, NULL)
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, -32); // child pid
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -40); // &status
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // options = 0
+    code.xor_rr32(Reg::R10, Reg::R10); // rusage = NULL
+    code.movabs(Reg::Rax, SYS_WAIT4);
+    code.syscall();
+
+    // Extract exit code: (status >> 8) & 0xFF
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.shr_r_imm8(Reg::Rax, 8);
+    code.and_r_imm8(Reg::Rax, 0xFF);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // save exit_code
+
+    // Close read ends
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -16);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -24);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+
+    // Free cmd CStr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+
+    // Return exit code
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.leave_ret();
+
+    // ================================================================
+    // ERROR PATHS
+    // ================================================================
+
+    // Second pipe failed: close first pipe fds, fall through to pipe1_err
+    code.bind_label(pipe2_err);
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -16);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -12);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+
+    // First pipe failed or cleanup after pipe2_err
+    code.bind_label(pipe1_err);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64); // return -1
+    code.leave_ret();
+
+    // Fork failed: close all pipe fds
+    code.bind_label(fork_err);
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -16);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -12);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -24);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r32_mem(Reg::Rdi, Reg::Rbp, -20);
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_process_stdout() -> Str`: Return BSS stdout buffer as MINK Str.
+fn emit_process_stdout(code: &mut Code) {
+    prologue(code);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stdout_buf as u32));
+    code.leave_ret();
+}
+
+/// `rt_process_stderr() -> Str`: Return BSS stderr buffer as MINK Str.
+fn emit_process_stderr(code: &mut Code) {
+    prologue(code);
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stderr_buf as u32));
+    code.leave_ret();
+}
+
+/// `rt_process_stdout_len() -> Int`: Return captured stdout length.
+fn emit_process_stdout_len(code: &mut Code) {
+    prologue(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.proc_stdout_len as u32));
+    code.leave_ret();
+}
+
+/// `rt_process_stderr_len() -> Int`: Return captured stderr length.
+fn emit_process_stderr_len(code: &mut Code) {
+    prologue(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.proc_stderr_len as u32));
+    code.leave_ret();
+}
+
+// ===========================================================================
 // Stub services (unimplemented subsystems)
 // ===========================================================================
 
@@ -1915,13 +2212,13 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::VecPop, emit_stub_int);
     emit!(RuntimeService::VecRemove, emit_stub_int);
 
-    // --- Process services (stub) ---
-    emit!(RuntimeService::ProcessRun, emit_stub_int);
-    emit!(RuntimeService::ProcessStdout, emit_stub_str);
-    emit!(RuntimeService::ProcessStderr, emit_stub_str);
-    emit!(RuntimeService::ProcessStdoutLen, emit_stub_int);
-    emit!(RuntimeService::ProcessStderrLen, emit_stub_int);
-    emit!(RuntimeService::ProcessId, emit_stub_int);
+    // --- Process services ---
+    emit!(RuntimeService::ProcessId, emit_process_id);
+    emit!(RuntimeService::ProcessRun, emit_process_run);
+    emit!(RuntimeService::ProcessStdout, emit_process_stdout);
+    emit!(RuntimeService::ProcessStderr, emit_process_stderr);
+    emit!(RuntimeService::ProcessStdoutLen, emit_process_stdout_len);
+    emit!(RuntimeService::ProcessStderrLen, emit_process_stderr_len);
 
     // --- Time services (stub) ---
     emit!(RuntimeService::TimeNow, emit_stub_int);
