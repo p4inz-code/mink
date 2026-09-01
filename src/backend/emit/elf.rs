@@ -57,8 +57,13 @@ pub(crate) fn build_elf(text: &[u8], data: &[u8], bss_size: u32, entry_offset: u
     image[5] = ELF_DATA_LSB;
     image[6] = ELF_VERSION_1;
     image[7] = ELF_OSABI_NONE;
-    // e_version at offset 8 = 1
-    image[8..12].copy_from_slice(&1u32.to_le_bytes());
+    // e_ident[8..16] = padding (zero-initialized)
+    // e_type at offset 16 = ET_EXEC
+    image[16..18].copy_from_slice(&ELF_TYPE_EXEC.to_le_bytes());
+    // e_machine at offset 18 = EM_X86_64
+    image[18..20].copy_from_slice(&ELF_MACHINE_X86_64.to_le_bytes());
+    // e_version at offset 20 = EV_CURRENT (1)
+    image[20..24].copy_from_slice(&1u32.to_le_bytes());
     // e_entry at offset 24 = BASE_ADDR + entry_offset (in .text)
     let entry_addr = text_addr + entry_offset as u64;
     image[24..32].copy_from_slice(&entry_addr.to_le_bytes());
