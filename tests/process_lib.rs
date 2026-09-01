@@ -762,3 +762,102 @@ fn main() {
 }"#,
     0
 );
+
+// ==========================================================================
+// Linux Time/Random regression tests (Session 89)
+// ==========================================================================
+
+linux_test!(
+    linux_t01_time_now_positive,
+    r#"
+fn main() {
+    let now = rt_time_now();
+    if now < 1000000000 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+linux_test!(
+    linux_t02_time_millis_positive,
+    r#"
+fn main() {
+    let ms = rt_time_millis();
+    if ms <= 0 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+linux_test!(
+    linux_t03_time_ticks_positive,
+    r#"
+fn main() {
+    let t = rt_time_ticks();
+    if t <= 0 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+linux_test!(
+    linux_t04_time_freq_correct,
+    r#"
+fn main() {
+    let f = rt_time_freq();
+    if f != 1000000000 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+linux_test!(
+    linux_t05_random_next_nonzero,
+    r#"
+fn main() {
+    let a = rt_random_next();
+    if a == 0 { rt_exit(1); }
+    let b = rt_random_next();
+    if b == a { rt_exit(2); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+linux_test!(
+    linux_t06_random_seed_deterministic,
+    r#"
+fn main() {
+    rt_random_seed(42);
+    let a = rt_random_next();
+    rt_random_seed(42);
+    let b = rt_random_next();
+    if a != b { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+linux_test!(
+    linux_t07_time_millis_monotonic,
+    r#"
+fn main() {
+    let a = rt_time_millis();
+    let b = rt_time_millis();
+    if b < a { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+linux_test!(
+    linux_t08_time_year_reasonable,
+    r#"
+fn main() {
+    let now = rt_time_now();
+    // Just verify time_now returns a valid timestamp (after 2020)
+    if now < 1577836800 { rt_exit(1); }
+    rt_exit(0);
+}"#,
+    0
+);

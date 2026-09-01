@@ -153,6 +153,8 @@ pub struct RuntimeLayout {
     // --- Environment (Session 73) ---
     /// Simple env key-value storage (4096 bytes).
     pub env_storage: u64,
+    /// Pointer to the process environment array (Linux: envp from initial stack).
+    pub env_ptr: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -192,7 +194,29 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
     rng_state: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24,
     // --- Environment (Session 73) ---
     env_storage: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24 + 8,
-    size: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24 + 8 + 4096,
+    env_ptr: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096,
+    size: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

@@ -1921,6 +1921,11 @@ impl<'a> Lowerer<'a> {
             "rt_time_filetime_high" => RuntimeService::TimeFiletimeHigh,
             "rt_random_seed" => RuntimeService::RandomSeed,
             "rt_random_next" => RuntimeService::RandomNext,
+            // --- Environment ---
+            "rt_env_get" => RuntimeService::EnvGet,
+            "rt_env_set" => RuntimeService::EnvSet,
+            "rt_env_has" => RuntimeService::EnvHas,
+            "rt_env_remove" => RuntimeService::EnvRemove,
             // --- Networking (Session 67) ---
             "rt_net_wsa_startup" => RuntimeService::NetWsaStartup,
             "rt_net_wsa_cleanup" => RuntimeService::NetWsaCleanup,

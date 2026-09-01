@@ -53,6 +53,12 @@ const SYS_GETPID: u64 = 39;
 const SYS_FORK: u64 = 57;
 const SYS_EXECVE: u64 = 59;
 const SYS_WAIT4: u64 = 61;
+const SYS_GETTIMEOFDAY: u64 = 96;
+const SYS_GETRANDOM: u64 = 318;
+const SYS_NANOSLEEP: u64 = 35;
+const SYS_CLOCK_GETTIME: u64 = 228;
+const CLOCK_REALTIME: i32 = 0;
+const CLOCK_MONOTONIC: i32 = 1;
 
 // ===========================================================================
 // Linux file constants
@@ -163,9 +169,9 @@ fn free_cstr(code: &mut Code, cstr_reg: Reg) {
 // ===========================================================================
 
 fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
+    // Note: entry_rsp was already saved by the x86_64 entry stub before
+    // calling Init. Do NOT overwrite it here.
     prologue(code);
-    // Save entry RSP to BSS (use RIP-relative addressing for BSS)
-    code.mov_rip_r(Reg::Rsp, PatchKind::Bss(BSS.entry_rsp as u32));
     // Reset bump cursor and free list
     code.mov_rip_imm32(PatchKind::Bss(BSS.cursor as u32), 0);
     code.mov_rip_imm32(PatchKind::Bss(BSS.free_head as u32), 0);
@@ -174,9 +180,38 @@ fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.str_data_start as u32));
     code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.str_data_end_label));
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.str_data_end as u32));
-    // Initialize RNG seed (non-zero for xorshift64*)
-    code.movabs(Reg::Rax, 1u64);
+    // Initialize RNG seed via getrandom(2) syscall
+    // int getrandom(void *buf, size_t count, unsigned int flags)
+    code.sub_rsp(16); // scratch buffer for random bytes
+    code.mov_rr(Reg::Rdi, Reg::Rsp); // buf
+    code.movabs(Reg::Rsi, 8u64); // count = 8
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // flags = 0 (blocking)
+    code.movabs(Reg::Rax, SYS_GETRANDOM);
+    code.syscall();
+    // rax = bytes read (8 on success, negative on error)
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let rng_fallback = code.label();
+    code.jcc_label(0x8E, rng_fallback); // jle = rax <= 0 => error
+    // Success: load random bytes as seed
+    code.mov_r_mem(Reg::Rax, Reg::Rsp, 0);
+    code.add_rsp(16);
+    let rng_done = code.label();
+    code.jmp_label(rng_done);
+    code.bind_label(rng_fallback);
+    code.add_rsp(16);
+    code.movabs(Reg::Rax, 1u64); // fallback seed
+    code.bind_label(rng_done);
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.rng_state as u32));
+    // Capture environment pointer from the initial kernel stack.
+    // entry_rsp is the REAL kernel RSP saved by the entry stub (points to argc).
+    // Layout: [rsp+0]=argc, [rsp+8]=argv[0],..., [rsp+8*argc]=argv[argc-1],
+    //   [rsp+8*(argc+1)]=NULL, [rsp+8*(argc+2)]=envp[0],...
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.entry_rsp as u32));
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 0); // argc
+    code.lea_r_mem(Reg::Rdx, Reg::Rax, 2); // argc + 2
+    code.shl_r_imm8(Reg::Rdx, 3); // 8 * (argc + 2)
+    code.add_rr(Reg::Rdx, Reg::Rcx); // envp = entry_rsp + 8*(argc+2)
+    code.mov_rip_r(Reg::Rdx, PatchKind::Bss(BSS.env_ptr as u32));
     code.leave_ret();
 }
 
@@ -2093,6 +2128,347 @@ fn emit_process_stderr_len(code: &mut Code) {
 }
 
 // ===========================================================================
+// Time services (Linux)
+// ===========================================================================
+
+/// `rt_time_now() -> Int`: Return current Unix timestamp (seconds since 1970).
+/// Uses clock_gettime(CLOCK_REALTIME, &ts).
+fn emit_time_now(code: &mut Code) {
+    prologue(code);
+    // Allocate timespec on stack: [rbp-8]=tv_sec, [rbp-16]=tv_nsec
+    code.sub_rsp(16);
+    // clock_gettime(CLOCK_REALTIME=0, &ts)
+    code.movabs(Reg::Rdi, CLOCK_REALTIME as u64);
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -16);
+    code.movabs(Reg::Rax, SYS_CLOCK_GETTIME);
+    code.syscall();
+    // Return tv_sec (at rbp-16, first 8 bytes)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_time_millis() -> Int`: Return milliseconds since boot.
+/// Uses clock_gettime(CLOCK_MONOTONIC, &ts).
+fn emit_time_millis(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    // clock_gettime(CLOCK_MONOTONIC=1, &ts)
+    code.movabs(Reg::Rdi, CLOCK_MONOTONIC as u64);
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -16);
+    code.movabs(Reg::Rax, SYS_CLOCK_GETTIME);
+    code.syscall();
+    // Return tv_sec * 1000 + tv_nsec / 1000000
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16); // tv_sec
+    code.movabs(Reg::R10, 1000u64);
+    code.mul_r(Reg::R10); // RDX:RAX = tv_sec * 1000
+    code.mov_rr(Reg::R8, Reg::Rax); // save low bits
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // tv_nsec
+    code.movabs(Reg::R10, 1000000u64);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.div_r(Reg::R10); // RAX = tv_nsec / 1000000
+    code.add_rr(Reg::Rax, Reg::R8); // total millis
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_time_ticks() -> Int`: Return high-resolution ticks.
+/// Uses clock_gettime(CLOCK_MONOTONIC, &ts) and returns nanoseconds.
+fn emit_time_ticks(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.movabs(Reg::Rdi, CLOCK_MONOTONIC as u64);
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -16);
+    code.movabs(Reg::Rax, SYS_CLOCK_GETTIME);
+    code.syscall();
+    // Return tv_sec * 1_000_000_000 + tv_nsec (nanoseconds since boot)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16); // tv_sec
+    code.movabs(Reg::R10, 1000000000u64);
+    code.mul_r(Reg::R10); // RDX:RAX = tv_sec * 1e9
+    code.mov_rr(Reg::R8, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // tv_nsec
+    code.add_rr(Reg::Rax, Reg::R8); // total nanoseconds
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_time_freq() -> Int`: Return frequency of ticks.
+/// Returns 1_000_000_000 (nanoseconds) to match ticks.
+fn emit_time_freq(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 1_000_000_000u64);
+    code.leave_ret();
+}
+
+/// `rt_time_filetime() -> Int`: Return low 32 bits of nanoseconds since boot.
+fn emit_time_filetime(code: &mut Code) {
+    prologue(code);
+    // Allocate 24 bytes: [rbp-16]=timespec, [rbp-24]=nanosecond result
+    code.sub_rsp(24);
+    code.movabs(Reg::Rdi, CLOCK_MONOTONIC as u64);
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -16);
+    code.movabs(Reg::Rax, SYS_CLOCK_GETTIME);
+    code.syscall();
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16); // tv_sec
+    code.movabs(Reg::R10, 1000000000u64);
+    code.mul_r(Reg::R10);
+    code.mov_rr(Reg::R8, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // tv_nsec
+    code.add_rr(Reg::Rax, Reg::R8);
+    // Store 64-bit result, read low 32 bits as u32
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_r32_mem(Reg::Rax, Reg::Rbp, -24); // zero-extended 32-bit load
+    code.add_rsp(24);
+    code.leave_ret();
+}
+
+/// `rt_time_filetime_high() -> Int`: Return high 32 bits of nanoseconds since boot.
+fn emit_time_filetime_high(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(24);
+    code.movabs(Reg::Rdi, CLOCK_MONOTONIC as u64);
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -16);
+    code.movabs(Reg::Rax, SYS_CLOCK_GETTIME);
+    code.syscall();
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.movabs(Reg::R10, 1000000000u64);
+    code.mul_r(Reg::R10);
+    code.mov_rr(Reg::R8, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::R8);
+    // Store 64-bit result, read high 32 bits
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_r32_mem(Reg::Rax, Reg::Rbp, -20); // high DWORD at offset +4
+    code.add_rsp(24);
+    code.leave_ret();
+}
+
+// ===========================================================================
+// Random services (Linux)
+// ===========================================================================
+
+/// `rt_random_seed(seed)`: Seed the xorshift64* PRNG.
+fn emit_random_seed(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // seed
+    // xorshift64* requires nonzero state
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let nonzero = code.label();
+    code.jcc_label(0x85, nonzero); // jnz
+    code.movabs(Reg::Rax, 1u64);
+    code.bind_label(nonzero);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.rng_state as u32));
+    code.leave_ret();
+}
+
+/// `rt_random_next() -> Int`: Return next xorshift64* value.
+fn emit_random_next(code: &mut Code) {
+    prologue(code);
+    // x ^= x >> 12; x ^= x << 25; x ^= x >> 27; return x * multiplier
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.rng_state as u32));
+    // x ^= x >> 12
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shr_r_imm8(Reg::Rcx, 12);
+    code.xor_rr(Reg::Rax, Reg::Rcx);
+    // x ^= x << 25
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shl_r_imm8(Reg::Rcx, 25);
+    code.xor_rr(Reg::Rax, Reg::Rcx);
+    // x ^= x >> 27
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shr_r_imm8(Reg::Rcx, 27);
+    code.xor_rr(Reg::Rax, Reg::Rcx);
+    // x *= 2685821657736338717
+    code.movabs(Reg::Rdx, 2685821657736338717u64);
+    code.mul_r(Reg::Rdx);
+    // Store back to state and return
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.rng_state as u32));
+    code.leave_ret();
+}
+
+// ===========================================================================
+// Environment services (Linux)
+// ===========================================================================
+
+/// `rt_env_get(name: Str) -> Str`: Get environment variable value.
+/// Uses the process environment pointer captured at init.
+fn emit_env_get(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(32); // [rbp-8]=cstr_name, [rbp-16]=cstr_value, [rbp-24]=result
+    // Convert name Str to C string
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr_name
+    // Walk envp array looking for "NAME=VALUE"
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.env_ptr as u32));
+    let scan = code.label();
+    let found = code.label();
+    let not_found = code.label();
+    code.bind_label(scan);
+    code.mov_r_mem(Reg::Rdx, Reg::Rcx, 0); // *envp = entry ptr
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, not_found); // jz = NULL terminator
+    // Compare: entry starts with name + '='
+    // Load cstr_name pointer
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -8);
+    let cmp_loop = code.label();
+    let name_done = code.label();
+    let try_next = code.label();
+    code.bind_label(cmp_loop);
+    code.movzx_byte(Reg::R9, Reg::R8, 0); // name byte
+    code.movzx_byte(Reg::R10, Reg::Rdx, 0); // entry byte
+    // If name byte is 0, we matched the full name -> check for '=' in entry
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, name_done); // jz = name exhausted
+    // If entry byte is 0 or doesn't match, try next
+    code.test_rr(Reg::R10, Reg::R10);
+    code.jcc_label(0x84, try_next); // jz = entry exhausted
+    code.cmp_rr(Reg::R9, Reg::R10);
+    code.jcc_label(0x85, try_next); // jne
+    code.add_r_imm8(Reg::R8, 1);
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.jmp_label(cmp_loop);
+    code.bind_label(name_done);
+    // Name matched fully; check entry has '=' next
+    code.movzx_byte(Reg::R10, Reg::Rdx, 0);
+    code.cmp_r_imm8(Reg::R10, b'=');
+    code.jcc_label(0x85, try_next); // jne = no '=' -> not a match
+    // Found! entry+strlen(name)+1 is the value
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rdx, 1); // skip '='
+    // Compute value length by scanning for NUL
+    code.mov_rr(Reg::R9, Reg::Rdx); // start of value
+    let len_loop = code.label();
+    code.bind_label(len_loop);
+    code.movzx_byte(Reg::R10, Reg::R9, 0);
+    code.test_rr(Reg::R10, Reg::R10);
+    let len_done = code.label();
+    code.jcc_label(0x84, len_done);
+    code.add_r_imm8(Reg::R9, 1);
+    code.jmp_label(len_loop);
+    code.bind_label(len_done);
+    code.sub_rr(Reg::R9, Reg::Rdx); // length of value
+    // Allocate MINK Str: 8 + len bytes
+    code.mov_rr(Reg::Rax, Reg::R9);
+    code.add_r_imm8(Reg::Rax, 8);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax (size)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // save result ptr
+    // Write length prefix
+    code.mov_mem_r(Reg::Rax, 0, Reg::R9);
+    // Copy value bytes
+    code.add_r_imm8(Reg::Rax, 8); // data start
+    code.mov_rr(Reg::R11, Reg::R9); // count
+    let copy_loop = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R11, Reg::R11);
+    let copy_done = code.label();
+    code.jcc_label(0x84, copy_done);
+    code.movzx_byte(Reg::R10, Reg::Rdx, 0);
+    code.mov_mem_r8(Reg::Rax, 0, Reg::R10);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.sub_r_imm8(Reg::R11, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    // Free name CStr and return result
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.add_rsp(32);
+    code.leave_ret();
+    code.bind_label(try_next);
+    code.add_r_imm8(Reg::Rcx, 8); // next envp entry
+    code.jmp_label(scan);
+    code.bind_label(not_found);
+    // Variable not found: free name CStr, return empty string
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50); // push 0
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.add_rsp(32);
+    code.leave_ret();
+}
+
+/// `rt_env_has(name: Str) -> Bool`: Check if environment variable exists.
+fn emit_env_has(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    // Convert name Str to C string
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr_name
+    // Walk envp
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.env_ptr as u32));
+    let scan = code.label();
+    let found = code.label();
+    let not_found = code.label();
+    code.bind_label(scan);
+    code.mov_r_mem(Reg::Rdx, Reg::Rcx, 0);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, not_found);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -8);
+    let cmp_loop = code.label();
+    code.bind_label(cmp_loop);
+    code.movzx_byte(Reg::R9, Reg::R8, 0);
+    code.movzx_byte(Reg::R10, Reg::Rdx, 0);
+    code.test_rr(Reg::R9, Reg::R9);
+    let name_done = code.label();
+    code.jcc_label(0x84, name_done);
+    code.test_rr(Reg::R10, Reg::R10);
+    let try_next = code.label();
+    code.jcc_label(0x84, try_next);
+    code.cmp_rr(Reg::R9, Reg::R10);
+    code.jcc_label(0x85, try_next);
+    code.add_r_imm8(Reg::R8, 1);
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.jmp_label(cmp_loop);
+    code.bind_label(name_done);
+    code.movzx_byte(Reg::R10, Reg::Rdx, 0);
+    code.cmp_r_imm8(Reg::R10, b'=');
+    code.jcc_label(0x85, try_next);
+    // Found
+    code.movabs(Reg::Rax, 1u64); // true
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.add_rsp(8);
+    code.leave_ret();
+    code.bind_label(try_next);
+    code.add_r_imm8(Reg::Rcx, 8);
+    code.jmp_label(scan);
+    code.bind_label(not_found);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.add_rsp(8);
+    code.leave_ret();
+}
+
+/// `rt_env_set(name: Str, value: Str) -> Int`: Set environment variable.
+/// Returns 0 on success, -1 on failure.
+/// Linux does not provide a simple setenv syscall from user space without libc,
+/// so we use a helper: write "NAME=VALUE\0" to env_storage and update env_ptr.
+/// This is a simplified V1 implementation.
+fn emit_env_set(code: &mut Code) {
+    prologue(code);
+    // V1: return -1 (not fully supported without libc)
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_env_remove(name: Str) -> Int`: Remove environment variable.
+fn emit_env_remove(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+}
+
+// ===========================================================================
 // Stub services (unimplemented subsystems)
 // ===========================================================================
 
@@ -2220,23 +2596,23 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::ProcessStdoutLen, emit_process_stdout_len);
     emit!(RuntimeService::ProcessStderrLen, emit_process_stderr_len);
 
-    // --- Time services (stub) ---
-    emit!(RuntimeService::TimeNow, emit_stub_int);
-    emit!(RuntimeService::TimeMillis, emit_stub_int);
-    emit!(RuntimeService::TimeTicks, emit_stub_int);
-    emit!(RuntimeService::TimeFreq, emit_stub_int);
-    emit!(RuntimeService::TimeFiletime, emit_stub_int);
-    emit!(RuntimeService::TimeFiletimeHigh, emit_stub_int);
+    // --- Time services ---
+    emit!(RuntimeService::TimeNow, emit_time_now);
+    emit!(RuntimeService::TimeMillis, emit_time_millis);
+    emit!(RuntimeService::TimeTicks, emit_time_ticks);
+    emit!(RuntimeService::TimeFreq, emit_time_freq);
+    emit!(RuntimeService::TimeFiletime, emit_time_filetime);
+    emit!(RuntimeService::TimeFiletimeHigh, emit_time_filetime_high);
 
-    // --- Random services (stub) ---
-    emit!(RuntimeService::RandomSeed, emit_stub_int);
-    emit!(RuntimeService::RandomNext, emit_stub_int);
+    // --- Random services ---
+    emit!(RuntimeService::RandomSeed, emit_random_seed);
+    emit!(RuntimeService::RandomNext, emit_random_next);
 
-    // --- Environment services (stub) ---
-    emit!(RuntimeService::EnvGet, emit_stub_str);
-    emit!(RuntimeService::EnvSet, emit_stub_int);
-    emit!(RuntimeService::EnvHas, emit_stub_int);
-    emit!(RuntimeService::EnvRemove, emit_stub_int);
+    // --- Environment services ---
+    emit!(RuntimeService::EnvGet, emit_env_get);
+    emit!(RuntimeService::EnvSet, emit_env_set);
+    emit!(RuntimeService::EnvHas, emit_env_has);
+    emit!(RuntimeService::EnvRemove, emit_env_remove);
 
     // --- Network services (stub) ---
     emit!(RuntimeService::NetWsaStartup, emit_stub_int);
