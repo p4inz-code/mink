@@ -2294,7 +2294,7 @@ fn emit_random_next(code: &mut Code) {
 /// Uses the process environment pointer captured at init.
 fn emit_env_get(code: &mut Code) {
     prologue(code);
-    code.sub_rsp(32); // [rbp-8]=cstr_name, [rbp-16]=cstr_value, [rbp-24]=result
+    code.sub_rsp(40); // [rbp-8]=cstr_name, [rbp-16]=cstr_value, [rbp-24]=result, [rbp-32]=val_len
     // Convert name Str to C string
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
@@ -2348,6 +2348,7 @@ fn emit_env_get(code: &mut Code) {
     code.jmp_label(len_loop);
     code.bind_label(len_done);
     code.sub_rr(Reg::R9, Reg::Rdx); // length of value
+    code.mov_mem_r(Reg::Rbp, -32, Reg::R9); // save value length across StrAlloc
     // Allocate MINK Str: 8 + len bytes
     code.mov_rr(Reg::Rax, Reg::R9);
     code.add_r_imm8(Reg::Rax, 8);
@@ -2356,7 +2357,8 @@ fn emit_env_get(code: &mut Code) {
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
     code.add_rsp(16);
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // save result ptr
-    // Write length prefix
+    // Restore value length and write length prefix
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -32);
     code.mov_mem_r(Reg::Rax, 0, Reg::R9);
     // Copy value bytes
     code.add_r_imm8(Reg::Rax, 8); // data start
@@ -2377,7 +2379,7 @@ fn emit_env_get(code: &mut Code) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
-    code.add_rsp(32);
+    code.add_rsp(40);
     code.leave_ret();
     code.bind_label(try_next);
     code.add_r_imm8(Reg::Rcx, 8); // next envp entry
@@ -2391,7 +2393,7 @@ fn emit_env_get(code: &mut Code) {
     code.u8(0x50); // push 0
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
     code.add_rsp(16);
-    code.add_rsp(32);
+    code.add_rsp(40);
     code.leave_ret();
 }
 
