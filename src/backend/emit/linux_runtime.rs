@@ -65,6 +65,7 @@ const CLOCK_MONOTONIC: i32 = 1;
 // ===========================================================================
 
 const SYS_SOCKET: u64 = 41;
+const SYS_SETSOCKOPT: u64 = 54;
 const SYS_CONNECT: u64 = 42;
 const SYS_ACCEPT: u64 = 43;
 const SYS_SENDTO: u64 = 44;
@@ -492,8 +493,10 @@ fn emit_exit(code: &mut Code) {
     code.jcc_label(0x83, no_leak); // jae — end of table, no leak
     code.cmp_mem_imm8(Reg::Rcx, 16, 0);
     code.jcc_label(0x84, next); // je — dead entry
-    // Found a live allocation — leak!
-    code.movabs(Reg::Rcx, RuntimeErrorKind::Leak as u64);
+    // Found a live allocation — leak! Fail with the catalogued E-R06
+    // number (6), matching the Windows runtime. The enum discriminant
+    // is not the error number.
+    code.movabs(Reg::Rcx, RuntimeErrorKind::Leak.number());
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Fail));
     code.int3();
     code.bind_label(next);
@@ -2319,7 +2322,7 @@ fn emit_random_next(code: &mut Code) {
 /// Uses the process environment pointer captured at init.
 fn emit_env_get(code: &mut Code) {
     prologue(code);
-    code.sub_rsp(40); // [rbp-8]=cstr_name, [rbp-16]=cstr_value, [rbp-24]=result, [rbp-32]=val_len
+    code.sub_rsp(40); // [rbp-8]=cstr_name, [rbp-16]=value_start, [rbp-24]=result, [rbp-32]=val_len
     // Convert name Str to C string
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
@@ -2327,7 +2330,6 @@ fn emit_env_get(code: &mut Code) {
     // Walk envp array looking for "NAME=VALUE"
     code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.env_ptr as u32));
     let scan = code.label();
-    let found = code.label();
     let not_found = code.label();
     code.bind_label(scan);
     code.mov_r_mem(Reg::Rdx, Reg::Rcx, 0); // *envp = entry ptr
@@ -2374,6 +2376,10 @@ fn emit_env_get(code: &mut Code) {
     code.bind_label(len_done);
     code.sub_rr(Reg::R9, Reg::Rdx); // length of value
     code.mov_mem_r(Reg::Rbp, -32, Reg::R9); // save value length across StrAlloc
+    // Save the value-start pointer too: the StrAlloc service call below
+    // may clobber caller-saved registers (rdx is volatile), and the copy
+    // loop reads the source bytes from it.
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rdx); // save value start
     // Allocate MINK Str: 8 + len bytes
     code.mov_rr(Reg::Rax, Reg::R9);
     code.add_r_imm8(Reg::Rax, 8);
@@ -2382,8 +2388,9 @@ fn emit_env_get(code: &mut Code) {
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
     code.add_rsp(16);
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // save result ptr
-    // Restore value length and write length prefix
+    // Restore value length and value start, write length prefix
     code.mov_r_mem(Reg::R9, Reg::Rbp, -32);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
     code.mov_mem_r(Reg::Rax, 0, Reg::R9);
     // Copy value bytes
     code.add_r_imm8(Reg::Rax, 8); // data start
@@ -2433,7 +2440,6 @@ fn emit_env_has(code: &mut Code) {
     // Walk envp
     code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.env_ptr as u32));
     let scan = code.label();
-    let found = code.label();
     let not_found = code.label();
     code.bind_label(scan);
     code.mov_r_mem(Reg::Rdx, Reg::Rcx, 0);
@@ -2460,9 +2466,11 @@ fn emit_env_has(code: &mut Code) {
     code.cmp_r_imm8(Reg::R10, b'=');
     code.jcc_label(0x85, try_next);
     // Found
-    code.movabs(Reg::Rax, 1u64); // true
+    // Found. Free the name CStr FIRST: free_cstr clobbers rax, and the
+    // true result must survive to the return.
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
+    code.movabs(Reg::Rax, 1u64); // true
     code.add_rsp(8);
     code.leave_ret();
     code.bind_label(try_next);
@@ -2654,6 +2662,17 @@ fn emit_net_bind(code: &mut Code) {
     code.mov_r_mem(Reg::R10, Reg::Rbp, -24);
     net_parse_ip_addr(code);
     code.mov_mem_r(Reg::Rbp, -36, Reg::Rax); // sin_addr at offset 4
+    // setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, 4): allow quick
+    // rebinds so restarts and test reruns do not hit EADDRINUSE from a
+    // peer in TIME_WAIT. Best-effort — a failure is ignored.
+    code.mov_mem_imm32(Reg::Rbp, -8, 1); // optval = 1
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, -16); // sock
+    code.movabs(Reg::Rsi, 1); // SOL_SOCKET
+    code.movabs(Reg::Rdx, 2); // SO_REUSEADDR
+    code.lea_r_mem(Reg::R10, Reg::Rbp, -8); // optval
+    code.movabs(Reg::R8, 4); // optlen
+    code.movabs(Reg::Rax, SYS_SETSOCKOPT);
+    code.syscall();
     // bind(sock, &addr, 16)
     code.mov_r_mem(Reg::Rdi, Reg::Rbp, -16);
     code.lea_r_mem(Reg::Rsi, Reg::Rbp, -40);
@@ -2907,6 +2926,105 @@ fn emit_net_htons(code: &mut Code) {
 }
 
 // ===========================================================================
+// Crypto services (Linux) — kernel getrandom(2), no external libraries
+// ===========================================================================
+
+/// `rt_crypto_init() -> Int`: No provider initialization is required on
+/// Linux — getrandom(2) is a direct syscall backed by the kernel CSPRNG.
+/// Always returns 0 (success).
+fn emit_crypto_init(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_crypto_random_bytes(buf, len) -> Int`: Fill `buf` with `len` secure
+/// random bytes via getrandom(2) (flags = 0: the kernel CSPRNG). Loops on
+/// short reads so the whole buffer is filled; returns 0 on success and -1
+/// on error. On success the string length prefix is written, matching the
+/// Windows (BCryptGenRandom) contract.
+fn emit_crypto_random_bytes(code: &mut Code) {
+    prologue(code);
+    // r8 = data pointer (buf + 8, past the length prefix); r9 = remaining.
+    // Both survive the syscall (the kernel only clobbers rcx/r11).
+    code.mov_r_mem(Reg::R8, Reg::Rbp, 16); // buf
+    code.add_r_imm8(Reg::R8, 8); // skip the 8-byte length prefix
+    code.mov_r_mem(Reg::R9, Reg::Rbp, 24); // len
+    let loop_start = code.label();
+    let done = code.label();
+    let error = code.label();
+    code.bind_label(loop_start);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x8E, done); // jle — buffer filled
+    code.mov_rr(Reg::Rdi, Reg::R8); // buf
+    code.mov_rr(Reg::Rsi, Reg::R9); // count
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // flags = 0
+    code.movabs(Reg::Rax, SYS_GETRANDOM);
+    code.syscall();
+    // rax = bytes read (positive) or a negative errno
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x8E, error); // jle — error (incl. EINTR): fail
+    code.add_rr(Reg::R8, Reg::Rax); // advance the data pointer
+    code.sub_rr(Reg::R9, Reg::Rax); // decrement the remaining count
+    code.jmp_label(loop_start);
+    code.bind_label(error);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(done);
+    // Set the string length prefix (Windows parity)
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 16); // buf
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 24); // len
+    code.mov_mem_r(Reg::R11, 0, Reg::R10);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_crypto_random_int() -> Int`: Return 8 secure random bytes from
+/// getrandom(2) as a 64-bit integer. On error, returns 0 (Windows parity).
+fn emit_crypto_random_int(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8); // 8-byte scratch buffer at [rsp]
+    let ok = code.label();
+    code.mov_rr(Reg::Rdi, Reg::Rsp); // buf
+    code.movabs(Reg::Rsi, 8u64); // count = 8
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // flags = 0
+    code.movabs(Reg::Rax, SYS_GETRANDOM);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x8F, ok); // jg — 8 bytes read
+    code.xor_rr32(Reg::Rax, Reg::Rax); // error: return 0
+    code.leave_ret();
+    code.bind_label(ok);
+    code.mov_r_mem(Reg::Rax, Reg::Rsp, 0);
+    code.leave_ret();
+}
+
+/// `rt_crypto_secure_zero(ptr, len)`: Securely zero `len` bytes at `ptr`.
+/// A byte-by-byte loop (the write cannot be optimized away because the
+/// machine runtime is hand-emitted assembly). Unlike the Windows version
+/// this stores exactly `len` bytes — the Windows implementation writes
+/// 32-bit zeros while advancing by one byte, which can touch up to three
+/// bytes past the requested region.
+fn emit_crypto_secure_zero(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // ptr
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 24); // len
+    code.xor_rr32(Reg::Rax, Reg::Rax); // zero source
+    let loop_start = code.label();
+    let done = code.label();
+    code.bind_label(loop_start);
+    code.test_rr(Reg::R11, Reg::R11);
+    code.jcc_label(0x84, done); // je
+    code.mov_mem_r8(Reg::R10, 0, Reg::Rax); // byte [ptr] = 0
+    code.add_r_imm8(Reg::R10, 1);
+    code.sub_r_imm32(Reg::R11, 1);
+    code.jmp_label(loop_start);
+    code.bind_label(done);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+// ===========================================================================
 // Stub services (unimplemented subsystems)
 // ===========================================================================
 
@@ -3070,11 +3188,11 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::NetGetHostName, emit_net_get_host_name);
     emit!(RuntimeService::NetHtons, emit_net_htons);
 
-    // --- Crypto services (stub) ---
-    emit!(RuntimeService::CryptoInit, emit_stub_int);
-    emit!(RuntimeService::CryptoRandomBytes, emit_stub_int);
-    emit!(RuntimeService::CryptoRandomInt, emit_stub_int);
-    emit!(RuntimeService::CryptoSecureZero, emit_stub_int);
+    // --- Crypto services (Linux: kernel getrandom(2)) ---
+    emit!(RuntimeService::CryptoInit, emit_crypto_init);
+    emit!(RuntimeService::CryptoRandomBytes, emit_crypto_random_bytes);
+    emit!(RuntimeService::CryptoRandomInt, emit_crypto_random_int);
+    emit!(RuntimeService::CryptoSecureZero, emit_crypto_secure_zero);
 
     RuntimeOffsets {
         services,

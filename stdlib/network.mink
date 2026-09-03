@@ -1,20 +1,20 @@
 // ==========================================================================
 // MINK Networking Library — Session 67
 //
-// TCP/UDP socket networking via Windows Winsock2 API.
-// Functions are loaded dynamically via LoadLibraryA/GetProcAddress.
+// TCP/UDP socket networking (Winsock2 on Windows, POSIX sockets on
+// Linux — the runtime intrinsics dispatch to the platform backend).
 //
 // API:
-//   net_init() -> Int                 Initialize Winsock2 (0=ok, non-zero=error).
-//   net_cleanup() -> Int              Clean up Winsock2 (0=ok).
-//   net_last_error() -> Int           Get last Winsock error code.
+//   net_init() -> Int                 Initialize networking (0=ok, non-zero=error).
+//   net_cleanup() -> Int              Clean up networking (0=ok).
+//   net_last_error() -> Int           Get last socket error code.
 //   net_socket(af, ty, proto) -> Int  Create a socket (-1 on error).
 //   net_connect(sock, addr, port) -> Int   Connect (0=ok, -1=error).
 //   net_bind(sock, addr, port) -> Int      Bind (0=ok, -1=error).
 //   net_listen(sock, backlog) -> Int       Listen (0=ok, -1=error).
 //   net_accept(sock) -> Int               Accept (new socket or -1).
 //   net_send(sock, data) -> Int            Send data (bytes sent or -1).
-//   net_recv(sock, maxlen) -> Str          Receive data.
+//   net_recv(sock, maxlen) -> Str          Receive data (owned Str).
 //   net_close(sock) -> Int                 Close socket (0=ok, -1=error).
 //   net_shutdown(sock, how) -> Int         Shutdown (0=ok, -1=error).
 //   net_resolve(host, port) -> Str         Resolve host (V1: returns host as-is).
@@ -28,12 +28,14 @@
 //
 // Ownership:
 //   net_init() must be called before any other networking function.
-//   net_recv() returns a Str pointing to a fixed BSS buffer (overwritten
-//   by each call; caller should copy if persistence is needed).
+//   net_recv() returns an OWNED heap Str allocated by the runtime.
+//   The caller owns it and must release it with rt_str_free when done.
+//   Each call returns a fresh allocation; results are never reused or
+//   overwritten by later calls. The same rule applies to net_resolve()
+//   and net_hostname().
 //
 // Platform:
-//   Currently Windows-only via Winsock2 (ws2_32.dll).
-//   Future: Linux/macOS via POSIX sockets.
+//   Windows via Winsock2 (ws2_32.dll); Linux x86_64 via raw syscalls.
 // ==========================================================================
 
 // --- Constants ---
@@ -119,9 +121,9 @@ fn net_send(sock: Int, data: Str) -> Int {
 
 // Receive data from a connected socket.
 // maxlen is the maximum bytes to receive.
-// Returns a string with received data (empty on error/close).
-// NOTE: The returned string points to a fixed BSS buffer that is
-// overwritten by each net_recv call. Copy it if you need persistence.
+// Returns an OWNED heap Str with the received data (empty on error/close).
+// The caller must rt_str_free the result when done. The result is a fresh
+// allocation every call and is never overwritten by a later net_recv.
 fn net_recv(sock: Int, maxlen: Int) -> Str {
     return rt_net_recv(sock, maxlen);
 }

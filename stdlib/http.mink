@@ -640,24 +640,31 @@ fn http_recv_all(sock: Int) -> Str {
     let buf = rt_str_alloc(max_size);
     let mut total = 0;
     let mut chunk_count = 0;
-    while total < max_size {
-        if chunk_count >= 1024 {
-            break;
-        }
+    // open tracks whether the peer is still sending. V1 move semantics
+    // forbid freeing `data` in an early-exit branch and then using it
+    // again textually, so each chunk is freed exactly once, at the
+    // bottom of the loop body.
+    let mut open = 1;
+    while total < max_size && open == 1 && chunk_count < 1024 {
         let data = net_recv(sock, 4096);
         let data_len = rt_str_len(data);
         if data_len == 0 {
-            break;
+            open = 0;
         }
         let mut ci = 0;
-        while ci < data_len {
-            if total + ci < max_size {
-                rt_str_set_byte(buf, total + ci, rt_str_byte(data, ci));
+        if open == 1 {
+            while ci < data_len {
+                if total + ci < max_size {
+                    rt_str_set_byte(buf, total + ci, rt_str_byte(data, ci));
+                }
+                ci = ci + 1;
             }
-            ci = ci + 1;
         }
-        total = total + data_len;
-        chunk_count = chunk_count + 1;
+        rt_str_free(data);
+        if open == 1 {
+            total = total + data_len;
+            chunk_count = chunk_count + 1;
+        }
     }
     // Return the buffer directly (may be larger than total data).
     // The rt_str_len on the original buf will return max_size,

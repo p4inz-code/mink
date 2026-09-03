@@ -416,6 +416,27 @@ fn main() {
 // ROUND-TRIP / CONSISTENCY
 // ============================================================
 
+/// Current UTC calendar date on the host (Howard Hinnant's civil-from-days
+/// algorithm, mirroring the MINK `time_year`/`time_month` code under test).
+/// Computing the expected values keeps the test deterministic across date
+/// rollovers instead of hardcoding a month.
+fn host_utc_year_month() -> (i64, i64) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let days = secs / 86400 + 719468;
+    let era = days / 146097;
+    let doe = days - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp >= 10 { mp - 9 } else { mp + 3 };
+    let year = if m <= 2 { y + 1 } else { y };
+    (year, m)
+}
+
 #[test]
 fn t50_time_now_year_is_2026() {
     let (code, out) = build_and_run(
@@ -455,8 +476,15 @@ fn main() {
     );
     assert_success(code, &out);
     let ints = all_ints(&out);
-    assert_eq!(ints[0], 2026);
-    assert_eq!(ints[1], 8);
+    let (host_year, host_month) = host_utc_year_month();
+    assert_eq!(
+        ints[0], host_year,
+        "MINK time_year must match the host UTC year"
+    );
+    assert_eq!(
+        ints[1], host_month,
+        "MINK time_month must match the host UTC month"
+    );
 }
 
 #[test]

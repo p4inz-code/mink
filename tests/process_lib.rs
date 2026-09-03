@@ -1108,3 +1108,298 @@ fn main() {
 }"#,
     0
 );
+
+// ==========================================================================
+// Linux networking ownership regression tests (Session 92)
+//
+// net_recv returns an OWNED heap Str: the caller must rt_str_free it.
+// A received-but-unfreed string is a real leak (E-R06, exit 106).
+// ==========================================================================
+
+// --- TCP echo with net_recv + rt_str_free: content verified, clean exit ---
+linux_net_test!(
+    linux_n07_recv_owned_free,
+    r#"
+fn main() {
+    net_init();
+    let srv = net_tcp_socket();
+    if srv == -1 { rt_exit(10); }
+    let r1 = net_bind(srv, "127.0.0.1", 21003);
+    if r1 != 0 { rt_exit(20); }
+    let r2 = net_listen(srv, 1);
+    if r2 != 0 { rt_exit(30); }
+    let cli = net_tcp_socket();
+    if cli == -1 { rt_exit(40); }
+    let r3 = net_connect(cli, "127.0.0.1", 21003);
+    if r3 != 0 { rt_exit(50); }
+    let peer = net_accept(srv);
+    if peer == -1 { rt_exit(60); }
+    let sent = net_send(cli, "hello");
+    if sent <= 0 { rt_exit(70); }
+    let got = net_recv(peer, 100);
+    let glen = rt_str_len(got);
+    if glen != 5 { rt_exit(80); }
+    // h=104 e=101 l=108 o=111
+    if rt_str_byte(got, 0) != 104 { rt_exit(90); }
+    if rt_str_byte(got, 1) != 101 { rt_exit(91); }
+    if rt_str_byte(got, 2) != 108 { rt_exit(92); }
+    if rt_str_byte(got, 3) != 108 { rt_exit(93); }
+    if rt_str_byte(got, 4) != 111 { rt_exit(94); }
+    rt_str_free(got);
+    net_close(peer);
+    net_close(cli);
+    net_close(srv);
+    net_cleanup();
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- TCP echo WITHOUT freeing the received string: E-R06 leak (exit 106) ---
+linux_net_test!(
+    linux_n08_recv_leak_e_ro6,
+    r#"
+fn main() {
+    net_init();
+    let srv = net_tcp_socket();
+    if srv == -1 { rt_exit(10); }
+    let r1 = net_bind(srv, "127.0.0.1", 21004);
+    if r1 != 0 { rt_exit(20); }
+    let r2 = net_listen(srv, 1);
+    if r2 != 0 { rt_exit(30); }
+    let cli = net_tcp_socket();
+    if cli == -1 { rt_exit(40); }
+    let r3 = net_connect(cli, "127.0.0.1", 21004);
+    if r3 != 0 { rt_exit(50); }
+    let peer = net_accept(srv);
+    if peer == -1 { rt_exit(60); }
+    let sent = net_send(cli, "hello");
+    if sent <= 0 { rt_exit(70); }
+    let got = net_recv(peer, 100);
+    let glen = rt_str_len(got);
+    if glen != 5 { rt_exit(80); }
+    // NOTE: got is intentionally NOT freed: the leak checker must fire
+    // with E-R06 (exit 106) at process exit.
+    net_close(peer);
+    net_close(cli);
+    net_close(srv);
+    net_cleanup();
+    rt_exit(0);
+}"#,
+    106
+);
+
+// --- UDP loopback datagram round-trip: bind + connect-send + recv ---
+linux_net_test!(
+    linux_n09_udp_loopback,
+    r#"
+fn main() {
+    net_init();
+    // Receiver bound to a fixed loopback port.
+    let rx = net_udp_socket();
+    if rx == -1 { rt_exit(10); }
+    let rb = net_bind(rx, "127.0.0.1", 21005);
+    if rb != 0 { rt_exit(20); }
+    // Sender: connect() then send() (sendto with NULL dest requires a
+    // connected socket).
+    let tx = net_udp_socket();
+    if tx == -1 { rt_exit(30); }
+    let tc = net_connect(tx, "127.0.0.1", 21005);
+    if tc != 0 { rt_exit(40); }
+    let sent = net_send(tx, "udp-ping");
+    if sent <= 0 { rt_exit(50); }
+    let got = net_recv(rx, 100);
+    let glen = rt_str_len(got);
+    if glen == 0 { rt_exit(60); }
+    // content: u=117 d=100 p=112
+    if rt_str_byte(got, 0) != 117 { rt_exit(70); }
+    if rt_str_byte(got, 1) != 100 { rt_exit(80); }
+    if rt_str_byte(got, 2) != 112 { rt_exit(90); }
+    rt_str_free(got);
+    net_close(rx);
+    net_close(tx);
+    net_cleanup();
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- UDP send on an unconnected socket fails immediately (-1) ---
+linux_net_test!(
+    linux_n10_udp_unconnected_send_error,
+    r#"
+fn main() {
+    net_init();
+    let s = net_udp_socket();
+    if s == -1 { rt_exit(10); }
+    // sendto with NULL dest on an unconnected socket must fail fast.
+    let sent = net_send(s, "no-dest");
+    if sent != -1 { rt_exit(20); }
+    net_close(s);
+    net_cleanup();
+    rt_exit(0);
+}"#,
+    0
+);
+
+// ==========================================================================
+// Linux environment ownership regression tests (Session 92)
+//
+// rt_env_get returns an OWNED heap Str: the caller must rt_str_free it.
+// A fetched-but-unfreed value is a real leak (E-R06, exit 106).
+// ==========================================================================
+
+// --- rt_env_get existing variable: owned Str, free, exit 0 ---
+linux_test!(
+    linux_e07_env_get_owned_free,
+    r#"
+fn main() {
+    let path = rt_env_get("PATH");
+    let plen = rt_str_len(path);
+    if plen == 0 { rt_exit(10); }
+    rt_str_free(path);
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- rt_env_get missing variable: empty owned Str, free, exit 0 ---
+linux_test!(
+    linux_e08_env_get_missing_empty,
+    r#"
+fn main() {
+    let miss = rt_env_get("MINK_NO_SUCH_VAR_XYZ_42");
+    let mlen = rt_str_len(miss);
+    if mlen != 0 { rt_exit(20); }
+    rt_str_free(miss);
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- rt_env_get WITHOUT freeing: E-R06 leak (exit 106) ---
+linux_test!(
+    linux_e09_env_get_leak_e_ro6,
+    r#"
+fn main() {
+    let path = rt_env_get("PATH");
+    let plen = rt_str_len(path);
+    if plen == 0 { rt_exit(10); }
+    // NOTE: path intentionally not freed: leak checker must fire E-R06.
+    rt_exit(0);
+}"#,
+    106
+);
+
+// --- rt_env_has existing variable returns true ---
+linux_test!(
+    linux_e10_env_has_existing_true,
+    r#"
+fn main() {
+    let h = rt_env_has("PATH");
+    if h == true { rt_exit(0); }
+    rt_exit(1);
+}"#,
+    0
+);
+
+// ==========================================================================
+// Linux crypto regression tests (Session 92)
+// ==========================================================================
+
+/// Build and run a MINK program on Linux with hashing.mink + crypto.mink.
+fn build_and_run_linux_crypto(test_body: &str) -> (bool, i32) {
+    let hashing = std::fs::read_to_string("stdlib/hashing.mink").unwrap_or_default();
+    let crypto =
+        std::fs::read_to_string("stdlib/crypto.mink").expect("failed to read stdlib/crypto.mink");
+    let source = format!("{}\n{}\n{}", hashing, crypto, test_body);
+    let exe = build_linux_elf(&source);
+    let code = run_linux_elf(&exe);
+    let _ = std::fs::remove_file(&exe);
+    (true, code)
+}
+
+macro_rules! linux_crypto_test {
+    ($name:ident, $body:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            if !wsl_available() {
+                eprintln!("skipping: WSL not available");
+                return;
+            }
+            let (build_ok, code) = build_and_run_linux_crypto($body);
+            assert!(build_ok, "Linux ELF build failed");
+            assert_eq!(
+                code, $expected,
+                "Linux crypto runtime returned wrong exit code"
+            );
+        }
+    };
+}
+
+// --- crypto_init succeeds and random bytes are 32 long and non-zero ---
+linux_crypto_test!(
+    linux_c01_crypto_random_bytes,
+    r#"
+fn main() {
+    let ci = rt_crypto_init();
+    if ci != 0 { rt_exit(10); }
+    let b1 = crypto_random_bytes(32);
+    let l1 = rt_str_len(b1);
+    if l1 != 32 { rt_exit(20); }
+    let mut sum = 0;
+    let mut i = 0;
+    while i < l1 {
+        sum = sum + rt_str_byte(b1, i);
+        i = i + 1;
+    }
+    if sum == 0 { rt_exit(30); }
+    rt_str_free(b1);
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- two 32-byte CSPRNG draws differ (failure probability ~2^-256) ---
+linux_crypto_test!(
+    linux_c02_random_bytes_differ,
+    r#"
+fn main() {
+    let ci = rt_crypto_init();
+    if ci != 0 { rt_exit(10); }
+    let b1 = crypto_random_bytes(32);
+    let b2 = crypto_random_bytes(32);
+    let mut same = true;
+    let mut i = 0;
+    while i < 32 {
+        if rt_str_byte(b1, i) != rt_str_byte(b2, i) {
+            same = false;
+        }
+        i = i + 1;
+    }
+    rt_str_free(b1);
+    rt_str_free(b2);
+    if same == true { rt_exit(20); }
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- crypto_random_int is callable and hex output has expected length ---
+linux_crypto_test!(
+    linux_c03_random_int_and_hex,
+    r#"
+fn main() {
+    let ci = rt_crypto_init();
+    if ci != 0 { rt_exit(10); }
+    let r1 = rt_crypto_random_int();
+    let r2 = rt_crypto_random_int();
+    if r1 == 0 && r2 == 0 { rt_exit(20); }
+    let h = crypto_random_hex(8);
+    let hl = rt_str_len(h);
+    rt_str_free(h);
+    if hl != 16 { rt_exit(30); }
+    rt_exit(0);
+}"#,
+    0
+);
