@@ -259,24 +259,33 @@ fn emit_alloc(code: &mut Code) {
     code.and_r_imm8(Reg::Rax, 0xF0); // align up to 16
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
 
-    // Reuse the most recently freed block when the free list is nonempty
-    // AND the freed block is large enough for the new allocation.
+    // Walk the LIFO free list from the head and reuse the FIRST block
+    // large enough for this allocation. Small blocks freed after a large
+    // one must not permanently hide it (repeated large buffers would
+    // otherwise exhaust the arena although every block was freed).
+    // Skipped blocks are dropped only when a later block is reused;
+    // when nothing fits the whole list is preserved and we bump.
     let bump = code.label();
     let record = code.label();
-    let too_small = code.label();
+    let walk = code.label();
+    let reuse = code.label();
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.free_head as u32));
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, bump); // jz (empty free list)
-    // Read the saved size from [block+8] and compare with needed size.
+    code.bind_label(walk);
+    // Read the saved size from [block+8] and the next link from [block].
     code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // Rdx = old_size
-    code.cmp_r_mem(Reg::Rdx, Reg::Rbp, -8); // compare old_size vs needed
-    code.jcc_label(0x8C, too_small); // jl (freed block too small)
-    // Block is large enough — pop and reuse.
-    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // next = [block]
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // Rcx = next block
+    code.cmp_r_mem(Reg::Rdx, Reg::Rbp, -8); // old_size vs needed
+    code.jcc_label(0x8D, reuse); // jge — large enough, reuse this block
+    code.mov_rr(Reg::Rax, Reg::Rcx); // advance to the next block
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, walk); // jnz — keep walking
+    code.jmp_label(bump); // walked off the end: nothing fits
+    code.bind_label(reuse);
+    // Unlink the reused block: free_head = its next link.
     code.mov_rip_r(Reg::Rcx, PatchKind::Bss(BSS.free_head as u32));
     code.jmp_label(record);
-    // Freed block too small — fall through to bump allocation.
-    code.bind_label(too_small);
 
     // Otherwise bump the cursor within the arena bounds.
     code.bind_label(bump);
@@ -338,6 +347,24 @@ fn emit_free(code: &mut Code) {
     code.sub_rsp(16);
 
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    // Freeing an immutable image literal is a safe no-op: image string
+    // data is immortal and was never heap-allocated, so there is nothing
+    // to release. This lets consuming stdlib functions free their Owned
+    // Str parameters unconditionally (callers may legitimately pass
+    // literals, which the checker cannot distinguish at runtime).
+    // Heap misuse below is still fully detected: double frees and free
+    // of non-live pointers fall through this check and fail E-R04.
+    let not_image = code.label();
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.str_data_start as u32));
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x82, not_image); // jb — below the image region
+    code.mov_r_rip(Reg::Rdx, PatchKind::Bss(BSS.str_data_end as u32));
+    code.cmp_rr(Reg::Rax, Reg::Rdx);
+    code.jcc_label(0x83, not_image); // jae — at/above the image region
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret(); // inside the image region: no-op success
+    code.bind_label(not_image);
+
     code.test_rr(Reg::Rax, Reg::Rax);
     let invalid = code.label();
     code.jcc_label(0x84, invalid); // jz (null free)

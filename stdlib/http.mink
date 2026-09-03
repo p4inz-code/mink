@@ -666,30 +666,51 @@ fn http_recv_all(sock: Int) -> Str {
             chunk_count = chunk_count + 1;
         }
     }
-    // Return the buffer directly (may be larger than total data).
-    // The rt_str_len on the original buf will return max_size,
-    // but that's acceptable for an internal receive buffer.
-    return buf;
+    // Copy the received bytes into an exact-length result so that
+    // rt_str_len(result) equals the number of bytes actually received
+    // (the accumulation buffer is capacity-sized, not data-sized).
+    let result = rt_str_alloc(total);
+    let mut ri = 0;
+    while ri < total {
+        rt_str_set_byte(result, ri, rt_str_byte(buf, ri));
+        ri = ri + 1;
+    }
+    rt_str_free(buf);
+    return result;
 }
 
 // Send an HTTP request and return the complete response.
+// Consumes `request` and `host` (freed on every path). The raw rt_net_*
+// intrinsics below borrow their string arguments, so both parameters stay
+// live here and are freed exactly once, at the single textual exit.
 fn http_send(request: Str, host: Str, port: Int) -> Str {
     let sock = net_tcp_socket();
-    if sock == -1 {
-        return "";
+    let mut can_send = 0;
+    if sock != -1 {
+        can_send = 1;
     }
-    let conn = net_connect(sock, host, port);
-    if conn != 0 {
+    let mut sent_ok = 0;
+    if can_send == 1 {
+        let conn = rt_net_connect(sock, host, port);
+        if conn == 0 {
+            sent_ok = 1;
+        }
+    }
+    if sent_ok == 1 {
+        let sent = rt_net_send(sock, request);
+        if sent == -1 {
+            sent_ok = 0;
+        }
+    }
+    let mut response = "";
+    if sent_ok == 1 {
+        response = http_recv_all(sock);
+    }
+    if sock != -1 {
         net_close(sock);
-        return "";
     }
-    let sent = net_send(sock, request);
-    if sent == -1 {
-        net_close(sock);
-        return "";
-    }
-    let response = http_recv_all(sock);
-    net_close(sock);
+    rt_str_free(request);
+    rt_str_free(host);
     return response;
 }
 
@@ -701,9 +722,12 @@ fn http_client_get_with(host: Str, port: Int, path: Str) -> Str {
     let p_len = rt_str_len(path);
     let h_len = rt_str_len(host);
     // "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
-    let sp = 4;
-    let sm = 14;
-    let st = 24;
+    let head = "GET ";
+    let mid = " HTTP/1.1\r\nHost: ";
+    let tail = "\r\nConnection: close\r\n\r\n";
+    let sp = rt_str_len(head);
+    let sm = rt_str_len(mid);
+    let st = rt_str_len(tail);
     let total = sp + p_len + sm + h_len + st;
     let result = rt_str_alloc(total);
     // "GET "
@@ -718,7 +742,6 @@ fn http_client_get_with(host: Str, port: Int, path: Str) -> Str {
         i = i + 1;
     }
     // " HTTP/1.1\r\nHost: "
-    let mid = " HTTP/1.1\r\nHost: ";
     i = 0;
     while i < sm {
         rt_str_set_byte(result, sp + p_len + i, rt_str_byte(mid, i));
@@ -731,13 +754,14 @@ fn http_client_get_with(host: Str, port: Int, path: Str) -> Str {
         i = i + 1;
     }
     // "\r\nConnection: close\r\n\r\n"
-    let tail = "\r\nConnection: close\r\n\r\n";
     i = 0;
     while i < st {
         rt_str_set_byte(result, sp + p_len + sm + h_len + i, rt_str_byte(tail, i));
         i = i + 1;
     }
-    return http_send(result, host, port);
+    let response = http_send(result, host, port);
+    rt_str_free(path);
+    return response;
 }
 
 // Build a POST request with body, send it.
@@ -828,7 +852,10 @@ fn http_client_post_with(host: Str, port: Int, path: Str, body: Str) -> Str {
         rt_str_set_byte(result, pos + i, rt_str_byte(body, i));
         i = i + 1;
     }
-    return http_send(result, host, port);
+    let response = http_send(result, host, port);
+    rt_str_free(path);
+    rt_str_free(body);
+    return response;
 }
 
 // --- High-Level Client ---
@@ -919,7 +946,9 @@ fn http_client_get(url: Str) -> Str {
         }
         port = pv;
     }
-    return http_client_get_with(host, port, use_path);
+    let response = http_client_get_with(host, port, use_path);
+    rt_str_free(url);
+    return response;
 }
 
 // Perform an HTTP POST request from a URL string with a body.
@@ -1003,5 +1032,7 @@ fn http_client_post(url: Str, body: Str) -> Str {
         }
         port = pv;
     }
-    return http_client_post_with(host, port, use_path, body);
+    let response = http_client_post_with(host, port, use_path, body);
+    rt_str_free(url);
+    return response;
 }

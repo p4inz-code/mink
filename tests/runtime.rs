@@ -160,8 +160,8 @@ fn double_free_is_e_ro4() {
 fn heap_exhaustion_is_e_ro2() {
     let exe = build(
         "fn main() {
-            let a = rt_alloc(524288);
-            let b = rt_alloc(524288);
+            let a = rt_alloc(2097152);
+            let b = rt_alloc(2097152);
             let c = rt_alloc(16);
             rt_free(a);
             rt_free(b);
@@ -170,7 +170,7 @@ fn heap_exhaustion_is_e_ro2() {
         }",
     );
     let (code, _) = run(&exe);
-    assert_eq!(code, 102, "exhausting the 1 MiB arena is E-R02");
+    assert_eq!(code, 102, "exhausting the 4 MiB arena is E-R02");
 }
 
 #[test]

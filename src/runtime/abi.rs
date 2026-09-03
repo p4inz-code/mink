@@ -57,7 +57,11 @@ pub const ALLOC_ALIGNMENT: u64 = 16;
 
 /// The size of the runtime heap arena, in bytes. Fixed at compile time so
 /// allocation is deterministic and needs no operating-system interaction.
-pub const HEAP_SIZE: u64 = 1024 * 1024;
+// 4 MiB arena. The HTTP receive path buffers up to `MAX_BODY` (1 MiB)
+// plus framing slack and copies it once into an exact-length result, so
+// the arena must hold roughly twice a maximum body plus live network
+// chunks; the original 1 MiB arena could not fit even one such buffer.
+pub const HEAP_SIZE: u64 = 4 * 1024 * 1024;
 
 /// The maximum number of simultaneously live allocations. The liveness
 /// table is a fixed-size array, so the bound is part of the ABI.

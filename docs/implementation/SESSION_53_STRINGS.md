@@ -80,10 +80,18 @@ MINK V1 has no destructors. Strings allocated by transformation functions cannot
 
 **Impact**: Chained transformations like `str_to_upper(str_trim(s))` leak the intermediate `str_trim` result. The caller must manage all allocations explicitly.
 
-### 3. `rt_str_free` Crashes on Literals
-`rt_str_free` on a string literal causes E-R07 (misaligned access) because literals are not heap-allocated.
+### 3. `rt_str_free` on Literals Is a Safe No-Op (Session 93)
+`rt_str_free` on a string literal used to cause E-R07 because literals are not
+heap-allocated. Since Session 93 the `Free`/`StrFree` services treat a pointer
+inside the immutable image string region as a safe no-op (image data is
+immortal and was never heap-allocated), on both Windows and Linux. Heap misuse
+is still fully detected: double frees, interior pointers, and non-live
+pointers fall through the image check and fail E-R04/E-R07 as before.
 
-**Impact**: Library functions cannot free their Str parameters — they don't know if the input is heap-allocated or a literal. The caller must manage free lifetimes.
+**Impact**: Library functions CAN now free their Str parameters
+unconditionally — the call is harmless for literal arguments — which makes
+"callee consumes and frees owned parameters" implementable. Callers still own
+the returned strings and must free them.
 
 ### 4. User Functions Consume Str Parameters
 When a user-defined function takes `Str`, the parameter is consumed. The caller cannot use the original variable afterward.

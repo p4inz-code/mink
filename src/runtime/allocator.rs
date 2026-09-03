@@ -12,8 +12,10 @@
 //!
 //! - addresses are **offsets into the arena** (`0 .. HEAP_SIZE`), which
 //!   the machine runtime translates to absolute addresses (`arena + offset`);
-//! - allocation rounds the requested size up to [`ALLOC_ALIGNMENT`] and
-//!   either reuses the most recently freed block or bumps the cursor;
+//! - allocation rounds the requested size up to [`ALLOC_ALIGNMENT`],
+//!   then first-fits the LIFO free list from most recently freed (walking
+//!   past too-small blocks so they cannot hide a large reusable block),
+//!   falling back to the bump cursor when nothing fits;
 //! - every live allocation occupies one slot of a fixed-size table; a
 //!   slot records the block's start offset and size;
 //! - `free` requires the pointer to be the exact 16-aligned start of a
@@ -101,27 +103,37 @@ impl Allocator {
             return Err(RuntimeError::new(RuntimeErrorKind::InvalidSize, Some(size)));
         }
         let size = align_up(size, ALLOC_ALIGNMENT);
-        let start = match self.free.pop() {
-            // Reuse the most recently freed block only if it is large
-            // enough for the new allocation.  A too-small block is
-            // discarded and the allocator falls back to bump.
-            Some((block, old_size)) if old_size >= size => block,
-            Some((_block, _old_size)) => {
-                // Freed block is too small — bump-allocate instead.
-                if self.cursor + size > HEAP_SIZE {
-                    return Err(RuntimeError::new(RuntimeErrorKind::OutOfMemory, Some(size)));
+        // First-fit scan over the LIFO free list, from most recently
+        // freed to least. Small blocks freed after a large one must not
+        // permanently hide the large block from later large allocations
+        // (repeated big receive buffers would otherwise exhaust the arena
+        // even though every block was freed). Blocks skipped before a fit
+        // are dropped, mirroring the machine runtime's walk; if nothing
+        // fits, the whole list is preserved and the allocator bumps.
+        let start = {
+            let mut fit = None;
+            for (i, (_block, old_size)) in self.free.iter().enumerate().rev() {
+                if *old_size >= size {
+                    fit = Some(i);
+                    break;
                 }
-                let block = self.cursor;
-                self.cursor += size;
-                block
             }
-            None => {
-                if self.cursor + size > HEAP_SIZE {
-                    return Err(RuntimeError::new(RuntimeErrorKind::OutOfMemory, Some(size)));
+            match fit {
+                Some(i) => {
+                    // Drop the skipped (more recently freed) prefix
+                    // (indices i+1..), keeping the fit at the new tail.
+                    self.free.truncate(i + 1);
+                    let (block, _) = self.free.pop().expect("the fit is now the tail");
+                    block
                 }
-                let block = self.cursor;
-                self.cursor += size;
-                block
+                None => {
+                    if self.cursor + size > HEAP_SIZE {
+                        return Err(RuntimeError::new(RuntimeErrorKind::OutOfMemory, Some(size)));
+                    }
+                    let block = self.cursor;
+                    self.cursor += size;
+                    block
+                }
             }
         };
         let slot = self

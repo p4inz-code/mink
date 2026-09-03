@@ -1403,3 +1403,288 @@ fn main() {
 }"#,
     0
 );
+
+// =========================================================================
+// Linux HTTP regression tests (Session 93): generated MINK Linux ELF
+// clients run inside WSL against a deterministic localhost python server
+// that splits responses across many TCP sends (multi-recv), plus error
+// paths (refused, premature close) with the leak checker enabled.
+// =========================================================================
+
+const LINUX_HTTP_SERVER_PY: &str = r#"import socket, sys, time
+PORT = int(sys.argv[1])
+HOST = "127.0.0.1"
+BIG = ("A" * 19990) + "MINK-END"
+def parts(conn, ps, d=0.02):
+    for p in ps:
+        conn.sendall(p.encode("latin-1"))
+        time.sleep(d)
+def handle(conn):
+    data = b""
+    conn.settimeout(5.0)
+    try:
+        while b"\r\n\r\n" not in data and len(data) < 65536:
+            c = conn.recv(4096)
+            if not c: break
+            data += c
+    except socket.timeout:
+        pass
+    path = "/"
+    try:
+        head = data.split(b"\r\n", 1)[0].decode("latin-1")
+        if len(head.split(" ")) >= 2:
+            path = head.split(" ")[1]
+    except Exception:
+        pass
+    if path.startswith("/split"):
+        parts(conn, ["HTTP/1.1 200 OK\r\n", "Content-Type: text/plain\r\n",
+                     "Content-Length: 13\r\n", "\r\n", "hello ", "world\n"])
+    elif path.startswith("/slowhdr"):
+        parts(conn, ["HTTP/1.1 200 OK\r\n", "X-One: 1\r\n", "X-Two: 2\r\n",
+                     "Content-Length: 5\r\n", "\r\n", "hello"])
+    elif path.startswith("/big"):
+        conn.sendall(("HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: text/plain\r\n\r\n" % len(BIG)).encode())
+        step = len(BIG) // 4
+        for i in range(0, len(BIG), step):
+            conn.sendall(BIG[i:i+step].encode())
+            time.sleep(0.02)
+    elif path.startswith("/empty"):
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+    elif path.startswith("/close_early"):
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Len")
+        time.sleep(0.05)
+    elif path.startswith("/err404"):
+        conn.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found")
+    else:
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+    conn.close()
+def main():
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((HOST, PORT))
+    srv.listen(8)
+    print("listening", flush=True)
+    served = 0
+    srv.settimeout(30.0)
+    try:
+        while served < 64:
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                break
+            handle(conn)
+            served += 1
+    except Exception:
+        pass
+    srv.close()
+if __name__ == "__main__":
+    main()
+"#;
+
+/// Build network.mink + http.mink + `body` for the Linux ELF target and
+/// return the produced executable.
+fn build_linux_http_source(body: &str) -> std::path::PathBuf {
+    let net = std::fs::read_to_string("stdlib/network.mink").unwrap_or_default();
+    let http = std::fs::read_to_string("stdlib/http.mink").expect("stdlib/http.mink");
+    let source = format!("{net}\n{http}\n{body}");
+    build_linux_elf(&source)
+}
+
+/// Run `exe` inside WSL against the embedded python server on `port`;
+/// returns the client's exit code (server runs in the background). A
+/// real script file is used instead of `bash -c` because `$` variables
+/// are not preserved across the Windows -> wsl.exe argument boundary.
+fn run_linux_http_client(exe: &std::path::Path, port: u16) -> i32 {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let srv = std::env::temp_dir().join(format!("mink_http_server_{n}.py"));
+    std::fs::write(&srv, LINUX_HTTP_SERVER_PY).unwrap();
+    let runner = std::env::temp_dir().join(format!("mink_http_run_{n}.sh"));
+    let to_wsl = |p: &std::path::Path| -> String {
+        let s = p.to_str().unwrap().replace('\\', "/");
+        if let Some(rest) = s.strip_prefix("C:/") {
+            format!("/mnt/c/{rest}")
+        } else {
+            s
+        }
+    };
+    let (srv_w, exe_w, run_w) = (to_wsl(&srv), to_wsl(exe), to_wsl(&runner));
+    let log_w = format!("{run_w}.log");
+    // Wait (up to ~10 s) for the server to report it is listening so the
+    // client never races a slow python startup under parallel test load.
+    let script = format!(
+        "#!/bin/bash\npython3 '{}' {} > '{}' 2>&1 &\nSRV=$!\nfor i in $(seq 1 20); do\n  if grep -q listening '{}' 2>/dev/null; then break; fi\n  sleep 0.25\ndone\nchmod +x '{}'\n'{}'\nRC=$?\nkill $SRV 2>/dev/null\nexit $RC\n",
+        srv_w, port, log_w, log_w, exe_w, exe_w
+    );
+    std::fs::write(&runner, script).unwrap();
+    let output = Command::new("wsl.exe")
+        .args(["-d", "Ubuntu", "--", "bash", &run_w])
+        .output()
+        .expect("failed to run WSL HTTP test");
+    let code = output.status.code().unwrap_or(-1);
+    if code != 0 {
+        eprintln!(
+            "[http test debug] stdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        eprintln!(
+            "[http test debug] stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let _ = std::fs::remove_file(&srv);
+    let _ = std::fs::remove_file(&runner);
+    code
+}
+
+/// The Session 93 HTTP verification client: one owned response per
+/// request, parsed and freed inside a single consumer function.
+/// `{PORT}` / `{PORT2}` are substituted before building.
+const LINUX_HTTP_CLIENT_SRC: &str = r#"
+// One owned response per request; all parsing happens inside the single
+// function that owns it, and the response is freed exactly once at that
+// function's single textual exit (V1 ownership model).
+// mode 0: full check (end-of-headers, status, body length, optional
+//         all-'A' prefix, tail compare); mode 1: expect refused (len 0);
+//         mode 2: expect premature close (partial, no end-of-headers).
+fn verify(host: Str, port: Int, path: Str, mode: Int, want_code: Int, want_len: Int, want_all: Int, want_tail: Str) -> Int {
+    let resp = http_client_get_with(host, port, path);
+    let len = rt_str_len(resp);
+    let mut code = 0;
+    let mut ci = 9;
+    while ci < len {
+        let b = rt_str_byte(resp, ci);
+        if b == 32 {
+            ci = len;
+        } else {
+            code = code * 10 + (b - 48);
+            ci = ci + 1;
+        }
+    }
+    let mut bs = 0;
+    let mut found = 0;
+    let mut si = 0;
+    while si < len - 3 {
+        if rt_str_byte(resp, si) == 13 {
+            if rt_str_byte(resp, si + 1) == 10 {
+                if rt_str_byte(resp, si + 2) == 13 {
+                    if rt_str_byte(resp, si + 3) == 10 {
+                        bs = si + 4;
+                        found = 1;
+                        si = len;
+                    }
+                }
+            }
+        }
+        si = si + 1;
+    }
+    let mut pass = 0;
+    if mode == 1 {
+        if len == 0 {
+            pass = 1;
+        }
+    }
+    if mode == 2 {
+        if found == 0 {
+            if len > 0 {
+                pass = 1;
+            }
+        }
+    }
+    if mode == 0 {
+        if found == 1 {
+            if code == want_code {
+                if len - bs == want_len {
+                    pass = 1;
+                }
+            }
+        }
+    }
+    if pass == 1 {
+        if mode == 0 {
+            let body_len = len - bs;
+            let tl = rt_str_len(want_tail);
+            if want_all == 1 {
+                let mut k = 0;
+                let mut ab_end = body_len;
+                if tl > 0 {
+                    ab_end = body_len - tl;
+                }
+                while k < ab_end {
+                    if rt_str_byte(resp, bs + k) != 65 {
+                        pass = 0;
+                    }
+                    k = k + 1;
+                }
+            }
+            if pass == 1 {
+                if tl > 0 {
+                    let mut k = 0;
+                    while k < tl {
+                        if rt_str_byte(resp, bs + body_len - tl + k) != rt_str_byte(want_tail, k) {
+                            pass = 0;
+                        }
+                        k = k + 1;
+                    }
+                }
+            }
+        }
+    }
+    rt_str_free(resp);
+    return pass;
+}
+
+fn main() {
+    let r = net_init();
+    if r != 0 {
+        rt_exit(10);
+    }
+    // Responses split across many TCP sends (multi-recv) + byte-exact bodies.
+    let a = verify("127.0.0.1", {PORT}, "/health", 0, 200, 2, 0, "ok");
+    let b = verify("127.0.0.1", {PORT}, "/split", 0, 200, 12, 0, "hello world\n");
+    let c = verify("127.0.0.1", {PORT}, "/slowhdr", 0, 200, 5, 0, "hello");
+    // 20 KB body: forces many net_recv calls; every byte verified.
+    let d = verify("127.0.0.1", {PORT}, "/big", 0, 200, 19998, 1, "MINK-END");
+    let e = verify("127.0.0.1", {PORT}, "/empty", 0, 200, 0, 0, "");
+    let f = verify("127.0.0.1", {PORT}, "/err404", 0, 404, 9, 0, "not found");
+    // Error paths: refused (no listener) and premature server close.
+    let g = verify("127.0.0.1", {PORT2}, "/split", 1, 0, 0, 0, "");
+    let h = verify("127.0.0.1", {PORT}, "/close_early", 2, 0, 0, 0, "");
+    if a == 1 {
+        if b == 1 {
+            if c == 1 {
+                if d == 1 {
+                    if e == 1 {
+                        if f == 1 {
+                            if g == 1 {
+                                if h == 1 {
+                                    rt_exit(0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    rt_exit(1);
+}
+"#;
+
+#[test]
+fn linux_h01_http_execution_verified() {
+    if !wsl_available() {
+        eprintln!("skipping: WSL not available");
+        return;
+    }
+    let port = 38200 + (std::process::id() % 300) as u16;
+    let source = LINUX_HTTP_CLIENT_SRC
+        .replace("{PORT}", &port.to_string())
+        .replace("{PORT2}", &(port + 1).to_string());
+    let exe = build_linux_http_source(&source);
+    let code = run_linux_http_client(&exe, port);
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(
+        code, 0,
+        "Linux HTTP client (multi-recv, error paths, ownership) must exit 0"
+    );
+}
