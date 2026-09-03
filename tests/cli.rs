@@ -1180,13 +1180,23 @@ fn explain_unknown_code() {
 }
 
 #[test]
-fn explain_missing_code() {
+fn explain_without_code_lists_available_codes() {
+    // Session 94: `mink explain` with no code lists the documented error
+    // codes instead of failing, and the unknown-code hint points at it.
     let output = mink().arg("explain").output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("missing error code"),
-        "expected error message in: {stderr}"
+        stdout.contains("documented error codes"),
+        "expected the code list in: {stdout}"
+    );
+    assert!(stdout.contains("E-T01"), "stdout was: {stdout}");
+    let bad = mink().args(["explain", "E-XX99"]).output().unwrap();
+    assert_eq!(bad.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        stderr.contains("without arguments"),
+        "hint should point at the listing: {stderr}"
     );
 }
 
@@ -1227,5 +1237,81 @@ fn check_json_deterministic() {
     assert_eq!(
         out1.stdout, out2.stdout,
         "JSON output should be deterministic"
+    );
+}
+// ---------------------------------------------------------------------------
+// Session 94: user-facing CLI quality regressions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lowercase_v_prints_version_and_succeeds() {
+    let output = mink().arg("-v").output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("mink {}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn all_version_aliases_agree() {
+    for flag in ["version", "-v", "-V", "--version"] {
+        let output = mink().arg(flag).output().unwrap();
+        assert!(output.status.success(), "{flag} should succeed");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            format!("mink {}", env!("CARGO_PKG_VERSION")),
+            "{flag} should print the same version"
+        );
+    }
+}
+
+#[test]
+fn version_with_extra_argument_fails_cleanly() {
+    for args in [vec!["version", "extra"], vec!["help", "build"]] {
+        let output = mink().args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?} should fail");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument"),
+            "stderr was: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn directory_as_source_is_rejected_with_clear_error() {
+    // A temp directory, not a source file.
+    let dir = std::env::temp_dir().join(format!("mink_cli_test_{}_dir", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for command in ["check", "build", "run"] {
+        let output = mink().arg(command).arg(&dir).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{command} on a dir should fail"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("is a directory"),
+            "{command} stderr was: {stderr}"
+        );
+        assert!(
+            !stderr.contains("front-end error(s)"),
+            "{command} must report the real cause: {stderr}"
+        );
+    }
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn explain_rejects_extra_arguments() {
+    let output = mink().args(["explain", "E-T01", "extra"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument"),
+        "stderr was: {stderr}"
     );
 }

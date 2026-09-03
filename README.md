@@ -117,8 +117,13 @@ The generated `.exe` is a standalone Windows executable. Copy it to any Windows 
 | `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
 | `mink version` | Print the compiler version |
 | `mink help` | Show usage information |
+| `mink explain` | With no code, list all documented error codes |
 
-All commands accept `--help` and `--version` flags.
+Version and help are also available as global flags anywhere the command
+name would go: `mink --version`, `mink -V`, and `mink -v` all print the
+version; `mink --help` and `mink -h` print usage. Options such as `--help`
+are not accepted after a subcommand name (for example, `mink build --help`
+reports an unknown option — use `mink help`).
 
 ### Examples
 

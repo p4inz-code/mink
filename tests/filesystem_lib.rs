@@ -2,10 +2,14 @@
 //!
 //! Tests path operations, file I/O, directory operations, and library integration.
 //!
-//! V1 OWNERSHIP: user function calls consume Str params.
-//! V1 LIMITATION: FS wrappers (fs_write, fs_file_size, etc.) can cause crashes
-//! when called in sequence due to stack frame issues in user function calling.
-//! Tests use rt_fs_* intrinsics directly for reliability.
+//! V1 OWNERSHIP: user function calls consume Str params (callees must free
+//! consumed strings; freeing image-region literals is a safe no-op since
+//! Session 93, so wrappers can free their parameters unconditionally).
+//! Historical note: pre-Session-90 FS wrappers crashed when called in
+//! sequence (stack-frame register clobbers). That limitation no longer
+//! reproduces as of Session 94 (wrappers in sequence are covered by
+//! `fs_wrappers_sequence_write_read_roundtrip` below); the intrinsic-level
+//! tests remain for reference and precise diagnostics.
 
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -405,7 +409,7 @@ fn main() {
 }
 
 // ============================================================
-// FILE I/O — using rt_fs_* intrinsics directly (V1 limitation)
+// FILE I/O — wrapper-level round-trip (see fs_wrappers_sequence test)
 // ============================================================
 
 #[test]
@@ -641,4 +645,44 @@ fn main() {
     let vals = all_ints(&out);
     assert_eq!(vals[0], 2, "size 1: {}", out);
     assert_eq!(vals[1], 4, "size 2: {}", out);
+}
+// ---------------------------------------------------------------------------
+// Session 94: wrapper-level file I/O round-trip. The pre-Session-90 stack
+// frame issue that made fs_* wrappers crash in sequence no longer
+// reproduces; this test locks the user-facing wrapper path.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fs_wrappers_sequence_write_read_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("mink_fs_s94_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("w.txt").to_str().unwrap().replace('\\', "/");
+    let body = format!(
+        r#"
+fn main() {{
+    let w = fs_write("{path}", "wrapper-roundtrip");
+    let r = fs_read("{path}");
+    let l = rt_str_len(r);
+    let mut good = true;
+    if w != 17 {{ good = false; }}
+    if l != 17 {{ good = false; }}
+    let exp = "wrapper-roundtrip";
+    let mut i = 0;
+    while i < l {{
+        if rt_str_byte(r, i) != rt_str_byte(exp, i) {{ good = false; }}
+        i = i + 1;
+    }}
+    rt_str_free(r);
+    let d = fs_remove_file("{path}");
+    if good == true {{
+        if d == 0 || d == 1 {{ rt_exit(0); }}
+    }}
+    rt_exit(1);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&body);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(code, 0, "wrapper sequence must exit 0: {out}");
 }

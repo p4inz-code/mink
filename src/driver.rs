@@ -60,6 +60,11 @@ pub enum BuildError {
         /// The underlying I/O error.
         source: io::Error,
     },
+    /// The path exists but is a directory, not a MINK source file.
+    NotAFile {
+        /// The path that was expected to be a source file.
+        path: PathBuf,
+    },
     /// One or more front-end errors (lex / parse / semantic / type / HIR / MIR).
     FrontEnd(Box<CheckReport>),
     /// One or more back-end errors (unsupported constructs, verification).
@@ -79,6 +84,13 @@ impl fmt::Display for BuildError {
             Self::Io { path, source: _ } => {
                 write!(f, "failed to read '{}'", path.display())
             }
+            Self::NotAFile { path } => {
+                write!(
+                    f,
+                    "'{}' is a directory, not a MINK source file",
+                    path.display()
+                )
+            }
             Self::FrontEnd(report) => {
                 write!(f, "{} front-end error(s)", report.errors.len())
             }
@@ -96,7 +108,7 @@ impl std::error::Error for BuildError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } | Self::Output { source, .. } => Some(source),
-            Self::FrontEnd(_) | Self::Backend(_) => None,
+            Self::NotAFile { .. } | Self::FrontEnd(_) | Self::Backend(_) => None,
         }
     }
 }
@@ -195,6 +207,11 @@ pub struct CheckReport {
 /// Loads `path` and runs the full pipeline. When the source contains `mod`
 /// declarations, all reachable modules are loaded and compiled together.
 pub fn check(sources: &mut SourceMap, path: &Path) -> Result<CheckReport, BuildError> {
+    if path.is_dir() {
+        return Err(BuildError::NotAFile {
+            path: path.to_path_buf(),
+        });
+    }
     // Discover all modules reachable from the root file.
     let modules = discover_modules(sources, path).map_err(|errors| match errors {
         // Root file I/O error: report as BuildError::Io.

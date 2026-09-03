@@ -27,13 +27,15 @@ Commands:
   run <path>      Compile and execute a MINK source file
   check <path> [--json]
                   Analyze a MINK source file without producing output
-  explain <code>  Explain an error code (e.g., mink explain E-T01)
+  explain [code]  Explain an error code (e.g., mink explain E-T01);
+                  with no code, list all documented error codes
   version         Print the compiler version
   help            Print this help
 
 Options:
   -h, --help      Print help
-  -V, --version   Print version
+  -v, -V, --version
+                  Print the compiler version
   --json          Output machine-readable JSON (for check)
   --target <name> Target to compile for (default: the host's native target)
 
@@ -55,7 +57,7 @@ enum Command {
     Build { path: PathBuf, target: Target },
     Run { path: PathBuf, target: Target },
     Check { path: PathBuf, json: bool },
-    Explain { code: String },
+    Explain { code: Option<String> },
 }
 
 /// Entry point for the compiler process. Returns the process exit code.
@@ -125,13 +127,32 @@ pub fn main(args: &[String]) -> ExitCode {
                         ExitCode::from(1)
                     }
                 }
+                Err(BuildError::FrontEnd(report)) => {
+                    print_errors(&sources, &report);
+                    ExitCode::from(1)
+                }
+                Err(BuildError::Backend(errors)) => {
+                    print_backend_errors(&sources, &errors);
+                    ExitCode::from(1)
+                }
                 Err(error) => {
                     eprintln!("mink: error: {error}");
                     build_error_exit_code(&error)
                 }
             }
         }
-        Ok(Command::Explain { code }) => match crate::diagnostics::explain(&code) {
+        Ok(Command::Explain { code: None }) => {
+            // No code given: list all documented error codes.
+            let mut codes = crate::diagnostics::all_codes();
+            codes.sort_unstable();
+            codes.dedup();
+            println!("MINK documented error codes ({}):", codes.len());
+            for chunk in codes.chunks(8) {
+                println!("  {}", chunk.join(" "));
+            }
+            ExitCode::SUCCESS
+        }
+        Ok(Command::Explain { code: Some(code) }) => match crate::diagnostics::explain(&code) {
             Some(doc) => {
                 println!("Error {}: {}", doc.code, doc.title);
                 println!();
@@ -258,6 +279,7 @@ fn print_backend_errors(sources: &SourceMap, errors: &[BackendError]) {
 fn build_error_exit_code(error: &BuildError) -> ExitCode {
     match error {
         BuildError::Io { .. }
+        | BuildError::NotAFile { .. }
         | BuildError::FrontEnd(_)
         | BuildError::Backend(_)
         | BuildError::Output { .. } => ExitCode::from(1),
@@ -342,9 +364,24 @@ fn parse(args: &[String]) -> Result<Command, String> {
     let Some(first) = args.first() else {
         return Ok(Command::Help);
     };
+    let no_extra = |command: &str| -> Result<(), String> {
+        if args.len() > 1 {
+            Err(format!("unexpected argument '{}' for '{command}'", args[1]))
+        } else {
+            Ok(())
+        }
+    };
     match first.as_str() {
-        "help" | "-h" | "--help" => Ok(Command::Help),
-        "version" | "-V" | "--version" => Ok(Command::Version),
+        "help" => {
+            no_extra("help")?;
+            Ok(Command::Help)
+        }
+        "-h" | "--help" => Ok(Command::Help),
+        "version" => {
+            no_extra("version")?;
+            Ok(Command::Version)
+        }
+        "-v" | "-V" | "--version" => Ok(Command::Version),
         "build" => parse_build(&args[1..]),
         "check" => {
             let mut path: Option<PathBuf> = None;
@@ -365,10 +402,11 @@ fn parse(args: &[String]) -> Result<Command, String> {
             Ok(Command::Check { path, json })
         }
         "explain" => {
-            let code = args
-                .get(1)
-                .ok_or("missing error code (usage: mink explain E-XXXX)")?;
-            Ok(Command::Explain { code: code.clone() })
+            let code = args.get(1).cloned();
+            if code.is_some() && args.len() > 2 {
+                return Err(format!("unexpected argument '{}' for 'explain'", args[2]));
+            }
+            Ok(Command::Explain { code })
         }
         "run" => parse_run(&args[1..]),
         other => Err(format!("unknown command '{other}'")),
