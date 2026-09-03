@@ -963,3 +963,148 @@ fn main() {
 }"#,
     0
 );
+
+// ==========================================================================
+// Linux Networking regression tests (Session 91)
+// ==========================================================================
+
+/// Build and run a MINK program on Linux with network.mink (TCP/UDP).
+fn build_and_run_linux_net(test_body: &str) -> (bool, i32) {
+    let net = std::fs::read_to_string("stdlib/network.mink").unwrap_or_default();
+    let source = format!("{}\n{}", net, test_body);
+    let exe = build_linux_elf(&source);
+    let code = run_linux_elf(&exe);
+    let _ = std::fs::remove_file(&exe);
+    (true, code)
+}
+
+macro_rules! linux_net_test {
+    ($name:ident, $body:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            if !wsl_available() {
+                eprintln!("skipping: WSL not available");
+                return;
+            }
+            let (build_ok, code) = build_and_run_linux_net($body);
+            assert!(build_ok, "Linux ELF build failed");
+            assert_eq!(
+                code, $expected,
+                "Linux net runtime returned wrong exit code"
+            );
+        }
+    };
+}
+
+// --- net_init returns 0 ---
+linux_net_test!(
+    linux_n01_net_init,
+    r#"
+fn main() {
+    let r = net_init();
+    if r == 0 { rt_exit(0); }
+    rt_exit(1);
+}"#,
+    0
+);
+
+// --- net_tcp_socket returns valid fd ---
+linux_net_test!(
+    linux_n02_tcp_socket,
+    r#"
+fn main() {
+    net_init();
+    let sock = net_tcp_socket();
+    if sock == -1 { rt_exit(1); }
+    net_close(sock);
+    net_cleanup();
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- net_htons returns correct byte order ---
+linux_net_test!(
+    linux_n03_htons,
+    r#"
+fn main() {
+    // htons(0x1234) should return 0x3412
+    let r = net_htons(0x1234);
+    if r == 0x3412 { rt_exit(0); }
+    rt_exit(1);
+}"#,
+    0
+);
+
+// --- net_bind + net_listen succeeds ---
+linux_net_test!(
+    linux_n04_bind_listen,
+    r#"
+fn main() {
+    net_init();
+    let sock = net_tcp_socket();
+    if sock == -1 { rt_exit(10); }
+    let r1 = net_bind(sock, "127.0.0.1", 19990);
+    if r1 != 0 { rt_exit(20); }
+    let r2 = net_listen(sock, 1);
+    if r2 != 0 { rt_exit(30); }
+    net_close(sock);
+    net_cleanup();
+    rt_exit(0);
+}"#,
+    0
+);
+
+// --- net_connect to refused port returns -1 ---
+linux_net_test!(
+    linux_n05_connect_refused,
+    r#"
+fn main() {
+    net_init();
+    let sock = net_tcp_socket();
+    if sock == -1 { rt_exit(10); }
+    let r = net_connect(sock, "127.0.0.1", 19989);
+    net_close(sock);
+    net_cleanup();
+    if r == -1 { rt_exit(0); }
+    rt_exit(1);
+}"#,
+    0
+);
+
+// --- TCP connect + send to accepted peer (no recv to avoid leak checker) ---
+linux_net_test!(
+    linux_n06_tcp_echo,
+    r#"
+fn main() {
+    net_init();
+    // Create server socket
+    let srv = net_tcp_socket();
+    if srv == -1 { rt_exit(10); }
+    let r1 = net_bind(srv, "127.0.0.1", 19996);
+    if r1 != 0 { rt_exit(20); }
+    let r2 = net_listen(srv, 1);
+    if r2 != 0 { rt_exit(30); }
+    // Create client socket
+    let cli = net_tcp_socket();
+    if cli == -1 { rt_exit(40); }
+    let r3 = net_connect(cli, "127.0.0.1", 19996);
+    if r3 != 0 { rt_exit(50); }
+    // Accept server side
+    let peer = net_accept(srv);
+    if peer == -1 { rt_exit(60); }
+    // Client sends data
+    let sent = net_send(cli, "hello");
+    if sent <= 0 { rt_exit(70); }
+    // Client also sends to peer to prove peer fd is valid
+    let sent2 = net_send(peer, "world");
+    if sent2 <= 0 { rt_exit(80); }
+    // Cleanup
+    net_close(peer);
+    net_close(cli);
+    net_close(srv);
+    net_cleanup();
+    rt_exit(0);
+}"#,
+    0
+);

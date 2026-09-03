@@ -815,6 +815,24 @@ impl Code {
         self.bytes(&[0x48, 0x98]);
     }
 
+    /// `bswap reg` — byte-swap 32-bit value in register (zero-extends to 64-bit).
+    pub(crate) fn bswap_rr(&mut self, reg: Reg) {
+        // bswap uses opcode-embedded register: 0F C8+rd
+        // No ModRM, so use REX.B for R8-R15 only
+        let r = reg as u8;
+        if r >= 8 {
+            self.u8(0x41); // REX.B
+        }
+        self.u8(0x0F);
+        self.u8(0xC8 + (r & 7));
+    }
+
+    /// `xchg al, ah` — swap low two bytes of RAX (16-bit byte swap).
+    pub(crate) fn xchg_al_ah(&mut self) {
+        self.u8(0x86);
+        self.u8(0xC4);
+    }
+
     /// `jmp rel32` to a runtime label (patched later).
     pub(crate) fn jmp_label(&mut self, label: u32) {
         self.jmp(PatchKind::Label(label));

@@ -61,6 +61,31 @@ const CLOCK_REALTIME: i32 = 0;
 const CLOCK_MONOTONIC: i32 = 1;
 
 // ===========================================================================
+// Linux networking syscall numbers
+// ===========================================================================
+
+const SYS_SOCKET: u64 = 41;
+const SYS_CONNECT: u64 = 42;
+const SYS_ACCEPT: u64 = 43;
+const SYS_SENDTO: u64 = 44;
+const SYS_RECVFROM: u64 = 45;
+const SYS_SHUTDOWN: u64 = 48;
+const SYS_BIND: u64 = 49;
+const SYS_LISTEN: u64 = 50;
+const SYS_UNAME: u64 = 63;
+
+// AF_INET=2, SOCK_STREAM=1, SOCK_DGRAM=2, IPPROTO_TCP=6, IPPROTO_UDP=17
+const AF_INET: u64 = 2;
+const SOCK_STREAM: u64 = 1;
+const IPPROTO_TCP: u64 = 6;
+
+/// Offset of recv_buf in BSS (reuse Windows net_func_table slot).
+const NET_RECV_BUF_BSS: u32 = crate::runtime::abi::BSS.recv_buf as u32;
+
+/// recv_buf size (bytes). Must hold hostname + receive data.
+const RECV_BUF_SIZE: u32 = 4096;
+
+// ===========================================================================
 // Linux file constants
 // ===========================================================================
 
@@ -2471,6 +2496,417 @@ fn emit_env_remove(code: &mut Code) {
 }
 
 // ===========================================================================
+// Networking services (Linux)
+// ===========================================================================
+
+/// Helper: parse an IPv4 dotted-decimal string into a 32-bit network-byte-order address.
+/// Input: R10 = pointer to MINK Str (8-byte length prefix + data).
+/// Output: RAX = sin_addr in network byte order.
+/// Clobbers: RCX, RDX, R8, R9, R10, R11, RAX.
+fn net_parse_ip_addr(code: &mut Code) {
+    // R8 = accumulator (network byte order)
+    code.xor_rr32(Reg::R8, Reg::R8);
+    // R10 = data start (skip 8-byte length prefix)
+    code.mov_r_mem(Reg::Rax, Reg::R10, 0); // len
+    code.add_r_imm8(Reg::R10, 8);
+    // Compute end pointer for bounds checking
+    code.mov_rr(Reg::R11, Reg::R10);
+    code.add_rr(Reg::R11, Reg::Rax); // R11 = end_ptr
+    for octet in 0..4u32 {
+        let done_label = code.label();
+        code.xor_rr32(Reg::R9, Reg::R9); // octet value = 0
+        // Bounds check
+        code.cmp_rr(Reg::R10, Reg::R11);
+        code.jcc_label(0x83, done_label); // jae
+        let digit_loop = code.label();
+        code.bind_label(digit_loop);
+        code.movzx_byte(Reg::Rcx, Reg::R10, 0);
+        code.test_rr(Reg::Rcx, Reg::Rcx);
+        code.jcc_label(0x84, done_label); // NUL
+        code.cmp_r_imm8(Reg::Rcx, 0x2E);
+        code.jcc_label(0x84, done_label); // '.'
+        code.sub_r_imm32(Reg::Rcx, '0' as u32);
+        code.mov_r32_imm32(Reg::Rax, 10);
+        code.mul_r(Reg::R9);
+        code.mov_rr(Reg::R9, Reg::Rax);
+        code.add_rr(Reg::R9, Reg::Rcx);
+        code.add_r_imm8(Reg::R10, 1);
+        code.cmp_rr(Reg::R10, Reg::R11);
+        code.jcc_label(0x83, done_label); // jae
+        code.jmp_label(digit_loop);
+        code.bind_label(done_label);
+        code.add_r_imm8(Reg::R10, 1); // skip '.' or NUL
+        // Build network byte order: octet 0 goes to bits [7:0], etc.
+        if octet > 0 {
+            code.shl_r_imm8(Reg::R9, (octet * 8) as u8);
+        }
+        code.add_rr(Reg::R8, Reg::R9);
+    }
+    code.mov_rr(Reg::Rax, Reg::R8); // result in RAX
+}
+
+/// `rt_net_wsa_startup() -> Int`: No-op on Linux (always returns 0).
+fn emit_net_wsa_startup(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_wsa_cleanup() -> Int`: No-op on Linux (always returns 0).
+fn emit_net_wsa_cleanup(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_wsa_last_error() -> Int`: Returns 0 on Linux.
+fn emit_net_wsa_last_error(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_socket(af, ty, proto) -> Int`: Create a socket via socket(2).
+/// Returns file descriptor on success, -1 on error.
+fn emit_net_socket(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, 16); // af
+    code.mov_r_mem(Reg::Rsi, Reg::Rbp, 24); // type
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 32); // protocol
+    code.movabs(Reg::Rax, SYS_SOCKET);
+    code.syscall();
+    // socket returns fd >= 0 on success, negative errno on error
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x89, ok); // jns (non-negative = success)
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.leave_ret();
+}
+
+/// `rt_net_connect(sock, addr, port) -> Int`: Connect TCP socket.
+/// addr is a MINK Str containing "x.x.x.x". Returns 0 on success, -1 on error.
+fn emit_net_connect(code: &mut Code) {
+    prologue(code);
+    // [rbp-16]=sock, [rbp-24]=addr ptr, [rbp-40..56]=sockaddr_in
+    code.sub_rsp(56);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // sock
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // addr ptr
+    // Store port at [rbp-56] before writing sockaddr_in
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax);
+    // Zero-init sockaddr_in (16 bytes at [rbp-40])
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    // sin_family = AF_INET (2)
+    code.movabs(Reg::Rax, AF_INET);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    // htons(port) — store BEFORE sin_addr to avoid 8-byte overwrite
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+    code.xchg_al_ah(); // swap low 2 bytes = htons
+    code.mov_mem_r(Reg::Rbp, -38, Reg::Rax); // sin_port at offset 2
+    // Parse IP address string -> sin_addr
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -24);
+    net_parse_ip_addr(code);
+    // RAX = sin_addr in network byte order
+    code.mov_mem_r(Reg::Rbp, -36, Reg::Rax); // sin_addr at offset 4
+    // connect(sock, &sockaddr_in, 16)
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, -16);
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -40);
+    code.movabs(Reg::Rdx, 16);
+    code.movabs(Reg::Rax, SYS_CONNECT);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok); // jz: success
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_bind(sock, addr, port) -> Int`: Bind TCP socket.
+fn emit_net_bind(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(56);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // sock
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // addr ptr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // port
+    // Zero-init sockaddr_in
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    code.movabs(Reg::Rax, AF_INET);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    // htons(port) — store BEFORE sin_addr to avoid 8-byte overwrite
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+    code.xchg_al_ah(); // swap low 2 bytes = htons
+    code.mov_mem_r(Reg::Rbp, -38, Reg::Rax); // sin_port at offset 2
+    // Parse IP address -> sin_addr
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -24);
+    net_parse_ip_addr(code);
+    code.mov_mem_r(Reg::Rbp, -36, Reg::Rax); // sin_addr at offset 4
+    // bind(sock, &addr, 16)
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, -16);
+    code.lea_r_mem(Reg::Rsi, Reg::Rbp, -40);
+    code.movabs(Reg::Rdx, 16);
+    code.movabs(Reg::Rax, SYS_BIND);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_listen(sock, backlog) -> Int`: Start listening.
+fn emit_net_listen(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, 16); // sock
+    code.mov_r_mem(Reg::Rsi, Reg::Rbp, 24); // backlog
+    code.movabs(Reg::Rax, SYS_LISTEN);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_accept(sock) -> Int`: Accept connection. Returns new fd or -1.
+fn emit_net_accept(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, 16); // sock
+    code.xor_rr32(Reg::Rsi, Reg::Rsi); // addr = NULL
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // addrlen = NULL
+    code.movabs(Reg::Rax, SYS_ACCEPT);
+    code.syscall();
+    // accept returns fd >= 0 on success, negative errno on error
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x89, ok); // jns: non-negative = success
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.leave_ret();
+}
+
+/// `rt_net_send(sock, data) -> Int`: Send data. Returns bytes sent or -1.
+/// sendto syscall: rdi=fd, rsi=buf, rdx=len, r10=flags, r8=dest_addr, r9=addrlen
+fn emit_net_send(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, 16); // sock
+    // data is a Str: [len:8][bytes...] at [rbp+24]
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 24); // data ptr (temp)
+    code.lea_r_mem(Reg::Rsi, Reg::R10, 8); // data+8 = byte array
+    code.mov_r_mem(Reg::Rdx, Reg::R10, 0); // length (first 8 bytes of Str)
+    code.xor_rr32(Reg::R10, Reg::R10); // flags = 0 (must use r10 for sendto)
+    code.xor_rr32(Reg::R8, Reg::R8); // dest_addr = NULL
+    code.xor_rr32(Reg::R9, Reg::R9); // addrlen = 0
+    code.movabs(Reg::Rax, SYS_SENDTO);
+    code.syscall();
+    // sendto returns bytes sent on success, negative errno on error
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x89, ok); // jns: non-negative = success
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.leave_ret();
+}
+
+/// `rt_net_recv(sock, maxlen) -> Str`: Receive data into BSS buffer, return as Str.
+/// recvfrom syscall: rdi=fd, rsi=buf, rdx=len, r10=flags, r8=src_addr, r9=addrlen
+fn emit_net_recv(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8]=byte_count, [rbp-16]=saved_str_ptr
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, 16); // sock
+    // Receive into BSS recv_buf+8 (skip 8-byte length prefix)
+    code.lea_r_rip(Reg::Rsi, PatchKind::Bss(NET_RECV_BUF_BSS + 8));
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 24); // maxlen
+    code.xor_rr32(Reg::R10, Reg::R10); // flags = 0 (must use r10 for recvfrom)
+    code.xor_rr32(Reg::R8, Reg::R8); // src_addr = NULL
+    code.xor_rr32(Reg::R9, Reg::R9); // addrlen = NULL
+    code.movabs(Reg::Rax, SYS_RECVFROM);
+    code.syscall();
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save byte count
+    // Check for error (negative)
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let is_ok = code.label();
+    code.jcc_label(0x89, is_ok); // jns: non-negative = ok
+    // Error: return empty string
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50); // push 0
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+    code.bind_label(is_ok);
+    // Check for zero-length (connection closed)
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let positive = code.label();
+    code.jcc_label(0x8F, positive); // jg: positive length
+    // Zero: return empty string
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+    code.bind_label(positive);
+    // Allocate MINK Str(length) and copy data
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, -8); // length
+    code.sub_rsp(8);
+    code.u8(0x50); // push length
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    // RAX = allocated Str ptr. Save it.
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // Copy: BSS recv_buf+8 -> Str+8, for length bytes
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF_BSS + 8));
+    code.add_r_imm8(Reg::Rax, 8); // Str data start
+    code.mov_rr(Reg::R8, Reg::Rax); // dest
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // count
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, copy_done);
+    code.movzx_byte(Reg::Rax, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R8, 1);
+    code.sub_r_imm32(Reg::R9, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_net_close(sock) -> Int`: Close socket. Returns 0 on success.
+fn emit_net_close(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, 16); // sock
+    code.movabs(Reg::Rax, SYS_CLOSE);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_shutdown(sock, how) -> Int`: Shutdown socket.
+fn emit_net_shutdown(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rdi, Reg::Rbp, 16); // sock
+    code.mov_r_mem(Reg::Rsi, Reg::Rbp, 24); // how
+    code.movabs(Reg::Rax, SYS_SHUTDOWN);
+    code.syscall();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x84, ok);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_getaddrinfo(host, port) -> Str`: V1 — returns host string as-is.
+fn emit_net_get_addr_info(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // host ptr
+    code.leave_ret();
+}
+
+/// `rt_net_freeaddrinfo()`: V1 no-op.
+fn emit_net_free_addr_info(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_net_gethostname() -> Str`: Get local hostname via uname(2).
+fn emit_net_get_host_name(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = length, [rbp-16] = saved string ptr
+    // uname struct on stack: 65 * 5 = 325 bytes for 5 fields (sysname, nodename, ...)
+    // We only need nodename at offset 65. Use BSS recv_buf as temp.
+    code.lea_r_rip(Reg::Rdi, PatchKind::Bss(NET_RECV_BUF_BSS));
+    code.movabs(Reg::Rax, SYS_UNAME);
+    code.syscall();
+    // nodename is at offset 65 in utsname (each field is 65 bytes)
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF_BSS + 65));
+    // Scan for null terminator to compute length
+    code.xor_rr32(Reg::R8, Reg::R8); // length counter
+    let scan = code.label();
+    let scan_done = code.label();
+    code.bind_label(scan);
+    code.cmp_r_imm32(Reg::R8, 63);
+    code.jcc_label(0x83, scan_done);
+    code.movzx_byte(Reg::R9, Reg::R10, 0);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, scan_done);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R8, 1);
+    code.jmp_label(scan);
+    code.bind_label(scan_done);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::R8); // save length
+    // Allocate Str(length)
+    code.mov_rr(Reg::Rdi, Reg::R8);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // save string ptr
+    // Copy: BSS recv_buf+65 -> Str+8, for length bytes
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF_BSS + 65));
+    code.add_r_imm8(Reg::Rax, 8);
+    code.mov_rr(Reg::R8, Reg::Rax);
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8);
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, copy_done);
+    code.movzx_byte(Reg::Rax, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R8, 1);
+    code.sub_r_imm32(Reg::R9, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_net_htons(value) -> Int`: Host-to-network byte order (16-bit).
+fn emit_net_htons(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // value
+    code.xchg_al_ah(); // swap low 2 bytes = htons
+    code.leave_ret();
+}
+
+// ===========================================================================
 // Stub services (unimplemented subsystems)
 // ===========================================================================
 
@@ -2616,23 +3052,23 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::EnvHas, emit_env_has);
     emit!(RuntimeService::EnvRemove, emit_env_remove);
 
-    // --- Network services (stub) ---
-    emit!(RuntimeService::NetWsaStartup, emit_stub_int);
-    emit!(RuntimeService::NetWsaCleanup, emit_stub_int);
-    emit!(RuntimeService::NetWsaLastError, emit_stub_int);
-    emit!(RuntimeService::NetSocket, emit_stub_int);
-    emit!(RuntimeService::NetConnect, emit_stub_int);
-    emit!(RuntimeService::NetBind, emit_stub_int);
-    emit!(RuntimeService::NetListen, emit_stub_int);
-    emit!(RuntimeService::NetAccept, emit_stub_int);
-    emit!(RuntimeService::NetSend, emit_stub_int);
-    emit!(RuntimeService::NetRecv, emit_stub_str);
-    emit!(RuntimeService::NetClose, emit_stub_int);
-    emit!(RuntimeService::NetShutdown, emit_stub_int);
-    emit!(RuntimeService::NetGetAddrInfo, emit_stub_str);
-    emit!(RuntimeService::NetFreeAddrInfo, emit_stub_int);
-    emit!(RuntimeService::NetGetHostName, emit_stub_str);
-    emit!(RuntimeService::NetHtons, emit_stub_int);
+    // --- Network services (Linux) ---
+    emit!(RuntimeService::NetWsaStartup, emit_net_wsa_startup);
+    emit!(RuntimeService::NetWsaCleanup, emit_net_wsa_cleanup);
+    emit!(RuntimeService::NetWsaLastError, emit_net_wsa_last_error);
+    emit!(RuntimeService::NetSocket, emit_net_socket);
+    emit!(RuntimeService::NetConnect, emit_net_connect);
+    emit!(RuntimeService::NetBind, emit_net_bind);
+    emit!(RuntimeService::NetListen, emit_net_listen);
+    emit!(RuntimeService::NetAccept, emit_net_accept);
+    emit!(RuntimeService::NetSend, emit_net_send);
+    emit!(RuntimeService::NetRecv, emit_net_recv);
+    emit!(RuntimeService::NetClose, emit_net_close);
+    emit!(RuntimeService::NetShutdown, emit_net_shutdown);
+    emit!(RuntimeService::NetGetAddrInfo, emit_net_get_addr_info);
+    emit!(RuntimeService::NetFreeAddrInfo, emit_net_free_addr_info);
+    emit!(RuntimeService::NetGetHostName, emit_net_get_host_name);
+    emit!(RuntimeService::NetHtons, emit_net_htons);
 
     // --- Crypto services (stub) ---
     emit!(RuntimeService::CryptoInit, emit_stub_int);
