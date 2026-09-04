@@ -1,0 +1,84 @@
+// ============================================================================
+// MINK System Report
+//
+// A small self-contained Windows utility that gathers basic system
+// information and writes it as a JSON report file (report.json).
+//
+// It demonstrates real MINK capabilities:
+//   - process information:  rt_process_id       (current process ID)
+//   - time information:     rt_time_millis      (milliseconds since boot)
+//   - filesystem:           rt_fs_get_cwd, rt_fs_exists, rt_fs_file_size
+//   - string processing:    rt_str_len, rt_str_from_int, rt_str_concat
+//   - structured JSON output + file write:      rt_fs_write
+//   - clean exit / ownership:                   rt_str_free, rt_exit
+//
+// This program is intentionally self-contained: it uses only runtime
+// intrinsics, so it builds and runs with the plain `mink` CLI and needs
+// no standard-library modules or other files.
+// ============================================================================
+
+fn main() {
+    // --- Gather information ---
+    let pid = rt_process_id();            // Int: current process ID
+    let now = rt_time_millis();           // Int: milliseconds since boot
+    let cwd = rt_fs_get_cwd();            // Str (owned): current directory
+    let cwd_len = rt_str_len(cwd);        // Int: byte length of cwd
+    let has_exe = rt_fs_exists("main.exe");    // Bool: does our own exe exist?
+    let exe_size = rt_fs_file_size("main.exe");  // Int: size of our own exe
+
+    // --- Build the JSON document (piece by piece) ---
+    // Note: rt_str_concat copies its operands; every rt_str_from_int /
+    // rt_str_concat result is a new owned Str that must be freed.
+    let s_pid = rt_str_from_int(pid);
+    let j1 = rt_str_concat("{\"pid\":", s_pid);
+    rt_str_free(s_pid);
+
+    let j2 = rt_str_concat(j1, ",\"now_ms\":");
+    rt_str_free(j1);
+
+    let s_now = rt_str_from_int(now);
+    let j3 = rt_str_concat(j2, s_now);
+    rt_str_free(j2);
+    rt_str_free(s_now);
+
+    let j4 = rt_str_concat(j3, ",\"cwd_len\":");
+    rt_str_free(j3);
+
+    let s_len = rt_str_from_int(cwd_len);
+    let j5 = rt_str_concat(j4, s_len);
+    rt_str_free(j4);
+    rt_str_free(s_len);
+
+    let j6 = rt_str_concat(j5, ",\"exe_size\":");
+    rt_str_free(j5);
+
+    let s_size = rt_str_from_int(exe_size);
+    let j7 = rt_str_concat(j6, s_size);
+    rt_str_free(j6);
+    rt_str_free(s_size);
+
+    let json = rt_str_concat(j7, "}");
+    rt_str_free(j7);
+
+    // --- Write the report file ---
+    let bytes = rt_fs_write("report.json", json);
+    rt_str_free(json);
+
+    // --- Report what happened ---
+    rt_print_str("MINK system report written to report.json (");
+    rt_print_int(bytes);
+    rt_print_str(" bytes)");
+    rt_print_str("  pid=");
+    rt_print_int(pid);
+    rt_print_str(" exe_exists=");
+    if has_exe {
+        rt_print_int(1);
+    } else {
+        rt_print_int(0);
+    }
+
+    // --- Clean up remaining owned strings ---
+    rt_str_free(cwd);
+
+    rt_exit(0);
+}

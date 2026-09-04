@@ -1670,6 +1670,267 @@ fn main() {
 }
 "#;
 
+// =========================================================================
+// Session 97 — process_run pipe-buffer deadlock regression suite
+//
+// The historical bug: `emit_process_run` waited `WaitForSingleObject` for the
+// child BEFORE reading either pipe. A child producing more output than the
+// ~4 KB anonymous-pipe buffer blocked forever on a full pipe, and the parent
+// waited forever for it. The Session 97 fix drains both pipes (via
+// `PeekNamedPipe` + bounded reads) while the child runs.
+//
+// These tests exercise the actual draining behavior with generated MINK
+// children; they are NOT timeout-based. Capture remains bounded at 4088 bytes
+// per stream (the documented V1 contract), and overflow is discarded.
+// =========================================================================
+
+/// Build a MINK child executable that prints `count` copies of `'A'` (plus the
+/// usual CRLF) to stdout and exits with `exit_code`.
+fn build_large_child(dir: &std::path::Path, name: &str, count: usize, exit_code: i32) {
+    let strings = std::fs::read_to_string("stdlib/strings.mink").expect("stdio strings");
+    let src = format!(
+        "{strings}\nfn main() {{\n    let s = str_repeat(\"A\", {count});\n    \n    rt_print_str(s);\n    rt_str_free(s);\n    rt_exit({exit_code});\n}}\n"
+    );
+    let path = dir.join(format!("{name}.mink"));
+    std::fs::write(&path, src).unwrap();
+    let out = mink()
+        .arg("build")
+        .arg(&path)
+        .output()
+        .expect("mink build child");
+    assert!(
+        out.status.success(),
+        "child build failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Build and run a MINK parent program (process lib preloaded) from `dir` with
+/// the given `main` body. Returns (exit code, stdout bytes). The child exe is
+/// resolved via the parent's current directory, which is set to `dir`.
+fn run_parent_from(dir: &std::path::Path, main_body: &str) -> (i32, Vec<u8>) {
+    let lib = process_lib();
+    let src = format!("{lib}\nfn main() {{\n{main_body}\n}}\n");
+    let path = dir.join("parent_test.mink");
+    std::fs::write(&path, src).unwrap();
+    let out = mink()
+        .arg("build")
+        .arg(&path)
+        .output()
+        .expect("mink build parent");
+    assert!(
+        out.status.success(),
+        "parent build failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let exe = path.with_extension("exe");
+    let run = Command::new(&exe)
+        .current_dir(dir)
+        .output()
+        .expect("run parent");
+    let code = run.status.code().unwrap_or(-1);
+    (code, run.stdout)
+}
+
+fn s97_dir(label: &str) -> std::path::PathBuf {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mink_s97_proc_{label}_{n}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Parses the parent's stdout `code\r\nlen\r\n[content]` into those parts.
+fn parse_code_len_content(stdout: &[u8]) -> (i32, usize, Vec<u8>) {
+    let s = String::from_utf8_lossy(stdout);
+    let mut lines = s.split_terminator('\n');
+    let code: i32 = lines.next().unwrap_or("").trim().parse().unwrap_or(-1);
+    let len: usize = lines.next().unwrap_or("").trim().parse().unwrap_or(0);
+    let content = stdout
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|p| p + 1)
+        .and_then(|p| {
+            stdout[p..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .map(|q| p + q + 1)
+        })
+        .map(|p| stdout[p..].to_vec())
+        .unwrap_or_default();
+    let _ = s;
+    (code, len, content)
+}
+
+#[test]
+fn s97_large_stdout_drains_and_caps() {
+    // 5002 bytes (5000 'A' + CRLF) > 4096-byte pipe buffer: deadlocked before.
+    let dir = s97_dir("caps");
+    build_large_child(&dir, "big", 5000, 0);
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let rc = process_run(\"big.exe\");\n    rt_print_int(rc);\n    rt_print_int(process_stdout_len());\n    rt_print_str(process_stdout());\n    rt_exit(0);",
+    );
+    let (rc, len, content) = parse_code_len_content(&out);
+    assert_eq!(code, 0, "parent must exit 0");
+    assert_eq!(rc, 0, "child must exit 0");
+    assert_eq!(len, 4088, "capture must cap at 4088 (V1 contract)");
+    // The 5000-byte 'A' stream is capped at 4088; the CRLF trail is discarded.
+    assert_eq!(
+        &content[..4088],
+        vec![b'A'; 4088],
+        "captured prefix must be exact"
+    );
+    assert_eq!(
+        content.len(),
+        4090,
+        "captured string + parent CRLF = 4090 bytes"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s97_stdout_just_above_pipe_buffer() {
+    // 4097 bytes: the exact historical deadlock trigger.
+    let dir = s97_dir("abovethresh");
+    build_large_child(&dir, "child", 4095, 0); // 4095 'A' + CRLF = 4097 bytes
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let rc = process_run(\"child.exe\");\n    rt_print_int(rc);\n    rt_print_int(process_stdout_len());\n    rt_exit(0);",
+    );
+    let (rc, len, _) = parse_code_len_content(&out);
+    assert_eq!(code, 0, "parent must exit 0");
+    assert_eq!(rc, 0, "child must exit 0 without deadlock");
+    assert_eq!(len, 4088, "capture capped at 4088");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s97_stdout_exact_pipe_buffer_boundary() {
+    // 4096 'A' + CRLF = 4098 bytes at/around the boundary must not hang.
+    let dir = s97_dir("boundary");
+    build_large_child(&dir, "child", 4096, 0);
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let rc = process_run(\"child.exe\");\n    rt_print_int(rc);\n    rt_print_int(process_stdout_len());\n    rt_exit(0);",
+    );
+    let (rc, len, _) = parse_code_len_content(&out);
+    assert_eq!(code, 0, "parent must exit 0");
+    assert_eq!(rc, 0, "must complete without deadlock");
+    assert_eq!(len, 4088, "capture capped at 4088");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s97_small_stdout_exact_content() {
+    let dir = s97_dir("small");
+    build_large_child(&dir, "small", 100, 0);
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let rc = process_run(\"small.exe\");\n    rt_print_int(rc);\n    rt_print_int(process_stdout_len());\n    rt_print_str(process_stdout());\n    rt_exit(0);",
+    );
+    let (rc, len, content) = parse_code_len_content(&out);
+    assert_eq!(code, 0, "parent must exit 0");
+    assert_eq!(rc, 0);
+    // Child prints 100 'A' + CRLF = 102 bytes; fully captured (no cap hit).
+    assert_eq!(len, 102, "small output must be captured in full");
+    assert_eq!(
+        &content[..100],
+        vec![b'A'; 100],
+        "captured bytes must be exact"
+    );
+    assert_eq!(&content[100..102], b"\r\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s97_large_stdout_64k() {
+    let dir = s97_dir("64k");
+    build_large_child(&dir, "c64", 70000, 0); // 70000 'A' + CRLF ≈ 68 KB
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let rc = process_run(\"c64.exe\");\n    rt_print_int(rc);\n    rt_print_int(process_stdout_len());\n    rt_exit(0);",
+    );
+    let (rc, len, _) = parse_code_len_content(&out);
+    assert_eq!(code, 0, "parent must exit 0");
+    assert_eq!(rc, 0, "large output must drain without deadlock");
+    assert_eq!(len, 4088, "capture capped at 4088; overflow discarded");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s97_large_stdout_1mb() {
+    let dir = s97_dir("1mb");
+    build_large_child(&dir, "c1m", 1_000_000, 0);
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let rc = process_run(\"c1m.exe\");\n    rt_print_int(rc);\n    rt_print_int(process_stdout_len());\n    rt_exit(0);",
+    );
+    let (rc, len, _) = parse_code_len_content(&out);
+    assert_eq!(code, 0, "parent must exit 0");
+    assert_eq!(rc, 0, "1 MB output must drain without deadlock");
+    assert_eq!(len, 4088, "capture capped at 4088");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s97_large_output_nonzero_exit() {
+    let dir = s97_dir("nonzero");
+    build_large_child(&dir, "c3", 5000, 3);
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let rc = process_run(\"c3.exe\");\n    rt_print_int(rc);\n    rt_print_int(process_stdout_len());\n    rt_exit(0);",
+    );
+    let (rc, len, _) = parse_code_len_content(&out);
+    assert_eq!(code, 0, "parent must exit 0");
+    assert_eq!(rc, 3, "non-zero exit code must be preserved");
+    assert_eq!(len, 4088);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s97_large_stderr_caps() {
+    // 3000 lines of `e` on stderr = 6000 bytes; stdout empty. Exercises the
+    // stderr drain path without needing a helper interpreter.
+    let dir = s97_dir("bigstderr");
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let rc = process_run(\"for /L %i in (1,1,3000) do @echo e 1>&2\");\n    rt_print_int(rc);\n    rt_print_int(process_stdout_len());\n    rt_print_int(process_stderr_len());\n    rt_exit(0);",
+    );
+    let (rc, _, _) = parse_code_len_content(&out);
+    assert_eq!(code, 0, "parent must exit 0");
+    let s = String::from_utf8_lossy(&out);
+    let parts: Vec<i64> = s
+        .split_whitespace()
+        .filter_map(|x| x.parse().ok())
+        .collect();
+    assert_eq!(parts.len(), 3, "expected rc, out_len, err_len: {s}");
+    assert_eq!(parts[0], 0);
+    assert_eq!(parts[1], 0, "stdout must stay empty");
+    assert_eq!(parts[2], 4088, "large stderr must be capped at 4088");
+    // `rc` from parse is the parent's own exit code
+    assert_eq!(rc, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn s97_repeated_large_executions() {
+    // Run the same big child three times sequentially; each call must return
+    // the same capped length with no stale state, no hang, no crash.
+    let dir = s97_dir("repeat");
+    build_large_child(&dir, "big", 5000, 0);
+    let (code, out) = run_parent_from(
+        &dir,
+        "    let a = process_run(\"big.exe\");\n    let la = process_stdout_len();\n    let b = process_run(\"big.exe\");\n    let lb = process_stdout_len();\n    let c = process_run(\"big.exe\");\n    let lc = process_stdout_len();\n    if a != 0 { rt_exit(21); }\n    if b != 0 { rt_exit(22); }\n    if c != 0 { rt_exit(23); }\n    if la != 4088 { rt_exit(24); }\n    if lb != 4088 { rt_exit(25); }\n    if lc != 4088 { rt_exit(26); }\n    rt_exit(0);",
+    );
+    assert_eq!(
+        code,
+        0,
+        "repeated large executions must all succeed: {}",
+        String::from_utf8_lossy(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn linux_h01_http_execution_verified() {
     if !wsl_available() {

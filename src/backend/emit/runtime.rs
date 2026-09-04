@@ -3155,6 +3155,107 @@ fn emit_process_id(code: &mut Code) {
 ///   [rbp-40]=stderr_read  [rbp-48]=stderr_write  [rbp-52]=exit_code(DWORD)
 ///   [rbp-168..rbp-64]=STARTUPINFOA(104 bytes)
 ///   [rbp-192..rbp-168]=PROCESS_INFORMATION(24 bytes)
+/// Emit a drain block for one pipe: peek the pipe and read/capture (or
+/// discard once the capture cap is reached) all currently available bytes,
+/// looping until the pipe is momentarily empty.
+///
+/// This is the core of the Session 97 `process_run` deadlock fix: the parent
+/// keeps draining both pipes while the child runs, so a child producing more
+/// output than the ~4 KB anonymous-pipe buffer can never block forever on a
+/// full pipe while the parent waits for it.
+///
+/// Capture keeps the first `cap` bytes in the BSS capture buffer; overflow is
+/// read into a scratch area and thrown away, so the child always has room to
+/// write. `PeekNamedPipe` gives an immediate, non-blocking availability count.
+#[allow(clippy::too_many_arguments)]
+fn emit_proc_pipe_drain(
+    code: &mut Code,
+    h_slot: i32,
+    avail_slot: i32,
+    written_slot: i32,
+    capture: PatchKind,
+    cap: u64,
+    scratch: i32,
+    bytes_read: i32,
+) {
+    let loop_start = code.label();
+    let done = code.label();
+    let discard = code.label();
+    let use_avail = code.label();
+    let use_avail_d = code.label();
+
+    code.bind_label(loop_start);
+    // avail = 0 (PeekNamedPipe may leave it untouched on failure)
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, avail_slot, Reg::Rax);
+    // PeekNamedPipe(hPipe, NULL, 0, &bytes_read, &avail, NULL)
+    code.sub_rsp(64); // 4 reg args + 2 stack args
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, h_slot);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.lea_r_mem(Reg::R9, Reg::Rbp, bytes_read);
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, avail_slot);
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rsp, 40, Reg::Rax);
+    code.call_rip(PatchKind::Iat(IAT_PEEK_NAMED_PIPE));
+    code.add_rsp(64);
+    // avail == 0 → nothing to read right now
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, avail_slot);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, done); // jz
+    // remaining = cap - written (written ≤ cap always)
+    code.mov_r_mem(Reg::R10, Reg::Rbp, written_slot);
+    code.movabs(Reg::R11, cap);
+    code.sub_rr(Reg::R11, Reg::R10); // R11 = remaining capture space
+    code.test_rr(Reg::R11, Reg::R11);
+    code.jcc_label(0x8E, discard); // jle → capture full, discard
+    // to_read = min(avail, remaining)
+    code.cmp_rr(Reg::Rax, Reg::R11);
+    code.jcc_label(0x8E, use_avail); // jle: use avail
+    code.mov_rr(Reg::Rax, Reg::R11); // else use remaining
+    code.bind_label(use_avail);
+    // ReadFile(hPipe, capture + written, to_read, &bytes_read, NULL)
+    code.sub_rsp(48); // 4 reg args + 1 stack arg
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, h_slot);
+    code.lea_r_rip(Reg::Rdx, capture);
+    code.add_rr(Reg::Rdx, Reg::R10); // + written
+    code.mov_rr(Reg::R8, Reg::Rax); // to_read
+    code.lea_r_mem(Reg::R9, Reg::Rbp, bytes_read);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax); // lpOverlapped = NULL
+    code.call_rip(PatchKind::Iat(IAT_READ_FILE));
+    code.add_rsp(48);
+    // written += bytes_read
+    code.mov_r_mem(Reg::R10, Reg::Rbp, bytes_read);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, written_slot);
+    code.add_rr(Reg::Rax, Reg::R10);
+    code.mov_mem_r(Reg::Rbp, written_slot, Reg::Rax);
+    code.jmp_label(loop_start);
+
+    // Discard path: capture cap reached; read into scratch and throw away so
+    // the child can keep writing, then re-peek.
+    code.bind_label(discard);
+    // to_read = min(avail, 2048)
+    code.movabs(Reg::R11, 2048u64);
+    code.cmp_rr(Reg::Rax, Reg::R11);
+    code.jcc_label(0x8E, use_avail_d); // jle: use avail
+    code.mov_rr(Reg::Rax, Reg::R11); // else use 2048
+    code.bind_label(use_avail_d);
+    code.sub_rsp(48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, h_slot);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, scratch);
+    code.mov_rr(Reg::R8, Reg::Rax);
+    code.lea_r_mem(Reg::R9, Reg::Rbp, bytes_read);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax);
+    code.call_rip(PatchKind::Iat(IAT_READ_FILE));
+    code.add_rsp(48);
+    code.jmp_label(loop_start);
+
+    code.bind_label(done);
+}
+
 fn emit_process_run(code: &mut Code) {
     prologue(code);
     // [rbp+16] = cmd Str ptr
@@ -3163,8 +3264,9 @@ fn emit_process_run(code: &mut Code) {
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax); // RSP = RBP on return
 
-    // Allocate frame (+ 32 bytes for SECURITY_ATTRIBUTES at [rbp-544])
-    code.sub_rsp(544);
+    // Allocate frame. SECURITY_ATTRIBUTES at [rbp-544]; pipe-drain scratch
+    // buffer (2048 bytes, offsets -2624..-577) below it.
+    code.sub_rsp(2624);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // [rbp-8] = original cstr
 
     // Build "cmd.exe /c " + cmd CStr
@@ -3333,36 +3435,84 @@ fn emit_process_run(code: &mut Code) {
     code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
     code.add_rsp(32);
 
-    // WaitForSingleObject(hProcess, INFINITE) — must come BEFORE
-    // ReadFile to avoid deadlock when child fills pipe buffer.
+    // Zero capture counters, exit-code slot, and bytes-read scratch.
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // written_stdout
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // written_stderr
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // exit_code
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // bytes_read scratch
+
+    // Poll-and-drain loop (Session 97 fix): drain both pipes while the child
+    // runs and wait at most 20 ms at a time. A child producing more output
+    // than the ~4 KB anonymous-pipe buffer can never block forever on a full
+    // pipe while the parent waits for it, because the parent keeps draining.
+    let poll_loop = code.label();
+    code.bind_label(poll_loop);
+    // Drain stdout (capture into stdout_buf data, cap 4088 bytes)
+    emit_proc_pipe_drain(
+        code,
+        -24,
+        -64,
+        -80,
+        PatchKind::Bss(BSS.stdout_buf as u32 + 8),
+        4088u64,
+        -2624,
+        -96,
+    );
+    // Drain stderr (capture into stderr_buf data, cap 4088 bytes)
+    emit_proc_pipe_drain(
+        code,
+        -40,
+        -72,
+        -88,
+        PatchKind::Bss(BSS.stderr_buf as u32 + 8),
+        4088u64,
+        -2624,
+        -96,
+    );
+    // WaitForSingleObject(hProcess, 20)
     code.sub_rsp(32);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -192);
-    code.movabs(Reg::Rdx, 0xFFFF_FFFFu64);
+    code.movabs(Reg::Rdx, 20u64);
     code.call_rip(PatchKind::Iat(IAT_WAIT_FOR_SINGLE_OBJECT));
     code.add_rsp(32);
+    // WAIT_TIMEOUT (0x102) → keep draining
+    code.movabs(Reg::Rcx, 0x102u64);
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x84, poll_loop); // jz
+
+    // Final drain after the child exited (captures anything still buffered).
+    emit_proc_pipe_drain(
+        code,
+        -24,
+        -64,
+        -80,
+        PatchKind::Bss(BSS.stdout_buf as u32 + 8),
+        4088u64,
+        -2624,
+        -96,
+    );
+    emit_proc_pipe_drain(
+        code,
+        -40,
+        -72,
+        -88,
+        PatchKind::Bss(BSS.stderr_buf as u32 + 8),
+        4088u64,
+        -2624,
+        -96,
+    );
 
     // GetExitCodeProcess(hProcess, &exit_code)
-    code.xor_rr32(Reg::Rax, Reg::Rax);
-    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // zero exit_code slot
     code.sub_rsp(32);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -192);
     code.lea_r_mem(Reg::Rdx, Reg::Rbp, -56);
     code.call_rip(PatchKind::Iat(IAT_GET_EXIT_CODE_PROCESS));
     code.add_rsp(32);
 
-    // Read stdout (single read, V1 bounded capture)
-    code.sub_rsp(48);
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
-    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(BSS.stdout_buf as u32 + 8));
-    code.movabs(Reg::R8, 4088u64);
-    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32));
-    code.xor_rr32(Reg::Rax, Reg::Rax);
-    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax);
-    code.call_rip(PatchKind::Iat(IAT_READ_FILE));
-    code.add_rsp(48);
-
-    // Save stdout_len and proc_stdout_ptr
-    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.bytes_written as u32));
+    // Publish captured stdout length and pointer (bounded-capture contract:
+    // at most 4088 bytes per stream; overflow is discarded).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
     code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.stdout_buf as u32));
     code.mov_mem_r(Reg::R10, 0, Reg::Rax);
     code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stdout_len as u32));
@@ -3371,18 +3521,8 @@ fn emit_process_run(code: &mut Code) {
     code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stdout_ptr as u32));
     code.mov_mem_r(Reg::R10, 0, Reg::Rax);
 
-    // Read stderr
-    code.sub_rsp(48);
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
-    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(BSS.stderr_buf as u32 + 8));
-    code.movabs(Reg::R8, 4088u64);
-    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32));
-    code.xor_rr32(Reg::Rax, Reg::Rax);
-    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax);
-    code.call_rip(PatchKind::Iat(IAT_READ_FILE));
-    code.add_rsp(48);
-
-    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.bytes_written as u32));
+    // Publish captured stderr length and pointer.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
     code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.stderr_buf as u32));
     code.mov_mem_r(Reg::R10, 0, Reg::Rax);
     code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stderr_len as u32));
@@ -3782,6 +3922,7 @@ const IAT_CREATE_PROCESS_A: u32 = 18;
 const IAT_GET_EXIT_CODE_PROCESS: u32 = 19;
 const IAT_WAIT_FOR_SINGLE_OBJECT: u32 = 20;
 const IAT_SET_HANDLE_INFORMATION: u32 = 23;
+const IAT_PEEK_NAMED_PIPE: u32 = 34;
 
 /// `rt_fs_exists(path: Str) -> Bool`.
 /// GetFileAttributesA returns INVALID_HANDLE_VALUE (0xFFFFFFFF) on error.

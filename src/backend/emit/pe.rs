@@ -59,6 +59,8 @@ const KERNEL32_IMPORTS: &[&str] = &[
     // --- Networking dynamic loading (Session 67) ---
     "LoadLibraryA",
     "GetProcAddress",
+    // --- Process drain fix (Session 97) ---
+    "PeekNamedPipe",
 ];
 
 const K32_COUNT: u32 = KERNEL32_IMPORTS.len() as u32;
@@ -119,6 +121,7 @@ pub(crate) mod iat {
     // --- Dynamic loading (Session 67) ---
     pub const LOAD_LIBRARY_A: u32 = 32;
     pub const GET_PROC_ADDRESS: u32 = 33;
+    pub const PEEK_NAMED_PIPE: u32 = 34;
 }
 
 /// The layout of the sections, computed from their contents.
