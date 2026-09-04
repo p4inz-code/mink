@@ -111,6 +111,8 @@ fn path_join(a: Str, b: Str) -> Str {
             j = j + 1;
         }
     }
+    rt_str_free(a);
+    rt_str_free(b);
     return result;
 }
 
@@ -148,6 +150,7 @@ fn path_parent(p: Str) -> Str {
             j = j + 1;
         }
     }
+    rt_str_free(p);
     return result;
 }
 
@@ -170,6 +173,7 @@ fn path_filename(p: Str) -> Str {
         rt_str_set_byte(result, j, rt_str_byte(p, start + j));
         j = j + 1;
     }
+    rt_str_free(p);
     return result;
 }
 
@@ -197,6 +201,7 @@ fn path_extension(p: Str) -> Str {
         rt_str_set_byte(result, j, rt_str_byte(p, ext_start + j));
         j = j + 1;
     }
+    rt_str_free(p);
     return result;
 }
 
@@ -222,27 +227,44 @@ fn path_stem(p: Str) -> Str {
         rt_str_set_byte(result, j, rt_str_byte(p, j));
         j = j + 1;
     }
+    rt_str_free(p);
     return result;
 }
 
 /// path_has_extension(p, ext): check if path has the given extension.
+// Note: `p` is consumed by path_extension (which frees it); `pe` (heap result)
+// and `ext` are freed here.
 fn path_has_extension(p: Str, ext: Str) -> Bool {
     let pe = path_extension(p);
-    return rt_str_eq(pe, ext);
+    let r = rt_str_eq(pe, ext);
+    rt_str_free(pe);
+    rt_str_free(ext);
+    return r;
 }
 
 /// path_is_absolute(p): true if starts with '/' or has ':' at position 1.
 fn path_is_absolute(p: Str) -> Bool {
     let mut len = rt_str_len(p);
-    if len == 0 { return false; }
-    if rt_str_byte(p, 0) == 47 { return true; }
-    if len >= 2 {
-        if rt_str_byte(p, 1) == 58 { return true; }
+    let mut r = false;
+    if len == 0 {
+        r = false;
+    } else {
+        if rt_str_byte(p, 0) == 47 {
+            r = true;
+        } else {
+            if len >= 2 {
+                if rt_str_byte(p, 1) == 58 {
+                    r = true;
+                }
+            }
+        }
     }
-    return false;
+    rt_str_free(p);
+    return r;
 }
 
 /// path_is_relative(p): true if NOT absolute.
+// `p` is consumed by path_is_absolute (which frees it).
 fn path_is_relative(p: Str) -> Bool {
     return !path_is_absolute(p);
 }
@@ -275,6 +297,8 @@ fn path_with_extension(p: Str, ext: Str) -> Str {
         rt_str_set_byte(result, stem_end + j, rt_str_byte(ext, j));
         j = j + 1;
     }
+    rt_str_free(p);
+    rt_str_free(ext);
     return result;
 }
 
@@ -287,6 +311,7 @@ fn path_normalize(p: Str) -> Str {
         rt_str_set_byte(result, i, rt_str_byte(p, i));
         i = i + 1;
     }
+    rt_str_free(p);
     return result;
 }
 
@@ -294,32 +319,56 @@ fn path_normalize(p: Str) -> Str {
 // FILE OPERATIONS
 // ============================================================
 
+// V1 OWNERSHIP CONTRACT (Session 93/95):
+// - Intrinsic calls (rt_fs_*) do NOT consume Str arguments (read-borrow).
+// - User function calls DO consume Str arguments: the callee owns them.
+// - Therefore every wrapper below frees its consumed Str parameters at a
+//   single textual exit. Freeing a literal/immutable string is a safe no-op,
+//   so literal callers are unaffected; heap-string callers no longer leak.
+
 fn fs_exists(path: Str) -> Bool {
-    return rt_fs_exists(path);
+    let r = rt_fs_exists(path);
+    rt_str_free(path);
+    return r;
 }
 
 fn fs_file_size(path: Str) -> Int {
-    return rt_fs_file_size(path);
+    let r = rt_fs_file_size(path);
+    rt_str_free(path);
+    return r;
 }
 
 fn fs_read(path: Str) -> Str {
-    return rt_fs_read(path);
+    let r = rt_fs_read(path);
+    rt_str_free(path);
+    return r;
 }
 
 fn fs_write(path: Str, data: Str) -> Int {
-    return rt_fs_write(path, data);
+    let r = rt_fs_write(path, data);
+    rt_str_free(path);
+    rt_str_free(data);
+    return r;
 }
 
 fn fs_copy_file(src: Str, dst: Str) -> Int {
-    return rt_fs_copy(src, dst);
+    let r = rt_fs_copy(src, dst);
+    rt_str_free(src);
+    rt_str_free(dst);
+    return r;
 }
 
 fn fs_move(src: Str, dst: Str) -> Int {
-    return rt_fs_move(src, dst);
+    let r = rt_fs_move(src, dst);
+    rt_str_free(src);
+    rt_str_free(dst);
+    return r;
 }
 
 fn fs_remove_file(path: Str) -> Int {
-    return rt_fs_remove_file(path);
+    let r = rt_fs_remove_file(path);
+    rt_str_free(path);
+    return r;
 }
 
 // ============================================================
@@ -327,11 +376,15 @@ fn fs_remove_file(path: Str) -> Int {
 // ============================================================
 
 fn fs_create_dir(path: Str) -> Int {
-    return rt_fs_create_dir(path);
+    let r = rt_fs_create_dir(path);
+    rt_str_free(path);
+    return r;
 }
 
 fn fs_remove_dir(path: Str) -> Int {
-    return rt_fs_remove_dir(path);
+    let r = rt_fs_remove_dir(path);
+    rt_str_free(path);
+    return r;
 }
 
 fn fs_get_cwd() -> Str {
@@ -339,7 +392,9 @@ fn fs_get_cwd() -> Str {
 }
 
 fn fs_set_cwd(path: Str) -> Int {
-    return rt_fs_set_cwd(path);
+    let r = rt_fs_set_cwd(path);
+    rt_str_free(path);
+    return r;
 }
 
 // ============================================================
@@ -347,19 +402,35 @@ fn fs_set_cwd(path: Str) -> Int {
 // ============================================================
 
 fn fs_is_file(path: Str) -> Bool {
-    if !rt_fs_exists(path) { return false; }
-    let sz = rt_fs_file_size(path);
-    return sz >= 0;
+    let mut r = false;
+    if rt_fs_exists(path) {
+        let sz = rt_fs_file_size(path);
+        if sz >= 0 {
+            r = true;
+        }
+    }
+    rt_str_free(path);
+    return r;
 }
 
 fn fs_is_dir(path: Str) -> Bool {
-    if !rt_fs_exists(path) { return false; }
-    let sz = rt_fs_file_size(path);
-    return sz < 0;
+    let mut r = false;
+    if rt_fs_exists(path) {
+        let sz = rt_fs_file_size(path);
+        if sz < 0 {
+            r = true;
+        }
+    }
+    rt_str_free(path);
+    return r;
 }
 
 fn fs_file_size_or(path: Str, default: Int) -> Int {
     let sz = rt_fs_file_size(path);
-    if sz < 0 { return default; }
-    return sz;
+    let mut r = sz;
+    if sz < 0 {
+        r = default;
+    }
+    rt_str_free(path);
+    return r;
 }

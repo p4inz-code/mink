@@ -491,6 +491,9 @@ fn _parse_value(arena: Ptr<Int>, input_len: Int, pos: Int, wp: Int) -> (Int, Int
 }
 
 // Public parse entry point — takes Str input, returns value offset (0 on error)
+// Session 95: input bytes are pre-read into the arena and parsing works
+// entirely off the arena, so the consumed `input` string is freed at the
+// single textual exit (literal inputs are a safe no-op free).
 fn json_parse(input: Str, arena: Ptr<Int>) -> Int {
     let mut input_len = rt_str_len(input);
     // Pre-read input bytes into arena[0..input_len-1]
@@ -508,13 +511,18 @@ fn json_parse(input: Str, arena: Ptr<Int>) -> Int {
     }
     // Parse starting at read position 0, write position wp
     let mut result = _parse_value(arena, input_len, 0, wp);
-    if result.0 == 0 { return 0; }
-    let mut p = _skip_ws(arena, input_len, result.1);
-    if p < input_len { return 0; }
-    // Advance the write pointer past the newly written value
-    let mut val_size = _val_size(arena, result.0);
-    _write(arena, 8191, result.0 + val_size);
-    return result.0;
+    let mut parsed = 0;
+    if result.0 != 0 {
+        let mut p = _skip_ws(arena, input_len, result.1);
+        if p >= input_len {
+            // Advance the write pointer past the newly written value
+            let mut val_size = _val_size(arena, result.0);
+            _write(arena, 8191, result.0 + val_size);
+            parsed = result.0;
+        }
+    }
+    rt_str_free(input);
+    return parsed;
 }
 
 // ============================================================================

@@ -88,14 +88,18 @@ fn net_socket(af: Int, ty: Int, proto: Int) -> Int {
 // addr is an IPv4 string like "127.0.0.1".
 // Returns 0 on success, -1 on error.
 fn net_connect(sock: Int, addr: Str, port: Int) -> Int {
-    return rt_net_connect(sock, addr, port);
+    let r = rt_net_connect(sock, addr, port);
+    rt_str_free(addr);
+    return r;
 }
 
 // Bind to an address and port.
 // addr is an IPv4 string like "0.0.0.0" for all interfaces.
 // Returns 0 on success, -1 on error.
 fn net_bind(sock: Int, addr: Str, port: Int) -> Int {
-    return rt_net_bind(sock, addr, port);
+    let r = rt_net_bind(sock, addr, port);
+    rt_str_free(addr);
+    return r;
 }
 
 // Start listening for connections.
@@ -116,7 +120,9 @@ fn net_accept(sock: Int) -> Int {
 // Send data over a connected socket.
 // Returns the number of bytes sent, or -1 on error.
 fn net_send(sock: Int, data: Str) -> Int {
-    return rt_net_send(sock, data);
+    let r = rt_net_send(sock, data);
+    rt_str_free(data);
+    return r;
 }
 
 // Receive data from a connected socket.
@@ -147,7 +153,9 @@ fn net_shutdown(sock: Int, how: Int) -> Int {
 // Resolve a hostname to an IP address string.
 // V1: Returns the host string as-is (full DNS via getaddrinfo is V2).
 fn net_resolve(host: Str, port: Int) -> Str {
-    return rt_net_getaddrinfo(host, port);
+    let r = rt_net_getaddrinfo(host, port);
+    rt_str_free(host);
+    return r;
 }
 
 // Free a resolved address (no-op in V1).
