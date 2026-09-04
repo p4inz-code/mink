@@ -2516,6 +2516,10 @@ fn emit_net_wsa_last_error(code: &mut Code) {
 /// `rt_net_socket(af, ty, proto) -> Int`: WSASocketA. Returns socket handle.
 fn emit_net_socket(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // af
     code.mov_r_mem(Reg::R11, Reg::Rbp, 24); // type
     code.mov_r_mem(Reg::R12, Reg::Rbp, 32); // protocol
@@ -2532,12 +2536,20 @@ fn emit_net_socket(code: &mut Code) {
     code.call_rax();
     code.add_rsp(48);
     code.leave_ret();
+    // Not initialized: return INVALID_SOCKET (-1) instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
 }
 
 /// `rt_net_connect(sock, addr, port) -> Int`: Connect to IPv4 address.
 /// addr is a Str containing "x.x.x.x". Returns 0 on success, -1 on error.
 fn emit_net_connect(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.sub_rsp(64); // [rbp-16]=sock, [rbp-24]=addr ptr, [rbp-40..56]=sockaddr_in, [rbp-56]=port
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
@@ -2626,11 +2638,19 @@ fn emit_net_connect(code: &mut Code) {
     code.bind_label(ok);
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
+    // Not initialized: clean -1 instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
 }
 
 /// `rt_net_bind(sock, addr, port) -> Int`: Bind to IPv4 address.
 fn emit_net_bind(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.sub_rsp(64);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // sock
@@ -2717,11 +2737,19 @@ fn emit_net_bind(code: &mut Code) {
     code.bind_label(ok);
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
+    // Not initialized: clean -1 instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
 }
 
 /// `rt_net_listen(sock, backlog) -> Int`: Start listening.
 fn emit_net_listen(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, 24); // backlog
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 48)); // listen
@@ -2736,11 +2764,19 @@ fn emit_net_listen(code: &mut Code) {
     code.bind_label(ok);
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
+    // Not initialized: clean -1 instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
 }
 
 /// `rt_net_accept(sock) -> Int`: Accept connection. Returns new socket or -1.
 fn emit_net_accept(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
     code.xor_rr32(Reg::Rdx, Reg::Rdx); // addr = NULL
     code.xor_rr32(Reg::R8, Reg::R8); // addrlen = NULL
@@ -2756,11 +2792,19 @@ fn emit_net_accept(code: &mut Code) {
     code.leave_ret();
     code.bind_label(ok);
     code.leave_ret();
+    // Not initialized: clean -1 instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
 }
 
 /// `rt_net_send(sock, data) -> Int`: Send data. Returns bytes sent or -1.
 fn emit_net_send(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
     // data is a Str: [len:8][bytes...] at [rbp+24]
     code.mov_r_mem(Reg::R10, Reg::Rbp, 24); // data ptr
@@ -2780,11 +2824,19 @@ fn emit_net_send(code: &mut Code) {
     code.leave_ret();
     code.bind_label(ok);
     code.leave_ret();
+    // Not initialized: clean -1 instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
 }
 
 /// `rt_net_recv(sock, maxlen) -> Str`: Receive data into recv_buf, return as Str.
 fn emit_net_recv(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.sub_rsp(16); // [rbp-8] = bytes received, [rbp-16] = saved string ptr
     code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // sock
     code.mov_r_mem(Reg::R11, Reg::Rbp, 24); // maxlen
@@ -2851,11 +2903,23 @@ fn emit_net_recv(code: &mut Code) {
     code.add_rsp(16); // pop arg + alignment padding
     // RAX = empty string ptr (length prefix = 0)
     code.leave_ret();
+    // Not initialized: return empty Str instead of faulting.
+    code.bind_label(ninit);
+    code.sub_rsp(8); // alignment padding
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50); // push rax (= 0 length) as stack arg
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
 }
 
 /// `rt_net_close(sock) -> Int`: Close socket. Returns 0 on success.
 fn emit_net_close(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 80)); // closesocket
     code.sub_rsp(32);
@@ -2870,11 +2934,19 @@ fn emit_net_close(code: &mut Code) {
     code.bind_label(ok);
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
+    // Not initialized: clean -1 instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
 }
 
 /// `rt_net_shutdown(sock, how) -> Int`: Shutdown socket.
 fn emit_net_shutdown(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, 24); // how
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 88)); // shutdown
@@ -2888,6 +2960,10 @@ fn emit_net_shutdown(code: &mut Code) {
     code.leave_ret();
     code.bind_label(ok);
     code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+    // Not initialized: clean -1 instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
     code.leave_ret();
 }
 
@@ -2911,6 +2987,10 @@ fn emit_net_free_addr_info(code: &mut Code) {
 /// Allocates a heap Str via StrAlloc and copies the hostname into it.
 fn emit_net_get_host_name(code: &mut Code) {
     prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
     code.sub_rsp(16); // [rbp-8] = length, [rbp-16] = saved string ptr
     // Use BSS recv_buf as temp buffer: gethostname(NET_RECV_BUF, 255)
     code.lea_r_rip(Reg::Rcx, PatchKind::Bss(NET_RECV_BUF));
@@ -2963,6 +3043,14 @@ fn emit_net_get_host_name(code: &mut Code) {
     code.bind_label(copy_done);
     // Return saved string ptr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+    // Not initialized: return empty Str instead of faulting.
+    code.bind_label(ninit);
+    code.sub_rsp(8); // alignment padding
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50); // push rax (= 0 length) as stack arg
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
     code.leave_ret();
 }
 

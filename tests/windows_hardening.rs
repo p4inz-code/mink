@@ -563,6 +563,54 @@ fn main() {{
     assert_eq!(code, 0, "udp round trip failed: {err}");
 }
 
+/// Every net intrinsic must fail cleanly (socket -1, recv/hostname empty
+/// string) when called BEFORE net_init() — previously this faulted through a
+/// NULL Winsock function pointer. The program must exit 0 with no crash and
+/// no leak-checker failure.
+#[test]
+fn network_operations_without_init_fail_cleanly() {
+    let body = r#"
+fn main() {
+    // Deliberately no net_init(): each intrinsic below must return its
+    // documented failure value instead of crashing.
+    let sock = net_tcp_socket();
+    let sock2 = net_udp_socket();
+    let mut pass = 0;
+    if sock == -1 {
+        if sock2 == -1 {
+            pass = 1;
+        }
+    }
+    if sock != -1 {
+        net_close(sock);
+    }
+    if sock2 != -1 {
+        net_close(sock2);
+    }
+    // String-returning intrinsics must yield an empty string pre-init.
+    let hn = net_hostname();
+    let rv = net_recv(0, 64);
+    let hlen = rt_str_len(hn);
+    let rlen = rt_str_len(rv);
+    rt_str_free(hn);
+    rt_str_free(rv);
+    if pass == 1 {
+        if hlen == 0 {
+            if rlen == 0 {
+                rt_exit(0);
+            }
+        }
+    }
+    rt_exit(1);
+}
+"#;
+    let (code, _out, err) = build_and_run(&["network.mink"], body, "net_no_init");
+    assert_eq!(
+        code, 0,
+        "net intrinsics without net_init must fail cleanly, stderr: {err}"
+    );
+}
+
 // =========================================================================
 // HTTP end-to-end (Phase 7) — deterministic localhost split server
 // =========================================================================
@@ -645,6 +693,40 @@ fn serve_http_once(listener: &TcpListener, route: &str) {
             stream.flush().unwrap();
             std::thread::sleep(Duration::from_millis(30));
             // close without finishing headers
+        }
+        "/echo" => {
+            // Read the request body (Content-Length bytes after the header
+            // terminator; the header reader may already hold part of it).
+            let text = String::from_utf8_lossy(&req);
+            let clen = text
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split(':').nth(1))
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let header_end = req
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|p| p + 4)
+                .unwrap_or(req.len());
+            let mut body: Vec<u8> = req[header_end..].to_vec();
+            while body.len() < clen {
+                let mut buf = [0u8; 4096];
+                match stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                    Err(_) => break,
+                }
+            }
+            body.truncate(clen);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.flush().unwrap();
+            stream.write_all(&body).unwrap();
+            stream.flush().unwrap();
         }
         _ => {
             let _ = route;
@@ -864,6 +946,126 @@ fn main() {{
     let _ = std::fs::remove_file(&exe);
     server.join().unwrap();
     assert_eq!(code, 0, "large-body HTTP exact length failed: {err}");
+}
+
+/// POST end-to-end: three sequential requests with exact bodies (511, 2048,
+/// and 0 bytes) echoed byte-for-byte by the deterministic localhost server.
+/// Verifies the POST request line, Content-Length digits (3/4/1-wide), body
+/// bytes, status 200, exact response length, and leak-free ownership.
+#[test]
+fn http_windows_post_exact_body_roundtrip() {
+    let port = free_port();
+    let server = std::thread::spawn(move || {
+        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        serve_http_once(&listener, "/echo");
+        serve_http_once(&listener, "/echo");
+        serve_http_once(&listener, "/echo");
+    });
+
+    let source = format!(
+        r#"
+fn check(resp: Str, want_len: Int, want_fill: Int) -> Int {{
+    let len = rt_str_len(resp);
+    let mut code = 0;
+    let mut ci = 9;
+    while ci < len {{
+        let b = rt_str_byte(resp, ci);
+        if b == 32 {{
+            ci = len;
+        }} else {{
+            code = code * 10 + (b - 48);
+            ci = ci + 1;
+        }}
+    }}
+    let mut bs = 0;
+    let mut found = 0;
+    let mut si = 0;
+    while si < len - 3 {{
+        if rt_str_byte(resp, si) == 13 {{
+            if rt_str_byte(resp, si + 1) == 10 {{
+                if rt_str_byte(resp, si + 2) == 13 {{
+                    if rt_str_byte(resp, si + 3) == 10 {{
+                        bs = si + 4;
+                        found = 1;
+                        si = len;
+                    }}
+                }}
+            }}
+        }}
+        si = si + 1;
+    }}
+    let mut pass = 0;
+    if found == 1 {{
+        if code == 200 {{
+            if len - bs == want_len {{
+                let mut allf = 1;
+                let mut k = 0;
+                while k < want_len {{
+                    if rt_str_byte(resp, bs + k) != want_fill {{
+                        allf = 0;
+                    }}
+                    k = k + 1;
+                }}
+                if allf == 1 {{
+                    pass = 1;
+                }}
+            }}
+        }}
+    }}
+    rt_str_free(resp);
+    return pass;
+}}
+
+fn main() {{
+    let r = net_init();
+    if r != 0 {{
+        rt_exit(10);
+    }}
+    // 511 bytes of 'A' (Content-Length: 511 -> 3 digits)
+    let b1 = rt_str_alloc(511);
+    let mut i = 0;
+    while i < 511 {{
+        rt_str_set_byte(b1, i, 65);
+        i = i + 1;
+    }}
+    let r1 = http_client_post_with("127.0.0.1", {port}, "/echo", b1);
+    let a = check(r1, 511, 65);
+    // 2048 bytes of 'B' (4 digits)
+    let b2 = rt_str_alloc(2048);
+    i = 0;
+    while i < 2048 {{
+        rt_str_set_byte(b2, i, 66);
+        i = i + 1;
+    }}
+    let r2 = http_client_post_with("127.0.0.1", {port}, "/echo", b2);
+    let b = check(r2, 2048, 66);
+    // Empty body (Content-Length: 0)
+    let r3 = http_client_post_with("127.0.0.1", {port}, "/echo", "");
+    let c = check(r3, 0, 0);
+    if a == 1 {{
+        if b == 1 {{
+            if c == 1 {{
+                rt_exit(0);
+            }}
+        }}
+    }}
+    rt_exit(1);
+}}
+"#
+    );
+    let mut full = stdlib_file("network.mink");
+    full.push('\n');
+    full.push_str(&stdlib_file("http.mink"));
+    full.push('\n');
+    full.push_str(&source);
+    let exe = build_win(&full, "http_post");
+    let (code, _out, err) = run_exe(&exe);
+    let _ = std::fs::remove_file(&exe);
+    server.join().unwrap();
+    assert_eq!(
+        code, 0,
+        "Windows HTTP POST exact-body round trip failed: {err}"
+    );
 }
 
 // =========================================================================
