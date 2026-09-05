@@ -2530,6 +2530,39 @@ fn emit_env_remove(code: &mut Code) {
     code.leave_ret();
 }
 
+// --- Session 99 stub helpers (Linux frozen; compile-totality only) ---
+
+/// Unit stub: returns immediately with no value.
+fn emit_linux_stub_unit(code: &mut Code) {
+    prologue(code);
+    code.leave_ret();
+}
+
+/// Stub returning 0.
+fn emit_linux_stub_zero(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// Stub returning -1.
+fn emit_linux_stub_minus_one(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// Stub returning an owned empty Str.
+fn emit_linux_stub_empty_str(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
 // ===========================================================================
 // Networking services (Linux)
 // ===========================================================================
@@ -3196,6 +3229,33 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::EnvSet, emit_env_set);
     emit!(RuntimeService::EnvHas, emit_env_has);
     emit!(RuntimeService::EnvRemove, emit_env_remove);
+
+    // --- Session 99 services (Linux frozen: deterministic stubs so the
+    // shared service table stays total; no Linux program calls these) ---
+    emit!(RuntimeService::Sleep, |code: &mut Code| {
+        emit_linux_stub_unit(code)
+    });
+    emit!(RuntimeService::StderrWrite, |code: &mut Code| {
+        emit_linux_stub_minus_one(code)
+    });
+    emit!(RuntimeService::StdinRead, |code: &mut Code| {
+        emit_linux_stub_empty_str(code)
+    });
+    emit!(RuntimeService::Argc, |code: &mut Code| {
+        emit_linux_stub_zero(code)
+    });
+    emit!(RuntimeService::Argv, |code: &mut Code| {
+        emit_linux_stub_empty_str(code)
+    });
+    emit!(RuntimeService::ArgvParse, |code: &mut Code| {
+        emit_linux_stub_unit(code)
+    });
+    emit!(RuntimeService::StrFromFloat, |code: &mut Code| {
+        emit_linux_stub_empty_str(code)
+    });
+    emit!(RuntimeService::StrFormat, |code: &mut Code| {
+        emit_linux_stub_empty_str(code)
+    });
 
     // --- Network services (Linux) ---
     emit!(RuntimeService::NetWsaStartup, emit_net_wsa_startup);

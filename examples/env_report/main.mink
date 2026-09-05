@@ -1,0 +1,97 @@
+// MINK Environment Report — Session 99 Wave A proof application.
+//
+// Exercises every new Session 99 capability end-to-end:
+//   - command-line arguments        (rt_argc / rt_argv)
+//   - environment get/set/remove    (rt_env_get / rt_env_set / rt_env_remove)
+//   - stdin read to EOF             (rt_stdin_read)
+//   - float -> Str                  (rt_str_from_float)
+//   - str_format                    (rt_str_format)
+//   - stderr write                  (rt_stderr_write)
+//   - sleep                         (rt_sleep)
+//   - filesystem write              (rt_fs_write)
+//
+// Ownership rule followed throughout: every rt_str_* result is a new
+// owned string that must be released with rt_str_free exactly once.
+// The program exits 0 through the leak checker.
+//
+// Run with piped stdin, e.g.:  echo "piped input" | main.exe arg1 "arg two"
+fn main() {
+    // --- argv: count + the first two arguments (empty when absent) ---
+    let argc = rt_argc();
+    rt_print_int(argc);
+    let mut arg0 = rt_str_alloc(0);
+    let mut arg1 = rt_str_alloc(0);
+    if argc > 0 {
+        let x = rt_argv(0);
+        rt_str_free(arg0);
+        arg0 = x;
+    }
+    if argc > 1 {
+        let y = rt_argv(1);
+        rt_str_free(arg1);
+        arg1 = y;
+    }
+    rt_print_str(arg0);
+    rt_print_str(arg1);
+
+    // --- environment get (owned result, freed) ---
+    let p = rt_env_get("PATH");
+    let plen = rt_str_len(p);
+    rt_str_free(p);
+
+    // --- environment set / get / remove round trip ---
+    let rc_set = rt_env_set("MINK_S99_ENVREPORT", "env-report-value");
+    let v = rt_env_get("MINK_S99_ENVREPORT");
+    let vlen = rt_str_len(v);
+    rt_str_free(v);
+    let rc_remove = rt_env_remove("MINK_S99_ENVREPORT");
+
+    // --- stdin read to EOF (piped input; empty when nothing is piped) ---
+    let input = rt_stdin_read();
+    let inlen = rt_str_len(input);
+    rt_str_free(input);
+
+    // --- str_format (exactly three substitution arguments) ---
+    let s_plen = rt_str_from_int(plen);
+    let s_vlen = rt_str_from_int(vlen);
+    let s_inlen = rt_str_from_int(inlen);
+    let msg = rt_str_format("env_report: path_len={} value_len={} stdin_len={}", s_plen, s_vlen, s_inlen);
+    rt_print_str(msg);
+    rt_str_free(msg);
+    rt_str_free(s_plen);
+    rt_str_free(s_vlen);
+    rt_str_free(s_inlen);
+
+    // --- float -> Str ---
+    let f = rt_str_from_float(2.5);
+    let fp = rt_str_from_float(3.141592653589793);
+    rt_print_str(f);
+    rt_print_str(fp);
+    rt_str_free(f);
+    rt_str_free(fp);
+
+    // --- set/remove results ---
+    rt_print_int(rc_set);
+    rt_print_int(rc_remove);
+
+    // --- stderr write (exact bytes, separate stream) ---
+    let _n = rt_stderr_write("env_report: diagnostics on stderr\n");
+
+    // --- sleep (bounded, non-spinning) ---
+    rt_sleep(5);
+
+    // --- filesystem write of a small text report ---
+    let mut body = rt_str_concat("argc=", arg0);
+    let arg1b = rt_str_concat(" argv1=", arg1);
+    let body2 = rt_str_concat(body, arg1b);
+    rt_str_free(body);
+    rt_str_free(arg1b);
+    let n = rt_fs_write("env_report.txt", body2);
+    rt_str_free(body2);
+    rt_print_int(n);
+
+    // --- release the owned argv strings ---
+    rt_str_free(arg0);
+    rt_str_free(arg1);
+    rt_exit(0);
+}

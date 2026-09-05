@@ -1,0 +1,7 @@
+// Result<T, E> — the standard MINK type for error handling.
+// Represents either a successful value or an error.
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}

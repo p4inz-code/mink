@@ -1,0 +1,382 @@
+// MINK Hashing Library (Session 58)
+// Non-cryptographic hashes: FNV-1a, djb2
+// Cryptographic hash: SHA-256 (pure MINK using bitwise ops)
+// Helpers: hex encoding, digest comparison, hash combining
+
+// ============================================================
+// NON-CRYPTOGRAPHIC HASHES
+// ============================================================
+
+fn hash_fnv1a(s: Str) -> Int {
+    let mut hash = 2166136261;
+    let len = rt_str_len(s);
+    let mut i = 0;
+    while i < len {
+        let byte = rt_str_byte(s, i);
+        hash = hash ^ byte;
+        hash = hash * 16777619;
+        i = i + 1;
+    }
+    return hash;
+}
+
+fn hash_djb2(s: Str) -> Int {
+    let mut hash = 5381;
+    let len = rt_str_len(s);
+    let mut i = 0;
+    while i < len {
+        let byte = rt_str_byte(s, i);
+        hash = ((hash << 5) + hash) + byte;
+        i = i + 1;
+    }
+    return hash;
+}
+
+fn hash_combine(a: Int, b: Int) -> Int {
+    let mut h = a;
+    h = h ^ (b + 0x9e3779b9 + (h << 6) + (h >> 2));
+    return h;
+}
+
+// ============================================================
+// HEX ENCODING
+// ============================================================
+
+fn _hex_digit(v: Int) -> Int {
+    if v < 10 {
+        return v + 48;
+    }
+    return v + 87;
+}
+
+fn hex_encode_byte(b: Int) -> Str {
+    let hi = (b >> 4) & 15;
+    let lo = b & 15;
+    let result = rt_str_alloc(2);
+    rt_str_set_byte(result, 0, _hex_digit(hi));
+    rt_str_set_byte(result, 1, _hex_digit(lo));
+    return result;
+}
+
+// ============================================================
+// DIGEST EQUALITY (constant-time comparison)
+// ============================================================
+
+fn hash_digest_equal(a: Str, b: Str) -> Bool {
+    let len_a = rt_str_len(a);
+    let len_b = rt_str_len(b);
+    if len_a != len_b {
+        return false;
+    }
+    let mut diff = 0;
+    let mut i = 0;
+    while i < len_a {
+        let ba = rt_str_byte(a, i);
+        let bb = rt_str_byte(b, i);
+        diff = diff | (ba ^ bb);
+        i = i + 1;
+    }
+    if diff == 0 {
+        return true;
+    }
+    return false;
+}
+
+// ============================================================
+// SHA-256 (Pure MINK Implementation)
+// ============================================================
+// Critical: MINK Int is 64-bit signed. SHA-256 needs 32-bit modular
+// arithmetic. Every shift, XOR, AND, OR, and addition must be masked
+// to 32 bits to prevent upper-bit contamination.
+
+// 32-bit right rotation: ROTR(x, n) = (x >> n) | (x << (32-n))
+// Must mask EVERY sub-expression to prevent 64-bit contamination
+fn _rot32(x: Int, n: Int) -> Int {
+    let a = (x >> n) & 0xFFFFFFFF;
+    let b = (x << (32 - n)) & 0xFFFFFFFF;
+    return (a | b) & 0xFFFFFFFF;
+}
+
+// Initialize K constants into workspace at offset 0..511
+fn _sha256_init_k(ws: Ptr<Int>) {
+    rt_mem_store(ws, 0x428a2f98);
+    rt_mem_store(ws + 8, 0x71374491);
+    rt_mem_store(ws + 16, 0xb5c0fbcf);
+    rt_mem_store(ws + 24, 0xe9b5dba5);
+    rt_mem_store(ws + 32, 0x3956c25b);
+    rt_mem_store(ws + 40, 0x59f111f1);
+    rt_mem_store(ws + 48, 0x923f82a4);
+    rt_mem_store(ws + 56, 0xab1c5ed5);
+    rt_mem_store(ws + 64, 0xd807aa98);
+    rt_mem_store(ws + 72, 0x12835b01);
+    rt_mem_store(ws + 80, 0x243185be);
+    rt_mem_store(ws + 88, 0x550c7dc3);
+    rt_mem_store(ws + 96, 0x72be5d74);
+    rt_mem_store(ws + 104, 0x80deb1fe);
+    rt_mem_store(ws + 112, 0x9bdc06a7);
+    rt_mem_store(ws + 120, 0xc19bf174);
+    rt_mem_store(ws + 128, 0xe49b69c1);
+    rt_mem_store(ws + 136, 0xefbe4786);
+    rt_mem_store(ws + 144, 0x0fc19dc6);
+    rt_mem_store(ws + 152, 0x240ca1cc);
+    rt_mem_store(ws + 160, 0x2de92c6f);
+    rt_mem_store(ws + 168, 0x4a7484aa);
+    rt_mem_store(ws + 176, 0x5cb0a9dc);
+    rt_mem_store(ws + 184, 0x76f988da);
+    rt_mem_store(ws + 192, 0x983e5152);
+    rt_mem_store(ws + 200, 0xa831c66d);
+    rt_mem_store(ws + 208, 0xb00327c8);
+    rt_mem_store(ws + 216, 0xbf597fc7);
+    rt_mem_store(ws + 224, 0xc6e00bf3);
+    rt_mem_store(ws + 232, 0xd5a79147);
+    rt_mem_store(ws + 240, 0x06ca6351);
+    rt_mem_store(ws + 248, 0x14292967);
+    rt_mem_store(ws + 256, 0x27b70a85);
+    rt_mem_store(ws + 264, 0x2e1b2138);
+    rt_mem_store(ws + 272, 0x4d2c6dfc);
+    rt_mem_store(ws + 280, 0x53380d13);
+    rt_mem_store(ws + 288, 0x650a7354);
+    rt_mem_store(ws + 296, 0x766a0abb);
+    rt_mem_store(ws + 304, 0x81c2c92e);
+    rt_mem_store(ws + 312, 0x92722c85);
+    rt_mem_store(ws + 320, 0xa2bfe8a1);
+    rt_mem_store(ws + 328, 0xa81a664b);
+    rt_mem_store(ws + 336, 0xc24b8b70);
+    rt_mem_store(ws + 344, 0xc76c51a3);
+    rt_mem_store(ws + 352, 0xd192e819);
+    rt_mem_store(ws + 360, 0xd6990624);
+    rt_mem_store(ws + 368, 0xf40e3585);
+    rt_mem_store(ws + 376, 0x106aa070);
+    rt_mem_store(ws + 384, 0x19a4c116);
+    rt_mem_store(ws + 392, 0x1e376c08);
+    rt_mem_store(ws + 400, 0x2748774c);
+    rt_mem_store(ws + 408, 0x34b0bcb5);
+    rt_mem_store(ws + 416, 0x391c0cb3);
+    rt_mem_store(ws + 424, 0x4ed8aa4a);
+    rt_mem_store(ws + 432, 0x5b9cca4f);
+    rt_mem_store(ws + 440, 0x682e6ff3);
+    rt_mem_store(ws + 448, 0x748f82ee);
+    rt_mem_store(ws + 456, 0x78a5636f);
+    rt_mem_store(ws + 464, 0x84c87814);
+    rt_mem_store(ws + 472, 0x8cc70208);
+    rt_mem_store(ws + 480, 0x90befffa);
+    rt_mem_store(ws + 488, 0xa4506ceb);
+    rt_mem_store(ws + 496, 0xbef9a3f7);
+    rt_mem_store(ws + 504, 0xc67178f2);
+}
+
+// SHA-256 main function
+fn hash_sha256(s: Str) -> Str {
+    let input_len = rt_str_len(s);
+    let blocks = (input_len + 72) >> 6;
+
+    // Workspace: [0..512) = K constants, [512..1024) = message schedule W
+    let ws = rt_alloc(1024);
+    _sha256_init_k(ws);
+    let w_base = ws + 512;
+
+    // Initialize hash state
+    let mut h0 = 0x6a09e667;
+    let mut h1 = 0xbb67ae85;
+    let mut h2 = 0x3c6ef372;
+    let mut h3 = 0xa54ff53a;
+    let mut h4 = 0x510e527f;
+    let mut h5 = 0x9b05688c;
+    let mut h6 = 0x1f83d9ab;
+    let mut h7 = 0x5be0cd19;
+
+    // Process each 64-byte block
+    let mut block = 0;
+    while block < blocks {
+        // Load W[0..15] from input as big-endian 32-bit words
+        let mut i = 0;
+        while i < 16 {
+            let src = block * 64 + i * 4;
+            let mut word = 0;
+            if src < input_len {
+                word = (word + (rt_str_byte(s, src) << 24)) & 0xFFFFFFFF;
+            }
+            if src + 1 < input_len {
+                word = (word + (rt_str_byte(s, src + 1) << 16)) & 0xFFFFFFFF;
+            }
+            if src + 2 < input_len {
+                word = (word + (rt_str_byte(s, src + 2) << 8)) & 0xFFFFFFFF;
+            }
+            if src + 3 < input_len {
+                word = (word + rt_str_byte(s, src + 3)) & 0xFFFFFFFF;
+            }
+            rt_mem_store(w_base + i * 8, word);
+            i = i + 1;
+        }
+
+        // Set 0x80 padding byte (only in the block containing input_len)
+        let byte_pos = input_len - block * 64;
+        if byte_pos >= 0 {
+            let word_idx = byte_pos >> 2;
+            let byte_in_word = byte_pos & 3;
+            let shift = (3 - byte_in_word) * 8;
+            let w_off = w_base + word_idx * 8;
+            let old_word = rt_mem_load(w_off);
+            let mask = 0xFF << shift;
+            let new_val = (old_word & ~mask) | (0x80 << shift);
+            rt_mem_store(w_off, new_val);
+        }
+
+        // Set big-endian bit length in W[14] and W[15]
+        if block == blocks - 1 {
+            let bit_len = input_len * 8;
+            rt_mem_store(w_base + 112, (bit_len >> 32) & 0xFFFFFFFF);
+            rt_mem_store(w_base + 120, bit_len & 0xFFFFFFFF);
+        }
+
+        // Extend W[16..63]
+        let mut j = 16;
+        while j < 64 {
+            let wj15 = rt_mem_load(w_base + (j - 15) * 8) & 0xFFFFFFFF;
+            let wj2 = rt_mem_load(w_base + (j - 2) * 8) & 0xFFFFFFFF;
+            let wj16 = rt_mem_load(w_base + (j - 16) * 8) & 0xFFFFFFFF;
+            let wj7 = rt_mem_load(w_base + (j - 7) * 8) & 0xFFFFFFFF;
+
+            // s0 = ROTR7(W[j-15]) ^ ROTR18(W[j-15]) ^ SHR3(W[j-15])
+            let s0 = (_rot32(wj15, 7) ^ _rot32(wj15, 18) ^ ((wj15 >> 3) & 0xFFFFFFFF)) & 0xFFFFFFFF;
+            // s1 = ROTR17(W[j-2]) ^ ROTR19(W[j-2]) ^ SHR10(W[j-2])
+            let s1 = (_rot32(wj2, 17) ^ _rot32(wj2, 19) ^ ((wj2 >> 10) & 0xFFFFFFFF)) & 0xFFFFFFFF;
+
+            rt_mem_store(w_base + j * 8, (wj16 + s0 + wj7 + s1) & 0xFFFFFFFF);
+            j = j + 1;
+        }
+
+        // Initialize working variables
+        let mut a = h0;
+        let mut b = h1;
+        let mut c = h2;
+        let mut d = h3;
+        let mut e = h4;
+        let mut f = h5;
+        let mut g = h6;
+        let mut h = h7;
+
+        // 64 rounds
+        let mut r = 0;
+        while r < 64 {
+            let wi = rt_mem_load(w_base + r * 8) & 0xFFFFFFFF;
+            let ki = rt_mem_load(ws + r * 8) & 0xFFFFFFFF;
+
+            // Sigma1(e) = ROTR6(e) ^ ROTR11(e) ^ ROTR25(e)
+            let s1e = (_rot32(e, 6) ^ _rot32(e, 11) ^ _rot32(e, 25)) & 0xFFFFFFFF;
+            // Ch(e,f,g) = (e & f) ^ (~e & g)
+            let ch = (((e & f) & 0xFFFFFFFF) ^ (((~e) & 0xFFFFFFFF) & g)) & 0xFFFFFFFF;
+            // T1 = h + Sigma1(e) + Ch(e,f,g) + K[r] + W[r]
+            let t1 = (h + s1e + ch + ki + wi) & 0xFFFFFFFF;
+
+            // Sigma0(a) = ROTR2(a) ^ ROTR13(a) ^ ROTR22(a)
+            let s0a = (_rot32(a, 2) ^ _rot32(a, 13) ^ _rot32(a, 22)) & 0xFFFFFFFF;
+            // Maj(a,b,c) = (a & b) ^ (a & c) ^ (b & c)
+            let maj = (((a & b) ^ (a & c) ^ (b & c)) & 0xFFFFFFFF);
+            // T2 = Sigma0(a) + Maj(a,b,c)
+            let t2 = (s0a + maj) & 0xFFFFFFFF;
+
+            h = g;
+            g = f;
+            f = e;
+            e = (d + t1) & 0xFFFFFFFF;
+            d = c;
+            c = b;
+            b = a;
+            a = (t1 + t2) & 0xFFFFFFFF;
+
+            r = r + 1;
+        }
+
+        // Add compressed chunk to hash
+        h0 = (h0 + a) & 0xFFFFFFFF;
+        h1 = (h1 + b) & 0xFFFFFFFF;
+        h2 = (h2 + c) & 0xFFFFFFFF;
+        h3 = (h3 + d) & 0xFFFFFFFF;
+        h4 = (h4 + e) & 0xFFFFFFFF;
+        h5 = (h5 + f) & 0xFFFFFFFF;
+        h6 = (h6 + g) & 0xFFFFFFFF;
+        h7 = (h7 + h) & 0xFFFFFFFF;
+
+        block = block + 1;
+    }
+
+    // Convert hash state to 64-char hex string
+    let result = rt_str_alloc(64);
+    let mut pos = 0;
+
+    // h0
+    let mut v = h0;
+    let mut k = 0;
+    while k < 8 {
+        rt_str_set_byte(result, pos + 7 - k, _hex_digit(v & 15));
+        v = v >> 4;
+        k = k + 1;
+    }
+    pos = pos + 8;
+    // h1
+    v = h1;
+    k = 0;
+    while k < 8 {
+        rt_str_set_byte(result, pos + 7 - k, _hex_digit(v & 15));
+        v = v >> 4;
+        k = k + 1;
+    }
+    pos = pos + 8;
+    // h2
+    v = h2;
+    k = 0;
+    while k < 8 {
+        rt_str_set_byte(result, pos + 7 - k, _hex_digit(v & 15));
+        v = v >> 4;
+        k = k + 1;
+    }
+    pos = pos + 8;
+    // h3
+    v = h3;
+    k = 0;
+    while k < 8 {
+        rt_str_set_byte(result, pos + 7 - k, _hex_digit(v & 15));
+        v = v >> 4;
+        k = k + 1;
+    }
+    pos = pos + 8;
+    // h4
+    v = h4;
+    k = 0;
+    while k < 8 {
+        rt_str_set_byte(result, pos + 7 - k, _hex_digit(v & 15));
+        v = v >> 4;
+        k = k + 1;
+    }
+    pos = pos + 8;
+    // h5
+    v = h5;
+    k = 0;
+    while k < 8 {
+        rt_str_set_byte(result, pos + 7 - k, _hex_digit(v & 15));
+        v = v >> 4;
+        k = k + 1;
+    }
+    pos = pos + 8;
+    // h6
+    v = h6;
+    k = 0;
+    while k < 8 {
+        rt_str_set_byte(result, pos + 7 - k, _hex_digit(v & 15));
+        v = v >> 4;
+        k = k + 1;
+    }
+    pos = pos + 8;
+    // h7
+    v = h7;
+    k = 0;
+    while k < 8 {
+        rt_str_set_byte(result, pos + 7 - k, _hex_digit(v & 15));
+        v = v >> 4;
+        k = k + 1;
+    }
+
+    rt_free(ws);
+    return result;
+}

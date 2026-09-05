@@ -159,6 +159,22 @@ pub struct RuntimeLayout {
     pub env_storage: u64,
     /// Pointer to the process environment array (Linux: envp from initial stack).
     pub env_ptr: u64,
+    // --- Session 99: Windows Wave A tranche 1 ---
+    /// argv parse complete flag (1 when `argv_table` is populated).
+    pub argv_ready: u64,
+    /// Number of parsed arguments (excluding the executable name).
+    pub argv_count: u64,
+    /// argv table: 64 entries of (offset-into-arg_data u64, length u64).
+    pub argv_table: u64,
+    /// Copy area for parsed argument bytes (4096 bytes).
+    pub arg_data: u64,
+    /// Fixed BSS buffer for stdin reads [len:u64][bytes;65528].
+    pub stdin_buf: u64,
+    /// Redirect flag for `rt_str_from_float`: non-zero when the write
+    /// thunk appends into `float_sink` instead of the console.
+    pub write_redirect: u64,
+    /// Float-to-string sink buffer (80 bytes; trailing CRLF stripped).
+    pub float_sink: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -209,7 +225,10 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 24
         + 8
         + 4096,
-    size: 1488
+    // --- Session 99: Windows Wave A tranche 1 ---
+    // argv_ready / argv_count / argv_table(64×16) / arg_data(4096) /
+    // stdin_buf(65536) / write_redirect / float_sink(80)
+    argv_ready: 1488
         + HEAP_SIZE
         + LIVE_TABLE_BYTES
         + 4096 * 2
@@ -221,6 +240,112 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 4096
         + 8,
+    argv_count: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 8,
+    argv_table: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16,
+    arg_data: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16,
+    stdin_buf: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096,
+    write_redirect: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536,
+    float_sink: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8,
+    size: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

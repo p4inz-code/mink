@@ -1069,18 +1069,15 @@ fn main() {{
 }
 
 // =========================================================================
-// Environment (Phase 8): current Windows state is a documented stub —
-// lock the observable behavior so any future wiring must flip these
-// assertions deliberately.
+// Environment (Phase 8 + Session 99): rt_env_* became real on Windows in
+// Session 99 (R13) — wire Get/SetEnvironmentVariableA. This test pins the
+// new observable contract: missing -> has=false / get=empty; inherited
+// variables are visible with exact values; ownership stays clean.
 // =========================================================================
 
 #[test]
-fn environment_windows_stub_behavior_is_documented() {
-    // rt_env_has reports false and rt_env_get reports empty on Windows:
-    // environment access is a documented V1 stub (not yet wired to the
-    // Windows API). This test pins that observable contract so wiring it
-    // later is an intentional change, and verifies ownership of the
-    // (empty) returned string is clean.
+fn environment_windows_real_behavior_is_documented() {
+    // Missing variable: has=false, get returns an owned empty string.
     let body = r#"
 fn main() {
     let has = rt_env_has("S95_DEFINITELY_MISSING");
@@ -1091,23 +1088,27 @@ fn main() {
     let l = rt_str_len(v);
     rt_str_free(v);
     if l != 0 { rt_exit(20); }
-    // Even a set variable is not visible while the API is a stub.
+    // An inherited environment variable is visible and exact.
     let has2 = rt_env_has("S95_SET_VAR");
     let mut hv2 = 0;
     if has2 == true { hv2 = 1; }
-    if hv2 != 0 { rt_exit(30); }
+    if hv2 != 1 { rt_exit(30); }
+    let v2 = rt_env_get("S95_SET_VAR");
+    let l2 = rt_str_len(v2);
+    rt_str_free(v2);
+    if l2 != 7 { rt_exit(40); }
     rt_exit(0);
 }
 "#;
     let cmd = Command::new(std::env::current_exe().unwrap());
-    // Set an env var on the child process itself (Rust) — the MINK runtime
-    // stub must still not see it.
-    let exe = build_win(body, "env_stub");
+    // Set an env var on the child process itself (Rust); the MINK runtime
+    // must see the inherited value (Session 99 real env wiring).
+    let exe = build_win(body, "env_real");
     let output = Command::new(&exe)
         .env("S95_SET_VAR", "present")
         .output()
         .unwrap();
     let code = output.status.code().unwrap_or(-1);
     let _ = std::fs::remove_file(&exe);
-    assert_eq!(code, 0, "env stub behavior mismatch: {cmd:?}");
+    assert_eq!(code, 0, "env behavior mismatch: {cmd:?}");
 }

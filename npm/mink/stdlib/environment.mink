@@ -1,0 +1,42 @@
+// MINK Environment Library
+// Session 65 — Environment variable access
+//
+// Provides functions to get, set, check, and remove environment variables.
+// All functions use the Windows API (GetEnvironmentVariableA, SetEnvironmentVariableA).
+//
+// Ownership model:
+//   - env_get returns a newly allocated Str (caller owns it)
+//   - env_set/env_remove return Int: 0 on success, -1 on failure
+//   - env_has returns Bool: true if the variable exists
+//
+// Security considerations:
+//   - Environment variables are inherited by child processes
+//   - Sensitive values should not be stored in environment variables
+//   - env_set modifies the current process environment only
+//
+// Windows-specific behavior:
+//   - Variable names are case-insensitive on Windows
+//   - Empty string values are supported
+//   - Maximum variable value length is platform-dependent (~32KB on Windows)
+
+// --- Intrinsic declarations (implemented in the embedded runtime) ---
+
+// Get the value of an environment variable.
+// Returns an empty string if the variable does not exist.
+extern fn rt_env_get(name: Str) -> Str;
+
+// Set an environment variable.
+// Returns 0 on success, -1 on failure.
+extern fn rt_env_set(name: Str, value: Str) -> Int;
+
+// Check if an environment variable exists.
+// Returns true if the variable exists, false otherwise.
+extern fn rt_env_has(name: Str) -> Bool;
+
+// Remove an environment variable.
+// Returns 0 on success, -1 on failure.
+extern fn rt_env_remove(name: Str) -> Int;
+
+// Get the current working directory.
+// Returns the full path of the current working directory.
+extern fn rt_fs_get_cwd() -> Str;

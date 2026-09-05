@@ -649,7 +649,7 @@ fn discover_modules_recursive(
     if !mod_names.is_empty() {
         let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
         for child_name in mod_names {
-            let child_path = parent_dir.join(format!("{child_name}.mink"));
+            let child_path = resolve_module_path(&child_name, parent_dir);
             discover_modules_recursive(
                 sources,
                 &child_path,
@@ -660,6 +660,41 @@ fn discover_modules_recursive(
             );
         }
     }
+}
+
+/// Resolves a `mod name;` declaration to a `.mink` file.
+///
+/// Search order:
+/// 1. the declaring file's directory (classic sibling-module behavior);
+/// 2. the bundled standard library next to the installed `mink`
+///    executable (`<exe>/../stdlib`, the npm package layout);
+/// 3. a `stdlib` directory in the current working directory (dev
+///    checkout layout: `target/debug/mink.exe` run from the repo root).
+///
+/// The first candidate that exists wins; when none exist the returned
+/// path is the sibling path so the existing "module file not found"
+/// error still names the most intuitive location.
+fn resolve_module_path(child_name: &str, parent_dir: &Path) -> PathBuf {
+    let sibling = parent_dir.join(format!("{child_name}.mink"));
+    if sibling.exists() {
+        return sibling;
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            roots.push(exe_dir.join("..").join("stdlib"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd.join("stdlib"));
+    }
+    for root in roots {
+        let candidate = root.join(format!("{child_name}.mink"));
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    sibling
 }
 
 // ======================================================================

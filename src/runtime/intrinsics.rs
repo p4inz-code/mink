@@ -519,6 +519,47 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Int, IntrinsicType::Int],
         result: IntrinsicType::Unit,
     },
+    // --- Session 99: Windows Wave A tranche 1 ---
+    Intrinsic {
+        name: "rt_sleep",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_stderr_write",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_stdin_read",
+        params: &[],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_argc",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_argv",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_str_from_float",
+        params: &[IntrinsicType::Float],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_str_format",
+        params: &[
+            IntrinsicType::Str,
+            IntrinsicType::Str,
+            IntrinsicType::Str,
+            IntrinsicType::Str,
+        ],
+        result: IntrinsicType::Str,
+    },
 ];
 
 /// Looks up an intrinsic by its reserved name.

@@ -876,6 +876,23 @@ pub enum RuntimeService {
     CryptoRandomInt,
     /// `rt_crypto_secure_zero(ptr: Ptr<Int>, len: Int)`: securely zero `len` bytes at `ptr`.
     CryptoSecureZero,
+    // --- Session 99: Windows Wave A tranche 1 ---
+    /// `rt_sleep(ms: Int)`: sleep for `ms` milliseconds.
+    Sleep,
+    /// `rt_stderr_write(s: Str) -> Int`: write bytes to stderr (bytes written or -1).
+    StderrWrite,
+    /// `rt_stdin_read() -> Str`: read all available stdin to EOF.
+    StdinRead,
+    /// `rt_argc() -> Int`: number of command-line arguments (excluding executable).
+    Argc,
+    /// `rt_argv(index: Int) -> Str`: command-line argument at `index`.
+    Argv,
+    /// `rt_str_from_float(f: Float) -> Str`: format a float as a string.
+    StrFromFloat,
+    /// `rt_str_format(fmt: Str, a0: Str, a1: Str, a2: Str) -> Str`: substitute `{}` placeholders.
+    StrFormat,
+    /// Internal: lazily parse the command line into the argv table.
+    ArgvParse,
 }
 
 impl RuntimeService {
@@ -952,6 +969,10 @@ impl RuntimeService {
             Self::CryptoRandomBytes => 2,
             Self::CryptoRandomInt => 0,
             Self::CryptoSecureZero => 2,
+            // --- Session 99: Windows Wave A tranche 1 ---
+            Self::Sleep | Self::StderrWrite | Self::Argv | Self::StrFromFloat => 1,
+            Self::StdinRead | Self::Argc | Self::ArgvParse => 0,
+            Self::StrFormat => 4,
         }
     }
 
@@ -1039,6 +1060,13 @@ impl RuntimeService {
                 | Self::CryptoRandomBytes
                 | Self::CryptoRandomInt
                 | Self::CryptoSecureZero
+                | Self::Sleep
+                | Self::StderrWrite
+                | Self::StdinRead
+                | Self::Argc
+                | Self::Argv
+                | Self::StrFromFloat
+                | Self::StrFormat
         )
     }
 }

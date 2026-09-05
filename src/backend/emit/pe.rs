@@ -61,6 +61,9 @@ const KERNEL32_IMPORTS: &[&str] = &[
     "GetProcAddress",
     // --- Process drain fix (Session 97) ---
     "PeekNamedPipe",
+    // --- Session 99: Windows Wave A tranche 1 ---
+    "Sleep",
+    "GetCommandLineA",
 ];
 
 const K32_COUNT: u32 = KERNEL32_IMPORTS.len() as u32;

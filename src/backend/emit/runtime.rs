@@ -46,7 +46,7 @@ use std::collections::HashMap;
 
 use super::super::ir::RuntimeService;
 use super::x86_64::{Code, PatchKind, Reg};
-use crate::runtime::abi::{BSS, HEAP_SIZE, LIVE_TABLE_BYTES, MAX_LIVE_ALLOCS};
+use crate::runtime::abi::{BSS, HEAP_SIZE, MAX_LIVE_ALLOCS};
 use crate::runtime::error::RuntimeErrorKind;
 
 /// The liveness table size in bytes.
@@ -62,6 +62,14 @@ const CRYPTO_DLL: u32 = BSS.bcrypt_dll_handle as u32;
 const CRYPTO_TABLE: u32 = BSS.crypto_func_table as u32;
 const RNG_STATE: u32 = BSS.rng_state as u32;
 const ENV_STORAGE: u32 = BSS.env_storage as u32;
+// --- Session 99: Windows Wave A tranche 1 ---
+const ARGV_READY: u32 = BSS.argv_ready as u32;
+const ARGV_COUNT: u32 = BSS.argv_count as u32;
+const ARGV_TABLE: u32 = BSS.argv_table as u32;
+const ARG_DATA: u32 = BSS.arg_data as u32;
+const STDIN_BUF: u32 = BSS.stdin_buf as u32;
+const WRITE_REDIRECT: u32 = BSS.write_redirect as u32;
+const FLOAT_SINK: u32 = BSS.float_sink as u32;
 
 /// The offsets of the machine services within `.text`, plus the labels
 /// the services reference (bound by [`emit_data`] and the emitter's string
@@ -286,6 +294,25 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::EnvHas, |code, _| emit_env_has(code));
     emit(code, RuntimeService::EnvRemove, |code, _| {
         emit_env_remove(code)
+    });
+    // --- Session 99: Windows Wave A tranche 1 ---
+    emit(code, RuntimeService::Sleep, |code, _| emit_sleep(code));
+    emit(code, RuntimeService::StderrWrite, |code, _| {
+        emit_stderr_write(code)
+    });
+    emit(code, RuntimeService::StdinRead, |code, _| {
+        emit_stdin_read(code)
+    });
+    emit(code, RuntimeService::Argc, |code, _| emit_argc(code));
+    emit(code, RuntimeService::Argv, |code, _| emit_argv(code));
+    emit(code, RuntimeService::ArgvParse, |code, _| {
+        emit_argv_parse(code)
+    });
+    emit(code, RuntimeService::StrFromFloat, |code, _| {
+        emit_str_from_float(code)
+    });
+    emit(code, RuntimeService::StrFormat, |code, _| {
+        emit_str_format(code)
     });
     // --- Filesystem (Session 56) ---
     emit(code, RuntimeService::FsRead, |code, _| emit_fs_read(code));
@@ -1648,8 +1675,52 @@ fn emit_write(code: &mut Code, stdout: bool) {
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rcx);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rdx);
 
-    let have = code.label();
+    // When `write_redirect` is set (only during `rt_str_from_float`),
+    // append into the `float_sink` BSS buffer instead of the console:
+    // [float_sink+0..8] = byte count, [float_sink+8..80] = data. This
+    // lets `rt_str_from_float` reuse the exact `rt_print_float` dtoa
+    // pipeline without duplicating it.
+    let normal = code.label();
     let done = code.label();
+    let redirect_store = code.label();
+    let redirect_ok = code.label();
+    let redirect_loop = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(WRITE_REDIRECT));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, normal); // jz — no redirect
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(FLOAT_SINK));
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // count
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // length
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, redirect_store); // jz — nothing to append
+    code.mov_rr(Reg::R8, Reg::Rcx);
+    code.add_rr(Reg::R8, Reg::Rdx); // count + length
+    code.cmp_r_imm32(Reg::R8, 72);
+    code.jcc_label(0x86, redirect_ok); // jbe
+    code.mov_r32_imm32(Reg::R8, 72); // clamp the final count
+    code.mov_r32_imm32(Reg::Rdx, 72); // clamp the copy length
+    code.sub_rr(Reg::Rdx, Reg::Rcx);
+    code.bind_label(redirect_ok);
+    // Copy `length` bytes from the source buffer into float_sink+8+count.
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(FLOAT_SINK));
+    code.add_r_imm8(Reg::R9, 8);
+    code.add_rr(Reg::R9, Reg::Rcx); // dest cursor
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8); // source buffer
+    code.bind_label(redirect_loop);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, redirect_store); // jz
+    code.movzx_byte(Reg::R11, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R9, 0, Reg::R11);
+    code.add_r_imm8(Reg::R9, 1);
+    code.add_r_imm8(Reg::R10, 1);
+    code.sub_r_imm32(Reg::Rdx, 1);
+    code.jmp_label(redirect_loop);
+    code.bind_label(redirect_store);
+    code.mov_mem_r(Reg::Rax, 0, Reg::R8); // store the new count
+    code.jmp_label(done);
+    code.bind_label(normal);
+
+    let have = code.label();
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(cache as u32));
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x85, have); // jnz
@@ -3283,7 +3354,7 @@ fn emit_process_run(code: &mut Code) {
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // [rbp-16] = cmd_cstr
 
     // Copy "cmd.exe /c " (11 bytes)
-    code.movabs(Reg::R10, 0x20657865_2E64_6D63u64);
+    code.movabs(Reg::R10, 0x2065_7865_2E64_6D63_u64);
     code.mov_mem_r(Reg::Rax, 0, Reg::R10); // "cmd.exe " (8 bytes)
     code.movabs(Reg::R10, 0x2Fu64);
     code.mov_mem_r8(Reg::Rax, 8, Reg::R10); // '/' at offset 8
@@ -3638,12 +3709,267 @@ fn emit_random_next(code: &mut Code) {
 
 // ===========================================================================
 
-// NOTE: Environment stubs return empty/error values.
-// A real implementation would use GetEnvironmentVariableA.
+// --- Session 99: real Windows environment (was V1 stub) ---
+// `GetEnvironmentVariableA` two-call length-query pattern: the first call
+// with (name, NULL, 0) returns the required size including the NUL
+// (0 when the variable is missing), the second fills the exact-length
+// buffer. Missing variables return an owned empty `Str`.
 
-/// `rt_env_get(key) -> Str`: V1 stub — return empty string.
+/// `rt_env_get(key) -> Str`: the value of the environment variable, or an
+/// owned empty string when missing.
 fn emit_env_get(code: &mut Code) {
     prologue(code);
+    code.sub_rsp(48); // spills: [rbp-8] cstr, [rbp-16] raw size, [rbp-24] result
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // GetEnvironmentVariableA(cstr, NULL, 0)
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    let missing = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, missing); // jz — not present
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // required size incl. NUL
+    // StrAlloc(size - 1) — exact length without the NUL
+    code.sub_r_imm32(Reg::Rax, 1);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // result ptr
+    // GetEnvironmentVariableA(cstr, result+8, raw_size)
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.mov_rr(Reg::Rdx, Reg::Rax);
+    code.add_r_imm8(Reg::Rdx, 8);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -16);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    let done = code.label();
+    code.jmp_label(done);
+    code.bind_label(missing);
+    // Owned empty Str for a missing variable.
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.bind_label(done);
+    // Free the name CStr, then return the result.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.leave_ret();
+}
+
+/// `rt_env_set(key, value) -> Int`: set an environment variable for this
+/// process (0 on success, -1 on failure). A zero-length value removes the
+/// variable, matching the Win32 semantics of `SetEnvironmentVariableA`.
+fn emit_env_set(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(48); // [rbp-8] name cstr, [rbp-16] value cstr, [rbp-24] result
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    to_cstr(code, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // SetEnvironmentVariableA(name, value)
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    code.call_rip(PatchKind::Iat(IAT_SET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    // Free both CStrs (order irrelevant).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    free_cstr(code, Reg::Rcx);
+    // 1 = success, 0 = failure (-1).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    let ok = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, ok); // jnz
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+/// `rt_env_has(key) -> Bool`: whether the variable is present (an empty
+/// value counts as present).
+fn emit_env_has(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(32); // [rbp-8] cstr, [rbp-16] size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // GetEnvironmentVariableA(cstr, NULL, 0) — returns 1 for set-empty.
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    let present = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, present); // jnz
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+    code.bind_label(present);
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.leave_ret();
+}
+
+/// `rt_env_remove(key) -> Int`: delete an environment variable (0 on
+/// success, -1 on failure; deleting a missing variable succeeds).
+fn emit_env_remove(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(32); // [rbp-8] cstr, [rbp-16] result
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // SetEnvironmentVariableA(name, NULL) deletes the variable.
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.call_rip(PatchKind::Iat(IAT_SET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    let ok = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, ok); // jnz
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+    code.bind_label(ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
+// ===========================================================================
+// Session 99: sleep, stderr write, stdin read, argv, float->Str, str_format
+// ===========================================================================
+
+/// `rt_sleep(ms: Int)`: sleep for `ms` milliseconds (kernel32 `Sleep`;
+/// zero returns immediately, no busy spin).
+fn emit_sleep(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16);
+    code.call_rip(PatchKind::Iat(IAT_SLEEP));
+    code.add_rsp(32);
+    code.leave_ret();
+}
+
+/// `rt_stderr_write(s: Str) -> Int`: write the exact bytes of `s` to
+/// stderr through the shared write thunk. Returns the requested length
+/// (the thunk's console write is fire-and-forget like all runtime
+/// console output; the byte count is authoritative for the contract).
+fn emit_stderr_write(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.add_r_imm8(Reg::Rcx, 8); // data start
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 0); // length
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStderr));
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.leave_ret();
+}
+
+/// `rt_stdin_read() -> Str`: read all available standard input to EOF
+/// (chunked `ReadFile` into the fixed stdin buffer, up to 65528 bytes),
+/// returned as an owned exact-length `Str`. EOF and error stop the read;
+/// no input is an owned empty `Str`.
+fn emit_stdin_read(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(48); // [rbp-8] total, [rbp-16] handle, [rbp-24] result
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // total = 0
+    // GetStdHandle(STD_INPUT_HANDLE = -10)
+    code.sub_rsp(32);
+    code.mov_r32_imm32(Reg::Rcx, IAT_STD_INPUT_HANDLE as u32);
+    code.call_rip(PatchKind::Iat(0));
+    code.add_rsp(32);
+    let empty = code.label();
+    code.cmp_r_imm8(Reg::Rax, 0xFF); // -1: INVALID_HANDLE_VALUE
+    code.jcc_label(0x84, empty); // je
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // handle
+    let loop_start = code.label();
+    let loop_done = code.label();
+    code.bind_label(loop_start);
+    // remaining = 65528 - total
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.mov_r32_imm32(Reg::R8, 65528);
+    code.sub_rr(Reg::R8, Reg::Rdx);
+    code.test_rr(Reg::R8, Reg::R8);
+    code.jcc_label(0x84, loop_done); // jz — buffer full
+    // ReadFile(handle, buf+8+total, remaining, &bytes_written, NULL)
+    code.sub_rsp(48); // 32 shadow + 8 (5th arg) + 8 pad
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // total
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(STDIN_BUF));
+    code.add_r_imm8(Reg::Rdx, 8);
+    code.add_rr(Reg::Rdx, Reg::Rax);
+    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32));
+    code.mov_mem_imm32(Reg::Rsp, 32, 0); // lpOverlapped = NULL
+    code.call_rip(PatchKind::Iat(4)); // ReadFile
+    code.add_rsp(48);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, loop_done); // jz — read error: stop
+    // total += bytes_read
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.bytes_written as u32));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, loop_done); // jz — EOF
+    code.add_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.jmp_label(loop_start);
+    code.bind_label(loop_done);
+    // Build the owned exact-length Str: StrAlloc(total), copy from
+    // stdin_buf+8, return.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    // Copy loop: for i in 0..total: dst[8+i] = src[8+i]
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // total
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, copy_done); // jz
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(STDIN_BUF));
+    code.add_r_imm8(Reg::R10, 8);
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -8);
+    code.sub_rr(Reg::R11, Reg::R9); // offset
+    code.add_rr(Reg::R10, Reg::R11); // src = stdin_buf+8+offset
+    code.movzx_byte(Reg::R8, Reg::R10, 0);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24); // dst base
+    code.add_r_imm8(Reg::Rdx, 8);
+    code.add_rr(Reg::Rdx, Reg::R11);
+    code.mov_mem_r8(Reg::Rdx, 0, Reg::R8);
+    code.sub_r_imm32(Reg::R9, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.leave_ret();
+    code.bind_label(empty);
+    // Owned empty Str.
     code.sub_rsp(8);
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.u8(0x50);
@@ -3652,23 +3978,580 @@ fn emit_env_get(code: &mut Code) {
     code.leave_ret();
 }
 
-/// `rt_env_set(key, value) -> Int`: V1 stub — return -1.
-fn emit_env_set(code: &mut Code) {
+/// Parse the Win32 command line once (lazily, on first argc/argv call):
+/// skip the executable name (quoted or bare), then tokenize arguments
+/// with quote handling — `"` groups spaces, `""` is an empty argument,
+/// quoted and unquoted runs concatenate (`"a"b` is `ab`). Results go
+/// into `arg_data` (≤ 4080 bytes) with an index table of up to 64
+/// (offset, length) entries. Truncated arguments are dropped; the parse
+/// simply stops at either cap.
+fn emit_argv_parse(code: &mut Code) {
     prologue(code);
-    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
-    code.leave_ret();
-}
-
-/// `rt_env_has(key) -> Bool`: V1 stub — return false (0).
-fn emit_env_has(code: &mut Code) {
-    prologue(code);
+    code.sub_rsp(48); // [rbp-8] cursor, [rbp-16] arg count, [rbp-24] arg_data cursor
+    // If already parsed, do nothing.
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(ARGV_READY));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let already = code.label();
+    code.jcc_label(0x85, already); // jnz — already parsed: return as-is
+    // GetCommandLineA()
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_GET_COMMAND_LINE_A));
+    code.add_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cursor
+    // --- skip the executable token ---
+    let skip_ws = code.label();
+    let skip_exe = code.label();
+    let skip_quoted = code.label();
+    let skip_bare = code.label();
+    let main_loop = code.label();
+    let copy_byte = code.label();
+    let token_plain2 = code.label();
+    let skip_ws_adv = code.label();
+    code.bind_label(skip_ws);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.test_r_imm32(Reg::Rcx, 0xFF);
+    code.jcc_label(0x84, skip_exe); // jz — end of string
+    code.cmp_r_imm8(Reg::Rcx, b' ');
+    code.jcc_label(0x84, skip_ws_adv); // je — space: advance
+    code.cmp_r_imm8(Reg::Rcx, b'\t');
+    code.jcc_label(0x84, skip_ws_adv); // je — tab: advance
+    code.jmp_label(skip_exe); // not whitespace: the executable begins
+    code.bind_label(skip_ws_adv);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.jmp_label(skip_ws);
+    code.bind_label(skip_exe);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.test_r_imm32(Reg::Rcx, 0xFF);
+    code.jcc_label(0x84, main_loop); // jz — nothing after the exe
+    code.cmp_r_imm8(Reg::Rcx, b'"');
+    code.jcc_label(0x85, skip_bare); // jne — bare token
+    // Quoted executable: consume up to the closing quote.
+    code.bind_label(skip_quoted);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.test_r_imm32(Reg::Rcx, 0xFF);
+    code.jcc_label(0x84, main_loop); // jz
+    code.cmp_r_imm8(Reg::Rcx, b'"');
+    code.jcc_label(0x85, skip_quoted); // jne — keep scanning
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.jmp_label(main_loop);
+    // Bare executable: consume up to whitespace.
+    code.bind_label(skip_bare);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.test_r_imm32(Reg::Rcx, 0xFF);
+    code.jcc_label(0x84, main_loop); // jz
+    code.cmp_r_imm8(Reg::Rcx, b' ');
+    code.jcc_label(0x84, main_loop); // je — whitespace ends the exe
+    code.cmp_r_imm8(Reg::Rcx, b'\t');
+    code.jcc_label(0x84, main_loop); // je
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.jmp_label(skip_bare);
+    // --- main tokenize loop ---
+    code.bind_label(main_loop);
     code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // arg count = 0
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // arg_data cursor = 0
+    let token_ws = code.label();
+    let token_start = code.label();
+    let token_done = code.label();
+    let token_quote = code.label();
+    let token_plain = code.label();
+    let record = code.label();
+    let cap_hit = code.label();
+    let finish = code.label();
+    let token_ws_adv = code.label();
+    code.bind_label(token_ws);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.test_r_imm32(Reg::Rcx, 0xFF);
+    code.jcc_label(0x84, finish); // jz — end of string: parsing complete
+    code.cmp_r_imm8(Reg::Rcx, b' ');
+    code.jcc_label(0x84, token_ws_adv); // je — whitespace: skip
+    code.cmp_r_imm8(Reg::Rcx, b'\t');
+    code.jcc_label(0x84, token_ws_adv); // je
+    code.jmp_label(token_start); // token begins
+    code.bind_label(token_ws_adv);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.jmp_label(token_ws);
+    // --- a new token begins at [rbp-8] ---
+    code.bind_label(token_start);
+    // offset = arg_data cursor; save it in [rbp-32]... reuse [rbp-24] as
+    // the running byte cursor and track length separately in [rbp-40].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // arg offset
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // arg length = 0
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // "token started" flag
+    code.jmp_label(token_plain);
+    code.bind_label(token_quote);
+    // Consume a quoted run: copy bytes until the closing quote.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    let quote_loop = code.label();
+    code.bind_label(quote_loop);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.test_r_imm32(Reg::Rcx, 0xFF);
+    code.jcc_label(0x84, token_done); // jz — unterminated quote
+    code.cmp_r_imm8(Reg::Rcx, b'"');
+    let quote_copy = code.label();
+    code.jcc_label(0x85, quote_copy); // jne — copy the byte
+    // Closing quote: consume it and continue plain parsing.
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.jmp_label(token_plain);
+    code.bind_label(quote_copy);
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -40); // length
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24); // data cursor
+    code.cmp_r_imm32(Reg::Rdx, 4080);
+    code.jcc_label(0x83, cap_hit); // jae — byte cap
+    code.lea_r_rip(Reg::R8, PatchKind::Bss(ARG_DATA));
+    code.add_rr(Reg::R8, Reg::Rdx);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rcx);
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rdx);
+    code.add_r_imm8(Reg::R9, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::R9);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.jmp_label(quote_loop);
+    code.bind_label(copy_byte);
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -40); // length
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24); // data cursor
+    code.cmp_r_imm32(Reg::Rdx, 4080);
+    code.jcc_label(0x83, cap_hit); // jae — byte cap
+    code.lea_r_rip(Reg::R8, PatchKind::Bss(ARG_DATA));
+    code.add_rr(Reg::R8, Reg::Rdx);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rcx);
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rdx);
+    code.add_r_imm8(Reg::R9, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::R9);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.jmp_label(token_plain);
+    code.bind_label(token_plain);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.test_r_imm32(Reg::Rcx, 0xFF);
+    code.jcc_label(0x84, token_done); // jz — token ends at NUL
+    code.cmp_r_imm8(Reg::Rcx, b'"');
+    code.jcc_label(0x85, token_plain2); // jne
+    // Opening quote: check for `""`.
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.movzx_byte(Reg::R8, Reg::Rdx, 1);
+    code.cmp_r_imm8(Reg::R8, b'"');
+    code.jcc_label(0x85, token_quote); // jne — quoted run
+    // `""` at the start of a token is an empty argument; inside a token
+    // (`"a""b"`) it merges, contributing no bytes.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40); // current length
+    let empty_merge = code.label();
+    code.test_rr(Reg::R8, Reg::R8);
+    code.jcc_label(0x85, empty_merge); // jnz — mid-token: merge
+    code.add_r_imm8(Reg::Rdx, 2);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rdx);
+    code.jmp_label(token_done); // `""` — empty argument ends here
+    code.bind_label(empty_merge);
+    code.add_r_imm8(Reg::Rdx, 2);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rdx);
+    code.jmp_label(token_plain);
+    code.bind_label(token_plain2);
+    code.cmp_r_imm8(Reg::Rcx, b' ');
+    code.jcc_label(0x84, token_done); // je — whitespace ends the token
+    code.cmp_r_imm8(Reg::Rcx, b'\t');
+    code.jcc_label(0x84, token_done); // je
+    code.jmp_label(copy_byte); // copy the byte
+    // --- record the completed token ---
+    code.bind_label(token_done);
+    // Entry: table[count] = (offset, length); count += 1. Bounded by 64.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // count
+    code.cmp_r_imm32(Reg::Rcx, 64);
+    code.jcc_label(0x83, record); // jae — table full
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(ARGV_TABLE));
+    code.mov_rr(Reg::R8, Reg::Rcx);
+    code.shl_r_imm8(Reg::R8, 4); // ×16
+    code.add_rr(Reg::Rdx, Reg::R8);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // offset
+    code.mov_mem_r(Reg::Rdx, 0, Reg::R8);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40); // length
+    code.mov_mem_r(Reg::Rdx, 8, Reg::R8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.bind_label(record);
+    code.jmp_label(token_ws);
+    code.bind_label(cap_hit);
+    // Byte cap reached: stop parsing entirely (documented truncation).
+    code.jmp_label(finish);
+    // --- finish ---
+    code.bind_label(finish);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // count
+    code.mov_rip_r(Reg::Rcx, PatchKind::Bss(ARGV_COUNT));
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(ARGV_READY));
+    code.bind_label(already);
     code.leave_ret();
 }
 
-/// `rt_env_remove(key) -> Int`: V1 stub — return -1.
-fn emit_env_remove(code: &mut Code) {
-    emit_env_set(code);
+/// `rt_argc() -> Int`: number of command-line arguments (excluding the
+/// executable name).
+fn emit_argc(code: &mut Code) {
+    prologue(code);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ArgvParse));
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(ARGV_COUNT));
+    code.leave_ret();
+}
+
+/// `rt_argv(index: Int) -> Str`: the argument at `index` (0-based,
+/// excluding the executable). Out-of-range indexes fail with `E-R10`;
+/// the returned string is an owned heap `Str` the caller must free.
+fn emit_argv(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(32); // [rbp-8] result
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ArgvParse));
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // index
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let bad = code.label();
+    code.jcc_label(0x8C, bad); // js
+    code.mov_r_rip(Reg::Rdx, PatchKind::Bss(ARGV_COUNT));
+    code.cmp_rr(Reg::Rax, Reg::Rdx);
+    code.jcc_label(0x83, bad); // jae
+    // table[index] = (offset, length)
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(ARGV_TABLE));
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.shl_r_imm8(Reg::Rcx, 4);
+    code.add_rr(Reg::Rdx, Reg::Rcx);
+    code.mov_r_mem(Reg::R8, Reg::Rdx, 0); // offset
+    code.mov_r_mem(Reg::R9, Reg::Rdx, 8); // length
+    // StrAlloc(length)
+    code.mov_rr(Reg::Rax, Reg::R9);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // Copy loop with advancing cursors: src = arg_data+offset, dst = result+8.
+    // R9 holds the length (from the table entry); R8 the offset.
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8); // result ptr
+    code.add_r_imm8(Reg::R10, 8); // dst cursor
+    code.lea_r_rip(Reg::R11, PatchKind::Bss(ARG_DATA));
+    code.add_rr(Reg::R11, Reg::R8); // src cursor
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, copy_done); // jz
+    code.movzx_byte(Reg::R8, Reg::R11, 0);
+    code.mov_mem_r8(Reg::R10, 0, Reg::R8);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R11, 1);
+    code.sub_r_imm32(Reg::R9, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.leave_ret();
+    code.bind_label(bad);
+    fail(code, 10); // E-R10 array index out of range
+}
+
+/// `rt_str_from_float(f: Float) -> Str`: the same deterministic decimal
+/// representation `rt_print_float` writes (17 significant digits, `%g`
+/// style, CRLF-terminated console form stripped), returned as an owned
+/// exact-length `Str`. Reuses the dtoa pipeline verbatim through the
+/// `write_redirect` sink.
+fn emit_str_from_float(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(48); // [rbp-8] len, [rbp-16] result
+    // Arm the redirect sink and reset its byte count.
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(WRITE_REDIRECT));
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(FLOAT_SINK));
+    // Call rt_print_float(value) — it appends digits + CRLF to the sink.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::PrintFloat));
+    code.add_rsp(16);
+    // Disarm the redirect.
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(WRITE_REDIRECT));
+    // len = sink_count - 2 (strip the trailing CRLF); clamped to >= 0.
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(FLOAT_SINK));
+    code.sub_r_imm32(Reg::Rax, 2);
+    let nonneg = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x89, nonneg); // jns
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(nonneg);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // len
+    // StrAlloc(len)
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // Copy len bytes from float_sink+8 into result+8.
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // remaining
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, copy_done);
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(FLOAT_SINK));
+    code.add_r_imm8(Reg::R10, 8);
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -8);
+    code.sub_rr(Reg::R11, Reg::R9); // offset
+    code.add_rr(Reg::R10, Reg::R11);
+    code.movzx_byte(Reg::R8, Reg::R10, 0);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    code.add_r_imm8(Reg::Rdx, 8);
+    code.add_rr(Reg::Rdx, Reg::R11);
+    code.mov_mem_r8(Reg::Rdx, 0, Reg::R8);
+    code.sub_r_imm32(Reg::R9, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_str_format(fmt: Str, a0: Str, a1: Str, a2: Str) -> Str`:
+/// substitute `{}` placeholders with the next unused argument in order
+/// (`a0`, `a1`, `a2`); `{{` and `}}` are literal braces; lone braces are
+/// literal; a placeholder with no argument left is removed. Two-pass:
+/// exact output length computed first, then one allocation and fill.
+fn emit_str_format(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(64); // [rbp-8] arg index, [rbp-16] cursor/len,
+    // [rbp-24] fmt ptr, [rbp-32] pass (0=length, 1=fill),
+    // [rbp-40] result ptr, [rbp-48] output cursor
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // arg index
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // length
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // pass 0
+    // ---- pass 1: compute the exact output length ----
+    let pass1 = code.label();
+    let scan_top = code.label();
+    let scan_done = code.label();
+    let literal = code.label();
+    let close_brace = code.label();
+    let open_lone = code.label();
+    code.bind_label(pass1);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    // Bound the scan by the format string's length prefix (MINK image
+    // strings are not NUL-terminated): remaining = [fmt].
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rdx); // remaining
+    code.add_r_imm8(Reg::Rax, 8); // data start (past the length prefix)
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // fmt cursor
+    code.bind_label(scan_top);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, scan_done); // jz — consumed the whole format
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.cmp_r_imm8(Reg::Rcx, b'{');
+    code.jcc_label(0x85, close_brace); // jne
+    // `{` — check the next byte.
+    code.movzx_byte(Reg::Rdx, Reg::Rax, 1);
+    code.cmp_r_imm8(Reg::Rdx, b'{');
+    let open_escaped = code.label();
+    code.jcc_label(0x85, open_escaped); // jne
+    // `{{` → one literal brace.
+    code.add_r_imm8(Reg::Rax, 2);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -2);
+    code.add_mem_imm32(Reg::Rbp, -16, 1);
+    code.jmp_label(scan_top);
+    code.bind_label(open_escaped);
+    code.cmp_r_imm8(Reg::Rdx, b'}');
+    code.jcc_label(0x85, open_lone); // jne — lone `{`
+    // `{}` — substitute the next argument if one remains.
+    code.add_r_imm8(Reg::Rax, 2);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -2);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8); // arg index
+    code.cmp_r_imm32(Reg::Rdx, 3);
+    let no_arg1 = code.label();
+    code.jcc_label(0x83, no_arg1); // jae — no argument: removed
+    // length += len(arg[argi])
+    code.mov_rr(Reg::R9, Reg::Rdx);
+    code.shl_r_imm8(Reg::R9, 3); // ×8
+    code.lea_r_mem(Reg::R10, Reg::Rbp, 24); // arg slot base: a0..a2 at [rbp+24..40]
+    code.add_rr(Reg::R10, Reg::R9);
+    code.mov_r_mem(Reg::R11, Reg::R10, 0); // arg Str ptr
+    code.mov_r_mem(Reg::R10, Reg::R11, 0); // len of the arg Str
+    code.add_mem_r(Reg::Rbp, -16, Reg::R10);
+    code.add_mem_imm32(Reg::Rbp, -8, 1); // arg index += 1
+    code.jmp_label(scan_top);
+    code.bind_label(no_arg1);
+    // The placeholder is still consumed (removed from the output); the
+    // fmt advance and remaining decrement already happened above.
+    code.jmp_label(scan_top);
+    code.bind_label(open_lone);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -1);
+    code.add_mem_imm32(Reg::Rbp, -16, 1);
+    code.jmp_label(scan_top);
+    code.bind_label(close_brace);
+    code.cmp_r_imm8(Reg::Rcx, b'}');
+    code.jcc_label(0x85, literal); // jne — ordinary byte
+    code.movzx_byte(Reg::Rdx, Reg::Rax, 1);
+    code.cmp_r_imm8(Reg::Rdx, b'}');
+    let close_escaped = code.label();
+    code.jcc_label(0x85, close_escaped); // jne
+    // `}}` → one literal brace.
+    code.add_r_imm8(Reg::Rax, 2);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -2);
+    code.add_mem_imm32(Reg::Rbp, -16, 1);
+    code.jmp_label(scan_top);
+    code.bind_label(close_escaped);
+    // Lone `}` → literal.
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -1);
+    code.add_mem_imm32(Reg::Rbp, -16, 1);
+    code.jmp_label(scan_top);
+    code.bind_label(literal);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -1);
+    code.add_mem_imm32(Reg::Rbp, -16, 1);
+    code.jmp_label(scan_top);
+    code.bind_label(scan_done);
+    // Allocate the exact-length result.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // result ptr
+    // ---- pass 2: fill the output ----
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // arg index = 0
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // output cursor = 0
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // fmt ptr
+    code.add_r_imm8(Reg::Rax, 8); // data start (past the length prefix)
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // remaining
+    let fill_top = code.label();
+    let fill_done = code.label();
+    let fill_literal = code.label();
+    let fill_open_lone = code.label();
+    let fill_close = code.label();
+    let fill_byte = code.label();
+    code.bind_label(fill_top);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, fill_done); // jz — consumed the whole format
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.cmp_r_imm8(Reg::Rcx, b'{');
+    code.jcc_label(0x85, fill_close); // jne
+    code.movzx_byte(Reg::Rdx, Reg::Rax, 1);
+    code.cmp_r_imm8(Reg::Rdx, b'{');
+    let fill_open_esc = code.label();
+    code.jcc_label(0x85, fill_open_esc); // jne
+    code.add_r_imm8(Reg::Rax, 2);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -2);
+    code.mov_r32_imm32(Reg::Rcx, b'{' as u32);
+    code.jmp_label(fill_byte);
+    code.bind_label(fill_open_esc);
+    code.cmp_r_imm8(Reg::Rdx, b'}');
+    code.jcc_label(0x85, fill_open_lone); // jne
+    code.add_r_imm8(Reg::Rax, 2);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -2);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8); // arg index
+    code.cmp_r_imm32(Reg::Rdx, 3);
+    let no_arg2 = code.label();
+    code.jcc_label(0x83, no_arg2); // jae — no argument: skip
+    // Copy arg[argi] bytes into the output.
+    code.mov_rr(Reg::R9, Reg::Rdx);
+    code.shl_r_imm8(Reg::R9, 3);
+    code.lea_r_mem(Reg::R10, Reg::Rbp, 24);
+    code.add_rr(Reg::R10, Reg::R9);
+    code.mov_r_mem(Reg::R10, Reg::R10, 0); // arg Str ptr
+    code.mov_r_mem(Reg::R11, Reg::R10, 0); // arg length
+    code.add_r_imm8(Reg::R10, 8); // data start
+    let arg_copy = code.label();
+    let arg_done = code.label();
+    code.bind_label(arg_copy);
+    code.test_rr(Reg::R11, Reg::R11);
+    code.jcc_label(0x84, arg_done);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48); // out cursor
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::R8, 8);
+    code.add_rr(Reg::R8, Reg::Rcx); // dst = result+8+out
+    code.movzx_byte(Reg::Rcx, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rcx);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_mem_imm32(Reg::Rbp, -48, 1);
+    code.sub_r_imm32(Reg::R11, 1);
+    code.jmp_label(arg_copy);
+    code.bind_label(arg_done);
+    code.add_mem_imm32(Reg::Rbp, -8, 1);
+    code.jmp_label(fill_top);
+    code.bind_label(no_arg2);
+    // The placeholder is still consumed (removed from the output); the
+    // fmt advance and remaining decrement already happened above.
+    code.jmp_label(fill_top);
+    code.bind_label(fill_open_lone);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -1);
+    code.mov_r32_imm32(Reg::Rcx, b'{' as u32);
+    code.jmp_label(fill_byte);
+    code.bind_label(fill_close);
+    code.cmp_r_imm8(Reg::Rcx, b'}');
+    code.jcc_label(0x85, fill_literal);
+    code.movzx_byte(Reg::Rdx, Reg::Rax, 1);
+    code.cmp_r_imm8(Reg::Rdx, b'}');
+    let fill_close_esc = code.label();
+    code.jcc_label(0x85, fill_close_esc);
+    code.add_r_imm8(Reg::Rax, 2);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -2);
+    code.mov_r32_imm32(Reg::Rcx, b'}' as u32);
+    code.jmp_label(fill_byte);
+    code.bind_label(fill_close_esc);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -1);
+    code.mov_r32_imm32(Reg::Rcx, b'}' as u32);
+    code.jmp_label(fill_byte);
+    code.bind_label(fill_literal);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.add_mem_imm32(Reg::Rbp, -56, -1);
+    code.jmp_label(fill_byte);
+    code.bind_label(fill_byte);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48); // out cursor
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::R8, 8);
+    code.add_rr(Reg::R8, Reg::Rdx);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rcx);
+    code.add_mem_imm32(Reg::Rbp, -48, 1);
+    code.jmp_label(fill_top);
+    code.bind_label(fill_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.leave_ret();
 }
 
 // ===========================================================================
@@ -3857,12 +4740,16 @@ fn emit_to_cstr(code: &mut Code) {
     code.sub_r_imm32(Reg::R11, 1);
     code.jmp_label(loop_start);
     code.bind_label(loop_done);
-    // null terminate
+    // null terminate: a SINGLE-byte store at buf[len]. (A wider store
+    // here would spill zeros past the end of a small CStr block into an
+    // adjacent live allocation — that corrupted the next CStr's first
+    // bytes and made SetEnvironmentVariableA fail with error 87 when the
+    // free-list reused the neighboring block.)
     code.mov_r_mem(Reg::R9, Reg::Rbp, -8);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // len
     code.add_rr(Reg::R9, Reg::Rax);
-    code.mov_mem_imm32(Reg::R9, 0, 0); // buf[len] = 0
+    code.mov_mem_imm8(Reg::R9, 0, 0); // buf[len] = 0
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.leave_ret();
 }
@@ -3923,6 +4810,12 @@ const IAT_GET_EXIT_CODE_PROCESS: u32 = 19;
 const IAT_WAIT_FOR_SINGLE_OBJECT: u32 = 20;
 const IAT_SET_HANDLE_INFORMATION: u32 = 23;
 const IAT_PEEK_NAMED_PIPE: u32 = 34;
+// --- Session 99: Windows Wave A tranche 1 ---
+const IAT_GET_ENVIRONMENT_VARIABLE_A: u32 = 28;
+const IAT_SET_ENVIRONMENT_VARIABLE_A: u32 = 29;
+const IAT_SLEEP: u32 = 35;
+const IAT_GET_COMMAND_LINE_A: u32 = 36;
+const IAT_STD_INPUT_HANDLE: i32 = -10;
 
 /// `rt_fs_exists(path: Str) -> Bool`.
 /// GetFileAttributesA returns INVALID_HANDLE_VALUE (0xFFFFFFFF) on error.

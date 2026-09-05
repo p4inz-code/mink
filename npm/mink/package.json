@@ -6,7 +6,8 @@
     "mink": "bin/mink.exe"
   },
   "files": [
-    "bin/mink.exe"
+    "bin/mink.exe",
+    "stdlib"
   ],
   "os": [
     "win32"

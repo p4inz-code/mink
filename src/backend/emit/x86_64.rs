@@ -52,7 +52,6 @@
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::mir::BlockId;
-use crate::runtime::abi::BSS;
 
 use super::super::ir::{
     BInstKind, BOperand, BProgram, BTerminator, BType, PlaceAddrStep, RuntimeService,
@@ -280,6 +279,21 @@ impl Code {
         self.u8(0xC6);
         self.mem_modrm(Reg::Rax, base, disp); // /0
         self.u8(imm);
+    }
+
+    /// `add qword [base + disp], r64`.
+    pub(crate) fn add_mem_r(&mut self, base: Reg, disp: i32, src: Reg) {
+        self.rex_w(src, base);
+        self.u8(0x01);
+        self.mem_modrm(src, base, disp);
+    }
+
+    /// `add qword [base + disp], imm32`.
+    pub(crate) fn add_mem_imm32(&mut self, base: Reg, disp: i32, imm: i32) {
+        self.rex_w(Reg::Rax, base);
+        self.u8(0x81);
+        self.mem_modrm(Reg::Rax, base, disp); // /0
+        self.i32_le(imm);
     }
 
     /// `mov r64, imm32` (zero-extends; writes the 32-bit register).

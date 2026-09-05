@@ -65,7 +65,7 @@ probes). Every "every major claim must be traceable" row carries anchors in Note
 | Windows target | `x86_64-windows-pe` implemented | `[code] src/backend/target.rs` |
 | Linux target | `x86_64-linux-elf` implemented but FROZEN by policy; not part of this audit | `[code] src/backend/target.rs`; session policy |
 | Architecture | AOT compiler, no external toolchain, zero Rust crate deps, standalone PE | `[code] Cargo.toml`, `src/backend/emit/*.rs` |
-| Distribution | npm `@p4inz-code/mink` 1.0.1 ships only the compiler `bin/mink.exe` (no stdlib sources) | `[code] npm/mink/package.json`; Session 97 clean-install record |
+| Distribution | npm `@p4inz-code/mink` 1.0.1 ships compiler `bin/mink.exe` + bundled `stdlib/` (all 16 `.mink` modules); `mod` resolves via `<exe>/../stdlib` with no config | `[code] npm/mink/package.json`, `src/driver.rs` resolve_module_path; `[exec]` Session 99 clean-install stdlib import |
 | P0 / P1 on the Windows base | 0 / 0 | Session 97 gate |
 
 Short-circuit semantics of `&&` / `||` were probed natively this session: both **do**
@@ -97,7 +97,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | L13 | `None` / nullability | VERIFIED | `Null` type + `Option<T>` (`[code] stdlib/option.mink`), `?` operator | None | - | - | N | - | Stronger than Python: exhaustive `match` on `Option` |
 | L14 | Ranges | VERIFIED | `a..b`, `a..=b`; `for i in 1..=10` (`[test] tests/loop_expressions.rs`) | No step forms (`range(a,b,s)`); P3 sugar | P3 | S | N | B | |
 | L15 | Slicing `s[a:b:c]` | PARTIAL | `str_sub` for strings (`[code] stdlib/strings.mink`); no slice views of arrays/Vec, no step | Array/container slicing absent | P2 | M | N | C | Function form exists for Str; slice *views* need reference+length types later |
-| L16 | Strings interpolation / f-strings / format spec | MISSING | Only `rt_str_from_int/bool` + manual concat; **no float→Str** intrinsic | No general formatting (values→text), the most-used Python text capability | P1 | M | Y | A/B | Quick-win first cut: `rt_str_from_float` + a small `str_format` |
+| L16 | Strings interpolation / f-strings / format spec | PARTIAL | `rt_str_from_float` (exact dtoa, same path as `rt_print_float`) + `rt_str_format` (up to 3 `{}` substitutions, `{{`/`}}` escapes, missing args dropped) (`[code] src/runtime/intrinsics.rs`; `[test] tests/session99.rs`; `[exec]` env_report example) | No Python-style format specs (`:02d`, `.2f`), no f-string syntax | P2 | M | N | - | Minimal MINK-native formatting contract is INTENTIONALLY DIFFERENT from Python's format language |
 | L17 | Enums / named constants (`enum`) | VERIFIED | `enum` w/ unit + data variants, explicit discriminants, exhaustive match (`[test] tests/enums.rs`, sum_types, discriminants) | None | - | - | N | - | Covers Python `enum` module capability |
 | L18 | `dataclass`-style declarative records | INTENT. DIFF. | `struct` with explicit typed fields IS declarative (`[code] src/ast/mod.rs`) | No derived methods (equality/print) yet | P3 | M | N | B | Structs are the dataclass; derives are convenience |
 | L19 | `namedtuple` | MISSING | tuples are positional only | Named-field tuple sugar | P3 | S | N | - | Structs cover the need |
@@ -183,7 +183,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 |---|---|---|---|---|---|---|---|---|---|
 | L65 | Modules (files) | VERIFIED | `mod name;` loads `<dir>/name.mink`, recursively; inline modules (`[code] src/driver.rs`, `src/module/mod.rs`) | None | - | - | N | - | |
 | L66 | Imports / name resolution | VERIFIED | `use path`, `use path::Item`, `pub` visibility; flat AST combination (`[code] src/driver.rs` check_multi_module) | V1: private items are still compiled in; true encapsulation is relaxed | P3 | S | N | B | Documented V1 simplification |
-| L67 | Import search paths (stdlib reusable without copying) | PARTIAL | resolution is relative to the root file's directory only; npm package ships **no** stdlib `.mink` sources | `use strings` after `npm install` cannot resolve; developer must copy stdlib files into the project | P1 | S-M | Y | A/F | Ship stdlib in the npm package + an include path for module lookup (part of packaging work, but the module-search mechanism is Wave A) |
+| L67 | Import search paths (stdlib reusable without copying) | VERIFIED | `mod name;` resolves in order: source dir sibling → bundled `stdlib` next to the installed `mink` exe → `cwd/stdlib` (`[code] src/driver.rs` resolve_module_path); npm ships `stdlib/*.mink` | None for V1 | - | - | N | - | Clean-install proof: `mod math;` program built via installed CLI from a separate cwd with no config (`[exec]` Session 99) |
 | L68 | Packages (directories / `__init__`) | MISSING | none | Directory package concept | P1 | M | Y | F | Package manager work (F) delivers this |
 | L69 | Relative imports / aliases | PARTIAL | file-relative `mod` only | `use a::b` style nesting within project dirs is limited | P2 | M | N | F | |
 | L70 | Circular import handling | PARTIAL | discovery visits each file once (cycle-safe) (`[code] src/driver.rs` visited set) | No explicit cycle diagnostic | P3 | S | N | - | |
@@ -211,14 +211,14 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | R03 | Module execution (`python -m pkg`) | MISSING | `mink run <file>` only | Package/module runner | P3 | M | N | F | Comes with package system |
 | R04 | Compiled standalone program | VERIFIED | `mink build` → zero-dependency PE (`[exec]` Session 97: standalone exe outside repo) | None — MINK is stronger (Python needs an interpreter + packaging to ship) | - | - | N | - | |
 | R05 | Import caching / bytecode cache | N/A | AOT compilation; no cache concept | — | - | - | N | - | |
-| R06 | Traceback / error reporting w/ location | PARTIAL | compile-time errors carry file:line:col; runtime errors print `mink: runtime error[E-Rxx]: msg` only (`[code] src/backend/emit/runtime.rs` Fail) | Runtime faults carry no source line or call stack | P1 | M | Y | A | Add per-image function/source-line metadata; session 97 base is otherwise stable |
+| R06 | Traceback / error reporting w/ location | PARTIAL | compile-time errors carry file:line:col; runtime errors print `mink: runtime error[E-Rxx]: msg` only (`[code] src/backend/emit/runtime.rs` Fail) | Runtime faults carry no source line or call stack | P1 | M | Y | A | DEFERRED from Session 99 tranche 1 (budget): all other Wave A items landed; R06 is the explicit next-session task — per-function source-line table in BSS + Fail-path print |
 | R07 | Warnings (`warnings` module) | MISSING | none | Warning channel | P3 | S | N | - | |
 | R08 | stdout output | VERIFIED | `rt_print_str/int/float/char` (+CRLF), write thunks via kernel32 (`[code] src/runtime/intrinsics.rs`) | None | - | - | N | - | Python `print()` equivalent |
-| R09 | User-facing stderr write | MISSING | internal WriteStderr service exists but no intrinsic is exposed (`[code] src/backend/emit/runtime.rs`) | Program cannot write diagnostics to stderr | P2 | S | N | A | Quick win: expose `rt_write_stderr` |
-| R10 | stdin input | MISSING | no stdin intrinsics | Programs cannot read console/stdin | P1 | M | Y | A | Needed for filters/pipes/CLI tools |
+| R09 | User-facing stderr write | VERIFIED | `rt_stderr_write(Str) -> Int` writes exact bytes to stderr (`[code] src/runtime/intrinsics.rs`; `[test] tests/session99.rs` stderr_write_is_separate_from_stdout; `[exec]` env_report example) | Writes are synchronous; stdout/stderr interleaving order not guaranteed | P3 | S | N | - | |
+| R10 | stdin input | VERIFIED | `rt_stdin_read() -> Str` reads all piped input to EOF (owned string; empty on no input) (`[code] src/runtime/intrinsics.rs`; `[test] tests/session99.rs`; `[exec]` env_report example with piped stdin) | Read-all only; no line-by-line streaming, no binary reads | P2 | M | N | - | Text/binary boundary documented in SESSION_99 record |
 | R11 | Exit codes | VERIFIED | `main` return → exit code; `rt_exit(code)` w/ leak check (`[exec]` 2547-test suite asserts codes) | None | - | - | N | - | |
-| R12 | argv (command-line args to programs) | MISSING | entry `fn main()` must take no parameters (`[code] src/backend/mod.rs` entry_function) | Programs cannot read their own arguments | P1 | M | Y | A | `GetCommandLineW` parse → argv intrinsic; entry-stub change |
-| R13 | Environment variables | PARTIAL | `rt_env_*` are V1 **stubs on Windows**: get returns empty, has false, set/remove -1 (`[code] src/backend/emit/runtime.rs` emit_env_get/set/has/remove); real env walk exists only on the frozen Linux emitter | Windows env access is non-functional; IAT slots for Get/SetEnvironmentVariableA already exist (unused) | P1 | S-M | Y | A | Quick win: wire the existing imports |
+| R12 | argv (command-line args to programs) | VERIFIED | `rt_argc() -> Int`, `rt_argv(i) -> Str` parse the ANSI command line (order, spaces, empty args preserved; count excludes the exe name) (`[code] src/backend/emit/runtime.rs`; `[test] tests/session99.rs`; `[exec]` env_report example) | ANSI-only command line; Unicode args P2 (W05/H) | P2 | M | N | - | |
+| R13 | Environment variables | VERIFIED | `rt_env_get/has/set/remove` wired to GetEnvironmentVariableA/SetEnvironmentVariableA; empty value sets an empty-valued var (deletion only via `rt_env_remove`); free-list reuse regression fixed (ToCstr NUL overrun) (`[code] src/backend/emit/runtime.rs`; `[test] tests/session99.rs` 4 env tests; `[exec]` env_report example) | ANSI-only names/values; Unicode env P2 (W05/H) | P2 | S-M | N | - | |
 | R14 | Signals / Ctrl+C handling | MISSING | no console control handler | Graceful interruption | P2 | M | N | H | Windows subset: SetConsoleCtrlHandler for CTRL_C/CLOSE |
 | R15 | Platform info (`sys.platform`, `platform`) | MISSING | none | Query OS/arch at runtime | P2 | S | N | A | Trivial intrinsic |
 | R16 | System info (mem/disk/cpu/uptime) | MISSING | none | System resource queries | P3 | M | N | H | |
@@ -228,7 +228,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | R20 | Async / event loop | MISSING | none | No non-blocking I/O model | P1 | XL | Y | E | Major subsystem (select/poll first — see D rows) |
 | R21 | Locks / synchronization primitives | MISSING | none | Mutex/condvar | P2 | L | N | E | With threads |
 | R22 | Subprocess run + capture | PARTIAL | `process_run/process_stdout/stderr/id`; exit codes; large-output drain fixed in Session 97 (`[exec]` S97 1 MB drain) | stdout/stderr capped at 4088 bytes/stream; no stdin, no env override, no explicit argv | P2 | M | N | C | Core capability VERIFIED; parity extras P2 |
-| R23 | Sleep / timers | MISSING | no sleep intrinsic | Programs cannot pause or time out | P1 | S | Y | A | kernel32 `Sleep` import; trivial |
+| R23 | Sleep / timers | VERIFIED | `rt_sleep(ms)` via kernel32 Sleep; bounded non-spinning wait (`[test] tests/session99.rs` sleep_zero_and_short_returns_cleanly) | No timer/callback API | P3 | S | N | - | |
 | R24 | Process pools / multiprocessing | MISSING | none | Parallel subprocess workloads | P3 | XL | N | E | After threads/process work |
 | R25 | Dynamic library loading / FFI | MISSING | LoadLibrary/GetProcAddress used internally for ws2_32/bcrypt (`[code] src/backend/emit/pe.rs`) but not user-accessible | No ctypes-equivalent; no C ABI calls from MINK programs | P2 | L | N | I | Design docs exist (`[doc] docs/ecosystem/C_ABI_SPEC.md`); not parity-blocking for the declared gate |
 | R26 | Error text from OS calls (`GetLastError`) | PARTIAL | `net_last_error` only; filesystem returns -1 silently | OS error messages | P2 | S | N | A | |
@@ -247,7 +247,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | S03 | Unicode data (categories/normalization/casefold) | MISSING | none (byte model) | Full Unicode DB | P3 | L | N | H | Minimal UTF-8 layer is L05 (P1); full DB optional |
 | S04 | Codecs / encodings (`codecs`, utf-8/16, latin-1…) | PARTIAL | `encoding.mink`: hex/base64(url)/url + `str_is_ascii` (`[code] stdlib/encoding.mink`; `[test] tests/encoding_lib.rs`) | No UTF-8 encode/decode, no text codecs | P2 | M | N | H | |
 | S05 | Text wrapping / formatting helpers (`textwrap`) | MISSING | none | Wrap/pad paragraph text | P3 | S | N | - | |
-| S06 | String parsing: int/float ↔ text | PARTIAL | `rt_str_from_int/bool`, `rt_str_parse_int` helper in http.mink; **no float→Str, no robust parse-to-float** (`[code] src/runtime/intrinsics.rs`) | Formatting and parsing numeric text is incomplete | P1 | M | Y | A/B | `str_format` + float text conversions are Wave A/B items |
+| S06 | String parsing: int/float ↔ text | PARTIAL | `rt_str_from_int/bool/float` + `rt_str_format` (Session 99, `[test] tests/session99.rs`); `rt_str_parse_int` helper in http.mink | No robust parse-to-float, no general str→int | P1 | M | Y | B | Formatting side VERIFIED; parsing side is the remaining Wave B item |
 
 ### 5.2 Binary data
 
@@ -341,7 +341,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| S50 | Environment (os.environ) | PARTIAL | Windows stubs (see R13) | Non-functional on Windows | P1 | S-M | Y | A | |
+| S50 | Environment (os.environ) | VERIFIED | see R13 — real get/set/has/remove on Windows | ANSI-only | P2 | S-M | N | - | |
 | S51 | Process execution | PARTIAL | see R22 | stdin/env/argv control | P2 | M | N | C | |
 | S52 | Platform identity | MISSING | see R15 | — | P2 | S | N | A | |
 | S53 | Locale / internationalization | MISSING | none | Locale-aware formatting | P3 | L | N | - | |
@@ -371,7 +371,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | S67 | Date/time decomposition + arithmetic | PARTIAL | year/month/day/hour/min/sec/weekday, leap-year, days-in-month, diff/add (`[code] stdlib/time.mink`) | No date structs/parsing, no timedelta | P2 | M | N | C | |
 | S68 | Timezone | MISSING | UTC epoch only | TZ handling, DST | P2 | M | N | C | Windows TZ API exists |
 | S69 | Formatting / parsing (`strftime`/`strptime`) | PARTIAL | single fixed `time_format(ts)` | Pattern-based formatting + parse-back | P1 | M | Y | C | High daily-use; pattern engine M |
-| S70 | Sleep / timers | MISSING | see R23 | — | P1 | S | Y | A | |
+| S70 | Sleep / timers | VERIFIED | see R23 — `rt_sleep(ms)` | None | - | - | N | - | |
 
 ### 5.14 Concurrency / async
 
@@ -385,7 +385,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| S74 | Logging | MISSING | none (needs stderr write first, R09) | Leveled logging | P1 | S-M | Y | A | Quick win once R09 lands; important production capability |
+| S74 | Logging | MISSING | stderr primitive now exists (R09 `rt_stderr_write`); no leveled logging module yet | Leveled logging | P1 | S-M | Y | A | Blocking dependency resolved in Session 99; module still to build |
 | S75 | Unit-test framework in MINK | MISSING | Rust-hosted suite only | `mink test` + assert macros | P1 | M | Y | G | Tooling row T09 is the same gap |
 | S76 | Profiling | MISSING | none | Timing/profiling tools | P2 | L | N | G | |
 | S77 | Runtime diagnostics / tracing hooks | MISSING | leak checker + error codes only | Tracing | P2 | M | N | G | |
@@ -425,9 +425,9 @@ Classification prefix in Notes: **REQ** = required for MINK Windows parity · **
 | W03 | Long paths (>260) | PARTIAL | ANSI APIs without `\\?\` or longPathAware manifest → MAX_PATH-limited | Long-path support | P2 | M | N | H | REQ for modern Windows; wide-API migration later |
 | W04 | Case-insensitive filesystem semantics | PARTIAL | kernel32 semantics inherited; no tests | — | P3 | S | N | - | PY-adjacent: Python docs warn about it; MINK inherits OS behavior |
 | W05 | UTF-8/Unicode paths + console output | PARTIAL | byte paths; WriteFile console output depends on console code page | Wide-char console + Unicode path layer | P2 | M | N | H | REQ for non-ASCII correctness; pairs with L05 |
-| W06 | Environment variables | PARTIAL | stubs (see R13) | wiring Get/SetEnvironmentVariableA | P1 | S-M | Y | A | REQ |
+| W06 | Environment variables | VERIFIED | see R13 — wired | ANSI-only | P2 | S-M | N | - | REQ |
 | W07 | Process creation | VERIFIED | CreateProcessA + pipe capture (`[code] src/backend/emit/runtime.rs`; `[exec]` Session 97) | see R22 extras | P2 | M | N | C | REQ |
-| W08 | Console stdin/stdout/stderr | PARTIAL | stdout verified; stderr capture verified; program stdin/stderr write missing (R09/R10) | — | P1 | M | Y | A | REQ |
+| W08 | Console stdin/stdout/stderr | VERIFIED | stdout verified; program stdin (`rt_stdin_read`) and stderr write (`rt_stderr_write`) added (R09/R10) (`[test] tests/session99.rs`) | Unicode console text (W05) | P2 | M | N | H | REQ |
 | W09 | File metadata (attributes, timestamps) | PARTIAL | size only | attrs/mtime | P2 | M | N | C | REQ |
 | W10 | Sockets | VERIFIED | Winsock2 loopback TCP/UDP verified (`[test] tests/windows_hardening.rs`) | None | - | - | N | - | REQ |
 | W11 | Signals/control events | MISSING | none | SetConsoleCtrlHandler | P2 | M | N | H | OPT (graceful shutdown) |
@@ -586,7 +586,7 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
 6. Parity-blocking work clusters into: language/data containers (Wave B), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G), plus a fast Windows-runtime wave (A) that removes the environment/stdin/argv/sleep/stderr/error-info gaps and bundles the stdlib into npm.
-7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) is NOT implemented (stubs); `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); the test suite is 2547 tests/56 targets (not "199 test files"); crypto is execution-verified on Windows.
+7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) was stubbed at audit time but is implemented since Session 99; `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); crypto is execution-verified on Windows.
 
 ### 10.7 FINAL STATUS (this matrix)
 

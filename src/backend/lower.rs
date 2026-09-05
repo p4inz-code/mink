@@ -1948,6 +1948,14 @@ impl<'a> Lowerer<'a> {
             "rt_crypto_random_bytes" => RuntimeService::CryptoRandomBytes,
             "rt_crypto_random_int" => RuntimeService::CryptoRandomInt,
             "rt_crypto_secure_zero" => RuntimeService::CryptoSecureZero,
+            // --- Session 99: Windows Wave A tranche 1 ---
+            "rt_sleep" => RuntimeService::Sleep,
+            "rt_stderr_write" => RuntimeService::StderrWrite,
+            "rt_stdin_read" => RuntimeService::StdinRead,
+            "rt_argc" => RuntimeService::Argc,
+            "rt_argv" => RuntimeService::Argv,
+            "rt_str_from_float" => RuntimeService::StrFromFloat,
+            "rt_str_format" => RuntimeService::StrFormat,
             _ => return None,
         };
         debug_assert!(service.is_callable());
