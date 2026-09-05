@@ -53,14 +53,17 @@
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::mir::BlockId;
 
+use std::collections::HashMap;
+
 use super::super::ir::{
-    BInstKind, BOperand, BProgram, BTerminator, BType, PlaceAddrStep, RuntimeService,
+    BInst, BInstKind, BOperand, BProgram, BTerminator, BType, PlaceAddrStep, RuntimeService,
 };
 use super::EmittedImage;
 use super::elf;
 use super::linux_runtime;
 use super::pe;
 use super::runtime;
+use crate::source::{SourceMap, Span};
 
 /// A general-purpose register for the runtime emitter. Values follow the
 /// x86-64 encoding (0–7 are `rax`…`rdi`, 8–15 are `r8`–`r15`), so the REX
@@ -128,6 +131,11 @@ pub(crate) struct Patch {
     pub(crate) offset: usize,
     /// What the field must point at.
     pub(crate) kind: PatchKind,
+    /// Bytes of the instruction that follow the `disp32` field. Most
+    /// RIP-relative forms end with the field (`tail == 0`), so the end of
+    /// the instruction is `offset + 4`; `mov [rip + disp32], imm32` has
+    /// four more bytes (`tail == 4`), and its end is `offset + 8`.
+    pub(crate) tail: u32,
 }
 
 /// The target of a `disp32` patch.
@@ -200,6 +208,7 @@ impl Code {
         self.patches.push(Patch {
             offset: self.buf.len(),
             kind,
+            tail: 0,
         });
         self.buf.extend_from_slice(&0u32.to_le_bytes());
     }
@@ -612,9 +621,18 @@ impl Code {
     }
 
     /// `mov qword [rip + disp32], imm32`.
+    ///
+    /// Ten bytes long: `48 C7 05 <disp32> <imm32>`. The `disp32` field is
+    /// *not* the last field (four bytes of `imm32` follow it), so the
+    /// patch is tagged with `tail: 4` and resolution measures the
+    /// displacement from the true end of the instruction.
     pub(crate) fn mov_rip_imm32(&mut self, kind: PatchKind, imm: i32) {
         self.bytes(&[0x48, 0xC7, 0x05]);
         self.patch(kind);
+        self.patches
+            .last_mut()
+            .expect("patch was just recorded")
+            .tail = 4;
         self.i32_le(imm);
     }
 
@@ -1006,6 +1024,125 @@ fn rex_rb(reg: Reg, rm: Reg) -> u8 {
     ((reg as u8 >> 3) & 1) << 2 | ((rm as u8 >> 3) & 1)
 }
 
+/// The embedded source-location table region (Session 100, R06): a magic
+/// header followed by one 16-byte entry per distinct fail-site location
+/// and a blob of pre-rendered `  at <file>:<line>\r\n` suffixes.
+///
+/// Layout (all fields little-endian):
+///
+/// ```text
+/// offset 0:  u64 magic   ("MINKSLOC", little-endian)
+/// offset 8:  u64 version (1)
+/// offset 16: u64 count   (number of entries)
+/// offset 24: u64 blob_off (offset from the region base to the blob)
+/// offset 32: entries[count], each u64 offset + u64 length into the blob
+/// then:      the blob of rendered location suffixes
+/// ```
+///
+/// `rt_fail` validates the magic, version, count, and every offset/length
+/// against the region bounds before reading, so malformed or truncated
+/// metadata degrades to the location-less fallback instead of crashing.
+pub(crate) const LOC_MAGIC: u64 = 0x434F_4C53_4B4E_494D; // bytes "MINKSLOC" little-endian
+pub(crate) const LOC_VERSION: u64 = 1;
+
+/// The byte offset of the location entries within the region (the header
+/// is four u64 fields).
+pub(crate) const LOC_ENTRIES_OFF: u64 = 32;
+
+/// Collects the distinct source locations generated runtime checks can
+/// report and assigns each a stable 1-based id (0 means "no location").
+///
+/// The sink is enabled for the Windows PE emitter, which instruments its
+/// runtime-fail sites with the location id of the operation that can
+/// fail. The Linux ELF emitter is frozen and passes a disabled sink: a
+/// disabled sink resolves every span to id 0 and emits no instrumentation,
+/// so user-function code bytes are identical to the pre-R06 output. (The
+/// ELF image still differs by the shared BSS cell and by the corrected
+/// `mov_rip_imm32` displacement immediates in the Linux runtime's
+/// zero-inits; both are semantically neutral — see the Session 100
+/// document.)
+struct LocSink<'a> {
+    sources: Option<&'a SourceMap>,
+    /// The rendered `  at <file>:<line>\r\n` suffixes, in id order
+    /// (location id = index + 1).
+    rendered: Vec<Vec<u8>>,
+    /// (SourceId raw, line) -> location id, deduplicating identical
+    /// file/line pairs so repeated checks share one table entry.
+    ids: HashMap<(u32, u32), u32>,
+}
+
+impl<'a> LocSink<'a> {
+    /// A disabled sink for the frozen Linux ELF emitter.
+    fn disabled() -> Self {
+        Self {
+            sources: None,
+            rendered: Vec::new(),
+            ids: HashMap::new(),
+        }
+    }
+
+    /// An enabled sink resolving spans against `sources`.
+    fn new(sources: &'a SourceMap) -> Self {
+        Self {
+            sources: Some(sources),
+            rendered: Vec::new(),
+            ids: HashMap::new(),
+        }
+    }
+
+    /// The 1-based location id for the failing operation at `span`, or `0`
+    /// when the sink is disabled or the span names no registered file.
+    ///
+    /// The reported line is the 1-based line of the span's start offset;
+    /// column information is intentionally not embedded (the compiler
+    /// pipeline measures columns in bytes, and the runtime contract only
+    /// promises file + line).
+    fn id_for(&mut self, span: Span) -> u32 {
+        let Some(sources) = self.sources else {
+            return 0;
+        };
+        let Some(file) = sources.get(span.file()) else {
+            return 0;
+        };
+        let offset = span.start().min(file.len());
+        let line = file.line_col(offset).line;
+        let file_raw = file.id().raw();
+        if let Some(&id) = self.ids.get(&(file_raw, line)) {
+            return id;
+        }
+        let id = self.rendered.len() as u32 + 1;
+        self.rendered
+            .push(format!("  at {}:{}\r\n", file.name().display(), line).into_bytes());
+        self.ids.insert((file_raw, line), id);
+        id
+    }
+}
+
+/// Appends the embedded source-location region into `code`, binding the
+/// region labels `rt_fail` reads. Deterministic: entries follow id order,
+/// which follows source order of the instrumented sites.
+fn emit_loc_region(code: &mut Code, sink: &LocSink<'_>, base_label: u32, end_label: u32) {
+    let mut entries = Vec::with_capacity(sink.rendered.len());
+    let mut blob = Vec::new();
+    for suffix in &sink.rendered {
+        entries.push((blob.len() as u64, suffix.len() as u64));
+        blob.extend_from_slice(suffix);
+    }
+    let count = sink.rendered.len() as u64;
+    let blob_off = LOC_ENTRIES_OFF + 16 * count;
+    code.bind_label(base_label);
+    code.bytes(&LOC_MAGIC.to_le_bytes());
+    code.bytes(&LOC_VERSION.to_le_bytes());
+    code.bytes(&count.to_le_bytes());
+    code.bytes(&blob_off.to_le_bytes());
+    for (off, len) in entries {
+        code.bytes(&off.to_le_bytes());
+        code.bytes(&len.to_le_bytes());
+    }
+    code.bytes(&blob);
+    code.bind_label(end_label);
+}
+
 /// Emits the x86-64 machine code for `program` and wraps it in a PE image.
 ///
 /// `entry` is the index of the `main` function (validated by the caller).
@@ -1018,18 +1155,27 @@ fn rex_rb(reg: Reg, rm: Reg) -> u8 {
 /// - the embedded runtime services and their message data;
 /// - `.data` (module bindings), `.bss` (runtime state), `.idata`
 ///   (`kernel32` imports), and `.reloc` sections.
-pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
+///
+/// `sources` is the compilation's source map; the emitter resolves every
+/// instrumented fail site's span to a (file, line) and embeds the
+/// resulting source-location table into the image (R06).
+pub(crate) fn emit_pe(program: &BProgram, entry: usize, sources: &SourceMap) -> EmittedImage {
     let mut code = Code::new();
+    let mut loc = LocSink::new(sources);
 
     // ------------------------------------------------------------------
     // Labels. The string-blob labels are created up front so function
     // bodies can reference them; the region bounds are bound around the
-    // string data and recorded by `rt_init`. All are bound before patch
-    // resolution.
+    // string data and recorded by `rt_init`. The source-location region
+    // labels are referenced by `rt_fail` (emitted with the runtime
+    // services) and bound after the string data, before patch
+    // resolution. All are bound before patch resolution.
     // ------------------------------------------------------------------
     let string_labels: Vec<u32> = (0..program.strings.len()).map(|_| code.label()).collect();
     let str_data_start_label = code.label();
     let str_data_end_label = code.label();
+    let loc_region_label = code.label();
+    let loc_region_end_label = code.label();
 
     // ------------------------------------------------------------------
     // Entry-point stub. `ret` from the exit service terminates the
@@ -1062,8 +1208,14 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     let mut function_starts = Vec::with_capacity(program.functions.len());
     let mut function_block_starts = Vec::with_capacity(program.functions.len());
     for (index, f) in program.functions.iter().enumerate() {
-        let (start, block_starts) =
-            emit_function(&mut code, f, index, &string_labels, &program.statics);
+        let (start, block_starts) = emit_function(
+            &mut code,
+            f,
+            index,
+            &string_labels,
+            &program.statics,
+            &mut loc,
+        );
         function_starts.push(start);
         function_block_starts.push(block_starts);
     }
@@ -1071,8 +1223,13 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     // ------------------------------------------------------------------
     // Embedded runtime: services, then the message data.
     // ------------------------------------------------------------------
-    let runtime_offsets =
-        runtime::emit_services(&mut code, str_data_start_label, str_data_end_label);
+    let runtime_offsets = runtime::emit_services(
+        &mut code,
+        str_data_start_label,
+        str_data_end_label,
+        loc_region_label,
+        loc_region_end_label,
+    );
     runtime::emit_data(&mut code, &runtime_offsets);
 
     // ------------------------------------------------------------------
@@ -1087,6 +1244,12 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
         code.bytes(&string.bytes);
     }
     code.bind_label(str_data_end_label);
+
+    // ------------------------------------------------------------------
+    // Embedded source-location table (R06): appended after the string
+    // data, inside the readable `.text` region `rt_fail` reaches.
+    // ------------------------------------------------------------------
+    emit_loc_region(&mut code, &loc, loc_region_label, loc_region_end_label);
 
     // ------------------------------------------------------------------
     // Module bindings: each binding's value image region, in source
@@ -1115,37 +1278,34 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
     let text_rva = layout.text_rva;
     let reloc = pe::relocation_block(text_rva);
     for patch in &code.patches {
+        // The end of the instruction: four bytes of `disp32` plus any
+        // trailing bytes (`tail`; see [`Patch`]).
+        let end = patch.offset as i64 + 4 + patch.tail as i64;
         let disp = match &patch.kind {
             PatchKind::Block { function, block } => {
                 let target = function_starts[*function] as i64
                     + function_block_starts[*function][*block as usize] as i64;
-                target - (patch.offset as i64 + 4)
+                target - end
             }
-            PatchKind::Function(index) => {
-                function_starts[*index] as i64 - (patch.offset as i64 + 4)
-            }
+            PatchKind::Function(index) => function_starts[*index] as i64 - end,
             PatchKind::Static(index) => {
                 // RIP-relative: target VA minus the address after the
                 // instruction. The image base cancels out.
-                (layout.data_rva as i64 + static_bases[*index] as i64)
-                    - (text_rva as i64 + patch.offset as i64 + 4)
+                (layout.data_rva as i64 + static_bases[*index] as i64) - (text_rva as i64 + end)
             }
-            PatchKind::RuntimeService(service) => {
-                runtime_offsets.of(*service) as i64 - (patch.offset as i64 + 4)
-            }
+            PatchKind::RuntimeService(service) => runtime_offsets.of(*service) as i64 - end,
             PatchKind::Bss(offset) => {
-                (layout.bss_rva as i64 + *offset as i64)
-                    - (text_rva as i64 + patch.offset as i64 + 4)
+                (layout.bss_rva as i64 + *offset as i64) - (text_rva as i64 + end)
             }
             PatchKind::Iat(index) => {
                 (layout.idata_rva as i64 + pe::IAT_OFFSET as i64 + 8 * *index as i64)
-                    - (text_rva as i64 + patch.offset as i64 + 4)
+                    - (text_rva as i64 + end)
             }
             PatchKind::Label(id) => {
                 let target = code.labels[*id as usize]
                     .expect("runtime labels are bound before patch resolution")
                     as i64;
-                target - (patch.offset as i64 + 4)
+                target - end
             }
         };
         code.buf[patch.offset..patch.offset + 4].copy_from_slice(&(disp as i32).to_le_bytes());
@@ -1169,8 +1329,18 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize) -> EmittedImage {
 }
 
 /// Emits an ELF64 executable for Linux x86_64.
+///
+/// Linux is frozen: a disabled [`LocSink`] is threaded through the shared
+/// function emitter so no source-location instrumentation is emitted and
+/// the user-function code bytes are identical to the pre-R06 output. (The
+/// image differs only by the shared `fail_loc` BSS cell — +8 bytes of
+/// `.bss` — and by the two displacement immediates of the Linux runtime's
+/// `mov_rip_imm32` zero-inits, which the Session 100 patch fix now
+/// resolves to their true target; both writes store 0 into freshly
+/// zeroed BSS, so runtime behavior is unchanged.)
 pub(crate) fn emit_elf(program: &BProgram, entry: usize) -> EmittedImage {
     let mut code = Code::new();
+    let mut loc = LocSink::disabled();
 
     // ------------------------------------------------------------------
     // Labels for string data.
@@ -1204,8 +1374,14 @@ pub(crate) fn emit_elf(program: &BProgram, entry: usize) -> EmittedImage {
     let mut function_starts = Vec::with_capacity(program.functions.len());
     let mut function_block_starts = Vec::with_capacity(program.functions.len());
     for (index, f) in program.functions.iter().enumerate() {
-        let (start, block_starts) =
-            emit_function(&mut code, f, index, &string_labels, &program.statics);
+        let (start, block_starts) = emit_function(
+            &mut code,
+            f,
+            index,
+            &string_labels,
+            &program.statics,
+            &mut loc,
+        );
         function_starts.push(start);
         function_block_starts.push(block_starts);
     }
@@ -1248,25 +1424,21 @@ pub(crate) fn emit_elf(program: &BProgram, entry: usize) -> EmittedImage {
     let bss_rva = data_rva + data.len() as u64;
 
     for patch in &code.patches {
+        // The end of the instruction: four bytes of `disp32` plus any
+        // trailing bytes (`tail`; see [`Patch`]).
+        let end = patch.offset as i64 + 4 + patch.tail as i64;
         let disp = match &patch.kind {
             PatchKind::Block { function, block } => {
                 let target = function_starts[*function] as i64
                     + function_block_starts[*function][*block as usize] as i64;
-                target - (patch.offset as i64 + 4)
+                target - end
             }
-            PatchKind::Function(index) => {
-                function_starts[*index] as i64 - (patch.offset as i64 + 4)
-            }
+            PatchKind::Function(index) => function_starts[*index] as i64 - end,
             PatchKind::Static(index) => {
-                (data_rva as i64 + static_bases[*index] as i64)
-                    - (text_rva as i64 + patch.offset as i64 + 4)
+                (data_rva as i64 + static_bases[*index] as i64) - (text_rva as i64 + end)
             }
-            PatchKind::RuntimeService(service) => {
-                runtime_offsets.of(*service) as i64 - (patch.offset as i64 + 4)
-            }
-            PatchKind::Bss(offset) => {
-                (bss_rva as i64 + *offset as i64) - (text_rva as i64 + patch.offset as i64 + 4)
-            }
+            PatchKind::RuntimeService(service) => runtime_offsets.of(*service) as i64 - end,
+            PatchKind::Bss(offset) => (bss_rva as i64 + *offset as i64) - (text_rva as i64 + end),
             PatchKind::Iat(_) => {
                 // Not used on Linux — IAT is Windows-specific
                 panic!("IAT patch not supported on Linux target");
@@ -1275,7 +1447,7 @@ pub(crate) fn emit_elf(program: &BProgram, entry: usize) -> EmittedImage {
                 let target = code.labels[*id as usize]
                     .expect("runtime labels are bound before patch resolution")
                     as i64;
-                target - (patch.offset as i64 + 4)
+                target - end
             }
         };
         code.buf[patch.offset..patch.offset + 4].copy_from_slice(&(disp as i32).to_le_bytes());
@@ -1303,6 +1475,7 @@ fn emit_function(
     function_index: usize,
     string_labels: &[u32],
     statics: &[super::super::ir::BStatic],
+    loc: &mut LocSink<'_>,
 ) -> (usize, Vec<u32>) {
     let start = code.len();
     let (slots, total_words) = slots(f);
@@ -1359,6 +1532,7 @@ fn emit_function(
             fail_label,
             param_words,
             statics,
+            loc,
         );
     }
     code.bind_label(fail_label);
@@ -1385,9 +1559,19 @@ fn emit_block(
     fail_label: u32,
     param_words: usize,
     statics: &[super::super::ir::BStatic],
+    loc: &mut LocSink<'_>,
 ) {
     for inst in &block.insts {
-        emit_inst(code, f, slots, inst, string_labels, fail_label, statics);
+        emit_inst(
+            code,
+            f,
+            slots,
+            inst,
+            string_labels,
+            fail_label,
+            statics,
+            loc,
+        );
     }
     match &block.terminator {
         BTerminator::Return { value, .. } => {
@@ -1505,7 +1689,9 @@ fn operand_words(f: &super::super::ir::BFunction, operand: BOperand) -> usize {
 /// padding first (when the argument count is odd), then the arguments
 /// rightmost-first (the runtime uses the same convention as user
 /// functions — argument 1 must be on top of the stack at the call so the
-/// callee reads it at `[rbp + 16]`), call, and store the result.
+/// callee reads it at `[rbp + 16]`), record the failing operation's
+/// source location (`locid`) in the fail-location cell, call, and store
+/// the result.
 fn emit_runtime_call(
     code: &mut Code,
     f: &super::super::ir::BFunction,
@@ -1513,6 +1699,7 @@ fn emit_runtime_call(
     target: crate::mir::LocalId,
     service: RuntimeService,
     args: &[BOperand],
+    locid: u32,
 ) {
     let mut words = 0usize;
     for arg in args {
@@ -1524,6 +1711,16 @@ fn emit_runtime_call(
     }
     for arg in args.iter().rev() {
         push_operand(code, f, slots, *arg);
+    }
+    // The runtime service may raise a structured error internally (an
+    // out-of-range string byte, an invalid pointer, allocator exhaustion);
+    // record this call site so `rt_fail` can report it. A non-zero id is
+    // written only when the location sink is enabled (Windows).
+    if locid != 0 {
+        code.mov_rip_imm32(
+            PatchKind::Bss(crate::runtime::abi::BSS.fail_loc as u32),
+            locid as i32,
+        );
     }
     code.call_patch(PatchKind::RuntimeService(service));
     if words + pad > 0 {
@@ -1542,6 +1739,23 @@ fn emit_runtime_call(
     }
 }
 
+/// Records `inst`'s source location as the current fail-site location in
+/// the runtime's `fail_loc` cell (R06). Called at every generated-code
+/// site that can raise a runtime error before the check that may fail;
+/// `rt_fail` reads the cell to report the location. When the location
+/// sink is disabled (frozen Linux ELF emitter) `id_for` returns 0 and no
+/// store is emitted, so no instrumentation code is added there.
+fn mark_fail_site(code: &mut Code, loc: &mut LocSink<'_>, inst: &BInst) -> u32 {
+    let locid = loc.id_for(inst.span);
+    if locid != 0 {
+        code.mov_rip_imm32(
+            PatchKind::Bss(crate::runtime::abi::BSS.fail_loc as u32),
+            locid as i32,
+        );
+    }
+    locid
+}
+
 #[allow(clippy::too_many_arguments)] // the emitter context is threaded per instruction
 fn emit_inst(
     code: &mut Code,
@@ -1551,6 +1765,7 @@ fn emit_inst(
     string_labels: &[u32],
     fail_label: u32,
     statics: &[super::super::ir::BStatic],
+    loc: &mut LocSink<'_>,
 ) {
     match &inst.kind {
         BInstKind::LoadLocal { target, src } => {
@@ -1768,7 +1983,10 @@ fn emit_inst(
             target,
             service,
             args,
-        } => emit_runtime_call(code, f, slots, *target, *service, args),
+        } => {
+            let locid = loc.id_for(inst.span);
+            emit_runtime_call(code, f, slots, *target, *service, args, locid);
+        }
         BInstKind::IndirectCall {
             target,
             fn_ptr,
@@ -1899,7 +2117,10 @@ fn emit_inst(
             // as huge, so one `jae` covers both out-of-range directions
             // (`E-R10`). The fail path is the function's shared
             // `E-R10` block (bound after the last block), so a valid
-            // access never falls into it.
+            // access never falls into it. The check records this
+            // instruction's source location first, so `rt_fail` reports
+            // the exact failing access.
+            mark_fail_site(code, loc, inst);
             eval_rax(code, slots, *index);
             code.cmp_r_imm32(Reg::Rax, *len as u32);
             code.jcc(0x83, PatchKind::Label(fail_label)); // jae
@@ -1926,6 +2147,7 @@ fn emit_inst(
             index,
             src,
         } => {
+            mark_fail_site(code, loc, inst);
             eval_rax(code, slots, *index);
             code.cmp_r_imm32(Reg::Rax, *len as u32);
             code.jcc(0x83, PatchKind::Label(fail_label)); // jae
@@ -1950,7 +2172,10 @@ fn emit_inst(
             // position (`word0 - off + 2*(off % 8)` for `off =
             // index * stride`, a no-op for full-word strides). The fail
             // path is the function's shared `E-R10` block, so valid
-            // chains never fall into it.
+            // chains never fall into it. Every index step that can raise
+            // `E-R10` is a failure of this instruction, so the location
+            // is recorded once before the chain is walked.
+            mark_fail_site(code, loc, inst);
             code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
             for step in steps {
                 match step {
@@ -1982,7 +2207,9 @@ fn emit_inst(
             // first-word address walked by the same field/index steps as
             // `PlaceStore`) and store it into the reference slot. The
             // running address stays in `rcx`; `rax` is scratch for index
-            // arithmetic.
+            // arithmetic. An out-of-range index step raises `E-R10` for
+            // this instruction, so the location is recorded first.
+            mark_fail_site(code, loc, inst);
             let target_word0 = slots[target.raw() as usize].0;
             code.lea_r_mem(Reg::Rcx, Reg::Rbp, slots[base.raw() as usize].0);
             for step in steps {

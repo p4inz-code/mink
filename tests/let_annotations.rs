@@ -582,15 +582,36 @@ fn native_let_annotation_with_loop_counter() {
 
 #[test]
 fn native_let_annotation_byte_identical_determinism() {
+    // R06 note: the emitted image embeds each runtime-fail site's source
+    // path exactly as given to the compiler (the location table survives
+    // in the standalone executable), so identical source compiled from
+    // *different* paths legitimately differs. Determinism is therefore
+    // asserted by compiling twice from the same fixed path.
     let src = "fn main() { let x: Int = 42; rt_print_int(x); return 0; }";
-    let exe1 = build(src);
-    let exe2 = build(src);
-    let bytes1 = std::fs::read(&exe1).unwrap();
-    let bytes2 = std::fs::read(&exe2).unwrap();
+    let path = unique_source("det");
+    std::fs::write(&path, src).unwrap();
+
+    let mink_exe = env!("CARGO_BIN_EXE_mink");
+    let build_once = || {
+        let out = Command::new(mink_exe)
+            .arg("build")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "build failed");
+        let exe = path.with_extension("exe");
+        let bytes = std::fs::read(&exe).unwrap();
+        let _ = std::fs::remove_file(&exe);
+        bytes
+    };
+    let bytes1 = build_once();
+    let bytes2 = build_once();
     assert_eq!(
         bytes1, bytes2,
-        "identical source must produce byte-identical executables"
+        "identical source at the same path must produce byte-identical executables"
     );
+
+    let _ = std::fs::remove_file(&path);
 }
 
 // ===========================================================================

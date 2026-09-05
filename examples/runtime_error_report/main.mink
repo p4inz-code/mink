@@ -1,0 +1,27 @@
+// Runtime Error Report — Session 100 R06 diagnostic proof application.
+//
+// This program INTENTIONALLY reaches a runtime failure: `pick` indexes a
+// fixed array with an out-of-range index, which raises E-R10 (array index
+// out of range, exit code 110). It is a diagnostics proof, not a normal
+// success example — do not use it as a template for ordinary programs.
+//
+// What it proves (see README.md):
+//   - a runtime failure reports the exact source file and line, with the
+//     location metadata embedded in the executable (no source files are
+//     needed at run time);
+//   - the generated standalone main.exe keeps reporting the correct
+//     location after being copied to an empty directory elsewhere;
+//   - the failure is deterministic (same exit code and message every run).
+//
+// The failing access `return a[i];` sits on line 20 below; the failing
+// index (9) is passed from `main` on line 24.
+fn pick(i: Int) -> Int {
+    let a = [10, 20, 30];
+    return a[i]; // E-R10: out-of-range access (i = 9) fails here (line 20)
+}
+
+fn main() {
+    let x = pick(9); // call that drives `pick` out of range (line 24)
+    rt_print_int(x);
+    return 0;
+}

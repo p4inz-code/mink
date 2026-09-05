@@ -399,15 +399,36 @@ fn native_mixed_scalars_in_one_program() {
 
 #[test]
 fn float_programs_are_byte_identical_across_builds() {
+    // R06 note: the emitted image embeds each runtime-fail site's source
+    // path exactly as given to the compiler (the location table survives
+    // in the standalone executable), so identical source compiled from
+    // *different* paths legitimately differs. Determinism is therefore
+    // asserted by compiling twice from the same fixed path.
     let src = "fn main() { let a = 1.5 + 2.5; let b = a * 2.0; rt_print_float(b); return; }";
-    let exe1 = build(src);
-    let bytes1 = std::fs::read(&exe1).unwrap();
-    let exe2 = build(src);
-    let bytes2 = std::fs::read(&exe2).unwrap();
+    let path = unique_source("det");
+    std::fs::write(&path, src).unwrap();
+
+    let mink_exe = env!("CARGO_BIN_EXE_mink");
+    let build_once = || {
+        let out = Command::new(mink_exe)
+            .arg("build")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "build failed");
+        let exe = path.with_extension("exe");
+        let bytes = std::fs::read(&exe).unwrap();
+        let _ = std::fs::remove_file(&exe);
+        bytes
+    };
+    let bytes1 = build_once();
+    let bytes2 = build_once();
     assert_eq!(
         bytes1, bytes2,
-        "two builds of the same source must be byte-identical"
+        "two builds of the same source at the same path must be byte-identical"
     );
+
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]

@@ -14,7 +14,7 @@ pub(crate) mod pe;
 pub(crate) mod runtime;
 pub(crate) mod x86_64;
 
-use crate::source::{SourceId, Span};
+use crate::source::{SourceId, SourceMap, Span};
 
 use super::error::BackendError;
 use super::ir::BProgram;
@@ -40,14 +40,17 @@ fn no_location() -> Span {
 }
 
 /// Emits `program` for `target`, with `entry` the index of the entry
-/// function (validated by the caller).
+/// function (validated by the caller). `sources` is the compilation's
+/// source map; the Windows PE emitter resolves instrumented fail-site
+/// spans against it to embed the runtime source-location table (R06).
 pub(crate) fn emit(
     program: &BProgram,
     target: Target,
     entry: usize,
+    sources: &SourceMap,
 ) -> Result<EmittedImage, Vec<BackendError>> {
     match target {
-        Target::X86_64WindowsPe => Ok(x86_64::emit_pe(program, entry)),
+        Target::X86_64WindowsPe => Ok(x86_64::emit_pe(program, entry, sources)),
         Target::X86_64LinuxElf => Ok(x86_64::emit_elf(program, entry)),
         other => Err(vec![BackendError::unsupported_target(
             no_location(),

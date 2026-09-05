@@ -833,6 +833,11 @@ pub enum RuntimeService {
     EnvHas,
     /// `rt_env_remove(name: Str) -> Int`: remove environment variable.
     EnvRemove,
+    /// `rt_home_dir() -> Str`: the current user's home/profile directory
+    /// (Session 100, W14). Windows resolution order: `USERPROFILE`; if
+    /// unset or empty, `HOMEDRIVE` + `HOMEPATH`; if neither is available,
+    /// an owned empty `Str`.
+    HomeDir,
     // --- Networking (Session 67) ---
     /// `rt_net_wsa_startup() -> Int`: initialize Winsock2 (0=ok, non-zero=error).
     NetWsaStartup,
@@ -952,6 +957,7 @@ impl RuntimeService {
             Self::RandomNext => 0,
             Self::RandomSeed => 1,
             // --- Environment (Session 65) ---
+            Self::HomeDir => 0,
             Self::EnvGet | Self::EnvHas | Self::EnvRemove => 1,
             Self::EnvSet => 2,
             // --- Networking (Session 67) ---
@@ -1040,6 +1046,7 @@ impl RuntimeService {
                 | Self::EnvSet
                 | Self::EnvHas
                 | Self::EnvRemove
+                | Self::HomeDir
                 | Self::NetWsaStartup
                 | Self::NetWsaCleanup
                 | Self::NetWsaLastError

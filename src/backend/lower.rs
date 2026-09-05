@@ -1926,6 +1926,7 @@ impl<'a> Lowerer<'a> {
             "rt_env_set" => RuntimeService::EnvSet,
             "rt_env_has" => RuntimeService::EnvHas,
             "rt_env_remove" => RuntimeService::EnvRemove,
+            "rt_home_dir" => RuntimeService::HomeDir,
             // --- Networking (Session 67) ---
             "rt_net_wsa_startup" => RuntimeService::NetWsaStartup,
             "rt_net_wsa_cleanup" => RuntimeService::NetWsaCleanup,

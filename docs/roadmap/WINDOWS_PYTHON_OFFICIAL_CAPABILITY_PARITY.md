@@ -211,7 +211,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | R03 | Module execution (`python -m pkg`) | MISSING | `mink run <file>` only | Package/module runner | P3 | M | N | F | Comes with package system |
 | R04 | Compiled standalone program | VERIFIED | `mink build` → zero-dependency PE (`[exec]` Session 97: standalone exe outside repo) | None — MINK is stronger (Python needs an interpreter + packaging to ship) | - | - | N | - | |
 | R05 | Import caching / bytecode cache | N/A | AOT compilation; no cache concept | — | - | - | N | - | |
-| R06 | Traceback / error reporting w/ location | PARTIAL | compile-time errors carry file:line:col; runtime errors print `mink: runtime error[E-Rxx]: msg` only (`[code] src/backend/emit/runtime.rs` Fail) | Runtime faults carry no source line or call stack | P1 | M | Y | A | DEFERRED from Session 99 tranche 1 (budget): all other Wave A items landed; R06 is the explicit next-session task — per-function source-line table in BSS + Fail-path print |
+| R06 | Traceback / error reporting w/ location | VERIFIED | compile-time errors carry file:line:col; runtime faults now print `mink: runtime error[E-Rxx]: msg (file:line)` — per-function fail-site location table embedded in the image (BSS `fail_loc` cell + patch-time span resolution; `[code] src/backend/emit/runtime.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/abi.rs`) | Runtime faults carry no call stack (V1 contract: location yes, stack no) | P1 | M | Y | A | IMPLEMENTED Session 100: `[test] tests/session100.rs` (9 tests incl. exact file/line), `[exec] examples/runtime_error_report/main.mink` (E-R10 at main.mink:20, exit 110); determinism tests pin same-path builds (image embeds path as given) |
 | R07 | Warnings (`warnings` module) | MISSING | none | Warning channel | P3 | S | N | - | |
 | R08 | stdout output | VERIFIED | `rt_print_str/int/float/char` (+CRLF), write thunks via kernel32 (`[code] src/runtime/intrinsics.rs`) | None | - | - | N | - | Python `print()` equivalent |
 | R09 | User-facing stderr write | VERIFIED | `rt_stderr_write(Str) -> Int` writes exact bytes to stderr (`[code] src/runtime/intrinsics.rs`; `[test] tests/session99.rs` stderr_write_is_separate_from_stdout; `[exec]` env_report example) | Writes are synchronous; stdout/stderr interleaving order not guaranteed | P3 | S | N | - | |
@@ -433,7 +433,7 @@ Classification prefix in Notes: **REQ** = required for MINK Windows parity · **
 | W11 | Signals/control events | MISSING | none | SetConsoleCtrlHandler | P2 | M | N | H | OPT (graceful shutdown) |
 | W12 | Executable discovery / PATH resolution | PARTIAL | child commands run through shell resolution; direct CreateProcessA path behavior untested | PATH search semantics | P2 | S | N | C | REQ (CLI tools) |
 | W13 | Temp dirs | MISSING | none | GetTempPath/GetTempFileName | P2 | S | N | C | REQ |
-| W14 | User/home/known folders | MISSING | none | USERPROFILE/APPDATA via env or SHGetKnownFolderPath | P1 | S | Y | A | REQ (config-file apps) — once env works, one import |
+| W14 | User/home/known folders | VERIFIED | `rt_home_dir` intrinsic: USERPROFILE, falling back to HOMEDRIVE+HOMEPATH (`[code] src/backend/emit/runtime.rs` emit_home_dir) | APPDATA/known-folders via SHGetKnownFolderPath still MISSING (P2, Wave H) | P1 | S | Y | A | IMPLEMENTED Session 100: `[test] tests/session100.rs` (5 tests: USERPROFILE, both fallback branches, missing-vars, path correctness) |
 | W15 | Registry (winreg) | MISSING | none | registry access | P2 | M | N | H | OPT — Python winreg is official; materially useful for Windows automation but not gate-blocking |
 | W16 | DLL/shared-library loading | MISSING | internal LoadLibrary/GetProcAddress only (ws2_32, bcrypt) (`[code] src/backend/emit/pe.rs`) | user-level FFI | P2 | L | N | I | OPT-to-REQ depending on interop ambitions; C ABI spec exists |
 | W17 | Terminal colors/ANSI/interactive UX | MISSING | none | console capability APIs | P3 | L | N | H | OPT |
@@ -547,7 +547,7 @@ under its primary wave and repeated in the note.
 
 | Wave | Blocking gaps | Count |
 |---|---|---|
-| A (Windows platform/runtime quick wins) | R06, R10, R12, R13, R23, S50, S70, S74, W06, W08, W14 (+ L16, S06 begin here: float→Str/format/numeric-text; + L67, P02, T06 mechanism: importable stdlib) | 11 (+5 shared) |
+| A (Windows platform/runtime quick wins) | R06, R10, R12, R13, R23, S50, S70, S74, W06, W08, W14 (+ L16, S06 begin here: float→Str/format/numeric-text; + L67, P02, T06 mechanism: importable stdlib) | 13 (+5 shared, all landed S99/S100) |
 | B (core language/data) | L08, L10, L34, S01, S02, S36 (+ L16, S06 complete here; + L05, whose UTF-8 layer is shared with H) | 6 (+4 shared) |
 | C (filesystem/process/time) | S28, S69 | 2 |
 | D (networking/internet/compression) | S41, S42, S44, S62 | 4 |

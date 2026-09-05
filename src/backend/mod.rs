@@ -89,7 +89,7 @@ pub fn compile(
     let lowered = lower::lower(program, sources)?;
     verify::verify(&lowered)?;
     let entry = entry_function(&lowered).map_err(|error| vec![error])?;
-    emit::emit(&lowered, target, entry)
+    emit::emit(&lowered, target, entry, sources)
 }
 
 /// Finds and validates the program's entry function, returning its index in

@@ -175,6 +175,14 @@ pub struct RuntimeLayout {
     pub write_redirect: u64,
     /// Float-to-string sink buffer (80 bytes; trailing CRLF stripped).
     pub float_sink: u64,
+    /// Fail-site location id (Session 100, R06): set by generated code
+    /// immediately before an operation that can raise a runtime error (a
+    /// generated bounds check or a runtime-intrinsic call), read by
+    /// `rt_fail` to print the embedded source location. `0` means no
+    /// location is recorded (every error path that is not tied to one
+    /// user operation — e.g. the exit-time leak scan — clears the cell
+    /// first).
+    pub fail_loc: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -328,7 +336,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 4096
         + 65536
         + 8,
-    size: 1488
+    fail_loc: 1488
         + HEAP_SIZE
         + LIVE_TABLE_BYTES
         + 4096 * 2
@@ -346,6 +354,25 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 65536
         + 8
         + 80,
+    size: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 8,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

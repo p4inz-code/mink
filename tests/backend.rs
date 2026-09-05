@@ -868,11 +868,18 @@ fn unordered_blocks_are_a_verification_error() {
 
 /// Compiles `src` all the way to an image.
 fn emit_image(src: &str) -> mink::backend::EmittedImage {
-    let mut sources = SourceMap::new();
     let path = unique_source("img");
-    std::fs::write(&path, src).unwrap();
-    let report = driver::check(&mut sources, &path).unwrap();
+    let image = emit_image_at(&path, src);
     let _ = std::fs::remove_file(&path);
+    image
+}
+
+/// Like `emit_image`, but writes to the given fixed path so the emitted
+/// image's embedded R06 source-path entries are identical across calls.
+fn emit_image_at(path: &std::path::Path, src: &str) -> mink::backend::EmittedImage {
+    let mut sources = SourceMap::new();
+    std::fs::write(path, src).unwrap();
+    let report = driver::check(&mut sources, path).unwrap();
     assert!(report.errors.is_empty(), "{:?}", report.errors);
     let mir = report.mir.expect("clean program");
     backend::compile(&mir, &sources, Target::native()).expect("compile succeeds")
@@ -955,13 +962,27 @@ fn enum_equality_lowers_to_word_compare() {
         .map(|l| l.ty)
         .expect("local `b`");
     assert_eq!(b_ty, BType::Bool);
-    assert_eq!(emit_image(src).bytes, emit_image(src).bytes);
+    // R06 note: the image embeds the source path as given, so determinism
+    // is asserted by compiling twice from the same fixed path.
+    let path = unique_source("det");
+    assert_eq!(
+        emit_image_at(&path, src).bytes,
+        emit_image_at(&path, src).bytes
+    );
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn emission_is_deterministic() {
     let src = "fn main() { let mut s = 0; for i in 0..10 { s = s + i; } return s; }";
-    assert_eq!(emit_image(src).bytes, emit_image(src).bytes);
+    // R06 note: the image embeds the source path as given, so determinism
+    // is asserted by compiling twice from the same fixed path.
+    let path = unique_source("det");
+    assert_eq!(
+        emit_image_at(&path, src).bytes,
+        emit_image_at(&path, src).bytes
+    );
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]

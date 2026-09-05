@@ -417,6 +417,12 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Str],
         result: IntrinsicType::Int,
     },
+    // --- Session 100: home-directory discovery (W14) ---
+    Intrinsic {
+        name: "rt_home_dir",
+        params: &[],
+        result: IntrinsicType::Str,
+    },
     // --- Networking (Session 67) ---
     Intrinsic {
         name: "rt_net_wsa_startup",

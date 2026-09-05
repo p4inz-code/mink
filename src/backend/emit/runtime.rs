@@ -70,6 +70,8 @@ const ARG_DATA: u32 = BSS.arg_data as u32;
 const STDIN_BUF: u32 = BSS.stdin_buf as u32;
 const WRITE_REDIRECT: u32 = BSS.write_redirect as u32;
 const FLOAT_SINK: u32 = BSS.float_sink as u32;
+// --- Session 100: R06 source-location metadata ---
+const FAIL_LOC: u32 = BSS.fail_loc as u32;
 
 /// The offsets of the machine services within `.text`, plus the labels
 /// the services reference (bound by [`emit_data`] and the emitter's string
@@ -88,6 +90,17 @@ pub(crate) struct RuntimeOffsets {
     pub(crate) str_data_start: u32,
     /// Label bounding one past the end of that region.
     pub(crate) str_data_end: u32,
+    /// Label of the start of the embedded source-location region (R06),
+    /// bound by the emitter after the string data.
+    pub(crate) loc_region: u32,
+    /// Label bounding one past the end of that region.
+    pub(crate) loc_region_end: u32,
+    /// Label of the literal `USERPROFILE\0` name (Session 100, W14).
+    pub(crate) profile_label: u32,
+    /// Label of the literal `HOMEDRIVE\0` name (Session 100, W14).
+    pub(crate) home_drive_label: u32,
+    /// Label of the literal `HOMEPATH\0` name (Session 100, W14).
+    pub(crate) home_path_label: u32,
 }
 
 impl RuntimeOffsets {
@@ -107,6 +120,8 @@ pub(crate) fn emit_services(
     code: &mut Code,
     str_data_start: u32,
     str_data_end: u32,
+    loc_region: u32,
+    loc_region_end: u32,
 ) -> RuntimeOffsets {
     let mut offsets = RuntimeOffsets {
         services: HashMap::new(),
@@ -115,6 +130,11 @@ pub(crate) fn emit_services(
         crlf_label: code.label(),
         str_data_start,
         str_data_end,
+        loc_region,
+        loc_region_end,
+        profile_label: code.label(),
+        home_drive_label: code.label(),
+        home_path_label: code.label(),
     };
     let mut emit =
         |code: &mut Code, service: RuntimeService, body: fn(&mut Code, &RuntimeOffsets)| {
@@ -295,6 +315,10 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::EnvRemove, |code, _| {
         emit_env_remove(code)
     });
+    // --- Session 100: home-directory discovery (W14) ---
+    emit(code, RuntimeService::HomeDir, |code, offsets| {
+        emit_home_dir(code, offsets)
+    });
     // --- Session 99: Windows Wave A tranche 1 ---
     emit(code, RuntimeService::Sleep, |code, _| emit_sleep(code));
     emit(code, RuntimeService::StderrWrite, |code, _| {
@@ -394,6 +418,14 @@ pub(crate) fn emit_data(code: &mut Code, offsets: &RuntimeOffsets) {
     code.bytes(&table);
     code.bind_label(offsets.crlf_label);
     code.bytes(b"\r\n");
+    // The environment-variable names `rt_home_dir` queries (Session 100,
+    // W14), each NUL-terminated for `GetEnvironmentVariableA`.
+    code.bind_label(offsets.profile_label);
+    code.bytes(b"USERPROFILE\0");
+    code.bind_label(offsets.home_drive_label);
+    code.bytes(b"HOMEDRIVE\0");
+    code.bind_label(offsets.home_path_label);
+    code.bytes(b"HOMEPATH\0");
 }
 
 /// The standard MINK-function prologue: `push rbp; mov rbp, rsp`.
@@ -1611,6 +1643,11 @@ fn emit_exit(code: &mut Code) {
     prologue(code);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // requested code
 
+    // The exit-time leak scan is not tied to one user operation, so its
+    // `E-R06` fail path must not report the last instrumented site's
+    // location. Clear the fail-location cell before scanning (R06).
+    code.mov_rip_imm32(PatchKind::Bss(FAIL_LOC), 0);
+
     let scan = code.label();
     let done = code.label();
     let leak = code.label();
@@ -1635,9 +1672,22 @@ fn emit_exit(code: &mut Code) {
 
 /// `rt_fail(rcx = error number)`: writes the structured diagnostic to
 /// stderr and terminates with exit code `100 + number`. Never returns.
+///
+/// When the fail-location cell (R06) holds a valid location-table id, a
+/// second line naming the source file and line is appended. Every table
+/// read is bounds-checked against the embedded region, so malformed or
+/// truncated metadata degrades to the location-less message, and when no
+/// location applies (a leak at exit, an error not tied to a user
+/// operation) the location line is omitted entirely.
+///
+/// Stack slots (relative to `rbp`): -8 error number, -16 location id,
+/// -24 region base, -32 region length, -40 count, -48 blob offset,
+/// -56 suffix offset, -64 suffix length. All scratch values live in these
+/// slots, so no value survives across the stderr-write calls in registers
+/// (the write thunk clobbers every scratch register).
 fn emit_fail(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(8); // align (entry rsp ≡ 8 → now ≡ 0); [rbp-8] holds the number
+    code.sub_rsp(72); // frame (see slot map); keeps rsp ≡ 8 (mod 16) at calls
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rcx);
 
     // Index the message table: entry = (number - 1) * 16.
@@ -1653,6 +1703,110 @@ fn emit_fail(code: &mut Code, offsets: &RuntimeOffsets) {
     code.add_rr(Reg::Rcx, Reg::Rax); // buffer
     code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStderr));
 
+    // --- Source-location suffix (R06) --------------------------------
+    // `fail_loc` holds a 1-based id written by the failing generated
+    // site (or 0 when no location applies: a leak at exit, an error not
+    // tied to a user operation). All reads are bounded by the region
+    // [loc_region, loc_region_end).
+    let no_loc = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(FAIL_LOC));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, no_loc); // jz — no location recorded
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+
+    // Region base and length. The length is derived from code labels
+    // (not from the embedded header), so it is the authoritative bound
+    // every later read is checked against.
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.loc_region));
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.loc_region_end));
+    code.sub_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+
+    // The header occupies 32 bytes; a shorter region cannot hold the
+    // four header fields, so nothing below is read unless the whole
+    // header fits.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.cmp_r_imm32(Reg::Rax, 32);
+    code.jcc_label(0x82, no_loc); // jb
+
+    // Magic and version guards.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 0);
+    code.movabs(Reg::Rdx, super::x86_64::LOC_MAGIC);
+    code.cmp_rr(Reg::Rax, Reg::Rdx);
+    code.jcc_label(0x85, no_loc); // jne
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 8);
+    code.movabs(Reg::Rdx, super::x86_64::LOC_VERSION);
+    code.cmp_rr(Reg::Rax, Reg::Rdx);
+    code.jcc_label(0x85, no_loc); // jne
+
+    // Count and blob offset.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 16);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 24);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax);
+
+    // Region-shape guards: entries end (32 + 16 * count) must not pass
+    // blob_off, and blob_off must not pass the region end.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.shl_r_imm8(Reg::Rax, 4);
+    code.add_r_imm8(Reg::Rax, 32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rax); // blob_off vs entries end
+    code.jcc_label(0x82, no_loc); // jb
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.cmp_rr(Reg::Rcx, Reg::Rax); // blob_off vs region length
+    code.jcc_label(0x87, no_loc); // ja
+
+    // id - 1 must be below count.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.dec_r(Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x83, no_loc); // jae
+
+    // The entry's 16 bytes must fit inside the region before the entry
+    // is read. The count check alone is not authoritative (a corrupted
+    // count can be arbitrarily large), so the entry offset is bounded by
+    // the code-derived region length instead.
+    code.shl_r_imm8(Reg::Rax, 4);
+    code.add_r_imm8(Reg::Rax, 48); // entry offset + entry width
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x87, no_loc); // ja
+
+    // Entry address = base + 32 + (id - 1) * 16: read offset and length.
+    code.sub_r_imm32(Reg::Rax, 16); // back to the entry offset
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.add_rr(Reg::Rcx, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // suffix offset
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 8);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // suffix length
+
+    // off + len must fit within the blob region (region length - blob_off).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64);
+    code.add_rr(Reg::Rax, Reg::Rcx); // off + len
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.sub_rr(Reg::Rcx, Reg::Rdx); // blob region length
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x87, no_loc); // ja
+
+    // Write buffer = base + blob_off + off; length = len.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.add_rr(Reg::Rcx, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+    code.add_rr(Reg::Rcx, Reg::Rax);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStderr));
+
+    code.bind_label(no_loc);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // error number
     code.add_r_imm8(Reg::Rax, 100);
     code.mov_r_rip(Reg::Rsp, PatchKind::Bss(BSS.entry_rsp as u32));
@@ -3764,6 +3918,221 @@ fn emit_env_get(code: &mut Code) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     free_cstr(code, Reg::Rcx);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.leave_ret();
+}
+
+/// `rt_home_dir() -> Str` (Session 100, W14): the current user's
+/// home/profile directory as an owned, exact-length `Str` (no trailing
+/// NUL). Resolution order:
+///
+/// 1. `USERPROFILE`, when set to a non-empty value;
+/// 2. otherwise `HOMEDRIVE` + `HOMEPATH` concatenated, when both are set;
+/// 3. otherwise an owned empty `Str`.
+///
+/// Each read uses `GetEnvironmentVariableA`'s two-call length-query
+/// pattern (exactly like `rt_env_get`), so no value is ever truncated and
+/// no caller-visible environment state is modified. Every intermediate
+/// allocation is freed before returning (the leak checker stays silent),
+/// and the result is heap-owned: the caller releases it with `rt_str_free`
+/// exactly once.
+///
+/// Stack slots (relative to `rbp`): -8 result, -16 `USERPROFILE`
+/// required size, -24 `HOMEDRIVE` blob, -32 `HOMEPATH` blob,
+/// -40 `HOMEDRIVE` length, -48 `HOMEPATH` length.
+fn emit_home_dir(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(48);
+
+    // --- Primary: USERPROFILE ----------------------------------------
+    // raw = GetEnvironmentVariableA("USERPROFILE", NULL, 0): the required
+    // size including the NUL (0 when the variable is not set).
+    code.sub_rsp(32);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.profile_label));
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    let fallback = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, fallback); // jz — USERPROFILE not set
+    // result = StrAlloc(raw - 1); GetEnvironmentVariableA("USERPROFILE",
+    // result + 8, raw) fills the exact payload. The required size is
+    // spilled first: `StrAlloc` clobbers `rax`, and the fill call needs
+    // the raw size as its third argument (exactly like `rt_env_get`).
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // required size incl. NUL
+    code.sub_r_imm32(Reg::Rax, 1);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // result ptr
+    code.sub_rsp(32);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.profile_label));
+    code.mov_rr(Reg::Rdx, Reg::Rax);
+    code.add_r_imm8(Reg::Rdx, 8);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -16);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    let done = code.label();
+    code.jmp_label(done);
+
+    code.bind_label(fallback);
+    // --- Fallback: HOMEDRIVE + HOMEPATH ------------------------------
+    let empty = code.label();
+    // raw = GetEnvironmentVariableA("HOMEDRIVE", NULL, 0); 0 -> empty.
+    code.sub_rsp(32);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.home_drive_label));
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    // The call's return value is in `rax`; its condition flags are not
+    // part of the ABI and must not be trusted, so the zero test is
+    // explicit (an omitted `test` here caused a fall-through into
+    // `StrAlloc(raw - 1)` with `raw == 0` → E-R08 when `HOMEDRIVE` was
+    // missing).
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, empty); // jz
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // HOMEDRIVE raw size
+    // drive = StrAlloc(raw - 1); read into drive + 8.
+    code.sub_r_imm32(Reg::Rax, 1);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.sub_rsp(32);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.home_drive_label));
+    code.mov_rr(Reg::Rdx, Reg::Rax);
+    code.add_r_imm8(Reg::Rdx, 8);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+
+    // raw = GetEnvironmentVariableA("HOMEPATH", NULL, 0); 0 -> free+empty.
+    code.sub_rsp(32);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.home_path_label));
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.xor_rr32(Reg::R8, Reg::R8);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+    let free_drive_empty = code.label();
+    // Explicit zero test again (flags from the call are not reliable).
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, free_drive_empty); // jz
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // HOMEPATH raw size
+    // path = StrAlloc(raw - 1); read into path + 8.
+    code.sub_r_imm32(Reg::Rax, 1);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    code.sub_rsp(32);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.home_path_label));
+    code.mov_rr(Reg::Rdx, Reg::Rax);
+    code.add_r_imm8(Reg::Rdx, 8);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -48);
+    code.call_rip(PatchKind::Iat(IAT_GET_ENVIRONMENT_VARIABLE_A));
+    code.add_rsp(32);
+
+    // --- Concatenate drive + path into the owned result ----------------
+    // total = (raw_drive - 1) + (raw_path - 1); result = StrAlloc(total).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.dec_r(Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.dec_r(Reg::Rcx);
+    code.add_rr(Reg::Rax, Reg::Rcx); // total
+    code.sub_rsp(8);
+    code.u8(0x50); // push total
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // result
+
+    // Copy the HOMEDRIVE payload (drive + 8, raw_drive - 1 bytes) into
+    // result + 8. Loop counter in r9; drive/result pointers reloaded each
+    // iteration from their slots (no calls inside the loop clobber them).
+    // Loop shape: guard-jump to a check label bound *before* the
+    // `cmp`/`jl`, so an empty payload skips the body but a non-empty one
+    // runs it (an earlier draft bound the guard target after the branch,
+    // which skipped the body unconditionally and left the result
+    // zero-filled).
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40); // raw_drive
+    code.dec_r(Reg::R8); // len_drive
+    code.xor_rr32(Reg::R9, Reg::R9); // i = 0
+    let drive_body = code.label();
+    let drive_check = code.label();
+    code.jmp_label(drive_check);
+    code.bind_label(drive_body);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -24); // drive blob
+    code.add_r_imm8(Reg::R10, 8);
+    code.add_rr(Reg::R10, Reg::R9); // drive + 8 + i
+    code.movzx_byte(Reg::R11, Reg::R10, 0);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8); // result
+    code.add_r_imm8(Reg::R10, 8);
+    code.add_rr(Reg::R10, Reg::R9); // result + 8 + i
+    code.mov_mem_r8(Reg::R10, 0, Reg::R11);
+    code.add_r_imm8(Reg::R9, 1);
+    code.bind_label(drive_check);
+    code.cmp_rr(Reg::R9, Reg::R8);
+    code.jcc_label(0x8C, drive_body); // jl
+
+    // Copy the HOMEPATH payload into result + 8 + len(drive). Same
+    // check-first loop shape as the drive copy above.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -48); // raw_path
+    code.dec_r(Reg::R8); // len_path
+    code.xor_rr32(Reg::R9, Reg::R9); // i = 0
+    let path_body = code.label();
+    let path_check = code.label();
+    code.jmp_label(path_check);
+    code.bind_label(path_body);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -32); // path blob
+    code.add_r_imm8(Reg::R10, 8);
+    code.add_rr(Reg::R10, Reg::R9); // path + 8 + i
+    code.movzx_byte(Reg::R11, Reg::R10, 0);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8); // result
+    code.add_r_imm8(Reg::R10, 8);
+    code.mov_r_mem(Reg::R12, Reg::Rbp, -40); // len(drive) = raw_drive - 1
+    code.dec_r(Reg::R12);
+    code.add_rr(Reg::R10, Reg::R12);
+    code.add_rr(Reg::R10, Reg::R9); // result + 8 + len(drive) + i
+    code.mov_mem_r8(Reg::R10, 0, Reg::R11);
+    code.add_r_imm8(Reg::R9, 1);
+    code.bind_label(path_check);
+    code.cmp_rr(Reg::R9, Reg::R8);
+    code.jcc_label(0x8C, path_body); // jl
+
+    // Free the two temporary blobs, then return the result.
+    code.sub_rsp(8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.u8(0x50); // push path blob
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrFree));
+    code.add_rsp(16);
+    code.sub_rsp(8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.u8(0x50); // push drive blob
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrFree));
+    code.add_rsp(16);
+    code.jmp_label(done);
+
+    // --- HOMEDRIVE set but HOMEPATH missing: free the drive blob -------
+    code.bind_label(free_drive_empty);
+    code.sub_rsp(8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrFree));
+    code.add_rsp(16);
+    // Fall through into the owned-empty result.
+    code.bind_label(empty);
+    // Owned empty Str for an unavailable home directory.
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.bind_label(done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.leave_ret();
 }
 

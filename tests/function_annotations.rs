@@ -675,42 +675,39 @@ fn native_annotated_loop_with_annotated_function() {
 
 #[test]
 fn native_images_are_deterministic_with_annotations() {
+    // R06 note: the emitted image embeds each runtime-fail site's source
+    // path exactly as given to the compiler (the location table survives
+    // in the standalone executable), so identical source compiled from
+    // *different* paths legitimately differs. Determinism is therefore
+    // asserted by compiling twice from the same fixed path.
     let src = "\
         fn add(x: Int, y: Int) -> Int { return x + y; }\n\
         fn main() { rt_print_int(add(1, 2)); return 0; }\n";
 
-    let path1 = unique_source("det1");
-    let path2 = unique_source("det2");
-    std::fs::write(&path1, src).unwrap();
-    std::fs::write(&path2, src).unwrap();
+    let path = unique_source("det");
+    std::fs::write(&path, src).unwrap();
 
     let mink_exe = env!("CARGO_BIN_EXE_mink");
-    let out1 = Command::new(mink_exe)
-        .arg("build")
-        .arg(&path1)
-        .output()
-        .unwrap();
-    let out2 = Command::new(mink_exe)
-        .arg("build")
-        .arg(&path2)
-        .output()
-        .unwrap();
-    assert!(out1.status.success());
-    assert!(out2.status.success());
-
-    let exe1 = path1.with_extension("exe");
-    let exe2 = path2.with_extension("exe");
-    let bytes1 = std::fs::read(&exe1).unwrap();
-    let bytes2 = std::fs::read(&exe2).unwrap();
+    let build_once = || {
+        let out = Command::new(mink_exe)
+            .arg("build")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "build failed");
+        let exe = path.with_extension("exe");
+        let bytes = std::fs::read(&exe).unwrap();
+        let _ = std::fs::remove_file(&exe);
+        bytes
+    };
+    let bytes1 = build_once();
+    let bytes2 = build_once();
     assert_eq!(
         bytes1, bytes2,
-        "identical source must produce byte-identical images"
+        "identical source at the same path must produce byte-identical images"
     );
 
-    let _ = std::fs::remove_file(&path1);
-    let _ = std::fs::remove_file(&path2);
-    let _ = std::fs::remove_file(&exe1);
-    let _ = std::fs::remove_file(&exe2);
+    let _ = std::fs::remove_file(&path);
 }
 
 // ---------------------------------------------------------------------------
