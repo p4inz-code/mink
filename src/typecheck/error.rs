@@ -142,6 +142,10 @@ pub enum TypeErrorKind {
     /// A struct destructuring pattern (session 32) names a struct type
     /// that does not match the initializer's type.
     StructPatternTypeMismatch,
+    /// A `Map` key or `Set` element type cannot satisfy the hashing and
+    /// equality contract (Session 101, Wave B): only `Int`, `Bool`,
+    /// `Char`, `Str`, and unit-only enums are valid keys.
+    InvalidCollectionKey,
 }
 
 impl TypeErrorKind {
@@ -193,6 +197,7 @@ impl TypeErrorKind {
             Self::UnknownStructFieldInPattern => "E-T39",
             Self::MissingStructFieldInPattern => "E-T40",
             Self::StructPatternTypeMismatch => "E-T41",
+            Self::InvalidCollectionKey => "E-T42",
         }
     }
 }
@@ -235,6 +240,24 @@ impl TypeError {
             actual: Some(actual.into()),
             operator: None,
             related,
+        }
+    }
+
+    /// Creates an invalid-collection-key error at `span` (`E-T42`): a
+    /// `Map<K, V>` key type or `Set<T>` element type that cannot satisfy
+    /// the hashing/equality contract.
+    pub fn invalid_collection_key(
+        span: Span,
+        ty: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: TypeErrorKind::InvalidCollectionKey,
+            span,
+            expected: Some(ty.into()),
+            actual: Some(reason.into()),
+            operator: None,
+            related: None,
         }
     }
 
@@ -837,7 +860,8 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::DestructureArityMismatch
             | TypeErrorKind::UnknownStructFieldInPattern
             | TypeErrorKind::MissingStructFieldInPattern
-            | TypeErrorKind::StructPatternTypeMismatch => actual.to_string(),
+            | TypeErrorKind::StructPatternTypeMismatch
+            | TypeErrorKind::InvalidCollectionKey => format!("`{expected}` is not a valid key type: {actual}"),
         };
         f.write_str(&message)
     }

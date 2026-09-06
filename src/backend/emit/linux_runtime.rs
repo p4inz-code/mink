@@ -3204,6 +3204,32 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::VecPop, emit_stub_int);
     emit!(RuntimeService::VecRemove, emit_stub_int);
 
+    // --- Map/Set services (stub; Linux is FROZEN) ---
+    emit!(RuntimeService::MapNew, emit_stub_int);
+    emit!(RuntimeService::MapInsert, emit_stub_int);
+    emit!(RuntimeService::MapGet, emit_stub_int);
+    emit!(RuntimeService::MapHas, emit_stub_int);
+    emit!(RuntimeService::MapRemove, emit_stub_int);
+    emit!(RuntimeService::MapLen, emit_stub_int);
+    emit!(RuntimeService::MapFree, emit_stub_int);
+    emit!(RuntimeService::MapKeys, emit_stub_int);
+    emit!(RuntimeService::MapValues, emit_stub_int);
+    emit!(RuntimeService::SetNew, emit_stub_int);
+    emit!(RuntimeService::SetInsert, emit_stub_int);
+    emit!(RuntimeService::SetHas, emit_stub_int);
+    emit!(RuntimeService::SetRemove, emit_stub_int);
+    emit!(RuntimeService::SetLen, emit_stub_int);
+    emit!(RuntimeService::SetFree, emit_stub_int);
+    emit!(RuntimeService::SetElements, emit_stub_int);
+
+    // --- Internal collection helpers (stub; Linux is FROZEN) ---
+    emit!(RuntimeService::CollFreeValue, emit_stub_int);
+    emit!(RuntimeService::CollCloneValue, emit_stub_int);
+    emit!(RuntimeService::CollHash, emit_stub_int);
+    emit!(RuntimeService::CollKeyEq, emit_stub_int);
+    emit!(RuntimeService::MapRebuild, emit_stub_int);
+    emit!(RuntimeService::SetRebuild, emit_stub_int);
+
     // --- Process services ---
     emit!(RuntimeService::ProcessId, emit_process_id);
     emit!(RuntimeService::ProcessRun, emit_process_run);

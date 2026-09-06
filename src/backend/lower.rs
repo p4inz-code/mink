@@ -43,6 +43,7 @@ use crate::semantics::SymbolId;
 use crate::source::{SourceMap, Span};
 use crate::typecheck::{EnumId, StructId, TypeId, TypeKind, layout_error_message};
 
+use super::descriptors;
 use super::error::BackendError;
 use super::ir::{
     BBlock, BFunction, BInst, BInstKind, BLocal, BOperand, BProgram, BStatic, BString, BTerminator,
@@ -179,10 +180,13 @@ pub(crate) fn lower(program: &MirProgram, sources: &SourceMap) -> LowerResult {
     let mut lowerer = Lowerer::new(program, sources);
     lowerer.run();
     if lowerer.errors.is_empty() {
+        let (collection_descs, collection_field_lists) = lowerer.desc_table.into_bytes();
         Ok(BProgram {
             functions: lowerer.functions,
             statics: lowerer.statics,
             strings: lowerer.strings,
+            collection_descs,
+            collection_field_lists,
         })
     } else {
         Err(lowerer.errors)
@@ -232,6 +236,11 @@ struct Lowerer<'a> {
     /// Why a struct/array type was rejected: type id → reason, recorded
     /// when classification fails so diagnostics can explain the failure.
     unsupported_aggregates: HashMap<TypeId, String>,
+    /// The collection element descriptor builder (Session 101, Wave B):
+    /// hidden descriptor ids are appended to the `rt_vec_new`/
+    /// `rt_map_new`/`rt_set_new` runtime calls, and the serialized table
+    /// rides along in the [`BProgram`].
+    desc_table: descriptors::DescBuilder<'a>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -270,6 +279,7 @@ impl<'a> Lowerer<'a> {
             fn_local_types: Vec::new(),
             fn_insts: Vec::new(),
             unsupported_aggregates: HashMap::new(),
+            desc_table: descriptors::DescBuilder::new(&program.types),
         }
     }
 
@@ -335,7 +345,11 @@ impl<'a> Lowerer<'a> {
             Some(TypeKind::Struct(id)) => self.classify_struct(ty, *id),
             Some(TypeKind::Array { .. }) => self.classify_array(ty),
             // Session 42: Vec<T> is a single-word pointer (like Ptr<Int>).
-            Some(TypeKind::Vec(_)) => Some(BType::Ptr),
+            // Session 101: Map<K, V> and Set<T> are likewise single-word
+            // pointers to their heap-allocated tables.
+            Some(TypeKind::Vec(_)) | Some(TypeKind::Map(_, _)) | Some(TypeKind::Set(_)) => {
+                Some(BType::Ptr)
+            }
             Some(TypeKind::Tuple(elems)) => self.classify_tuple(ty, elems),
             // Enums (session 17) with only unit variants are single-word
             // discriminant values. An enum with a data-carrying variant
@@ -1636,11 +1650,63 @@ impl<'a> Lowerer<'a> {
                         callee: callee_index,
                         args: lowered_args,
                     },
-                    Callee::Runtime(service) => BInstKind::RuntimeCall {
-                        target,
-                        service,
-                        args: lowered_args,
-                    },
+                    Callee::Runtime(service) => {
+                        // Session 101 (Wave B): the collection
+                        // constructors carry hidden descriptor-id
+                        // arguments appended here, so the runtime knows
+                        // each buffer's element size and ownership/free
+                        // strategy from the moment it is created.
+                        let mut args = lowered_args;
+                        match service {
+                        RuntimeService::VecNew => {
+                            let elem = self.collection_element_type(
+                                target,
+                                rvalue.span,
+                                "rt_vec_new",
+                            )?;
+                            let id = match elem {
+                                Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
+                                None => self.desc_table.desc_word(),
+                            };
+                            args.push(BOperand::Const(id as i64));
+                        }
+                        RuntimeService::MapNew => {
+                            let (key, value) = self.collection_map_types(
+                                target,
+                                rvalue.span,
+                                "rt_map_new",
+                            )?;
+                            let key_id = match key {
+                                Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
+                                None => self.desc_table.desc_word(),
+                            };
+                            let value_id = match value {
+                                Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
+                                None => self.desc_table.desc_word(),
+                            };
+                            args.push(BOperand::Const(key_id as i64));
+                            args.push(BOperand::Const(value_id as i64));
+                        }
+                        RuntimeService::SetNew => {
+                            let elem = self.collection_element_type(
+                                target,
+                                rvalue.span,
+                                "rt_set_new",
+                            )?;
+                            let id = match elem {
+                                Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
+                                None => self.desc_table.desc_word(),
+                            };
+                            args.push(BOperand::Const(id as i64));
+                        }
+                            _ => {}
+                        }
+                        BInstKind::RuntimeCall {
+                            target,
+                            service,
+                            args,
+                        }
+                    }
                     Callee::Indirect(fn_ptr) => BInstKind::IndirectCall {
                         target,
                         fn_ptr,
@@ -1861,6 +1927,101 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The element type of a `rt_vec_new`/`rt_set_new` call, from the
+    /// call's result local (a resolved `Vec<T>`/`Set<T>` type).
+    ///
+    /// Session 101 compatibility: an unannotated `rt_vec_new` call leaves
+    /// the element as an unresolved inference variable (the legacy
+    /// word-element behavior). Those keep an `Int` (8-byte word)
+    /// descriptor, so bare `rt_vec_new`/`rt_set_new` programs behave
+    /// exactly as before while annotated `Vec<T>`/`Set<T>` usage is fully
+    /// typed.
+    fn collection_element_type(
+        &self,
+        target: crate::mir::LocalId,
+        span: Span,
+        name: &str,
+    ) -> Result<Option<TypeId>, BackendError> {
+        let ty = self
+            .fn_local_types
+            .get(target.raw() as usize)
+            .copied()
+            .ok_or_else(|| {
+                BackendError::invalid_backend_ir(
+                    span,
+                    format!("`{name}`'s result local has no recorded type"),
+                )
+            })?;
+        let _ = span;
+        match self.program.types.kind(self.program.types.canonical(ty)) {
+            Some(TypeKind::Vec(elem)) | Some(TypeKind::Set(elem)) => {
+                let elem = self.program.types.canonical(*elem);
+                match self.program.types.kind(elem) {
+                    // Unresolved (legacy unannotated call): `None` asks the
+                    // caller to use the shared word-element descriptor.
+                    Some(TypeKind::Infer(_)) | None => Ok(None),
+                    _ => Ok(Some(elem)),
+                }
+            }
+            _ => Err(BackendError::invalid_backend_ir(
+                span,
+                format!("`{name}`'s result type is not a collection type"),
+            ))
+            .map(|_: ()| None),
+        }
+    }
+
+    /// The key/value types of a `rt_map_new` call, from the call's result
+    /// local (a resolved `Map<K, V>` type). Unresolved inference-variable
+    /// keys or values fall back to `Int` (legacy word behavior).
+    fn collection_map_types(
+        &self,
+        target: crate::mir::LocalId,
+        span: Span,
+        name: &str,
+    ) -> Result<(Option<TypeId>, Option<TypeId>), BackendError> {
+        let ty = self
+            .fn_local_types
+            .get(target.raw() as usize)
+            .copied()
+            .ok_or_else(|| {
+                BackendError::invalid_backend_ir(
+                    span,
+                    format!("`{name}`'s result local has no recorded type"),
+                )
+            })?;
+        let _ = span;
+        match self.program.types.kind(self.program.types.canonical(ty)) {
+            Some(TypeKind::Map(key, value)) => {
+                let key = self.program.types.canonical(*key);
+                let value = self.program.types.canonical(*value);
+                let resolve = |t: TypeId| -> Option<TypeId> {
+                    match self.program.types.kind(t) {
+                        Some(TypeKind::Infer(_)) | None => None,
+                        _ => Some(t),
+                    }
+                };
+                Ok((resolve(key), resolve(value)))
+            }
+            _ => Err(BackendError::invalid_backend_ir(
+                span,
+                format!("`{name}`'s result type is not a Map type"),
+            ))
+            .map(|_: ()| (None, None)),
+        }
+    }
+
+    /// The collection descriptor id of `elem`'s type, building the
+    /// descriptor table on first use.
+    fn collection_desc_id(&mut self, elem: TypeId, span: Span) -> Result<u32, BackendError> {
+        self.desc_table.desc(elem).map_err(|reason| {
+            BackendError::invalid_backend_ir(
+                span,
+                format!("collection element type not supported: {reason}"),
+            )
+        })
+    }
+
     /// The runtime service an intrinsic name maps to, if any. Only the
     /// callable subset of services is exposed to generated code.
     fn runtime_service(name: &str) -> Option<RuntimeService> {
@@ -1880,6 +2041,8 @@ impl<'a> Lowerer<'a> {
             "rt_print_float" => RuntimeService::PrintFloat,
             "rt_print_char" => RuntimeService::PrintChar,
             "rt_vec_new" => RuntimeService::VecNew,
+            "rt_dbg_word0" => RuntimeService::DbgWord0,
+            "rt_dbg_word8" => RuntimeService::DbgWord8,
             "rt_vec_push" => RuntimeService::VecPush,
             "rt_vec_get" => RuntimeService::VecGet,
             "rt_vec_len" => RuntimeService::VecLen,
@@ -1887,6 +2050,23 @@ impl<'a> Lowerer<'a> {
             "rt_vec_set" => RuntimeService::VecSet,
             "rt_vec_pop" => RuntimeService::VecPop,
             "rt_vec_remove" => RuntimeService::VecRemove,
+            // --- Map/Set (Session 101, Wave B) ---
+            "rt_map_new" => RuntimeService::MapNew,
+            "rt_map_insert" => RuntimeService::MapInsert,
+            "rt_map_get" => RuntimeService::MapGet,
+            "rt_map_has" => RuntimeService::MapHas,
+            "rt_map_remove" => RuntimeService::MapRemove,
+            "rt_map_len" => RuntimeService::MapLen,
+            "rt_map_free" => RuntimeService::MapFree,
+            "rt_map_keys" => RuntimeService::MapKeys,
+            "rt_map_values" => RuntimeService::MapValues,
+            "rt_set_new" => RuntimeService::SetNew,
+            "rt_set_insert" => RuntimeService::SetInsert,
+            "rt_set_has" => RuntimeService::SetHas,
+            "rt_set_remove" => RuntimeService::SetRemove,
+            "rt_set_len" => RuntimeService::SetLen,
+            "rt_set_free" => RuntimeService::SetFree,
+            "rt_set_elements" => RuntimeService::SetElements,
             "rt_str_concat" => RuntimeService::StrConcat,
             "rt_str_eq" => RuntimeService::StrEq,
             "rt_str_from_int" => RuntimeService::StrFromInt,

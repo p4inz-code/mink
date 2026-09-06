@@ -760,7 +760,7 @@ impl Code {
     }
 
     /// `imul rax, rcx`.
-    fn imul_rax_rcx(&mut self) {
+    pub(crate) fn imul_rax_rcx(&mut self) {
         self.bytes(&[0x48, 0x0F, 0xAF, 0xC1]);
     }
 
@@ -796,13 +796,13 @@ impl Code {
     }
 
     /// `setcc al` then `movzx eax, al`.
-    fn setcc_rax(&mut self, condition: u8) {
+    pub(crate) fn setcc_rax(&mut self, condition: u8) {
         self.bytes(&[0x0F, condition, 0xC0]);
         self.bytes(&[0x0F, 0xB6, 0xC0]);
     }
 
     /// `add rax, 1`.
-    fn add_rax_one(&mut self) {
+    pub(crate) fn add_rax_one(&mut self) {
         self.bytes(&[0x48, 0x83, 0xC0, 0x01]);
     }
 
@@ -1230,7 +1230,24 @@ pub(crate) fn emit_pe(program: &BProgram, entry: usize, sources: &SourceMap) -> 
         loc_region_label,
         loc_region_end_label,
     );
-    runtime::emit_data(&mut code, &runtime_offsets);
+    if std::env::var_os("MINK_DBG_OFFSETS").is_some() {
+        use RuntimeService as S;
+        eprintln!(
+            "[mink-dbg] VecPush={} VecFree={} Alloc={} Free={} VecNew={} VecGet={}",
+            runtime_offsets.of(S::VecPush),
+            runtime_offsets.of(S::VecFree),
+            runtime_offsets.of(S::Alloc),
+            runtime_offsets.of(S::Free),
+            runtime_offsets.of(S::VecNew),
+            runtime_offsets.of(S::VecGet)
+        );
+    }
+    runtime::emit_data(
+        &mut code,
+        &runtime_offsets,
+        &program.collection_descs,
+        &program.collection_field_lists,
+    );
 
     // ------------------------------------------------------------------
     // Immutable string data: each literal's blob is its length prefix
@@ -1701,13 +1718,28 @@ fn emit_runtime_call(
     args: &[BOperand],
     locid: u32,
 ) {
+    // Session 101 (Wave B): a runtime call whose result is a multi-word
+    // value (a `Vec<struct>`/`Vec<Range>` element read, for example) is
+    // returned through a caller-allocated return slot exactly like a user
+    // function's aggregate result: the slot's address is pushed as a
+    // hidden argument (rightmost, so it sits just after the visible
+    // parameters) and the service copies the value into it.
+    let aggregate = f
+        .local(target)
+        .map(|local| local.words > 1)
+        .unwrap_or(false);
     let mut words = 0usize;
     for arg in args {
         words += operand_words(f, *arg);
     }
-    let pad = words % 2;
+    let total = words + usize::from(aggregate);
+    let pad = total % 2;
     if pad == 1 {
         code.sub_rsp(8);
+    }
+    if aggregate {
+        code.lea_r_mem(Reg::Rax, Reg::Rbp, slots[target.raw() as usize].0);
+        code.push_rax();
     }
     for arg in args.iter().rev() {
         push_operand(code, f, slots, *arg);
@@ -1723,8 +1755,8 @@ fn emit_runtime_call(
         );
     }
     code.call_patch(PatchKind::RuntimeService(service));
-    if words + pad > 0 {
-        code.add_rsp((8 * (words + pad)) as i32);
+    if total + pad > 0 {
+        code.add_rsp((8 * (total + pad)) as i32);
     }
     // Float-returning intrinsics store the result in xmm0;
     // Int/Bool-returning intrinsics store the result in rax.
@@ -1734,7 +1766,7 @@ fn emit_runtime_call(
         .unwrap_or(false);
     if target_is_float {
         code.movsd_mem_xmm0(Reg::Rbp, slots[target.raw() as usize].0);
-    } else {
+    } else if !aggregate {
         code.mov_rbp_rax(slots[target.raw() as usize].0);
     }
 }
@@ -1968,9 +2000,9 @@ fn emit_inst(
                 push_operand(code, f, slots, *arg);
             }
             code.call(*callee);
-            // Clean up both arguments AND alignment padding.
-            // `pad` bytes were subtracted via sub_rsp before the pushes,
-            // so the total bytes to reclaim is (total + pad) * 8.
+            // Clean up arguments, hidden aggregate slot, AND alignment
+            // padding. `pad` bytes were subtracted via `sub_rsp` before the
+            // pushes, so the total bytes to reclaim is `(total + pad) * 8`.
             let cleanup = total + pad;
             if cleanup > 0 {
                 code.add_rsp((8 * cleanup) as i32);

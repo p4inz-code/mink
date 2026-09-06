@@ -32,6 +32,7 @@
 //! codes `E-B01`…`E-B12` (see [`error`] and
 //! `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`).
 
+mod descriptors;
 mod emit;
 mod error;
 mod ir;

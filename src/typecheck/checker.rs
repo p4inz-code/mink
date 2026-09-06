@@ -1197,6 +1197,50 @@ impl<'a> Checker<'a> {
                     let elem = self.resolve_type(&args[0]);
                     return self.types.push(TypeKind::Vec(elem));
                 }
+                // Session 101 (Wave B): `Map<K, V>` and `Set<T>` are
+                // builtin collection types. Keys/elements are validated
+                // against the hashing/equality contract at the point the
+                // type is resolved, so an unsupported key type is a clean
+                // E-T42 diagnostic (never a backend surprise).
+                if name.name == "Map" && args.len() == 2 {
+                    let key = self.resolve_type(&args[0]);
+                    let value = self.resolve_type(&args[1]);
+                    if let Some(reason) = self.invalid_collection_key_reason(key) {
+                        self.push_error(TypeError::invalid_collection_key(
+                            name.span,
+                            self.display(key),
+                            reason,
+                        ));
+                    }
+                    return self.types.push(TypeKind::Map(key, value));
+                }
+                if name.name == "Map" {
+                    self.errors.push(TypeError::wrong_arg_count(
+                        name.span,
+                        2,
+                        args.len(),
+                    ));
+                    return self.types.push(TypeKind::Error);
+                }
+                if name.name == "Set" && args.len() == 1 {
+                    let elem = self.resolve_type(&args[0]);
+                    if let Some(reason) = self.invalid_collection_key_reason(elem) {
+                        self.push_error(TypeError::invalid_collection_key(
+                            name.span,
+                            self.display(elem),
+                            reason,
+                        ));
+                    }
+                    return self.types.push(TypeKind::Set(elem));
+                }
+                if name.name == "Set" {
+                    self.errors.push(TypeError::wrong_arg_count(
+                        name.span,
+                        1,
+                        args.len(),
+                    ));
+                    return self.types.push(TypeKind::Error);
+                }
                 // Resolve each argument type first.
                 let _arg_tys: Vec<TypeId> = args.iter().map(|a| self.resolve_type(a)).collect();
                 // Try to resolve as a struct or enum with the given name.
@@ -1429,6 +1473,84 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// A FRESH function type for a collection intrinsic call site, or
+    /// `None` when `name` is not a collection intrinsic.
+    ///
+    /// The element/key/value inference variables are created per call, so
+    /// two call sites never share type state: `rt_vec_push` ties its value
+    /// argument to the vector's element type through one fresh variable,
+    /// `rt_map_get` ties its result to the map's value type, and so on.
+    fn collection_intrinsic_type(&mut self, name: &str) -> Option<TypeId> {
+        if !matches!(
+            name,
+            "rt_dbg_word0"
+                | "rt_dbg_word8"
+                | "rt_vec_new"
+                | "rt_vec_push"
+                | "rt_vec_get"
+                | "rt_vec_len"
+                | "rt_vec_free"
+                | "rt_vec_set"
+                | "rt_vec_pop"
+                | "rt_vec_remove"
+                | "rt_map_new"
+                | "rt_map_insert"
+                | "rt_map_get"
+                | "rt_map_has"
+                | "rt_map_remove"
+                | "rt_map_len"
+                | "rt_map_free"
+                | "rt_map_keys"
+                | "rt_map_values"
+                | "rt_set_new"
+                | "rt_set_insert"
+                | "rt_set_has"
+                | "rt_set_remove"
+                | "rt_set_len"
+                | "rt_set_free"
+                | "rt_set_elements"
+        ) {
+            return None;
+        }
+        use crate::runtime::intrinsics::IntrinsicType as K;
+        use crate::typecheck::TypeKind;
+        let key = self.types.push(TypeKind::Infer(None));
+        let value = self.types.push(TypeKind::Infer(None));
+        let elem = self.types.push(TypeKind::Infer(None));
+        let key_vec = self.types.push(TypeKind::Vec(key));
+        let value_vec = self.types.push(TypeKind::Vec(value));
+        let elem_vec = self.types.push(TypeKind::Vec(elem));
+        let elem_map = self.types.push(TypeKind::Map(key, value));
+        let elem_set = self.types.push(TypeKind::Set(elem));
+        let int = self.types.push(TypeKind::Int);
+        let bool = self.types.push(TypeKind::Bool);
+        let unit = self.types.push(TypeKind::Unit);
+        let mut kind_of = |k: K| match k {
+            K::Int => int,
+            K::Bool => bool,
+            K::Unit => unit,
+            K::Vec => elem_vec,
+            K::Map => elem_map,
+            K::Set => elem_set,
+            K::Elem => elem,
+            K::Key => key,
+            K::Value => value,
+            K::VecOfKey => key_vec,
+            K::VecOfValue => value_vec,
+            K::VecOfElem => elem_vec,
+            _ => self.types.push(TypeKind::Error),
+        };
+        let intrinsic = crate::runtime::intrinsics::by_name(name)
+            .expect("collection intrinsics are always registered");
+        let params = intrinsic
+            .params
+            .iter()
+            .map(|p| kind_of(*p))
+            .collect::<Vec<_>>();
+        let result = kind_of(intrinsic.result);
+        Some(self.types.push(TypeKind::Fn { params, result }))
+    }
+
     /// The concrete function type of a runtime intrinsic, from its
     /// declared signature. Intrinsics are typed concretely — not through
     /// inference variables — so calling `rt_free` produces `Unit` (which
@@ -1463,6 +1585,92 @@ impl<'a> Checker<'a> {
             crate::runtime::intrinsics::IntrinsicType::Vec => {
                 let elem = self.types.push(TypeKind::Infer(None));
                 self.types.push(TypeKind::Vec(elem))
+            }
+            // Session 101 (Wave B): Map<K, V> and Set<T> — the key and
+            // value types are inferred from usage.
+            crate::runtime::intrinsics::IntrinsicType::Map => {
+                let key = self.types.push(TypeKind::Infer(None));
+                let value = self.types.push(TypeKind::Infer(None));
+                self.types.push(TypeKind::Map(key, value))
+            }
+            crate::runtime::intrinsics::IntrinsicType::Set => {
+                let elem = self.types.push(TypeKind::Infer(None));
+                self.types.push(TypeKind::Set(elem))
+            }
+            // Tied element/key/value kinds only ever appear in the
+            // per-call instantiation of collection intrinsics
+            // ([`Checker::collection_intrinsic_type`]); the shared
+            // pre-registration signature never uses them, but keep the
+            // mapping total so a catalog edit cannot panic.
+            crate::runtime::intrinsics::IntrinsicType::Elem
+            | crate::runtime::intrinsics::IntrinsicType::Key
+            | crate::runtime::intrinsics::IntrinsicType::Value => {
+                self.types.push(TypeKind::Infer(None))
+            }
+            crate::runtime::intrinsics::IntrinsicType::VecOfKey
+            | crate::runtime::intrinsics::IntrinsicType::VecOfValue
+            | crate::runtime::intrinsics::IntrinsicType::VecOfElem => {
+                let elem = self.types.push(TypeKind::Infer(None));
+                self.types.push(TypeKind::Vec(elem))
+            }
+        }
+    }
+
+    /// Why `ty` cannot be a `Map` key or `Set` element, if it cannot.
+    ///
+    /// The V1 hashing/equality contract supports exactly: `Int`, `Bool`,
+    /// `Char`, `Str`, and enums whose variants are all unit variants
+    /// (hash/equality is over the single-word discriminant). Everything
+    /// else — `Float` (NaN equality), aggregates, collections, pointers,
+    /// references, functions, ranges, `Null`, tuples — is rejected with a
+    /// deterministic reason rather than being silently hashed by
+    /// representation.
+    fn invalid_collection_key_reason(&self, ty: TypeId) -> Option<String> {
+        match self.types.kind(self.types.canonical(ty)) {
+            Some(TypeKind::Int | TypeKind::Bool | TypeKind::Char | TypeKind::Str) => None,
+            Some(TypeKind::Enum(id)) => {
+                let info = self.types.enum_info(*id);
+                match info {
+                    Some(info) if info.variants.iter().all(|v| v.payload.is_none()) => None,
+                    Some(info) => Some(format!(
+                        "enum `{}` has a data-carrying variant; only unit-variant enums hash by discriminant",
+                        info.name
+                    )),
+                    None => Some("the enum's variants are not yet known".to_string()),
+                }
+            }
+            Some(TypeKind::Float) => Some(
+                "Float has no equality contract (NaN != NaN); float keys are deferred".to_string(),
+            ),
+            Some(TypeKind::Struct(id)) => {
+                let name = self
+                    .types
+                    .struct_info(*id)
+                    .map(|info| info.name.clone())
+                    .unwrap_or_else(|| format!("Struct#{}", id.raw()));
+                Some(format!("struct `{name}` has no hashing/equality contract"))
+            }
+            Some(TypeKind::Tuple(_)) => {
+                Some("tuples have no hashing/equality contract in V1".to_string())
+            }
+            Some(TypeKind::Array { .. }) => {
+                Some("arrays have no hashing/equality contract in V1".to_string())
+            }
+            Some(TypeKind::Vec(_)) => Some("a Vec has no hashing/equality contract".to_string()),
+            Some(TypeKind::Map(_, _)) => Some("a Map has no hashing/equality contract".to_string()),
+            Some(TypeKind::Set(_)) => Some("a Set has no hashing/equality contract".to_string()),
+            Some(TypeKind::Range(_)) => {
+                Some("a Range has no hashing/equality contract in V1".to_string())
+            }
+            Some(TypeKind::Ptr(_)) => Some("a Ptr cannot be a key".to_string()),
+            Some(TypeKind::Ref { .. }) => Some("a reference cannot be a key".to_string()),
+            Some(TypeKind::Fn { .. }) => Some("a function cannot be a key".to_string()),
+            Some(TypeKind::Null) => Some("Null cannot be a key".to_string()),
+            Some(TypeKind::Unit | TypeKind::Never) => {
+                Some("a valueless type cannot be a key".to_string())
+            }
+            Some(TypeKind::Infer(_)) | Some(TypeKind::Error) | None => {
+                Some("the key type is unresolved".to_string())
             }
         }
     }
@@ -3775,7 +3983,29 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|arg| (arg.span, self.expr_type(arg)))
             .collect();
-        let canon = self.types.canonical(callee_ty);
+        // Session 101 (Wave B): the collection intrinsics (`rt_vec_*`,
+        // `rt_map_*`, `rt_set_*`) are generic in their element/key/value
+        // types. Each call site gets a FRESH instantiation, so `Vec<Int>`
+        // and `Vec<Str>` can coexist in one program and `rt_vec_push` ties
+        // the pushed value to the vector's element type. (The shared
+        // pre-registered signature is never unified at a call site.)
+        let canon = match &callee.kind {
+            ExprKind::Ident(ident) => {
+                let name = self
+                    .semantic
+                    .resolve(ident.span)
+                    .and_then(|symbol| self.semantic.symbols().get(symbol))
+                    .filter(|symbol| matches!(symbol.kind, SymbolKind::Intrinsic))
+                    .map(|symbol| symbol.name.clone());
+                match name {
+                    Some(name) => self
+                        .collection_intrinsic_type(&name)
+                        .unwrap_or_else(|| self.types.canonical(callee_ty)),
+                    None => self.types.canonical(callee_ty),
+                }
+            }
+            _ => self.types.canonical(callee_ty),
+        };
         let (params, result) = match self.types.kind(canon) {
             Some(TypeKind::Fn { params, result }) => (params.clone(), *result),
             Some(TypeKind::Infer(_)) => {

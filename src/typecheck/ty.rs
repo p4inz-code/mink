@@ -237,6 +237,18 @@ pub enum TypeKind {
     /// The runtime representation is a single word (a pointer to a
     /// heap-allocated buffer with capacity and length headers).
     Vec(TypeId),
+    /// A hash map (Session 101, Wave B): a heap-allocated open-addressing
+    /// table of `key` → `value` entries. Both type parameters are part of
+    /// the type identity, so `Map<Str, Int>` and `Map<Str, Float>` are
+    /// distinct types. The runtime representation is a single word (a
+    /// pointer to a heap-allocated bucket table).
+    Map(TypeId, TypeId),
+    /// A hash set (Session 101, Wave B): a heap-allocated open-addressing
+    /// table of `elem` values. The element type is part of the type
+    /// identity, so `Set<Int>` and `Set<Str>` are distinct types. The
+    /// runtime representation is a single word (a pointer to a
+    /// heap-allocated bucket table).
+    Set(TypeId),
     /// A tuple type (session 29): `(T1, T2, ...)` — a fixed-length,
     /// heterogeneous sequence of types. An empty tuple `()` is the unit
     /// type (equivalent to [`TypeKind::Unit`]). A single-element tuple
@@ -484,6 +496,17 @@ impl TypeTable {
                 self.unify(*ea, *eb)?;
                 Ok(a)
             }
+            // Map types unify by key and value type.
+            (TypeKind::Map(ka, va), TypeKind::Map(kb, vb)) => {
+                self.unify(*ka, *kb)?;
+                self.unify(*va, *vb)?;
+                Ok(a)
+            }
+            // Set types unify by element type.
+            (TypeKind::Set(ea), TypeKind::Set(eb)) => {
+                self.unify(*ea, *eb)?;
+                Ok(a)
+            }
             // Tuples unify element-wise: same length and same element
             // types. An empty tuple unifies only with another empty tuple
             // (or Unit, since () == Unit).
@@ -568,6 +591,12 @@ impl TypeTable {
             }
             Some(TypeKind::Vec(elem)) => {
                 format!("Vec<{}>", self.display(*elem))
+            }
+            Some(TypeKind::Map(key, value)) => {
+                format!("Map<{}, {}>", self.display(*key), self.display(*value))
+            }
+            Some(TypeKind::Set(elem)) => {
+                format!("Set<{}>", self.display(*elem))
             }
             Some(TypeKind::Tuple(elems)) => {
                 if elems.is_empty() {
@@ -730,6 +759,11 @@ impl TypeTable {
                     len: *len,
                 },
                 TypeKind::Vec(elem) => TypeKind::Vec(remap.get(elem).copied().unwrap_or(*elem)),
+                TypeKind::Map(key, value) => TypeKind::Map(
+                    remap.get(key).copied().unwrap_or(*key),
+                    remap.get(value).copied().unwrap_or(*value),
+                ),
+                TypeKind::Set(elem) => TypeKind::Set(remap.get(elem).copied().unwrap_or(*elem)),
             }
         };
 

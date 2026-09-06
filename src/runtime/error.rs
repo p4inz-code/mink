@@ -47,6 +47,10 @@ pub enum RuntimeErrorKind {
     /// An array index out of range: a generated `base[index]` access with
     /// an index not below the array's length (or a negative index).
     ArrayIndexOutOfRange,
+    /// A `Map` lookup (`rt_map_get`) with a key that is not present.
+    /// Removal of a missing key is a documented no-op, not an error; only
+    /// `rt_map_get` raises this.
+    MissingKey,
 }
 
 impl RuntimeErrorKind {
@@ -64,6 +68,7 @@ impl RuntimeErrorKind {
             Self::InvalidSize => 8,
             Self::StringIndexOutOfRange => 9,
             Self::ArrayIndexOutOfRange => 10,
+            Self::MissingKey => 11,
         }
     }
 
@@ -80,6 +85,7 @@ impl RuntimeErrorKind {
             Self::InvalidSize => "E-R08",
             Self::StringIndexOutOfRange => "E-R09",
             Self::ArrayIndexOutOfRange => "E-R10",
+            Self::MissingKey => "E-R11",
         }
     }
 
@@ -101,6 +107,7 @@ impl RuntimeErrorKind {
             Self::ArrayIndexOutOfRange => {
                 "array index out of range: the index must be below the array's length"
             }
+            Self::MissingKey => "map key not found: the key is not present in the map",
         }
     }
 

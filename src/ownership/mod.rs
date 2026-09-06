@@ -2291,37 +2291,79 @@ impl<'a> Analyzer<'a> {
     fn eval_intrinsic(&mut self, intrinsic: &'static Intrinsic, args: &[Expr]) -> EvalValue {
         let is_str_free = intrinsic.name == "rt_str_free";
         let is_set_byte = intrinsic.name == "rt_str_set_byte";
-        let is_vec_free = intrinsic.name == "rt_vec_free";
-        let is_vec_push = intrinsic.name == "rt_vec_push";
-        let is_vec_get = intrinsic.name == "rt_vec_get";
-        let is_vec_len = intrinsic.name == "rt_vec_len";
+        // Session 101 (Wave B): the update intrinsics consume their
+        // collection argument and return the (possibly new) collection
+        // pointer, mirroring the existing `rt_vec_push` chaining idiom.
+        let consumes_collection = matches!(
+            intrinsic.name,
+            "rt_vec_push"
+                | "rt_vec_set"
+                | "rt_vec_remove"
+                | "rt_map_insert"
+                | "rt_map_remove"
+                | "rt_set_insert"
+                | "rt_set_remove"
+        );
+        let frees_collection = matches!(
+            intrinsic.name,
+            "rt_vec_free" | "rt_map_free" | "rt_set_free"
+        );
+        // The insert-family intrinsics MOVE an Owned `Str` value into the
+        // collection: the collection becomes the sole owner of the blob at
+        // runtime, so the source binding is consumed. Literals (Immutable
+        // strings) are unaffected (consume of an Immutable is allowed).
+        let consumes_value = matches!(
+            intrinsic.name,
+            "rt_vec_push" | "rt_vec_set" | "rt_map_insert" | "rt_set_insert"
+        );
         for (index, arg) in args.iter().enumerate() {
             let is_str_arg = matches!(intrinsic.params.get(index), Some(IntrinsicType::Str));
-            let is_vec_arg = matches!(intrinsic.params.get(index), Some(IntrinsicType::Vec));
-            if is_vec_arg {
-                if is_vec_free {
-                    // Consume: the Vec is moved and freed.
+            let is_coll_arg = matches!(
+                intrinsic.params.get(index),
+                Some(
+                    IntrinsicType::Vec
+                        | IntrinsicType::Map
+                        | IntrinsicType::Set
+                )
+            );
+            if is_coll_arg {
+                if frees_collection {
+                    // Consume: the collection is moved and freed.
                     let value = self.eval_expr(arg, Mode::Transfer);
                     if value.view.is_some() {
                         self.errors.push(SemanticError::borrow_conflict_detail(
                             arg.span,
-                            "cannot free a Vec through a reference".to_string(),
+                            "cannot free a collection through a reference".to_string(),
                         ));
                     }
-                } else if is_vec_push {
-                    // First arg (the Vec) is consumed and returned; second is read.
-                    if index == 0 {
-                        self.eval_expr(arg, Mode::Transfer);
-                    } else {
-                        self.eval_expr(arg, Mode::Observe);
-                    }
-                } else if is_vec_get || is_vec_len {
-                    // Read borrow: the Vec is borrowed, not consumed.
-                    self.eval_expr(arg, Mode::Observe);
+                } else if consumes_collection {
+                    // The collection is consumed and returned.
+                    self.eval_expr(arg, Mode::Transfer);
                 } else {
+                    // Read borrow: the collection is borrowed, not consumed.
                     self.eval_expr(arg, Mode::Observe);
                 }
                 continue;
+            }
+            if consumes_value && !is_str_arg {
+                // A value/key argument whose runtime type is `Str` is
+                // moved into the collection (the sole-owner contract);
+                // every other value type is observed (Copy semantics).
+                let arg_is_str = self
+                    .types
+                    .expr_type(arg.span)
+                    .and_then(|ty| self.types.types().kind(ty))
+                    .is_some_and(|kind| matches!(kind, TypeKind::Str));
+                if arg_is_str {
+                    let value = self.eval_expr(arg, Mode::Transfer);
+                    if value.view.is_some() {
+                        self.errors.push(SemanticError::borrow_conflict_detail(
+                            arg.span,
+                            "cannot move a string through a reference into a collection".to_string(),
+                        ));
+                    }
+                    continue;
+                }
             }
             if !is_str_arg {
                 self.eval_expr(arg, Mode::Observe);
@@ -2376,12 +2418,20 @@ impl<'a> Analyzer<'a> {
                 self.eval_expr(arg, Mode::Observe);
             }
         }
-        if intrinsic.result == IntrinsicType::Str {
-            // String-producing intrinsics (rt_str_alloc, rt_str_concat,
-            // rt_str_from_int, rt_str_from_bool) always produce owned strings.
-            EvalValue::owned()
-        } else if intrinsic.result == IntrinsicType::Vec {
-            // Vec-producing intrinsics produce owned values.
+        if matches!(
+            intrinsic.result,
+            IntrinsicType::Str
+                | IntrinsicType::Vec
+                | IntrinsicType::Map
+                | IntrinsicType::Set
+                | IntrinsicType::VecOfKey
+                | IntrinsicType::VecOfValue
+                | IntrinsicType::VecOfElem
+        ) {
+            // String/collection-producing intrinsics always produce
+            // owned values: the caller owns the fresh blob/table (or, for
+            // `rt_map_keys`/`rt_map_values`/`rt_set_elements`, the new
+            // Vec of deep clones).
             EvalValue::owned()
         } else {
             EvalValue::copy()

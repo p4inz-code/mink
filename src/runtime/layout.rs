@@ -269,6 +269,9 @@ fn scalar_layout(kind: &TypeKind) -> Option<(u64, u64)> {
         TypeKind::Range(_) => Some((2 * WORD_SIZE, WORD_SIZE)),
         // Session 42: Vec<T> is a single word (pointer to heap buffer).
         TypeKind::Vec(_) => Some((WORD_SIZE, WORD_SIZE)),
+        // Session 101 (Wave B): Map<K, V> and Set<T> are single words
+        // (pointers to heap-allocated tables).
+        TypeKind::Map(_, _) | TypeKind::Set(_) => Some((WORD_SIZE, WORD_SIZE)),
         // Error and unresolved-inference types never reach a layout in a
         // clean pipeline (they only arise from earlier diagnostics); give
         // them a zero-size layout so validation can continue reporting

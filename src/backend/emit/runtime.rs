@@ -101,6 +101,12 @@ pub(crate) struct RuntimeOffsets {
     pub(crate) home_drive_label: u32,
     /// Label of the literal `HOMEPATH\0` name (Session 100, W14).
     pub(crate) home_path_label: u32,
+    /// Label of the collection descriptor table (Session 101, Wave B),
+    /// bound by [`emit_data`] from the program's serialized descriptors.
+    pub(crate) desc_table_label: u32,
+    /// Label of the collection field/variant lists, bound by
+    /// [`emit_data`] after the descriptor entries.
+    pub(crate) desc_lists_label: u32,
 }
 
 impl RuntimeOffsets {
@@ -135,6 +141,8 @@ pub(crate) fn emit_services(
         profile_label: code.label(),
         home_drive_label: code.label(),
         home_path_label: code.label(),
+        desc_table_label: code.label(),
+        desc_lists_label: code.label(),
     };
     let mut emit =
         |code: &mut Code, service: RuntimeService, body: fn(&mut Code, &RuntimeOffsets)| {
@@ -142,8 +150,8 @@ pub(crate) fn emit_services(
             body(code, &offsets);
         };
     emit(code, RuntimeService::Init, emit_init);
-    emit(code, RuntimeService::Alloc, |code, _| emit_alloc(code));
-    emit(code, RuntimeService::Free, |code, _| emit_free(code));
+    emit(code, RuntimeService::Alloc, |code, r| emit_alloc(code, r));
+    emit(code, RuntimeService::Free, |code, r| emit_free(code, r));
     emit(code, RuntimeService::MemLoad, |code, _| emit_mem_load(code));
     emit(code, RuntimeService::MemStore, |code, _| {
         emit_mem_store(code)
@@ -189,16 +197,47 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::StrValidateHeap, |code, _| {
         emit_str_validate(code, true)
     });
-    emit(code, RuntimeService::VecNew, |code, _| emit_vec_new(code));
-    emit(code, RuntimeService::VecPush, |code, _| emit_vec_push(code));
-    emit(code, RuntimeService::VecGet, |code, _| emit_vec_get(code));
+    // --- Vec services (Session 41; reworked Session 101 Wave B for
+    // typed elements: element stride, ownership frees, multi-word values) ---
+    emit(code, RuntimeService::DbgWord0, |code, r| emit_dbg_word0(code, r));
+    emit(code, RuntimeService::DbgWord8, |code, _| emit_dbg_word8(code));
+    emit(code, RuntimeService::VecNew, |code, r| emit_vec_new(code, r));
+    emit(code, RuntimeService::VecPush, |code, r| emit_vec_push(code, r));
+    emit(code, RuntimeService::VecGet, |code, r| emit_vec_get(code, r));
     emit(code, RuntimeService::VecLen, |code, _| emit_vec_len(code));
-    emit(code, RuntimeService::VecFree, |code, _| emit_vec_free(code));
-    emit(code, RuntimeService::VecSet, |code, _| emit_vec_set(code));
-    emit(code, RuntimeService::VecPop, |code, _| emit_vec_pop(code));
-    emit(code, RuntimeService::VecRemove, |code, _| {
-        emit_vec_remove(code)
+    emit(code, RuntimeService::VecFree, |code, r| emit_vec_free(code, r));
+    emit(code, RuntimeService::VecSet, |code, r| emit_vec_set(code, r));
+    emit(code, RuntimeService::VecPop, |code, r| emit_vec_pop(code, r));
+    emit(code, RuntimeService::VecRemove, |code, r| emit_vec_remove(code, r));
+    // --- Map services (Session 101, Wave B) ---
+    emit(code, RuntimeService::MapNew, |code, r| emit_map_new(code, r));
+    emit(code, RuntimeService::MapInsert, |code, r| emit_map_insert(code, r));
+    emit(code, RuntimeService::MapGet, |code, r| emit_map_get(code, r));
+    emit(code, RuntimeService::MapHas, |code, r| emit_map_has(code, r));
+    emit(code, RuntimeService::MapRemove, |code, r| emit_map_remove(code, r));
+    emit(code, RuntimeService::MapLen, |code, _| emit_map_len(code));
+    emit(code, RuntimeService::MapFree, |code, r| emit_map_free(code, r));
+    emit(code, RuntimeService::MapKeys, |code, r| emit_map_keys(code, r));
+    emit(code, RuntimeService::MapValues, |code, r| emit_map_values(code, r));
+    // --- Set services (Session 101, Wave B) ---
+    emit(code, RuntimeService::SetNew, |code, r| emit_set_new(code, r));
+    emit(code, RuntimeService::SetInsert, |code, r| emit_set_insert(code, r));
+    emit(code, RuntimeService::SetHas, |code, r| emit_set_has(code, r));
+    emit(code, RuntimeService::SetRemove, |code, r| emit_set_remove(code, r));
+    emit(code, RuntimeService::SetLen, |code, _| emit_set_len(code));
+    emit(code, RuntimeService::SetFree, |code, r| emit_set_free(code, r));
+    emit(code, RuntimeService::SetElements, |code, r| emit_set_elements(code, r));
+    // --- Internal collection helpers (Session 101, Wave B) ---
+    emit(code, RuntimeService::CollFreeValue, |code, r| {
+        emit_coll_free_value(code, r)
     });
+    emit(code, RuntimeService::CollCloneValue, |code, r| {
+        emit_coll_clone_value(code, r)
+    });
+    emit(code, RuntimeService::CollHash, |code, r| emit_coll_hash(code, r));
+    emit(code, RuntimeService::CollKeyEq, |code, r| emit_coll_key_eq(code, r));
+    emit(code, RuntimeService::MapRebuild, |code, r| emit_map_rebuild(code, r));
+    emit(code, RuntimeService::SetRebuild, |code, r| emit_set_rebuild(code, r));
     emit(code, RuntimeService::StrConcat, |code, _| {
         emit_str_concat(code)
     });
@@ -373,9 +412,15 @@ pub(crate) fn emit_services(
 
 /// Emits the message data into `code` (after the services): the
 /// concatenated error messages, the error-index table (offset, length
-/// pairs, one per error number), and the CRLF constant. Binds the labels
-/// the services reference.
-pub(crate) fn emit_data(code: &mut Code, offsets: &RuntimeOffsets) {
+/// pairs, one per error number), the CRLF constant, and the collection
+/// descriptor tables (Session 101, Wave B). Binds the labels the
+/// services reference.
+pub(crate) fn emit_data(
+    code: &mut Code,
+    offsets: &RuntimeOffsets,
+    descs: &[u8],
+    desc_lists: &[u8],
+) {
     // Error messages in number order (E-R01 first). Each message is the
     // full diagnostic line the runtime writes to stderr.
     let mut kinds = [
@@ -389,6 +434,7 @@ pub(crate) fn emit_data(code: &mut Code, offsets: &RuntimeOffsets) {
         RuntimeErrorKind::InvalidSize,
         RuntimeErrorKind::StringIndexOutOfRange,
         RuntimeErrorKind::ArrayIndexOutOfRange,
+        RuntimeErrorKind::MissingKey,
     ];
     kinds.sort_by_key(|kind| kind.number());
     let messages = kinds
@@ -426,6 +472,15 @@ pub(crate) fn emit_data(code: &mut Code, offsets: &RuntimeOffsets) {
     code.bytes(b"HOMEDRIVE\0");
     code.bind_label(offsets.home_path_label);
     code.bytes(b"HOMEPATH\0");
+    // The collection descriptor tables (Session 101, Wave B): first the
+    // 16-byte descriptor entries, then the field/variant lists. The
+    // runtime collection services reach them RIP-relative through the
+    // labels, so the tables are as much a part of the image as the error
+    // messages.
+    code.bind_label(offsets.desc_table_label);
+    code.bytes(descs);
+    code.bind_label(offsets.desc_lists_label);
+    code.bytes(desc_lists);
 }
 
 /// The standard MINK-function prologue: `push rbp; mov rbp, rsp`.
@@ -473,10 +528,11 @@ fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
 /// Validated bump allocation with LIFO free-list reuse and a bounded
 /// liveness table: every returned block is 16-aligned and recorded in the
 /// table as live, so later frees and accesses are checked against it.
-fn emit_alloc(code: &mut Code) {
+fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    // Spill slot [rbp-8] holds the aligned size.
-    code.sub_rsp(16);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // size spill
 
     // Validate and align the size.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
@@ -563,9 +619,10 @@ fn emit_alloc(code: &mut Code) {
 /// The pointer must be the 16-aligned exact start of a live allocation;
 /// anything else (a double free, a never-allocated or interior pointer,
 /// `null`, or a misaligned address) is a structured runtime error.
-fn emit_free(code: &mut Code) {
+fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(16);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
 
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     // Freeing an immutable image literal is a safe no-op: image string
@@ -1903,50 +1960,1178 @@ fn emit_write(code: &mut Code, stdout: bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Vec services (Session 41)
+// Collection machinery (Session 101, Wave B)
 // ---------------------------------------------------------------------------
+//
+// Every Vec/Map/Set buffer embeds the id of a collection descriptor in
+// its header. The descriptor entry (16 bytes in the image's data region)
+// carries the element size, a tag describing what the element owns, and
+// the hashing/equality kind used when the element type is a Map key or
+// Set element:
+//
+//   [0..4]  elem_size   [4] tag   [5] hash   [8..12] ref   [12..16] ref2
+//
+// Tags: 0 plain, 1 str, 2 vec, 3 map, 4 set, 5 struct, 6 enum, 7 array.
+// Hashes: 0 none, 1 word, 2 str-bytes.
 
-// Buffer layout: [capacity: 8 bytes][length: 8 bytes][element_0][element_1]...
-// Each element is one word (8 bytes). Total allocation = (2 + capacity) * 8.
+use crate::backend::descriptors::{
+    HASH_STR, TAG_ARRAY, TAG_ENUM, TAG_MAP, TAG_SET, TAG_STR, TAG_STRUCT, TAG_VEC,
+};
 
-/// `rt_vec_new(capacity) -> data_ptr` (capacity at [rbp + 16]).
+const DESC_ELEM_SIZE: i32 = 0;
+const DESC_TAG: i32 = 4;
+const DESC_HASH: i32 = 5;
+const DESC_REF: i32 = 8;
+const DESC_REF2: i32 = 12;
+
+/// Bytes of a Vec buffer header: [capacity][length][elem_desc].
+const VEC_HEADER: i32 = 24;
+/// Bytes of a Map table header: [capacity][length][dead][key_desc][value_desc].
+const MAP_HEADER: i32 = 40;
+/// Bytes of a Set table header: [capacity][length][dead][elem_desc].
+const SET_HEADER: i32 = 32;
+/// Bytes of one bucket's occupancy word (before the key/element).
+const BUCKET_HEADER: i32 = 8;
+
+/// Pushes `args` rightmost-first with the alignment pad, calls `service`,
+/// and cleans up. The caller must leave `rsp` 16-byte aligned. Clobbers
+/// nothing beyond the pushed registers' values (caller-saved anyway).
+fn call_service(code: &mut Code, service: RuntimeService, args: &[Reg]) {
+    let pad = args.len() % 2;
+    if pad == 1 {
+        code.sub_rsp(8);
+    }
+    for arg in args.iter().rev() {
+        code.sub_rsp(8);
+        code.mov_mem_r(Reg::Rsp, 0, *arg);
+    }
+    code.call_patch(PatchKind::RuntimeService(service));
+    code.add_rsp((8 * (args.len() + pad)) as i32);
+}
+
+/// `out = desc_table_base + id * 16` (the descriptor entry for `id`).
+/// Session 101 fix: `out = id * 16` is computed BEFORE the table base is
+/// loaded, so the common `out == id` call form keeps the id intact (the
+/// previous order destroyed the id whenever the caller passed the same
+/// register twice, producing a garbage entry pointer and a segfault in
+/// every collection constructor). Clobbers `r11` only.
+fn desc_entry_addr(code: &mut Code, out: Reg, id: Reg, offsets: &RuntimeOffsets) {
+    code.mov_rr(out, id);
+    code.shl_r_imm8(out, 4);
+    code.lea_r_rip(Reg::R11, PatchKind::Label(offsets.desc_table_label));
+    code.add_rr(out, Reg::R11);
+}
+
+/// Copies `size` bytes (a register, a multiple of 8) from `src_addr` to
+/// `dst_addr` in 8-byte chunks. Session 101 fix: the scratch registers are
+/// `r9`/`r10`/`r11` and `rax` is never touched, so callers may pass
+/// `src`/`dst`/`size` in any of `rax`, `rcx`, `rdx`, `r8`, or `r10`
+/// (Session 57 callers passed `size` in `r8`; clobbering it mid-loop
+/// corrupted the copy bound for element values >= 8).
+fn emit_memcpy_words(code: &mut Code, src: Reg, dst: Reg, size: Reg) {
+    let top = code.label();
+    let exit = code.label();
+    code.mov_r32_imm32(Reg::R9, 0); // k = 0
+    code.bind_label(top);
+    code.cmp_rr(Reg::R9, size);
+    code.jcc_label(0x8D, exit); // jge
+    code.mov_rr(Reg::R10, Reg::R9);
+    code.add_rr(Reg::R10, src);
+    code.mov_r_mem(Reg::R11, Reg::R10, 0);
+    code.mov_rr(Reg::R10, Reg::R9);
+    code.add_rr(Reg::R10, dst);
+    code.mov_mem_r(Reg::R10, 0, Reg::R11);
+    code.add_r_imm8(Reg::R9, 8);
+    code.jmp_label(top);
+    code.bind_label(exit);
+}
+
+/// Copies `size` bytes (a register) from `src_addr` to `dst_addr` one
+/// byte at a time (for string blobs). `src`/`dst`/`size` must not be
+/// `rax`, `r8`, or `r9` (clobbered).
+fn emit_memcpy_bytes(code: &mut Code, src: Reg, dst: Reg, size: Reg) {
+    let top = code.label();
+    let exit = code.label();
+    code.mov_r32_imm32(Reg::R9, 0); // k = 0
+    code.bind_label(top);
+    code.cmp_rr(Reg::R9, size);
+    code.jcc_label(0x8D, exit); // jge
+    code.mov_rr(Reg::Rax, Reg::R9);
+    code.add_rr(Reg::Rax, src);
+    code.movzx_byte(Reg::R8, Reg::Rax, 0);
+    code.mov_rr(Reg::Rax, Reg::R9);
+    code.add_rr(Reg::Rax, dst);
+    code.mov_mem_r8(Reg::Rax, 0, Reg::R8);
+    code.add_r_imm8(Reg::R9, 1);
+    code.jmp_label(top);
+    code.bind_label(exit);
+}
+
+/// Whether the string blob in `rax` is an immutable image literal (its
+/// address lies in the image's string-data region). Jumps to `yes` when
+/// it is, `no` when it is not. Clobbers `rcx`.
+fn jcc_literal_str(code: &mut Code, yes: u32, no: u32) {
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.str_data_start as u32));
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x82, no); // jb — below the region: not a literal
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.str_data_end as u32));
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x83, yes); // jae — at/above the end: not a literal
+    // Fallthrough: inside [start, end) — it is a literal.
+}
+
+/// `CollFreeValue(addr, desc_id)`: recursively free one element of the
+/// descriptor's type at `addr`. Internal service (never called from
+/// generated code).
 ///
-/// Allocates a zero-initialized Vec buffer with the given capacity.
-/// Returns a pointer to the buffer. The buffer stores capacity at
-/// offset 0, length (initially 0) at offset 8, and elements starting
-/// at offset 16.
-fn emit_vec_new(code: &mut Code) {
+/// Stack layout (after sub_rsp(96)):
+///   [rbp-8]  = addr        [rbp-48] = loop bound (len/cap/count)
+///   [rbp-16] = desc id     [rbp-56] = key/elem desc
+///   [rbp-24] = entry addr  [rbp-64] = value desc / tag word
+///   [rbp-32] = value addr  [rbp-72] = key size
+///   [rbp-40] = loop index  [rbp-80] = value size / bucket size
+///                            [rbp-88] = list addr / scratch
+fn emit_coll_free_value(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    // rsp = rbp - 8.
-    // Need to call rt_alloc(size) where size = (2 + capacity) * 8.
-    // We need rsp to be 16-byte aligned at the call site.
-    code.sub_rsp(24); // rsp = rbp - 32 (16-byte aligned)
-
-    // rax = capacity from [rbp + 16].
+    code.sub_rsp(96);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
-    // Validate: capacity must be > 0.
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // addr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // desc id
+    code.mov_rr(Reg::Rax, Reg::Rax);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // entry
+
+    // Tag dispatch.
+    code.movzx_byte(Reg::Rax, Reg::Rax, DESC_TAG);
+    let tag_str = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_STR);
+    code.jcc_label(0x84, tag_str); // je
+    let tag_vec = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_VEC);
+    code.jcc_label(0x84, tag_vec);
+    let tag_map = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_MAP);
+    code.jcc_label(0x84, tag_map);
+    let tag_set = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_SET);
+    code.jcc_label(0x84, tag_set);
+    let tag_struct = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_STRUCT);
+    code.jcc_label(0x84, tag_struct);
+    let tag_enum = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_ENUM);
+    code.jcc_label(0x84, tag_enum);
+    let tag_array = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_ARRAY);
+    code.jcc_label(0x84, tag_array);
+    let done = code.label();
+    code.jmp_label(done); // TAG_PLAIN (and unknown tags): nothing owned
+
+    // --- TAG_STR: free the blob unless it is an image literal. ---
+    code.bind_label(tag_str);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // s = *addr
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, done); // jz — null pointer: nothing
+    let str_literal = code.label();
+    let str_heap = code.label();
+    jcc_literal_str(code, str_literal, str_heap);
+    code.bind_label(str_heap);
+    call_service(code, RuntimeService::StrFree, &[Reg::Rax]);
+    code.jmp_label(done);
+    code.bind_label(str_literal);
+    code.jmp_label(done);
+
+    // --- TAG_VEC: free each element, then the buffer. ---
+    code.bind_label(tag_vec);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // vec
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, done); // jz
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // vec
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // elem desc
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // elem_size
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // i = 0
+    let vec_loop = code.label();
+    let vec_exit = code.label();
+    code.bind_label(vec_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, vec_exit); // jge
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32);
+    code.add_rr(Reg::Rax, Reg::Rdx); // elem_addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -56); // elem desc
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.jmp_label(vec_loop);
+    code.bind_label(vec_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.jmp_label(done);
+
+    // --- TAG_MAP: free every live key and value, then the table. ---
+    code.bind_label(tag_map);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // map
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, done); // jz
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // key desc
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // value desc
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket_size
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // i = 0
+    let map_loop = code.label();
+    let map_exit = code.label();
+    let map_next = code.label();
+    code.bind_label(map_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, map_exit); // jge
+    // bucket = map + MAP_HEADER + i * bucket_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32);
+    code.add_rr(Reg::Rax, Reg::Rdx); // bucket
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket (scratch)
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, map_next); // jne — not live
+    // Free the key at bucket+8 (desc [rbp-56]).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // key addr (reuse entry slot)
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -56);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    // Free the value at bucket+8+key_size (desc [rbp-64]).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72); // key_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.bind_label(map_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.jmp_label(map_loop);
+    code.bind_label(map_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.jmp_label(done);
+
+    // --- TAG_SET: free every live element, then the table. ---
+    code.bind_label(tag_set);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // set
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, done); // jz
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // elem desc
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // elem_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket_size
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // i = 0
+    let set_loop = code.label();
+    let set_exit = code.label();
+    let set_next = code.label();
+    code.bind_label(set_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, set_exit); // jge
+    // bucket = set + SET_HEADER + i * bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket (scratch)
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, set_next); // jne
+    // Free the element at bucket+8 (desc [rbp-56]).
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -56);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.bind_label(set_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.jmp_label(set_loop);
+    code.bind_label(set_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.jmp_label(done);
+
+    // --- TAG_STRUCT: free each owned field at its offset. ---
+    code.bind_label(tag_struct);
+    code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.desc_lists_label));
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24); // entry
+    code.mov_r32_mem(Reg::Rcx, Reg::Rcx, DESC_REF2);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // list
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 0); // count
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // i = 0
+    let struct_loop = code.label();
+    let struct_exit = code.label();
+    let struct_next = code.label();
+    code.bind_label(struct_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, struct_exit); // jge
+    // off = [list + 8 + 8i]; fdesc = [list + 12 + 8i].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88); // list
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -40);
+    code.shl_r_imm8(Reg::Rdx, 3); // 8i
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.add_r_imm8(Reg::Rax, 8);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 0); // offset
+    code.mov_r32_mem(Reg::Rdx, Reg::Rax, 4); // field desc
+    code.movabs(Reg::R8, u32::MAX as u64);
+    code.cmp_rr(Reg::Rdx, Reg::R8);
+    code.jcc_label(0x84, struct_next); // je — no owned field
+    // CollFreeValue(addr + off, fdesc)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // addr
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.bind_label(struct_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.jmp_label(struct_loop);
+    code.bind_label(struct_exit);
+    code.jmp_label(done);
+
+    // --- TAG_ENUM: free the payload of the live variant, if any. ---
+    code.bind_label(tag_enum);
+    code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.desc_lists_label));
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24); // entry
+    code.mov_r32_mem(Reg::Rcx, Reg::Rcx, DESC_REF2);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // list
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 0); // count
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, done); // jz — no payload
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 4); // tag_offset
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 8); // payload_offset
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rcx);
+    // tag = [addr + tag_offset].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx); // tag
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // i = 0
+    let enum_loop = code.label();
+    let enum_exit = code.label();
+    let enum_next = code.label();
+    code.bind_label(enum_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, enum_exit); // jge
+    // disc = [list + 12 + 16i]; fdesc = [list + 20 + 16i].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -40);
+    code.shl_r_imm8(Reg::Rdx, 4); // 16i
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.add_r_imm8(Reg::Rax, 12);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // discriminant
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // tag
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x85, enum_next); // jne
+    code.mov_r32_mem(Reg::Rdx, Reg::Rax, 8); // payload desc
+    code.movabs(Reg::R8, u32::MAX as u64);
+    code.cmp_rr(Reg::Rdx, Reg::R8);
+    code.jcc_label(0x84, enum_exit); // je — no payload to free
+    // CollFreeValue(addr + payload_offset, fdesc)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -80);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.jmp_label(enum_exit);
+    code.bind_label(enum_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.jmp_label(enum_loop);
+    code.bind_label(enum_exit);
+    code.jmp_label(done);
+
+    // --- TAG_ARRAY: free every element at its stride. ---
+    code.bind_label(tag_array);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24); // entry
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // elem_size
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_REF2);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx); // count
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_REF);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx); // elem desc
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // i = 0
+    let arr_loop = code.label();
+    let arr_exit = code.label();
+    code.bind_label(arr_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, arr_exit); // jge
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72);
+    code.imul_rax_rcx();
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -56);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.jmp_label(arr_loop);
+    code.bind_label(arr_exit);
+    code.jmp_label(done);
+
+    code.bind_label(done);
+    code.leave_ret();
+}
+
+/// `CollCloneValue(src, dst, desc_id)`: deep-clone one descriptor-typed
+/// value from `src` to `dst` (both addresses). Owned strings are copied
+/// into fresh blobs, nested collections are cloned recursively, and
+/// plain words are copied verbatim. Internal service.
+///
+/// Stack layout (after sub_rsp(128)):
+///   [rbp-8]  = src         [rbp-64] = elem/key desc
+///   [rbp-16] = dst         [rbp-72] = src collection addr
+///   [rbp-24] = desc id     [rbp-80] = value desc
+///   [rbp-32] = entry       [rbp-88] = value size / scratch
+///   [rbp-40] = length      [rbp-96] = bucket size / scratch
+///   [rbp-48] = capacity    [rbp-104] = new collection addr
+///   [rbp-56] = elem size   [rbp-112] = loop index / idx
+///                            [rbp-120] = scratch
+fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(128);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // src
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // dst
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // desc id
+    code.mov_rr(Reg::Rax, Reg::Rax);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // entry
+
+    // Tag dispatch (default: TAG_PLAIN — verbatim word copy).
+    code.movzx_byte(Reg::Rax, Reg::Rax, DESC_TAG);
+    let tag_str = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_STR);
+    code.jcc_label(0x84, tag_str); // je
+    let tag_vec = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_VEC);
+    code.jcc_label(0x84, tag_vec);
+    let tag_map = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_MAP);
+    code.jcc_label(0x84, tag_map);
+    let tag_set = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_SET);
+    code.jcc_label(0x84, tag_set);
+    let tag_struct = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_STRUCT);
+    code.jcc_label(0x84, tag_struct);
+    let tag_enum = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_ENUM);
+    code.jcc_label(0x84, tag_enum);
+    let tag_array = code.label();
+    code.cmp_r_imm8(Reg::Rax, TAG_ARRAY);
+    code.jcc_label(0x84, tag_array);
+    let done = code.label();
+    let tag_plain = code.label();
+    code.jmp_label(tag_plain);
+
+    // --- TAG_PLAIN: verbatim copy of elem_size bytes. ---
+    code.bind_label(tag_plain);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32); // entry
+    code.mov_r32_mem(Reg::R8, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // src
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // dst
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    code.jmp_label(done);
+
+    // --- TAG_STR: copy literals verbatim; clone heap blobs. ---
+    code.bind_label(tag_str);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // s = *src
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let str_null = code.label();
+    code.jcc_label(0x84, str_null); // jz
+    let str_literal = code.label();
+    let str_heap = code.label();
+    jcc_literal_str(code, str_literal, str_heap);
+    code.bind_label(str_heap);
+    // Clone: len = [s]; StrAlloc(len); copy len bytes from s+8 to new+8.
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // len
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx); // len
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // new
+    // src = s + 8, dst = new + 8, size = len.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.add_r_imm8(Reg::Rcx, 8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rdx, 8);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -48);
+    emit_memcpy_bytes(code, Reg::Rcx, Reg::Rdx, Reg::R10);
+    // [dst] = new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rdx);
+    code.jmp_label(done);
+    code.bind_label(str_null);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.mov_mem_imm32(Reg::Rax, 0, 0);
+    code.jmp_label(done);
+    code.bind_label(str_literal);
+    // [dst] = s (immortal literal pointer).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax);
+    code.jmp_label(done);
+
+    // --- TAG_VEC: clone the buffer and every element. ---
+    code.bind_label(tag_vec);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_vec
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // elem desc
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx); // elem_size
+    // Allocate: 24 + capacity * elem_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
+    // Clone every element.
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx); // i = 0
+    let vec_loop = code.label();
+    let vec_exit = code.label();
+    code.bind_label(vec_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -40);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, vec_exit); // jge
+    // src_elem = src_vec + 24 + i*esize; dst_elem = new + 24 + i*esize.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // src_elem
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // dst_elem
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // elem desc
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88); // src
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -120); // dst
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx);
+    code.jmp_label(vec_loop);
+    code.bind_label(vec_exit);
+    // [dst] = new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rdx);
+    code.jmp_label(done);
+
+    // --- TAG_MAP: clone the table, deep-cloning keys and values. ---
+    code.bind_label(tag_map);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_map
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // key desc
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // value desc
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // bucket_size
+    // Allocate: MAP_HEADER + capacity * bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_mem_imm32(Reg::Rax, 8, 0); // length = 0 (filled as we insert)
+    code.mov_mem_imm32(Reg::Rax, 16, 0); // dead = 0
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64);
+    code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -80);
+    code.mov_mem_r(Reg::Rax, 32, Reg::Rcx);
+    // Walk the old buckets, rehashing into the new table.
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // i = 0
+    let map_loop = code.label();
+    let map_exit = code.label();
+    let map_next = code.label();
+    code.bind_label(map_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, map_exit); // jge
+    // b_old = src_map + MAP_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // b_old
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, map_next); // jne
+    // Hash the key at b_old + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -120);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // key addr (scratch)
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    // idx = hash & (capacity - 1).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_found = code.label();
+    code.bind_label(probe_loop);
+    // b_new = new + MAP_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // b_new
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, probe_found); // jz — empty slot
+    // idx = (idx + 1) & (capacity - 1).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -112);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_found);
+    // Deep-clone the key into b_new + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -120); // b_new
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // dst key addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // key desc
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -88); // dst key addr
+    // (src key addr = b_old + 8, recomputed from [rbp-120] before the call)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -120);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // src key addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -120);
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    // Deep-clone the value into b_new + 8 + key_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -120); // src key addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56); // key_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // src value addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -88); // dst key addr
+    code.add_rr(Reg::Rdx, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rdx); // dst value addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -120);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -80); // value desc
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    // Mark the bucket live and bump the length.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104); // new
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -112); // idx
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96); // bucket_size
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_imm32(Reg::Rax, 0, 1); // occupied = 1
+    code.bind_label(map_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.jmp_label(map_loop);
+    code.bind_label(map_exit);
+    // [dst] = new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rdx);
+    code.jmp_label(done);
+
+    // --- TAG_SET: clone the table, deep-cloning every element. ---
+    code.bind_label(tag_set);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_set
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // elem desc
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx); // elem_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // bucket_size
+    // Allocate: SET_HEADER + capacity * bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx); // capacity
+    code.mov_mem_imm32(Reg::Rax, 8, 0); // length = 0
+    code.mov_mem_imm32(Reg::Rax, 16, 0); // dead = 0
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64);
+    code.mov_mem_r(Reg::Rax, 24, Reg::Rcx); // elem desc
+    // Walk the old buckets, rehashing into the new table.
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx); // i = 0
+    let set_loop = code.label();
+    let set_exit = code.label();
+    let set_next = code.label();
+    code.bind_label(set_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, set_exit); // jge
+    // b_old = src_set + SET_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // b_old
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, set_next); // jne
+    // Hash the element at b_old + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -120);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // src elem addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    // idx = hash & (capacity - 1).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_found = code.label();
+    code.bind_label(probe_loop);
+    // b_new = new + SET_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // b_new
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, probe_found); // jz — empty slot
+    // idx = (idx + 1) & (capacity - 1).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_found);
+    // Deep-clone the element: src = b_old + 8 (kept in [rbp-88]),
+    // dst = b_new + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -120); // b_new
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // dst elem addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88); // src elem addr
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -120); // dst elem addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // elem desc
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    // Mark the bucket live and bump the length.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104); // new
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40); // idx
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96); // bucket_size
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_imm32(Reg::Rax, 0, 1); // occupied = 1
+    code.bind_label(set_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx);
+    code.jmp_label(set_loop);
+    code.bind_label(set_exit);
+    // [dst] = new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rdx);
+    code.jmp_label(done);
+
+    // --- TAG_STRUCT: copy verbatim, then deep-clone each owned field. ---
+    code.bind_label(tag_struct);
+    // Copy elem_size bytes verbatim.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32); // entry
+    code.mov_r32_mem(Reg::R8, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // src
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // dst
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    // Clone each owned field at its offset.
+    code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.desc_lists_label));
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32); // entry
+    code.mov_r32_mem(Reg::Rcx, Reg::Rcx, DESC_REF2);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // list
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 0); // count
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx); // i = 0
+    let struct_loop = code.label();
+    let struct_exit = code.label();
+    let struct_next = code.label();
+    code.bind_label(struct_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, struct_exit); // jge
+    // off = [list + 8 + 8i]; fdesc = [list + 12 + 8i].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96); // list
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -112);
+    code.shl_r_imm8(Reg::Rdx, 3); // 8i
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.add_r_imm8(Reg::Rax, 8);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 0); // offset
+    code.mov_r32_mem(Reg::Rdx, Reg::Rax, 4); // field desc
+    code.movabs(Reg::R8, u32::MAX as u64);
+    code.cmp_rr(Reg::Rdx, Reg::R8);
+    code.jcc_label(0x84, struct_next); // je — plain field: already copied
+    // CollCloneValue(src + off, dst + off, fdesc)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // src
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // src field
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16); // dst
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // dst field
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -120);
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.bind_label(struct_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx);
+    code.jmp_label(struct_loop);
+    code.bind_label(struct_exit);
+    code.jmp_label(done);
+
+    // --- TAG_ENUM: copy verbatim, then deep-clone the live payload. ---
+    code.bind_label(tag_enum);
+    // Copy elem_size bytes verbatim.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32); // entry
+    code.mov_r32_mem(Reg::R8, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // src
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // dst
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    // No variant list (unit-only enum): nothing owned.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32); // entry
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_REF2);
+    code.movabs(Reg::R8, u32::MAX as u64);
+    code.cmp_rr(Reg::Rcx, Reg::R8);
+    code.jcc_label(0x84, done); // je
+    code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.desc_lists_label));
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // list
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 0); // count
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, done); // jz
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 4); // tag_offset
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, 8); // payload_offset
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rcx);
+    // tag = [src + tag_offset].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx); // tag
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx); // i = 0
+    let enum_loop = code.label();
+    let enum_exit = code.label();
+    let enum_next = code.label();
+    code.bind_label(enum_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, enum_exit); // jge
+    // disc = [list + 12 + 16i]; pdesc = [list + 20 + 16i].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -112);
+    code.shl_r_imm8(Reg::Rdx, 4); // 16i
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.add_r_imm8(Reg::Rax, 12);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // discriminant
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // tag
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x85, enum_next); // jne
+    code.mov_r32_mem(Reg::Rdx, Reg::Rax, 8); // payload desc
+    code.movabs(Reg::R8, u32::MAX as u64);
+    code.cmp_rr(Reg::Rdx, Reg::R8);
+    code.jcc_label(0x84, enum_exit); // je — no payload
+    // CollCloneValue(src + payload_offset, dst + payload_offset, pdesc)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -80);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // src payload
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -80);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // dst payload
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -120);
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.jmp_label(enum_exit);
+    code.bind_label(enum_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx);
+    code.jmp_label(enum_loop);
+    code.bind_label(enum_exit);
+    code.jmp_label(done);
+
+    // --- TAG_ARRAY: deep-clone every element at its stride. ---
+    code.bind_label(tag_array);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32); // entry
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // elem_size
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_REF2);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx); // count
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_REF);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx); // elem desc
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx); // i = 0
+    let arr_loop = code.label();
+    let arr_exit = code.label();
+    code.bind_label(arr_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, arr_exit); // jge
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72);
+    code.imul_rax_rcx();
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // src elem
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -112);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72);
+    code.imul_rax_rcx();
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // dst elem
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -120);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -56);
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx);
+    code.jmp_label(arr_loop);
+    code.bind_label(arr_exit);
+    code.jmp_label(done);
+
+    code.bind_label(done);
+    code.leave_ret();
+}
+
+
+// Vec buffer layout: [capacity][length][elem_desc][element_0][element_1]...
+// Elements start at offset 24 and are `elem_size` bytes wide (elem_size
+// comes from the buffer's collection descriptor, always a multiple of 8).
+
+/// `rt_vec_new(capacity, elem_desc) -> data_ptr` (capacity at [rbp + 16],
+/// the hidden element-descriptor id at [rbp + 24]).
+///
+/// Allocates a Vec buffer for typed elements. The descriptor drives the
+/// element stride, ownership frees, and deep clones for the buffer's
+/// lifetime. Capacity must be positive (E-R08, unchanged contract).
+/// Debug helper: returns the word at [v+0] (capacity) of a Vec buffer.
+fn emit_dbg_word0(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // load [v+0]
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    code.leave_ret();
+}
+
+/// Debug helper: returns the word at [v+8] (length) of a Vec buffer.
+fn emit_dbg_word8(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 8);
+    code.leave_ret();
+}
+
+fn emit_vec_new(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(32);
+
+    // elem_size = [desc_entry(desc) + 0].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rcx); // [rbp-8] = elem_size
+
+    // Validate: capacity must be > 0 (E-R08).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.test_rr(Reg::Rax, Reg::Rax);
     let bad = code.label();
     code.jcc_label(0x8E, bad); // jle
 
-    // rax = (2 + capacity) * 8.
-    code.add_r_imm8(Reg::Rax, 2);
-    code.shl_r_imm8(Reg::Rax, 3); // rax *= 8
+    // size = 24 + capacity * elem_size.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
 
-    // Place size argument on the stack for rt_alloc.
-    // Convention: sub_rsp(8) for padding (1 arg = odd), then store arg at [rsp].
+    // Allocate (1 arg = odd: sub 8 pad, then store the arg at [rsp]).
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16); // clean up: 8 (pad) + 8 (arg)
+    code.add_rsp(16);
     // rax = allocated buffer pointer.
 
-    // Initialize header: [rax+0] = capacity, [rax+8] = 0 (length).
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // capacity
+    // Header: [rax+0] = capacity, [rax+8] = 0 (length), [rax+16] = desc.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
-    code.mov_mem_imm32(Reg::Rax, 8, 0); // length = 0
+    code.mov_mem_imm32(Reg::Rax, 8, 0);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
 
-    code.add_rsp(24);
+    code.add_rsp(32);
     code.leave_ret();
 
     code.bind_label(bad);
@@ -1954,26 +3139,35 @@ fn emit_vec_new(code: &mut Code) {
 }
 
 /// `rt_vec_push(data, value) -> data_ptr`
-/// (data at [rbp + 16], value at [rbp + 24]).
+/// (data at [rbp + 16], value words at [rbp + 24..]).
 ///
-/// Pushes `value` onto the end of the Vec buffer. If the buffer is
-/// full (length == capacity), reallocates with double capacity, copies
-/// elements, and frees the old buffer. Returns the (possibly new) data
-/// pointer.
+/// Pushes `value` onto the end of the Vec buffer. Element storage is
+/// `elem_size` bytes wide (from the buffer's descriptor), so multi-word
+/// values (structs, ranges, tagged enums) are copied whole. If the buffer
+/// is full (length == capacity), reallocates with double capacity, moves
+/// the elements, and frees the old buffer. Returns the (possibly new)
+/// data pointer.
 ///
-/// Stack layout (after sub_rsp(32)):
-///   [rbp-8]  = data ptr (updated if reallocated)
-///   [rbp-16] = value to push
-///   [rbp-24] = old data ptr (for free after realloc)
-///   [rbp-32] = unused (padding)
-fn emit_vec_push(code: &mut Code) {
+/// Stack layout (after sub_rsp(48)):
+///   [rbp-8]   = data ptr (updated if reallocated)
+///   [rbp-16]  = elem_size
+///   [rbp-24]  = length
+///   [rbp-32]  = old data ptr (for free after realloc)
+///   [rbp-40]  = elem_desc
+///   [rbp-48]  = scratch (new data ptr during realloc)
+fn emit_vec_push(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(32);
-    // Save args to spill slots.
+    code.sub_rsp(48);
+    // Save args.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // value
-    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // elem_desc = [data+16]; elem_size = [desc_entry(elem_desc) + 0].
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx); // elem_size
 
     let no_realloc = code.label();
     let store_value = code.label();
@@ -1982,247 +3176,325 @@ fn emit_vec_push(code: &mut Code) {
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
     code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rdx); // length (spill)
     code.cmp_rr(Reg::Rdx, Reg::Rcx);
     code.jcc_label(0x8C, no_realloc); // jl (length < capacity)
 
     // --- Reallocation ---
     // Save old data ptr.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
 
-    // new_size = (2 + capacity * 2) * 8.
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr
-    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
-    code.shl_r_imm8(Reg::Rcx, 1); // capacity * 2
-    code.add_r_imm8(Reg::Rcx, 2); // + 2
-    code.shl_r_imm8(Reg::Rcx, 3); // * 8
+    // new_size = 24 + capacity * 2 * elem_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // capacity
+    code.shl_r_imm8(Reg::Rax, 1); // * 2
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // elem_size
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
 
-    // Call rt_alloc(new_size).
-    code.sub_rsp(24);
+    // Call rt_alloc(new_size) (1 arg = odd).
     code.sub_rsp(8);
-    code.mov_mem_r(Reg::Rsp, 0, Reg::Rcx);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
     code.add_rsp(16);
-    code.add_rsp(24);
-    // rax = new data ptr.
-    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // new data ptr
 
-    // Copy header: new_cap = old_cap * 2, length = old length.
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // new data ptr
-    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24); // old data ptr
-    code.mov_r_mem(Reg::Rax, Reg::Rdx, 0); // old capacity
-    code.shl_r_imm8(Reg::Rax, 1); // new cap = old cap * 2
-    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax);
-    code.mov_r_mem(Reg::Rax, Reg::Rdx, 8); // old length
-    code.mov_mem_r(Reg::Rcx, 8, Reg::Rax);
+    // Copy header: new_cap = old_cap * 2, length = old length, desc.
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32); // old data ptr
+    code.mov_r_mem(Reg::Rcx, Reg::Rdx, 0); // old capacity
+    code.shl_r_imm8(Reg::Rcx, 1); // new cap = old cap * 2
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rdx, 8); // old length
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rdx, 16); // elem desc
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
 
-    // Copy elements loop: i = 0..length.
-    // R8 = i, Rax = length, Rdx = old ptr, Rcx = new ptr.
-    code.test_rr(Reg::Rax, Reg::Rax);
-    let loop_exit = code.label();
-    code.jcc_label(0x84, loop_exit); // jz (length == 0)
-    code.mov_r32_imm32(Reg::R8, 0);
-    let loop_top = code.label();
-    code.bind_label(loop_top);
-    code.cmp_rr(Reg::R8, Reg::Rax);
-    code.jcc_label(0x8D, loop_exit); // jge
-    // offset = 16 + i * 8.
-    code.mov_rr(Reg::R9, Reg::R8);
-    code.shl_r_imm8(Reg::R9, 3);
-    code.add_r_imm8(Reg::R9, 16);
-    // src = old + offset.
-    code.mov_rr(Reg::R10, Reg::Rdx);
-    code.add_rr(Reg::R10, Reg::R9);
-    code.mov_r_mem(Reg::R11, Reg::R10, 0);
-    // dst = new + offset.
-    code.mov_rr(Reg::R10, Reg::Rcx);
-    code.add_rr(Reg::R10, Reg::R9);
-    code.mov_mem_r(Reg::R10, 0, Reg::R11);
-    code.add_r_imm8(Reg::R8, 1);
-    code.jmp_label(loop_top);
-    code.bind_label(loop_exit);
+    // Copy elements: size = length * elem_size bytes, src = old+24,
+    // dst = new+24.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24); // length
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // elem_size
+    code.imul_rax_rcx(); // rax = length * elem_size
+    code.mov_rr(Reg::R8, Reg::Rax); // size
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32); // old
+    code.add_r_imm8(Reg::Rcx, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48); // new
+    code.add_r_imm8(Reg::Rdx, 24);
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
 
     // Free old buffer.
-    code.sub_rsp(24);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
     code.sub_rsp(8);
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
     code.add_rsp(16);
-    code.add_rsp(24);
+    // data = new.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
     code.jmp_label(store_value);
 
     // --- No reallocation ---
     code.bind_label(no_realloc);
     code.jmp_label(store_value);
 
-    // Store value and increment length.
+    // Store the value and increment length.
     code.bind_label(store_value);
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr (possibly new)
-    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
-    // offset = 16 + length * 8.
-    code.mov_rr(Reg::Rdx, Reg::Rcx);
-    code.shl_r_imm8(Reg::Rdx, 3);
-    code.add_r_imm8(Reg::Rdx, 16);
-    // Store value at data + offset.
-    code.mov_rr(Reg::R10, Reg::Rax);
-    code.add_rr(Reg::R10, Reg::Rdx);
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16); // value
-    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // data (spill)
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 8); // length
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // elem_size
+    code.imul_rax_rcx(); // rax = length * elem_size
+    code.add_r_imm8(Reg::Rax, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48); // data
+    code.add_rr(Reg::Rax, Reg::Rdx); // elem_addr
+    // Copy elem_size bytes from the value argument area ([rbp+24]).
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -16); // size
+    code.mov_rr(Reg::Rdx, Reg::Rax); // dst
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
     // Increment length.
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48); // data ptr
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
     code.add_r_imm8(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
     // Return data ptr.
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
     code.leave_ret();
 }
 
-/// `rt_vec_get(data, index) -> Int`
-/// (data at [rbp + 16], index at [rbp + 24]).
+/// `rt_vec_get(data, index) -> T`
+/// (data at [rbp + 16], index at [rbp + 24], hidden multi-word return
+/// slot at [rbp + 32] when the element is wider than one word).
 ///
-/// Bounds-checked element access. Returns the element at the given
-/// index, or triggers E-R10 (array index out of range) if invalid.
-fn emit_vec_get(code: &mut Code) {
+/// Bounds-checked element access (E-R10). Word-sized elements return in
+/// `rax`; multi-word elements are copied into the caller's return slot.
+fn emit_vec_get(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(8);
-    // rax = data ptr.
+    code.sub_rsp(16);
+    // elem_size from the header descriptor.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
-    // rcx = index.
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // data
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rdx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rdx); // elem_size
+    // rcx = index; bounds check: index < 0 -> error.
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
-    // Bounds check: index < 0 -> error.
     code.test_rr(Reg::Rcx, Reg::Rcx);
     let oob = code.label();
     code.jcc_label(0x88, oob); // js (negative)
-    // rdx = length from [data+8].
-    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8);
-    // index >= length -> error.
-    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    // r8 = length from [data+8]; index >= length -> error.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::R8, Reg::Rax, 8);
+    code.cmp_rr(Reg::Rcx, Reg::R8);
     code.jcc_label(0x8D, oob); // jge
-    // rax = data + 16 + index * 8.
-    code.mov_rr(Reg::Rdx, Reg::Rcx);
-    code.shl_r_imm8(Reg::Rdx, 3); // index * 8
-    code.add_r_imm8(Reg::Rdx, 16); // + 16
-    code.add_rr(Reg::Rax, Reg::Rdx); // data + offset
+    // elem_addr = data + 24 + index * elem_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx); // elem_addr
+    // elem_size <= 8: word load; else copy to the return slot.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.cmp_r_imm8(Reg::Rcx, 8);
+    let multi = code.label();
+    code.jcc_label(0x87, multi); // ja
     code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // load element
-    code.add_rsp(8);
+    code.add_rsp(16);
+    code.leave_ret();
+    code.bind_label(multi);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 32); // slot address
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -16); // size
+    code.mov_rr(Reg::Rcx, Reg::Rax); // src = elem_addr
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    code.add_rsp(16);
     code.leave_ret();
 
     code.bind_label(oob);
     fail(code, 10); // E-R10 (array index out of range)
 }
 
-/// `rt_vec_set(data, index, value)` (data at [rbp+16], index at [rbp+24], value at [rbp+32]).
-/// Returns the data pointer (for chaining).
-fn emit_vec_set(code: &mut Code) {
+/// `rt_vec_set(data, index, value) -> data_ptr`
+/// (data at [rbp+16], index at [rbp+24], value words at [rbp+32..]).
+/// Returns the data pointer (for chaining). The Vec owns its elements,
+/// so the element being replaced is freed first (descriptor-driven).
+fn emit_vec_set(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(8);
-    // rax = data ptr — save it for return value.
+    code.sub_rsp(32);
+    // rax = data ptr — save it for the return value.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
-    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // spill data ptr
-    // rcx = index.
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // data
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx); // elem_desc
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // elem_size
+    // rcx = index; bounds check: index < 0 -> error.
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
-    // Bounds check: index < 0 -> error.
     code.test_rr(Reg::Rcx, Reg::Rcx);
     let oob = code.label();
     code.jcc_label(0x88, oob); // js (negative)
-    // rdx = length from [data+8].
-    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8);
-    // index >= length -> error.
-    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    // r8 = length; index >= length -> error.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::R8, Reg::Rax, 8);
+    code.cmp_rr(Reg::Rcx, Reg::R8);
     code.jcc_label(0x8D, oob); // jge
-    // Store: data + 16 + index * 8 = value.
-    code.mov_rr(Reg::Rdx, Reg::Rcx);
-    code.shl_r_imm8(Reg::Rdx, 3); // index * 8
-    code.add_r_imm8(Reg::Rdx, 16); // + 16
-    code.mov_r_mem(Reg::R10, Reg::Rbp, 32); // value
-    code.add_rr(Reg::Rax, Reg::Rdx); // data + offset
-    code.mov_mem_r(Reg::Rax, 0, Reg::R10); // store element
+    // elem_addr = data + 24 + index * elem_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // elem_addr
+    // The Vec owns its elements: free the old element.
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // elem_desc
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    // Copy the new value from the argument area ([rbp+32]).
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 32);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32); // dst = elem_addr
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // size = elem_size
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
     // Return data pointer.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.add_rsp(8);
+    code.add_rsp(32);
     code.leave_ret();
 
     code.bind_label(oob);
     fail(code, 10); // E-R10 (array index out of range)
 }
 
-/// `rt_vec_pop(data) -> Int`: Pop last element. Returns the popped value.
-fn emit_vec_pop(code: &mut Code) {
+/// `rt_vec_pop(data) -> T`: pop the last element. The popped value's
+/// ownership transfers to the caller (it is NOT freed here). Word-sized
+/// elements return in `rax`; multi-word elements are copied into the
+/// hidden return slot at [rbp + 24].
+fn emit_vec_pop(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    code.sub_rsp(32);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx); // elem_desc
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // elem_size
+    // Empty check (E-R10, unchanged contract).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
-    // Empty check
     let empty = code.label();
     code.test_rr(Reg::Rcx, Reg::Rcx);
     code.jcc_label(0x84, empty); // jz
-    // Decrement length
+    // Decrement length.
     code.sub_r_imm32(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
-    // Load last element: data + 16 + (length-1) * 8
-    code.shl_r_imm8(Reg::Rcx, 3);
-    code.add_r_imm8(Reg::Rcx, 16);
-    code.add_rr(Reg::Rax, Reg::Rcx);
+    // elem_addr = data + 24 + length * elem_size (length already -1).
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx); // elem_addr
+    // Word or multi-word result?
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.cmp_r_imm8(Reg::Rcx, 8);
+    let multi = code.label();
+    code.jcc_label(0x87, multi); // ja
     code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.add_rsp(32);
+    code.leave_ret();
+    code.bind_label(multi);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 24); // slot address
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // size
+    code.mov_rr(Reg::Rcx, Reg::Rax); // src
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    code.add_rsp(32);
     code.leave_ret();
     code.bind_label(empty);
     fail(code, 10); // E-R10
 }
 
-/// `rt_vec_remove(data, index) -> Int`: Remove element at index, shift remaining.
-fn emit_vec_remove(code: &mut Code) {
+/// `rt_vec_remove(data, index) -> data_ptr`: remove the element at
+/// `index`, shifting the remaining elements left. The removed element is
+/// discarded (the Vec owns its elements), so it is freed
+/// descriptor-driven. Returns the data pointer (caller reassigns).
+fn emit_vec_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(16); // [rbp-8]=data ptr, [rbp-16]=saved value
+    code.sub_rsp(48);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx); // elem_desc
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // elem_size
+    // Bounds check.
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24); // index
-    // Bounds check
     code.test_rr(Reg::Rcx, Reg::Rcx);
     let oob = code.label();
     code.jcc_label(0x88, oob);
-    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // length
-    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::R8, Reg::Rax, 8); // length
+    code.cmp_rr(Reg::Rcx, Reg::R8);
     code.jcc_label(0x8D, oob);
-    // Save element value: data + 16 + index * 8
-    code.mov_rr(Reg::R10, Reg::Rcx);
-    code.shl_r_imm8(Reg::R10, 3);
-    code.add_r_imm8(Reg::R10, 16);
-    code.add_rr(Reg::Rax, Reg::R10);
-    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // load value
-    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // save to stack
-    // Shift loop: copy element[i+1] to element[i]
-    code.mov_rr(Reg::R10, Reg::Rcx); // i = index
-    code.sub_r_imm32(Reg::Rdx, 1); // length - 1
+    code.mov_mem_r(Reg::Rbp, -32, Reg::R8); // length (spill)
+    // elem_addr = data + 24 + index * elem_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    // Free the removed element (owned by the Vec).
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // elem_addr (spill)
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    // Shift elements left: for k in index..length-1: elem[k+1] -> elem[k].
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24); // k = index
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // bound = length - 1
+    code.sub_r_imm32(Reg::R8, 1);
     let shift_loop = code.label();
     let shift_done = code.label();
     code.bind_label(shift_loop);
-    code.cmp_rr(Reg::R10, Reg::Rdx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48); // k
+    code.cmp_rr(Reg::Rcx, Reg::R8);
     code.jcc_label(0x8D, shift_done); // jge
-    // Compute src_addr = data + 16 + (i+1)*8
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // data ptr
-    code.mov_rr(Reg::R9, Reg::R10);
-    code.shl_r_imm8(Reg::R9, 3); // i*8
-    code.add_r_imm8(Reg::R9, 24); // +24 = 16 + (i+1)*8 offset from data
-    code.add_rr(Reg::R9, Reg::Rax); // src_addr = data + 24 + i*8
-    code.mov_r_mem(Reg::R11, Reg::R9, 0); // R11 = *src_addr
-    // Compute dst_addr = data + 16 + i*8
-    code.mov_rr(Reg::R9, Reg::R10);
-    code.shl_r_imm8(Reg::R9, 3); // i*8
-    code.add_r_imm8(Reg::R9, 16); // +16
-    code.add_rr(Reg::R9, Reg::Rax); // dst_addr
-    code.mov_mem_r(Reg::R9, 0, Reg::R11); // *dst_addr = src value
-    code.add_r_imm8(Reg::R10, 1);
+    // src = data + 24 + (k+1) * elem_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // src_addr (scratch)
+    // dst = data + 24 + k * elem_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx); // dst_addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -40); // src_addr
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // size
+    emit_memcpy_words(code, Reg::Rdx, Reg::Rax, Reg::R8);
+    // k++
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
     code.jmp_label(shift_loop);
     code.bind_label(shift_done);
-    // Decrement length
+    // Decrement length.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
     code.sub_r_imm32(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
-    // Return data pointer (caller reassigns v = result)
+    // Return data pointer (caller reassigns v = result).
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.add_rsp(16);
+    code.add_rsp(48);
     code.leave_ret();
     code.bind_label(oob);
     fail(code, 10);
@@ -2240,14 +3512,1787 @@ fn emit_vec_len(code: &mut Code) {
 
 /// `rt_vec_free(data)` (data at [rbp + 16]).
 ///
-/// Frees the Vec buffer by calling rt_free on the data pointer.
-fn emit_vec_free(code: &mut Code) {
+/// Frees every element (descriptor-driven ownership: `Vec<Str>` frees
+/// its strings, nested collections free recursively) and then frees the
+/// Vec buffer itself.
+fn emit_vec_free(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(8);
+    code.sub_rsp(48);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let done = code.label();
+    code.jcc_label(0x84, done); // jz — null Vec: nothing (defensive)
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // vec
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // elem_desc
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // elem_size
+    // i = 0; loop over elements.
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    let loop_top = code.label();
+    let loop_exit = code.label();
+    code.bind_label(loop_top);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // i
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // length
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, loop_exit); // jge
+    // elem_addr = vec + 24 + i * elem_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24); // elem_desc
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    // i++
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.jmp_label(loop_top);
+    code.bind_label(loop_exit);
+    // Free the buffer. The `Free` runtime service has exactly one argument
+    // (the pointer), so the MINK stack cleanup is one word (8 bytes).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
     code.add_rsp(8);
+    code.bind_label(done);
+    code.leave_ret();
+}
+
+// ---------------------------------------------------------------------------
+// Map / Set operations (Session 101, Wave B)
+// ---------------------------------------------------------------------------
+//
+// Map buffer:   [capacity][length][dead][key_desc][value_desc][bucket_0]...
+// Set buffer:   [capacity][length][dead][elem_desc][bucket_0]...
+// One bucket:   [occupied][key/elem words][value words]
+//   occupied:   0 = empty, 1 = live, 2 = tombstone
+//
+// Probing is linear over power-of-two capacities (`idx = hash & (cap-1)`,
+// `idx = (idx + 1) & (cap-1)`), with tombstones counted in the header so
+// rebuilds happen before the table saturates. Keys are word-sized (Int,
+// Bool, Char, Str pointers, unit enums), values may be multi-word.
+//
+// Ownership: inserting a key/value transfers ownership to the table
+// (shallow word copy; the previous stored value is freed on replacement).
+// Removal frees the stored key and value. Enumeration
+// (`rt_map_keys`/`rt_map_values`/`rt_set_elements`) returns a NEW Vec of
+// deep clones, so the table and the Vec can be freed independently.
+
+/// `CollHash(addr, desc_id) -> Int`: the 64-bit hash of the descriptor-
+/// typed value at `addr`. Word-hashable keys return the word itself;
+/// strings use FNV-1a over the blob bytes. Internal service.
+fn emit_coll_hash(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(32);
+    // entry from the desc id at [rbp+24]; hash kind at entry[5].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, DESC_HASH);
+    code.cmp_r_imm8(Reg::Rcx, HASH_STR);
+    let str_hash = code.label();
+    code.jcc_label(0x84, str_hash); // je
+    // HASH_WORD (and default): the word itself.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.add_rsp(32);
+    code.leave_ret();
+    code.bind_label(str_hash);
+    // s = [addr]; a null pointer hashes like the empty string.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let null_str = code.label();
+    code.jcc_label(0x84, null_str); // jz
+    // FNV-1a: h = offset; for each byte: h ^= b; h *= prime.
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // len
+    code.add_r_imm8(Reg::Rax, 8); // base = s + 8
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // base
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx); // len
+    code.movabs(Reg::Rax, 0xcbf29ce484222325);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // h
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // i = 0
+    let hash_loop = code.label();
+    let hash_done = code.label();
+    code.bind_label(hash_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32); // i
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // len
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, hash_done); // jge
+    // h ^= byte[base + i]
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, 0);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.xor_rr(Reg::Rax, Reg::Rcx);
+    // h *= 0x100000001b3
+    code.movabs(Reg::Rcx, 0x100000001b3);
+    code.imul_rax_rcx();
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    // i++
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx);
+    code.jmp_label(hash_loop);
+    code.bind_label(hash_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.add_rsp(32);
+    code.leave_ret();
+    code.bind_label(null_str);
+    code.movabs(Reg::Rax, 0xcbf29ce484222325);
+    code.add_rsp(32);
+    code.leave_ret();
+}
+
+/// `CollKeyEq(a, b, desc_id) -> Bool`: whether the descriptor-typed
+/// values at `a` and `b` are equal under the Map/Set key contract
+/// (word equality, or byte equality for strings). Internal service.
+fn emit_coll_key_eq(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.movzx_byte(Reg::Rcx, Reg::Rax, DESC_HASH);
+    code.cmp_r_imm8(Reg::Rcx, HASH_STR);
+    let str_eq = code.label();
+    code.jcc_label(0x84, str_eq); // je
+    // Word equality.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rcx, Reg::Rcx, 0);
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.setcc_al(0x94); // sete
+    code.movzx_rax_al();
+    code.add_rsp(16);
+    code.leave_ret();
+    code.bind_label(str_eq);
+    // s1 = [a], s2 = [b].
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rcx, Reg::Rcx, 0);
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    let str_not_equal = code.label();
+    let str_equal = code.label();
+    code.jcc_label(0x84, str_equal); // je — identical pointer
+    // Null handling: either null (not both — covered above) -> not equal.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, str_not_equal); // jz
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, str_not_equal); // jz
+    // Lengths must match.
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 0); // len1
+    code.mov_r_mem(Reg::R8, Reg::Rcx, 0); // len2
+    code.cmp_rr(Reg::Rdx, Reg::R8);
+    code.jcc_label(0x85, str_not_equal); // jne
+    // Byte-by-byte comparison.
+    code.add_r_imm8(Reg::Rax, 8); // base1
+    code.add_r_imm8(Reg::Rcx, 8); // base2
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_r32_imm32(Reg::Rcx, 0); // k = 0
+    let eq_loop = code.label();
+    code.bind_label(eq_loop);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx); // k vs len1
+    code.jcc_label(0x8D, str_equal); // jge
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -8);
+    code.add_rr(Reg::R8, Reg::Rcx);
+    code.movzx_byte(Reg::R9, Reg::R8, 0);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -16);
+    code.add_rr(Reg::R8, Reg::Rcx);
+    code.movzx_byte(Reg::R10, Reg::R8, 0);
+    code.cmp_rr(Reg::R9, Reg::R10);
+    code.jcc_label(0x85, str_not_equal); // jne
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.jmp_label(eq_loop);
+    code.bind_label(str_equal);
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.add_rsp(16);
+    code.leave_ret();
+    code.bind_label(str_not_equal);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `MapRebuild(map, new_capacity) -> Map`: allocate a fresh table at
+/// `new_capacity`, rehash every live key into it (moving keys and values
+/// verbatim — ownership transfers), free the old table, and return the
+/// new pointer. Internal service.
+fn emit_map_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(112);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // old capacity
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // key_desc
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // value_desc
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx);
+    // value_size / key_size / bucket_size.
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // bucket_size
+    // Allocate: MAP_HEADER + new_cap * bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // new_cap
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_mem_imm32(Reg::Rax, 8, 0);
+    code.mov_mem_imm32(Reg::Rax, 16, 0);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.mov_mem_r(Reg::Rax, 32, Reg::Rcx);
+    // Walk the old buckets, rehashing live keys into the new table.
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // i = 0
+    let walk_loop = code.label();
+    let walk_exit = code.label();
+    let walk_next = code.label();
+    code.bind_label(walk_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, walk_exit); // jge
+    // bucket = map + MAP_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, walk_next); // jne
+    // Hash the key at bucket + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // key addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    // idx = hash & (new_cap - 1).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_done = code.label();
+    code.bind_label(probe_loop);
+    // b_new = new + MAP_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -96);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // b_new
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, probe_done); // jz — empty slot
+    // idx = (idx + 1) & (new_cap - 1).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_done);
+    // Move the key verbatim: src = bucket + 8, dst = b_new + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // src key addr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst key addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -48); // key_size
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    // Move the value: src = bucket + 8 + key_size, dst = b_new + 8 + key_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // src value addr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst value addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40); // value_size
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    // Mark the bucket live and bump the length.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    code.mov_mem_imm32(Reg::Rax, 0, 1); // occupied = 1
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96); // new
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.bind_label(walk_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx);
+    code.jmp_label(walk_loop);
+    code.bind_label(walk_exit);
+    // Free the old table (its keys/values have moved verbatim).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.add_rsp(112);
+    code.leave_ret();
+}
+
+/// `SetRebuild(set, new_capacity) -> Set`: the Set analogue of
+/// [`emit_map_rebuild`]. Internal service.
+fn emit_set_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(112);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // old capacity
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // elem_desc
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // elem_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // bucket_size
+    // Allocate: SET_HEADER + new_cap * bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // new_cap
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // new
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_mem_imm32(Reg::Rax, 8, 0);
+    code.mov_mem_imm32(Reg::Rax, 16, 0);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
+    // Walk the old buckets.
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // i = 0
+    let walk_loop = code.label();
+    let walk_exit = code.label();
+    let walk_next = code.label();
+    code.bind_label(walk_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, walk_exit); // jge
+    // bucket = set + SET_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, walk_next); // jne
+    // Hash the element at bucket + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // elem addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    // idx = hash & (new_cap - 1).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_done = code.label();
+    code.bind_label(probe_loop);
+    // b_new = new + SET_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -96);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // b_new
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, probe_done); // jz
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_done);
+    // Move the element verbatim: src = bucket + 8, dst = b_new + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // src elem addr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst elem addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40); // elem_size
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    // Mark the bucket live and bump the length.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    code.mov_mem_imm32(Reg::Rax, 0, 1);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.bind_label(walk_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx);
+    code.jmp_label(walk_loop);
+    code.bind_label(walk_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.add_rsp(112);
+    code.leave_ret();
+}
+
+/// `rt_map_new(capacity, key_desc, value_desc) -> Map` (capacity at
+/// [rbp+16], hidden key-descriptor id at [rbp+24], hidden value-descriptor
+/// id at [rbp+32]). Capacity must be positive (E-R08).
+fn emit_map_new(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let bad = code.label();
+    code.jcc_label(0x8E, bad); // jle
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // capacity
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx); // key_desc
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 32);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // value_desc
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    // bucket_size = 8 + key_size + value_size.
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32);
+    code.add_rr(Reg::Rcx, Reg::Rdx);
+    code.add_r_imm8(Reg::Rcx, BUCKET_HEADER as u8);
+    // size = MAP_HEADER + capacity * bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx); // capacity
+    code.mov_mem_imm32(Reg::Rax, 8, 0); // length
+    code.mov_mem_imm32(Reg::Rax, 16, 0); // dead
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.mov_mem_r(Reg::Rax, 32, Reg::Rcx);
+    code.add_rsp(32);
+    code.leave_ret();
+    code.bind_label(bad);
+    fail(code, 8); // E-R08 (invalid size)
+}
+
+/// `rt_map_insert(map, key, value...) -> Map` (map at [rbp+16], key word
+/// at [rbp+24], value words at [rbp+32..]). Inserts or replaces; on
+/// replacement the previous value is freed (the table owns its values).
+/// Returns the (possibly rebuilt) table pointer.
+fn emit_map_insert(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(112);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // key_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // value_desc
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // bucket_size
+    code.mov_mem_imm32(Reg::Rbp, -96, -1); // first_tombstone = none
+    // Hash the key argument at [rbp+24].
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    // idx = hash & (capacity - 1).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let occ_tomb = code.label();
+    let occ_empty = code.label();
+    let probe_found = code.label();
+    let probe_next = code.label();
+    code.bind_label(probe_loop);
+    // bucket = map + MAP_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, occ_tomb); // jne — 0 or 2
+    // Live bucket: compare keys.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // bucket key addr
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, probe_next); // jne — different key
+    // FOUND: free the previous value, then copy the new value words.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104); // bucket key addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // key_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // value addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 32);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // value_size
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    code.jmp_label(probe_found);
+    code.bind_label(probe_next);
+    // idx = (idx + 1) & (capacity - 1).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(occ_tomb);
+    // occupied != 1: 2 = tombstone, 0 = empty.
+    code.cmp_r_imm8(Reg::Rcx, 2);
+    code.jcc_label(0x85, occ_empty); // jne — must be 0
+    // Tombstone: remember the first one seen.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let have_tomb = code.label();
+    code.jcc_label(0x89, have_tomb); // jns — already recorded
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax);
+    code.bind_label(have_tomb);
+    code.jmp_label(probe_next);
+    code.bind_label(occ_empty);
+    // Insert at the first tombstone when one was seen, else this slot.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let use_empty = code.label();
+    code.jcc_label(0x88, use_empty); // js — no tombstone
+    let slot_found = code.label();
+    code.jmp_label(slot_found);
+    code.bind_label(use_empty);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.bind_label(slot_found);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // chosen idx
+    // bucket = map + MAP_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_mem_imm32(Reg::Rax, 0, 1); // occupied = 1
+    // Copy the key: [rbp+24] -> bucket + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst key addr
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -40); // key_size
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    // Copy the value: [rbp+32] -> bucket + 8 + key_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst value addr
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 32);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // value_size
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    // length++ (and dead-- when a tombstone was reused).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    let no_tomb = code.label();
+    code.jcc_label(0x88, no_tomb); // js
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
+    code.bind_label(no_tomb);
+    // Growth check: 4*(length + dead) >= 3*capacity -> rebuild *2.
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // length
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // dead
+    code.add_rr(Reg::Rdx, Reg::Rcx);
+    code.shl_r_imm8(Reg::Rdx, 2); // 4x
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_rr(Reg::R8, Reg::Rcx);
+    code.shl_r_imm8(Reg::R8, 1);
+    code.add_rr(Reg::R8, Reg::Rcx); // 3x
+    code.cmp_rr(Reg::Rdx, Reg::R8);
+    let no_grow = code.label();
+    code.jcc_label(0x8C, no_grow); // jl
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 0); // capacity
+    code.shl_r_imm8(Reg::Rdx, 1); // new_cap = capacity * 2
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // map
+    call_service(code, RuntimeService::MapRebuild, &[Reg::Rcx, Reg::Rdx]);
+    code.add_rsp(112);
+    code.leave_ret();
+    code.bind_label(no_grow);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(112);
+    code.leave_ret();
+    code.bind_label(probe_found);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(112);
+    code.leave_ret();
+}
+
+/// `rt_map_get(map, key, [slot]) -> Value` (map at [rbp+16], key word at
+/// [rbp+24], hidden multi-word return slot at [rbp+32]). A missing key
+/// raises E-R11.
+fn emit_map_get(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(96);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // key_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // value_desc
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // bucket_size
+    // Hash the key argument at [rbp+24].
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_empty = code.label();
+    let _probe_found = code.label();
+    let probe_miss = code.label();
+    code.bind_label(probe_loop);
+    // bucket = map + MAP_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    let occ_one = code.label();
+    code.jcc_label(0x84, occ_one); // je
+    code.cmp_r_imm8(Reg::Rcx, 2);
+    code.jcc_label(0x85, probe_empty); // jne — must be 0
+    // Tombstone: keep probing.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(occ_one);
+    // Compare keys.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // bucket key addr
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, probe_miss); // jne — different key
+    // FOUND: value addr = bucket + 8 + key_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80); // bucket key addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // key_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // value addr
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32); // value_size
+    code.cmp_r_imm8(Reg::Rcx, 8);
+    let multi = code.label();
+    code.jcc_label(0x87, multi); // ja
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // word result
+    code.add_rsp(96);
+    code.leave_ret();
+    code.bind_label(multi);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 32); // return slot
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // value_size
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    code.add_rsp(96);
+    code.leave_ret();
+    code.bind_label(probe_empty);
+    code.bind_label(probe_miss);
+    fail(code, 11); // E-R11 (missing key)
+}
+
+/// `rt_map_has(map, key) -> Bool`: membership test, no error on absence.
+fn emit_map_has(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(96);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // key_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // value_desc
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // bucket_size
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_empty = code.label();
+    let probe_found = code.label();
+    code.bind_label(probe_loop);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    let occ_one = code.label();
+    code.jcc_label(0x84, occ_one); // je
+    code.cmp_r_imm8(Reg::Rcx, 2);
+    code.jcc_label(0x85, probe_empty); // jne — must be 0
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(occ_one);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, probe_found); // jz — equal
+    // Different key: keep probing.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_found);
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.add_rsp(96);
+    code.leave_ret();
+    code.bind_label(probe_empty);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.add_rsp(96);
+    code.leave_ret();
+}
+
+/// `rt_map_remove(map, key) -> Map`: remove the entry if present (the
+/// stored key and value are freed; the bucket becomes a tombstone).
+/// Absence is a no-op.
+fn emit_map_remove(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(96);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // key_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // value_desc
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // bucket_size
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_empty = code.label();
+    let _probe_found = code.label();
+    let probe_miss = code.label();
+    code.bind_label(probe_loop);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    let occ_one = code.label();
+    code.jcc_label(0x84, occ_one); // je
+    code.cmp_r_imm8(Reg::Rcx, 2);
+    code.jcc_label(0x85, probe_empty); // jne — must be 0
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(occ_one);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // bucket key addr
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, probe_miss); // jne — different key
+    // FOUND: free the stored key and value, mark the tombstone.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80); // key addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // key_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // value addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    // Mark the tombstone and update the counters.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72); // bucket
+    code.mov_mem_imm32(Reg::Rax, 0, 2); // occupied = 2
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // dead
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.add_rsp(96);
+    code.leave_ret();
+    code.bind_label(probe_miss);
+    // Different key: keep probing.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_empty);
+    // Not present: return the map unchanged.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(96);
+    code.leave_ret();
+}
+
+/// `rt_map_len(map) -> Int`.
+fn emit_map_len(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 8); // length
+    code.leave_ret();
+}
+
+/// `rt_map_free(map)`: free every live key and value, then the table.
+fn emit_map_free(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(96);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let done = code.label();
+    code.jcc_label(0x84, done); // jz
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // key_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // value_desc
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // bucket_size
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx); // i = 0
+    let free_loop = code.label();
+    let free_exit = code.label();
+    let free_next = code.label();
+    code.bind_label(free_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, free_exit); // jge
+    // bucket = map + MAP_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, free_next); // jne
+    // Free the key.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // key addr
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    // Free the value.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // key_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -24);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.bind_label(free_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx);
+    code.jmp_label(free_loop);
+    code.bind_label(free_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.bind_label(done);
+    code.leave_ret();
+}
+
+/// `rt_map_keys(map) -> Vec<K>`: a NEW Vec owning deep clones of every
+/// key (the map keeps its own copies). Capacity is at least 1 so an
+/// empty map yields an empty, usable Vec.
+fn emit_map_keys(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(112);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // key_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    // capacity = max(length, 1).
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let nonempty = code.label();
+    code.jcc_label(0x85, nonempty); // jnz
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.bind_label(nonempty);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // cap
+    // Allocate VEC_HEADER + cap*key_size.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // vec
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx); // capacity
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx); // length
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx); // elem desc
+    // Map capacity and bucket size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // map cap
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // value desc
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24); // key_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket_size
+    // Walk the buckets; j counts cloned keys.
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx); // i = 0
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx); // j = 0
+    let walk_loop = code.label();
+    let walk_exit = code.label();
+    let walk_next = code.label();
+    code.bind_label(walk_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, walk_exit); // jge
+    // bucket = map + MAP_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, walk_next); // jne
+    // dst = vec + 24 + j*key_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56); // j
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24); // key_size
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // vec
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst
+    // src = bucket + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // src
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // key desc
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    // j++
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.bind_label(walk_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.jmp_label(walk_loop);
+    code.bind_label(walk_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rsp(112);
+    code.leave_ret();
+}
+
+/// `rt_map_values(map) -> Vec<V>`: a NEW Vec owning deep clones of every
+/// value (the map keeps its own copies).
+fn emit_map_values(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(112);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // value_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // value_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    // capacity = max(length, 1).
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let nonempty = code.label();
+    code.jcc_label(0x85, nonempty); // jnz
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.bind_label(nonempty);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // cap
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // vec
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // map cap
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // key desc
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rcx); // key_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24); // value_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket_size
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx); // i = 0
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx); // j = 0
+    let walk_loop = code.label();
+    let walk_exit = code.label();
+    let walk_next = code.label();
+    code.bind_label(walk_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, walk_exit); // jge
+    // bucket = map + MAP_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, MAP_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, walk_next); // jne
+    // dst = vec + 24 + j*value_size; src = bucket + 8 + key_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56); // j
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24); // value_size
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // vec
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96); // bucket
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -80); // key_size
+    code.add_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // src
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // value desc
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.bind_label(walk_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.jmp_label(walk_loop);
+    code.bind_label(walk_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rsp(112);
+    code.leave_ret();
+}
+
+/// `rt_set_new(capacity, elem_desc) -> Set` (capacity at [rbp+16], hidden
+/// element-descriptor id at [rbp+24]). Capacity must be positive (E-R08).
+fn emit_set_new(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let bad = code.label();
+    code.jcc_label(0x8E, bad); // jle
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // capacity
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx); // elem_desc
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.add_r_imm8(Reg::Rcx, BUCKET_HEADER as u8); // bucket_size
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_mem_imm32(Reg::Rax, 8, 0);
+    code.mov_mem_imm32(Reg::Rax, 16, 0);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
+    code.add_rsp(32);
+    code.leave_ret();
+    code.bind_label(bad);
+    fail(code, 8); // E-R08 (invalid size)
+}
+
+/// `rt_set_insert(set, elem) -> Set`: insert; duplicates are a no-op.
+fn emit_set_insert(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(112);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // elem_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // elem_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // bucket_size
+    code.mov_mem_imm32(Reg::Rbp, -96, -1); // first_tombstone = none
+    // Hash the element argument at [rbp+24].
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let occ_tomb = code.label();
+    let occ_empty = code.label();
+    let probe_done = code.label();
+    let probe_next = code.label();
+    code.bind_label(probe_loop);
+    // bucket = set + SET_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, occ_tomb); // jne — 0 or 2
+    // Live bucket: compare elements.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // bucket elem addr
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, probe_done); // jz — duplicate: nothing to do
+    code.jmp_label(probe_next);
+    code.bind_label(probe_next);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(occ_tomb);
+    code.cmp_r_imm8(Reg::Rcx, 2);
+    code.jcc_label(0x85, occ_empty); // jne — must be 0
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let have_tomb = code.label();
+    code.jcc_label(0x89, have_tomb); // jns
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax);
+    code.bind_label(have_tomb);
+    code.jmp_label(probe_next);
+    code.bind_label(occ_empty);
+    // Insert at the first tombstone when one was seen, else this slot.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let use_empty = code.label();
+    code.jcc_label(0x88, use_empty); // js
+    let slot_found = code.label();
+    code.jmp_label(slot_found);
+    code.bind_label(use_empty);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.bind_label(slot_found);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // chosen idx
+    // bucket = set + SET_HEADER + idx*bucket_size.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_mem_imm32(Reg::Rax, 0, 1); // occupied = 1
+    // Copy the element: [rbp+24] -> bucket + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst elem addr
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // elem_size
+    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    // length++ (and dead-- when a tombstone was reused).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    let no_tomb = code.label();
+    code.jcc_label(0x88, no_tomb); // js
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
+    code.bind_label(no_tomb);
+    // Growth check: 4*(length + dead) >= 3*capacity -> rebuild *2.
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
+    code.add_rr(Reg::Rdx, Reg::Rcx);
+    code.shl_r_imm8(Reg::Rdx, 2);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.mov_rr(Reg::R8, Reg::Rcx);
+    code.shl_r_imm8(Reg::R8, 1);
+    code.add_rr(Reg::R8, Reg::Rcx);
+    code.cmp_rr(Reg::Rdx, Reg::R8);
+    let no_grow = code.label();
+    code.jcc_label(0x8C, no_grow); // jl
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 0);
+    code.shl_r_imm8(Reg::Rdx, 1);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    call_service(code, RuntimeService::SetRebuild, &[Reg::Rcx, Reg::Rdx]);
+    code.add_rsp(112);
+    code.leave_ret();
+    code.bind_label(no_grow);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(112);
+    code.leave_ret();
+    code.bind_label(probe_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(112);
+    code.leave_ret();
+}
+
+/// `rt_set_has(set, elem) -> Bool`: membership test, no error on absence.
+fn emit_set_has(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(96);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // elem_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // elem_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // bucket_size
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_empty = code.label();
+    let probe_found = code.label();
+    code.bind_label(probe_loop);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    let occ_one = code.label();
+    code.jcc_label(0x84, occ_one); // je
+    code.cmp_r_imm8(Reg::Rcx, 2);
+    code.jcc_label(0x85, probe_empty); // jne — must be 0
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(occ_one);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, probe_found); // jz — equal
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_found);
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.add_rsp(96);
+    code.leave_ret();
+    code.bind_label(probe_empty);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.add_rsp(96);
+    code.leave_ret();
+}
+
+/// `rt_set_remove(set, elem) -> Set`: remove if present (the stored
+/// element is freed; the bucket becomes a tombstone). Absence is a no-op.
+fn emit_set_remove(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(96);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // elem_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // elem_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // bucket_size
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollHash, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // idx
+    let probe_loop = code.label();
+    let probe_empty = code.label();
+    let _probe_found = code.label();
+    let probe_miss = code.label();
+    code.bind_label(probe_loop);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    let occ_one = code.label();
+    code.jcc_label(0x84, occ_one); // je
+    code.cmp_r_imm8(Reg::Rcx, 2);
+    code.jcc_label(0x85, probe_empty); // jne — must be 0
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(occ_one);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -80, Reg::Rax); // bucket elem addr
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, probe_miss); // jne — different element
+    // FOUND: free the stored element and mark the tombstone.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72); // bucket
+    code.mov_mem_imm32(Reg::Rax, 0, 2); // occupied = 2
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 16); // dead
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.add_rsp(96);
+    code.leave_ret();
+    code.bind_label(probe_miss);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_empty);
+    // Not present: return the set unchanged.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rsp(96);
+    code.leave_ret();
+}
+
+/// `rt_set_len(set) -> Int`.
+fn emit_set_len(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 8); // length
+    code.leave_ret();
+}
+
+/// `rt_set_free(set)`: free every live element, then the table.
+fn emit_set_free(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(80);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let done = code.label();
+    code.jcc_label(0x84, done); // jz
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // elem_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // elem_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax); // bucket_size
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx); // i = 0
+    let free_loop = code.label();
+    let free_exit = code.label();
+    let free_next = code.label();
+    code.bind_label(free_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -48);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, free_exit); // jge
+    // bucket = set + SET_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, free_next); // jne
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.bind_label(free_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rcx);
+    code.jmp_label(free_loop);
+    code.bind_label(free_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.bind_label(done);
+    code.leave_ret();
+}
+
+/// `rt_set_elements(set) -> Vec<T>`: a NEW Vec owning deep clones of
+/// every element (the set keeps its own copies).
+fn emit_set_elements(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(112);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 24); // elem_desc
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    desc_entry_addr(code, Reg::Rax, Reg::Rax, offsets);
+    code.mov_r32_mem(Reg::Rcx, Reg::Rax, DESC_ELEM_SIZE);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rcx); // elem_size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rcx);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let nonempty = code.label();
+    code.jcc_label(0x85, nonempty); // jnz
+    code.mov_r32_imm32(Reg::Rax, 1);
+    code.bind_label(nonempty);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // cap
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.sub_rsp(8);
+    code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // vec
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // set cap
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24); // elem_size
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -88, Reg::Rax); // bucket_size
+    code.mov_r32_imm32(Reg::Rcx, 0);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx); // i = 0
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx); // j = 0
+    let walk_loop = code.label();
+    let walk_exit = code.label();
+    let walk_next = code.label();
+    code.bind_label(walk_loop);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -72);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x8D, walk_exit); // jge
+    // bucket = set + SET_HEADER + i*bucket_size.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, SET_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // bucket
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, walk_next); // jne
+    // dst = vec + 24 + j*elem_size; src = bucket + 8.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -56); // j
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24); // elem_size
+    code.imul_rax_rcx();
+    code.add_r_imm8(Reg::Rax, VEC_HEADER as u8);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // vec
+    code.add_rr(Reg::Rax, Reg::Rdx);
+    code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // dst
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
+    code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // src
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // elem desc
+    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
+    code.bind_label(walk_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
+    code.jmp_label(walk_loop);
+    code.bind_label(walk_exit);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rsp(112);
     code.leave_ret();
 }
 

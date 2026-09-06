@@ -65,7 +65,13 @@ pub const HEAP_SIZE: u64 = 4 * 1024 * 1024;
 
 /// The maximum number of simultaneously live allocations. The liveness
 /// table is a fixed-size array, so the bound is part of the ABI.
-pub const MAX_LIVE_ALLOCS: usize = 256;
+///
+/// Raised from 256 to 1024 in Session 101 (Wave B): a `Vec<Str>` with
+/// 1000 owned string elements, or a `Map<Str, V>` with 1000 owned string
+/// keys, holds that many live blobs simultaneously, and the Wave B stress
+/// contract requires 1000+ entry collections. The table costs 1024 × 24
+/// bytes of `.bss` (24 KiB), which is negligible against the 4 MiB arena.
+pub const MAX_LIVE_ALLOCS: usize = 1024;
 
 /// The size of one liveness-table entry: (address `u64`, size `u64`,
 /// live flag `u64`).

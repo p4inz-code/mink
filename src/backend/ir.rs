@@ -177,6 +177,14 @@ pub struct BProgram {
     /// source span. The emitter places each blob (length prefix + bytes)
     /// into the image and [`BInstKind::LoadStr`] references it by index.
     pub strings: Vec<BString>,
+    /// The serialized collection element descriptor table (Session 101,
+    /// Wave B): 16-byte entries built by the lowerer from the program's
+    /// type table, driving element strides, ownership frees, deep clones,
+    /// and key hashing/equality in the runtime collection services.
+    pub collection_descs: Vec<u8>,
+    /// The serialized struct field lists and enum variant lists referenced
+    /// by the descriptor entries (byte offsets into this region).
+    pub collection_field_lists: Vec<u8>,
 }
 
 /// A decoded string literal: the immutable byte data the image will carry.
@@ -738,6 +746,8 @@ pub enum RuntimeService {
     StrValidateHeap,
     // --- Vec services (Session 41) ---
     /// `rt_vec_new(capacity) -> Ptr<Int>`: allocate a Vec buffer.
+    DbgWord0,
+    DbgWord8,
     VecNew,
     /// `rt_vec_push(data, value) -> Ptr<Int>`: push element (may reallocate).
     VecPush,
@@ -753,6 +763,57 @@ pub enum RuntimeService {
     VecPop,
     /// `rt_vec_remove(data, index) -> Ptr<Int>`: remove element at index.
     VecRemove,
+    // --- Map services (Session 101, Wave B) ---
+    /// `rt_map_new(capacity, key_desc, value_desc) -> Ptr<Int>`: allocate a
+    /// hash-map table (the two descriptor ids are hidden compiler args).
+    MapNew,
+    /// `rt_map_insert(map, key, value) -> Ptr<Int>`: insert/replace entry.
+    MapInsert,
+    /// `rt_map_get(map, key) -> V`: look up an entry (E-R11 on missing key).
+    MapGet,
+    /// `rt_map_has(map, key) -> Bool`: membership test.
+    MapHas,
+    /// `rt_map_remove(map, key) -> Ptr<Int>`: remove entry (no-op when missing).
+    MapRemove,
+    /// `rt_map_len(map) -> Int`: number of live entries.
+    MapLen,
+    /// `rt_map_free(map)`: free the table and every owned key/value.
+    MapFree,
+    /// `rt_map_keys(map) -> Vec<K>`: new Vec of deep-cloned keys.
+    MapKeys,
+    /// `rt_map_values(map) -> Vec<V>`: new Vec of deep-cloned values.
+    MapValues,
+    // --- Set services (Session 101, Wave B) ---
+    /// `rt_set_new(capacity, elem_desc) -> Ptr<Int>`: allocate a hash-set
+    /// table (the descriptor id is a hidden compiler arg).
+    SetNew,
+    /// `rt_set_insert(set, elem) -> Ptr<Int>`: insert element.
+    SetInsert,
+    /// `rt_set_has(set, elem) -> Bool`: membership test.
+    SetHas,
+    /// `rt_set_remove(set, elem) -> Ptr<Int>`: remove element (no-op when missing).
+    SetRemove,
+    /// `rt_set_len(set) -> Int`: number of live elements.
+    SetLen,
+    /// `rt_set_free(set)`: free the table and every owned element.
+    SetFree,
+    /// `rt_set_elements(set) -> Vec<T>`: new Vec of deep-cloned elements.
+    SetElements,
+    // --- Internal collection helpers (Session 101, Wave B) ---
+    // These are called only from the collection services above, never from
+    // generated code (`is_callable` excludes them).
+    /// Internal: recursively free one element at `addr` following `desc`.
+    CollFreeValue,
+    /// Internal: deep-clone `desc`-typed bytes from `src` to `dst`.
+    CollCloneValue,
+    /// Internal: hash the key at `addr` following `desc` (word or str).
+    CollHash,
+    /// Internal: compare two keys at `a`/`b` following `desc`.
+    CollKeyEq,
+    /// Internal: allocate a larger Map table and rehash live entries.
+    MapRebuild,
+    /// Internal: allocate a larger Set table and rehash live entries.
+    SetRebuild,
     // --- String operations (Session 44) ---
     /// `rt_str_concat(a, b) -> Str`: allocate a new string containing
     /// the bytes of `a` followed by the bytes of `b`.
@@ -926,8 +987,22 @@ impl RuntimeService {
             Self::StrSetByte => 3,
             Self::VecPush | Self::VecGet => 2,
             Self::VecSet => 3,
-            Self::VecNew | Self::VecLen | Self::VecFree | Self::VecPop => 1,
+            // VecNew carries a hidden descriptor-id argument (appended by
+            // lowering); MapNew carries key+value descriptor ids; SetNew
+            // carries one.
+            Self::DbgWord0 | Self::DbgWord8 => 1,
+            Self::VecNew => 2,
+            Self::VecLen | Self::VecFree | Self::VecPop => 1,
             Self::VecRemove => 2,
+            Self::MapNew => 3,
+            Self::MapInsert => 3,
+            Self::MapGet | Self::MapHas | Self::MapRemove | Self::MapKeys | Self::MapValues => 2,
+            Self::MapLen | Self::MapFree => 1,
+            Self::SetNew => 2,
+            Self::SetInsert | Self::SetHas | Self::SetRemove | Self::SetElements => 2,
+            Self::SetLen | Self::SetFree => 1,
+            Self::CollFreeValue | Self::CollHash | Self::MapRebuild | Self::SetRebuild => 2,
+            Self::CollCloneValue | Self::CollKeyEq => 3,
             Self::StrConcat | Self::StrEq => 2,
             Self::StrFromInt | Self::StrFromBool => 1,
             Self::IntToFloat | Self::FloatToInt => 1,
@@ -1001,6 +1076,8 @@ impl RuntimeService {
                 | Self::PrintInt
                 | Self::PrintFloat
                 | Self::PrintChar
+                | Self::DbgWord0
+                | Self::DbgWord8
                 | Self::VecNew
                 | Self::VecPush
                 | Self::VecGet
@@ -1009,6 +1086,22 @@ impl RuntimeService {
                 | Self::VecPop
                 | Self::VecRemove
                 | Self::VecFree
+                | Self::MapNew
+                | Self::MapInsert
+                | Self::MapGet
+                | Self::MapHas
+                | Self::MapRemove
+                | Self::MapLen
+                | Self::MapFree
+                | Self::MapKeys
+                | Self::MapValues
+                | Self::SetNew
+                | Self::SetInsert
+                | Self::SetHas
+                | Self::SetRemove
+                | Self::SetLen
+                | Self::SetFree
+                | Self::SetElements
                 | Self::StrConcat
                 | Self::StrEq
                 | Self::StrFromInt

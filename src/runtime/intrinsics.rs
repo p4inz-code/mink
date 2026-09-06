@@ -76,8 +76,28 @@ pub enum IntrinsicType {
     Bool,
     /// No value (the intrinsic produces nothing).
     Unit,
-    /// A Vec<T> value: a dynamic array of word-sized elements.
+    /// A Vec<T> value: a dynamic array of elements (Session 101 Wave B:
+    /// element storage is fully typed, including owned `Str` elements and
+    /// multi-word aggregate elements).
     Vec,
+    /// A Map<K, V> value: a hash map of keys to values.
+    Map,
+    /// A Set<T> value: a hash set of elements.
+    Set,
+    /// The element type of the signature's `Vec`/`Set` parameter (a fresh
+    /// inference variable; never used at pre-registration — collection
+    /// intrinsics are instantiated per call site).
+    Elem,
+    /// The key type of the signature's `Map` parameter.
+    Key,
+    /// The value type of the signature's `Map` parameter.
+    Value,
+    /// `Vec<K>` for the signature's `Map<K, V>` parameter (`rt_map_keys`).
+    VecOfKey,
+    /// `Vec<V>` for the signature's `Map<K, V>` parameter (`rt_map_values`).
+    VecOfValue,
+    /// `Vec<T>` for the signature's `Set<T>` parameter (`rt_set_elements`).
+    VecOfElem,
 }
 
 /// A declared runtime intrinsic: its reserved name and its signature.
@@ -205,6 +225,16 @@ pub const ALL: &[Intrinsic] = &[
         result: IntrinsicType::Int,
     },
     Intrinsic {
+        name: "rt_dbg_word0",
+        params: &[IntrinsicType::Vec],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_dbg_word8",
+        params: &[IntrinsicType::Vec],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
         name: "rt_vec_free",
         params: &[IntrinsicType::Vec],
         result: IntrinsicType::Unit,
@@ -224,6 +254,98 @@ pub const ALL: &[Intrinsic] = &[
         name: "rt_vec_remove",
         params: &[IntrinsicType::Vec, IntrinsicType::Int],
         result: IntrinsicType::Vec,
+    },
+    // --- Map operations (Session 101, Wave B) ---
+    // Buffer layout: [capacity: Int][length: Int][dead: Int][key_desc: Int]
+    //                [value_desc: Int][bucket0][bucket1]...
+    // Each bucket: [occupied: Int][key words][value words].
+    // occupied: 0 = empty, 1 = live, 2 = tombstone.
+    Intrinsic {
+        name: "rt_map_new",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Map,
+    },
+    Intrinsic {
+        name: "rt_map_insert",
+        params: &[IntrinsicType::Map, IntrinsicType::Key, IntrinsicType::Value],
+        result: IntrinsicType::Map,
+    },
+    Intrinsic {
+        name: "rt_map_get",
+        params: &[IntrinsicType::Map, IntrinsicType::Key],
+        result: IntrinsicType::Value,
+    },
+    Intrinsic {
+        name: "rt_map_has",
+        params: &[IntrinsicType::Map, IntrinsicType::Key],
+        result: IntrinsicType::Bool,
+    },
+    Intrinsic {
+        name: "rt_map_remove",
+        params: &[IntrinsicType::Map, IntrinsicType::Key],
+        result: IntrinsicType::Map,
+    },
+    Intrinsic {
+        name: "rt_map_len",
+        params: &[IntrinsicType::Map],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_map_free",
+        params: &[IntrinsicType::Map],
+        result: IntrinsicType::Unit,
+    },
+    // Enumeration: returns a NEW Vec owning deep clones of the keys or
+    // values (the Map keeps its own copies), so the result can be freed
+    // independently without double-frees.
+    Intrinsic {
+        name: "rt_map_keys",
+        params: &[IntrinsicType::Map],
+        result: IntrinsicType::VecOfKey,
+    },
+    Intrinsic {
+        name: "rt_map_values",
+        params: &[IntrinsicType::Map],
+        result: IntrinsicType::VecOfValue,
+    },
+    // --- Set operations (Session 101, Wave B) ---
+    // Buffer layout: [capacity: Int][length: Int][dead: Int][elem_desc: Int]
+    //                [bucket0][bucket1]...
+    // Each bucket: [occupied: Int][elem words].
+    Intrinsic {
+        name: "rt_set_new",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Set,
+    },
+    Intrinsic {
+        name: "rt_set_insert",
+        params: &[IntrinsicType::Set, IntrinsicType::Elem],
+        result: IntrinsicType::Set,
+    },
+    Intrinsic {
+        name: "rt_set_has",
+        params: &[IntrinsicType::Set, IntrinsicType::Elem],
+        result: IntrinsicType::Bool,
+    },
+    Intrinsic {
+        name: "rt_set_remove",
+        params: &[IntrinsicType::Set, IntrinsicType::Elem],
+        result: IntrinsicType::Set,
+    },
+    Intrinsic {
+        name: "rt_set_len",
+        params: &[IntrinsicType::Set],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_set_free",
+        params: &[IntrinsicType::Set],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_set_elements",
+        params: &[IntrinsicType::Set],
+        result: IntrinsicType::VecOfElem,
     },
     // --- String operations (Session 44) ---
     Intrinsic {
