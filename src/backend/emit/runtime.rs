@@ -2523,7 +2523,7 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -72, Reg::Rax); // new
     // src = s + 8, dst = new + 8, size = len.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
@@ -2571,7 +2571,7 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // new
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
@@ -2652,7 +2652,7 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // new
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
@@ -2792,7 +2792,7 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // new
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx); // capacity
@@ -3121,7 +3121,7 @@ fn emit_vec_new(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     // rax = allocated buffer pointer.
 
     // Header: [rax+0] = capacity, [rax+8] = 0 (length), [rax+16] = desc.
@@ -3196,7 +3196,7 @@ fn emit_vec_push(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // new data ptr
 
     // Copy header: new_cap = old_cap * 2, length = old length, desc.
@@ -3226,7 +3226,7 @@ fn emit_vec_push(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
-    code.add_rsp(16);
+    code.add_rsp(8);
     // data = new.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
@@ -3763,7 +3763,7 @@ fn emit_map_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // new
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
@@ -4616,7 +4616,7 @@ fn emit_map_keys(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // vec
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx); // capacity
@@ -4721,7 +4721,7 @@ fn emit_map_values(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // vec
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
@@ -4817,7 +4817,7 @@ fn emit_set_new(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
     code.mov_mem_imm32(Reg::Rax, 8, 0);
@@ -5231,7 +5231,7 @@ fn emit_set_elements(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // vec
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
