@@ -1,0 +1,9 @@
+// Map minimal test: create with capacity, insert, get, free
+fn main() -> Int {
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, 1, 42);
+    let v = rt_map_get(m, 1);
+    rt_print_int(v);
+    rt_map_free(m);
+    return 0;
+}

@@ -262,7 +262,7 @@ pub const ALL: &[Intrinsic] = &[
     // occupied: 0 = empty, 1 = live, 2 = tombstone.
     Intrinsic {
         name: "rt_map_new",
-        params: &[],
+        params: &[IntrinsicType::Int],
         result: IntrinsicType::Map,
     },
     Intrinsic {

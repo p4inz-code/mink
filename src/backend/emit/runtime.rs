@@ -199,34 +199,80 @@ pub(crate) fn emit_services(
     });
     // --- Vec services (Session 41; reworked Session 101 Wave B for
     // typed elements: element stride, ownership frees, multi-word values) ---
-    emit(code, RuntimeService::DbgWord0, |code, r| emit_dbg_word0(code, r));
-    emit(code, RuntimeService::DbgWord8, |code, _| emit_dbg_word8(code));
-    emit(code, RuntimeService::VecNew, |code, r| emit_vec_new(code, r));
-    emit(code, RuntimeService::VecPush, |code, r| emit_vec_push(code, r));
-    emit(code, RuntimeService::VecGet, |code, r| emit_vec_get(code, r));
+    emit(code, RuntimeService::DbgWord0, |code, r| {
+        emit_dbg_word0(code, r)
+    });
+    emit(code, RuntimeService::DbgWord8, |code, _| {
+        emit_dbg_word8(code)
+    });
+    emit(code, RuntimeService::VecNew, |code, r| {
+        emit_vec_new(code, r)
+    });
+    emit(code, RuntimeService::VecPush, |code, r| {
+        emit_vec_push(code, r)
+    });
+    emit(code, RuntimeService::VecGet, |code, r| {
+        emit_vec_get(code, r)
+    });
     emit(code, RuntimeService::VecLen, |code, _| emit_vec_len(code));
-    emit(code, RuntimeService::VecFree, |code, r| emit_vec_free(code, r));
-    emit(code, RuntimeService::VecSet, |code, r| emit_vec_set(code, r));
-    emit(code, RuntimeService::VecPop, |code, r| emit_vec_pop(code, r));
-    emit(code, RuntimeService::VecRemove, |code, r| emit_vec_remove(code, r));
+    emit(code, RuntimeService::VecFree, |code, r| {
+        emit_vec_free(code, r)
+    });
+    emit(code, RuntimeService::VecSet, |code, r| {
+        emit_vec_set(code, r)
+    });
+    emit(code, RuntimeService::VecPop, |code, r| {
+        emit_vec_pop(code, r)
+    });
+    emit(code, RuntimeService::VecRemove, |code, r| {
+        emit_vec_remove(code, r)
+    });
     // --- Map services (Session 101, Wave B) ---
-    emit(code, RuntimeService::MapNew, |code, r| emit_map_new(code, r));
-    emit(code, RuntimeService::MapInsert, |code, r| emit_map_insert(code, r));
-    emit(code, RuntimeService::MapGet, |code, r| emit_map_get(code, r));
-    emit(code, RuntimeService::MapHas, |code, r| emit_map_has(code, r));
-    emit(code, RuntimeService::MapRemove, |code, r| emit_map_remove(code, r));
+    emit(code, RuntimeService::MapNew, |code, r| {
+        emit_map_new(code, r)
+    });
+    emit(code, RuntimeService::MapInsert, |code, r| {
+        emit_map_insert(code, r)
+    });
+    emit(code, RuntimeService::MapGet, |code, r| {
+        emit_map_get(code, r)
+    });
+    emit(code, RuntimeService::MapHas, |code, r| {
+        emit_map_has(code, r)
+    });
+    emit(code, RuntimeService::MapRemove, |code, r| {
+        emit_map_remove(code, r)
+    });
     emit(code, RuntimeService::MapLen, |code, _| emit_map_len(code));
-    emit(code, RuntimeService::MapFree, |code, r| emit_map_free(code, r));
-    emit(code, RuntimeService::MapKeys, |code, r| emit_map_keys(code, r));
-    emit(code, RuntimeService::MapValues, |code, r| emit_map_values(code, r));
+    emit(code, RuntimeService::MapFree, |code, r| {
+        emit_map_free(code, r)
+    });
+    emit(code, RuntimeService::MapKeys, |code, r| {
+        emit_map_keys(code, r)
+    });
+    emit(code, RuntimeService::MapValues, |code, r| {
+        emit_map_values(code, r)
+    });
     // --- Set services (Session 101, Wave B) ---
-    emit(code, RuntimeService::SetNew, |code, r| emit_set_new(code, r));
-    emit(code, RuntimeService::SetInsert, |code, r| emit_set_insert(code, r));
-    emit(code, RuntimeService::SetHas, |code, r| emit_set_has(code, r));
-    emit(code, RuntimeService::SetRemove, |code, r| emit_set_remove(code, r));
+    emit(code, RuntimeService::SetNew, |code, r| {
+        emit_set_new(code, r)
+    });
+    emit(code, RuntimeService::SetInsert, |code, r| {
+        emit_set_insert(code, r)
+    });
+    emit(code, RuntimeService::SetHas, |code, r| {
+        emit_set_has(code, r)
+    });
+    emit(code, RuntimeService::SetRemove, |code, r| {
+        emit_set_remove(code, r)
+    });
     emit(code, RuntimeService::SetLen, |code, _| emit_set_len(code));
-    emit(code, RuntimeService::SetFree, |code, r| emit_set_free(code, r));
-    emit(code, RuntimeService::SetElements, |code, r| emit_set_elements(code, r));
+    emit(code, RuntimeService::SetFree, |code, r| {
+        emit_set_free(code, r)
+    });
+    emit(code, RuntimeService::SetElements, |code, r| {
+        emit_set_elements(code, r)
+    });
     // --- Internal collection helpers (Session 101, Wave B) ---
     emit(code, RuntimeService::CollFreeValue, |code, r| {
         emit_coll_free_value(code, r)
@@ -234,10 +280,18 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::CollCloneValue, |code, r| {
         emit_coll_clone_value(code, r)
     });
-    emit(code, RuntimeService::CollHash, |code, r| emit_coll_hash(code, r));
-    emit(code, RuntimeService::CollKeyEq, |code, r| emit_coll_key_eq(code, r));
-    emit(code, RuntimeService::MapRebuild, |code, r| emit_map_rebuild(code, r));
-    emit(code, RuntimeService::SetRebuild, |code, r| emit_set_rebuild(code, r));
+    emit(code, RuntimeService::CollHash, |code, r| {
+        emit_coll_hash(code, r)
+    });
+    emit(code, RuntimeService::CollKeyEq, |code, r| {
+        emit_coll_key_eq(code, r)
+    });
+    emit(code, RuntimeService::MapRebuild, |code, r| {
+        emit_map_rebuild(code, r)
+    });
+    emit(code, RuntimeService::SetRebuild, |code, r| {
+        emit_set_rebuild(code, r)
+    });
     emit(code, RuntimeService::StrConcat, |code, _| {
         emit_str_concat(code)
     });
@@ -2607,7 +2661,11 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // elem desc
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88); // src
     code.mov_r_mem(Reg::R10, Reg::Rbp, -120); // dst
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
     code.add_r_imm8(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx);
@@ -2729,7 +2787,11 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
     code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // src key addr
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -120);
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     // Deep-clone the value into b_new + 8 + key_size.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -120); // src key addr
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56); // key_size
@@ -2741,7 +2803,11 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -120);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -88);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -80); // value desc
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     // Mark the bucket live and bump the length.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -104); // new
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
@@ -2864,7 +2930,11 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88); // src elem addr
     code.mov_r_mem(Reg::R10, Reg::Rbp, -120); // dst elem addr
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -64); // elem desc
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     // Mark the bucket live and bump the length.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -104); // new
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
@@ -2935,7 +3005,11 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // dst field
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -120);
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.bind_label(struct_next);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
     code.add_r_imm8(Reg::Rcx, 1);
@@ -3010,7 +3084,11 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rbp, -120, Reg::Rax); // dst payload
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -120);
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.jmp_label(enum_exit);
     code.bind_label(enum_next);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
@@ -3053,7 +3131,11 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -120);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -56);
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -112);
     code.add_r_imm8(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rbp, -112, Reg::Rcx);
@@ -3064,7 +3146,6 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.bind_label(done);
     code.leave_ret();
 }
-
 
 // Vec buffer layout: [capacity][length][elem_desc][element_0][element_1]...
 // Elements start at offset 24 and are `elem_size` bytes wide (elem_size
@@ -3672,7 +3753,7 @@ fn emit_coll_key_eq(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_r_mem(Reg::Rcx, Reg::Rcx, 0);
     code.cmp_rr(Reg::Rax, Reg::Rcx);
-    code.setcc_al(0x94); // sete
+    code.setcc_al(0x95); // setne — 0 if equal, 1 if different
     code.movzx_rax_al();
     code.add_rsp(16);
     code.leave_ret();
@@ -3717,11 +3798,11 @@ fn emit_coll_key_eq(code: &mut Code, offsets: &RuntimeOffsets) {
     code.add_r_imm8(Reg::Rcx, 1);
     code.jmp_label(eq_loop);
     code.bind_label(str_equal);
-    code.mov_r32_imm32(Reg::Rax, 1);
+    code.xor_rr32(Reg::Rax, Reg::Rax); // 0 = equal
     code.add_rsp(16);
     code.leave_ret();
     code.bind_label(str_not_equal);
-    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_r32_imm32(Reg::Rax, 1); // 1 = not equal
     code.add_rsp(16);
     code.leave_ret();
 }
@@ -4104,7 +4185,11 @@ fn emit_map_insert(code: &mut Code, offsets: &RuntimeOffsets) {
     code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
-    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollKeyEq,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x85, probe_next); // jne — different key
     // FOUND: free the previous value, then copy the new value words.
@@ -4288,7 +4373,11 @@ fn emit_map_get(code: &mut Code, offsets: &RuntimeOffsets) {
     code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
-    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollKeyEq,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x85, probe_miss); // jne — different key
     // FOUND: value addr = bucket + 8 + key_size.
@@ -4377,7 +4466,11 @@ fn emit_map_has(code: &mut Code, offsets: &RuntimeOffsets) {
     code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
-    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollKeyEq,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, probe_found); // jz — equal
     // Different key: keep probing.
@@ -4463,7 +4556,11 @@ fn emit_map_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
-    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollKeyEq,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x85, probe_miss); // jne — different key
     // FOUND: free the stored key and value, mark the tombstone.
@@ -4675,7 +4772,11 @@ fn emit_map_keys(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // key desc
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     // j++
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
     code.add_r_imm8(Reg::Rcx, 1);
@@ -4779,7 +4880,11 @@ fn emit_map_values(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // value desc
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
     code.add_r_imm8(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);
@@ -4880,7 +4985,11 @@ fn emit_set_insert(code: &mut Code, offsets: &RuntimeOffsets) {
     code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
-    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollKeyEq,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, probe_done); // jz — duplicate: nothing to do
     code.jmp_label(probe_next);
@@ -5027,7 +5136,11 @@ fn emit_set_has(code: &mut Code, offsets: &RuntimeOffsets) {
     code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
-    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollKeyEq,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, probe_found); // jz — equal
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
@@ -5104,7 +5217,11 @@ fn emit_set_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.lea_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -80);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
-    call_service(code, RuntimeService::CollKeyEq, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollKeyEq,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x85, probe_miss); // jne — different element
     // FOUND: free the stored element and mark the tombstone.
@@ -5281,7 +5398,11 @@ fn emit_set_elements(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -96);
     code.mov_r_mem(Reg::R10, Reg::Rbp, -104);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // elem desc
-    call_service(code, RuntimeService::CollCloneValue, &[Reg::Rcx, Reg::R10, Reg::Rdx]);
+    call_service(
+        code,
+        RuntimeService::CollCloneValue,
+        &[Reg::Rcx, Reg::R10, Reg::Rdx],
+    );
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
     code.add_r_imm8(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rbp, -56, Reg::Rcx);

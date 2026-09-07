@@ -1,0 +1,22 @@
+// Set minimal test: create, insert, contains, remove, free
+fn main() -> Int {
+    let mut s = rt_set_new(4);
+    s = rt_set_insert(s, 42);
+    let found = rt_set_has(s, 42);
+    if found {
+        rt_print_str("has=true");
+    } else {
+        rt_print_str("has=false");
+        return 1;
+    }
+    let ln = rt_set_len(s);
+    rt_print_int(ln);
+    s = rt_set_remove(s, 42);
+    let found2 = rt_set_has(s, 42);
+    if found2 {
+        rt_print_str("still has after remove");
+        return 2;
+    }
+    rt_set_free(s);
+    return 0;
+}
