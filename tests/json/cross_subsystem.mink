@@ -1,0 +1,105 @@
+// Cross-subsystem: collections combined with strings, environment,
+// filesystem, process, allocator, and JSON-style arena values.
+fn _read(arena: Ptr<Int>, offset: Int) -> Int {
+    return rt_mem_load(arena + offset * 8);
+}
+
+fn _write(arena: Ptr<Int>, offset: Int, val: Int) {
+    rt_mem_store(arena + offset * 8, val);
+}
+
+// Builds a JSON-style tag-3 string value [3, len, b0, b1, ...] at wp.
+fn _json_str(arena: Ptr<Int>, wp: Int, s: Str) -> Int {
+    _write(arena, wp, 3);
+    let len = rt_str_len(s);
+    _write(arena, wp + 1, len);
+    let mut i = 0;
+    while i < len {
+        _write(arena, wp + 2 + i, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    return wp;
+}
+
+// Reads the string payload of a tag-3 value into a heap Str.
+fn _json_str_get(arena: Ptr<Int>, off: Int) -> Str {
+    let len = _read(arena, off + 1);
+    let mut s = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        rt_str_set_byte(s, i, _read(arena, off + 2 + i));
+        i = i + 1;
+    }
+    return s;
+}
+
+fn main() -> Int {
+    // 1. Map and Vec together (values feed a map; vecs grow independently)
+    let mut m = rt_map_new(4);
+    let mut v1 = rt_vec_new(2);
+    v1 = rt_vec_push(v1, 10);
+    v1 = rt_vec_push(v1, 20);
+    v1 = rt_vec_push(v1, 30);
+    m = rt_map_insert(m, 1, 111);
+    m = rt_map_insert(m, 2, 222);
+    m = rt_map_insert(m, 3, 333);
+    if rt_map_len(m) != 3 { rt_print_str("FAIL: map len"); return 1; }
+    if rt_map_get(m, 2) != 222 { rt_print_str("FAIL: map get"); return 2; }
+    if rt_vec_len(v1) != 3 { rt_print_str("FAIL: vec len"); return 3; }
+    if rt_vec_get(v1, 2) != 30 { rt_print_str("FAIL: vec[2]"); return 4; }
+    m = rt_map_remove(m, 2);
+    if rt_map_has(m, 2) { rt_print_str("FAIL: has after remove"); return 5; }
+    if rt_map_len(m) != 2 { rt_print_str("FAIL: len after remove"); return 6; }
+    rt_map_free(m);
+    rt_vec_free(v1);
+
+    // 2. Set of heap strings from environment and filesystem
+    let mut s = rt_set_new(4);
+    let e1 = rt_env_get("PATH");
+    s = rt_set_insert(s, e1);
+    let cwd = rt_fs_get_cwd();
+    s = rt_set_insert(s, cwd);
+    if rt_set_len(s) != 2 { rt_print_str("FAIL: set len"); return 7; }
+    if rt_env_has("PATH") != true { rt_print_str("FAIL: env has"); return 8; }
+    rt_set_free(s);
+
+    // 3. Process subsystem (BSS-backed output: print, do not collect)
+    let code = rt_process_run("cmd /c echo cross-ok");
+    if code != 0 { rt_print_str("FAIL: process exit"); return 9; }
+    let out = rt_process_stdout();
+    if rt_process_stdout_len() <= 0 { rt_print_str("FAIL: process stdout"); return 10; }
+    rt_print_str("PROC: ");
+    rt_print_str(out);
+    rt_print_str("\n");
+
+    // 4. Allocator pointers as map values
+    let mut m2 = rt_map_new(4);
+    let p = rt_alloc(16);
+    rt_mem_store(p, 1234);
+    rt_mem_store(p + 8, 5678);
+    m2 = rt_map_insert(m2, 7, p);
+    let gp = rt_map_get(m2, 7);
+    if rt_mem_load(gp) != 1234 { rt_print_str("FAIL: mem[0]"); return 11; }
+    if rt_mem_load(gp + 8) != 5678 { rt_print_str("FAIL: mem[1]"); return 12; }
+    rt_map_free(m2);
+    rt_free(p);
+
+    // 5. JSON-style arena values collected into a set
+    let arena = rt_alloc(512);
+    let a1 = _json_str(arena, 0, "alpha");
+    let a2 = _json_str(arena, 10, "beta");
+    let a3 = _json_str(arena, 20, "gamma");
+    let mut js = rt_set_new(4);
+    js = rt_set_insert(js, _json_str_get(arena, a1));
+    js = rt_set_insert(js, _json_str_get(arena, a2));
+    js = rt_set_insert(js, _json_str_get(arena, a3));
+    if rt_set_len(js) != 3 { rt_print_str("FAIL: json set len"); return 13; }
+    if !rt_set_has(js, "alpha") { rt_print_str("FAIL: json alpha"); return 14; }
+    if !rt_set_has(js, "beta") { rt_print_str("FAIL: json beta"); return 15; }
+    if !rt_set_has(js, "gamma") { rt_print_str("FAIL: json gamma"); return 16; }
+    rt_set_free(js);
+    rt_free(arena);
+
+    rt_print_str("CROSS_SUBSYSTEM: PASS\n");
+    return 0;
+}
