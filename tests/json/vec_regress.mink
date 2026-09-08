@@ -1,0 +1,66 @@
+// Vec regression: growth/realloc/free (Session 102 E-R04), multiple
+// instances, string elements, repeated create/grow/free cycles.
+fn main() -> Int {
+    // Test 1: single Vec growing across several reallocations
+    let mut v = rt_vec_new(1);
+    let mut i = 0;
+    while i < 64 {
+        v = rt_vec_push(v, i * 7);
+        i = i + 1;
+    }
+    let l1 = rt_vec_len(v);
+    if l1 != 64 { rt_print_str("FAIL: len != 64"); return 1; }
+    i = 0;
+    while i < 64 {
+        if rt_vec_get(v, i) != i * 7 { rt_print_str("FAIL: value after growth"); return 2; }
+        i = i + 1;
+    }
+    rt_vec_free(v);
+
+    // Test 2: two Vec instances interleaved (independent buffers)
+    let mut a = rt_vec_new(2);
+    let mut b = rt_vec_new(2);
+    a = rt_vec_push(a, 111);
+    b = rt_vec_push(b, 222);
+    a = rt_vec_push(a, 112);
+    b = rt_vec_push(b, 223);
+    a = rt_vec_push(a, 113);
+    b = rt_vec_push(b, 224);
+    if rt_vec_get(a, 2) != 113 { rt_print_str("FAIL: a[2]"); return 3; }
+    if rt_vec_get(b, 2) != 224 { rt_print_str("FAIL: b[2]"); return 4; }
+    if rt_vec_len(a) != 3 || rt_vec_len(b) != 3 { rt_print_str("FAIL: interleaved len"); return 5; }
+    rt_vec_free(a);
+    rt_vec_free(b);
+
+    // Test 3: set / pop / remove on a grown Vec
+    let mut v3 = rt_vec_new(1);
+    v3 = rt_vec_push(v3, 10);
+    v3 = rt_vec_push(v3, 20);
+    v3 = rt_vec_push(v3, 30);
+    v3 = rt_vec_set(v3, 1, 99);
+    if rt_vec_get(v3, 1) != 99 { rt_print_str("FAIL: set"); return 6; }
+    let popped = rt_vec_pop(v3);
+    if popped != 30 { rt_print_str("FAIL: pop"); return 7; }
+    if rt_vec_len(v3) != 2 { rt_print_str("FAIL: len after pop"); return 8; }
+    v3 = rt_vec_remove(v3, 0);
+    if rt_vec_get(v3, 0) != 99 { rt_print_str("FAIL: get after remove"); return 9; }
+    if rt_vec_len(v3) != 1 { rt_print_str("FAIL: len after remove"); return 10; }
+    rt_vec_free(v3);
+
+    // Test 4: repeated create/grow/free cycles (old-buffer free each time)
+    let mut c = 0;
+    while c < 200 {
+        let mut vc = rt_vec_new(1);
+        let mut j = 0;
+        while j < 32 {
+            vc = rt_vec_push(vc, j);
+            j = j + 1;
+        }
+        if rt_vec_get(vc, 31) != 31 { rt_print_str("FAIL: cycle value"); return 11; }
+        rt_vec_free(vc);
+        c = c + 1;
+    }
+
+    rt_print_str("VEC_REGRESS: PASS");
+    return 0;
+}
