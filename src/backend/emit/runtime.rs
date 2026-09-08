@@ -2130,8 +2130,8 @@ fn jcc_literal_str(code: &mut Code, yes: u32, no: u32) {
     code.jcc_label(0x82, no); // jb — below the region: not a literal
     code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.str_data_end as u32));
     code.cmp_rr(Reg::Rax, Reg::Rcx);
-    code.jcc_label(0x83, yes); // jae — at/above the end: not a literal
-    // Fallthrough: inside [start, end) — it is a literal.
+    code.jcc_label(0x82, yes); // jb — inside [start, end): a literal
+    // At/above the end: a heap pointer — fall through (not a literal).
 }
 
 /// `CollFreeValue(addr, desc_id)`: recursively free one element of the
@@ -4406,7 +4406,7 @@ fn emit_map_get(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rbp, -64, Reg::Rax); // idx
     let probe_loop = code.label();
     let probe_empty = code.label();
-    let _probe_found = code.label();
+    let probe_found = code.label();
     let probe_miss = code.label();
     code.bind_label(probe_loop);
     // bucket = map + MAP_HEADER + idx*bucket_size.
@@ -4445,7 +4445,18 @@ fn emit_map_get(code: &mut Code, offsets: &RuntimeOffsets) {
         &[Reg::Rcx, Reg::R10, Reg::Rdx],
     );
     code.test_rr(Reg::Rax, Reg::Rax);
-    code.jcc_label(0x85, probe_miss); // jne — different key
+    code.jcc_label(0x84, probe_found); // jz — equal, found
+    // Session 106 fix: a differing key must continue probing. The
+    // previous code jumped to probe_miss (E-R11), so any get() whose
+    // key shared a probe chain with another key failed spuriously.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    code.add_rax_one();
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.and_rr(Reg::Rax, Reg::Rcx);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.jmp_label(probe_loop);
+    code.bind_label(probe_found);
     // FOUND: value addr = bucket + 8 + key_size.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -80); // bucket key addr
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // key_size

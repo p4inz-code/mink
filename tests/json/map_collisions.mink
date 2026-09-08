@@ -1,0 +1,52 @@
+// Map hash-collision chains (Int keys: idx = key & (cap - 1))
+fn main() -> Int {
+    // Part 1: full collision chain without growth (cap 8, keys 1,9,17,25,33
+    // all hash to bucket 1; -1 and -9 to bucket 7)
+    let mut m = rt_map_new(8);
+    m = rt_map_insert(m, 1, 11);
+    m = rt_map_insert(m, 9, 19);
+    m = rt_map_insert(m, 17, 117);
+    m = rt_map_insert(m, 25, 125);
+    m = rt_map_insert(m, 33, 133);
+    if rt_map_len(m) != 5 { rt_print_str("FAIL: collision len != 5"); return 1; }
+    if rt_map_get(m, 1) != 11 { rt_print_str("FAIL: get(1)"); return 2; }
+    if rt_map_get(m, 9) != 19 { rt_print_str("FAIL: get(9)"); return 3; }
+    if rt_map_get(m, 17) != 117 { rt_print_str("FAIL: get(17)"); return 4; }
+    if rt_map_get(m, 25) != 125 { rt_print_str("FAIL: get(25)"); return 5; }
+    if rt_map_get(m, 33) != 133 { rt_print_str("FAIL: get(33)"); return 6; }
+    // Negative keys colliding on bucket 7
+    m = rt_map_insert(m, -1, 71);
+    m = rt_map_insert(m, -9, 79);
+    if rt_map_get(m, -1) != 71 { rt_print_str("FAIL: get(-1)"); return 7; }
+    if rt_map_get(m, -9) != 79 { rt_print_str("FAIL: get(-9)"); return 8; }
+    // Remove the MIDDLE of the chain: lookups beyond the tombstone must
+    // still find their keys
+    m = rt_map_remove(m, 17);
+    if rt_map_has(m, 17) { rt_print_str("FAIL: has(17) after remove"); return 9; }
+    if rt_map_get(m, 9) != 19 { rt_print_str("FAIL: get(9) past tombstone"); return 10; }
+    if rt_map_get(m, 25) != 125 { rt_print_str("FAIL: get(25) past tombstone"); return 11; }
+    if rt_map_get(m, 33) != 133 { rt_print_str("FAIL: get(33) past tombstone"); return 12; }
+    // Re-insert: must reuse the tombstone slot
+    m = rt_map_insert(m, 17, 217);
+    if rt_map_get(m, 17) != 217 { rt_print_str("FAIL: reinsert(17) != 217"); return 13; }
+    if rt_map_len(m) != 7 { rt_print_str("FAIL: len after reinsert != 7"); return 14; }
+    rt_map_free(m);
+
+    // Part 2: collisions across repeated growth (cap 4, 20 keys all with
+    // key & 3 == 1; table grows 4 -> 8 -> 16 -> 32)
+    let mut m2 = rt_map_new(4);
+    let mut i = 1;
+    while i <= 77 {
+        m2 = rt_map_insert(m2, i, i * 10);
+        i = i + 4;
+    }
+    if rt_map_len(m2) != 20 { rt_print_str("FAIL: growth len != 20"); return 15; }
+    i = 1;
+    while i <= 77 {
+        if rt_map_get(m2, i) != i * 10 { rt_print_str("FAIL: growth value"); return 16; }
+        i = i + 4;
+    }
+    rt_map_free(m2);
+    rt_print_str("MAP_COLLISIONS: PASS");
+    return 0;
+}

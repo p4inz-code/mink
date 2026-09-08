@@ -1,0 +1,59 @@
+// Map with string keys: comprehensive coverage
+fn main() -> Int {
+    let mut m = rt_map_new(4);
+
+    // Empty string key
+    m = rt_map_insert(m, "", 1);
+    if !rt_map_has(m, "") { rt_print_str("FAIL: has(empty) false"); return 1; }
+    if rt_map_get(m, "") != 1 { rt_print_str("FAIL: get(empty) != 1"); return 2; }
+
+    // Single character
+    m = rt_map_insert(m, "a", 2);
+    if rt_map_get(m, "a") != 2 { rt_print_str("FAIL: get(a) != 2"); return 3; }
+
+    // A space
+    m = rt_map_insert(m, " ", 3);
+    if rt_map_get(m, " ") != 3 { rt_print_str("FAIL: get(space) != 3"); return 4; }
+
+    // Multiple words (spaces inside)
+    m = rt_map_insert(m, "hello world", 4);
+    if rt_map_get(m, "hello world") != 4 { rt_print_str("FAIL: get(hello world) != 4"); return 5; }
+
+    // Punctuation
+    m = rt_map_insert(m, "!@#$%^&*()", 5);
+    if rt_map_get(m, "!@#$%^&*()") != 5 { rt_print_str("FAIL: get(punct) != 5"); return 6; }
+
+    // Long string
+    m = rt_map_insert(m, "the quick brown fox jumps over the lazy dog 0123456789 abcdefghijklmnopqrstuvwxyz", 6);
+    if rt_map_get(m, "the quick brown fox jumps over the lazy dog 0123456789 abcdefghijklmnopqrstuvwxyz") != 6 {
+        rt_print_str("FAIL: get(long) != 6");
+        return 7;
+    }
+
+    // Independent equal strings: heap-built "abc" vs literal "abc"
+    let h = rt_str_alloc(3);
+    rt_str_set_byte(h, 0, 97);
+    rt_str_set_byte(h, 1, 98);
+    rt_str_set_byte(h, 2, 99);
+    m = rt_map_insert(m, h, 7);
+    // Lookup with an equal-content literal must hit the heap key
+    if rt_map_get(m, "abc") != 7 { rt_print_str("FAIL: get(abc) != 7 via literal"); return 8; }
+    let l7 = rt_map_len(m);
+    if l7 != 7 { rt_print_str("FAIL: len != 7"); return 9; }
+    // Update through the literal: same key, new value
+    m = rt_map_insert(m, "abc", 8);
+    if rt_map_get(m, "abc") != 8 { rt_print_str("FAIL: updated abc != 8"); return 10; }
+    if rt_map_len(m) != 7 { rt_print_str("FAIL: len after update != 7"); return 11; }
+
+    // Remove by content
+    m = rt_map_remove(m, "hello world");
+    if rt_map_has(m, "hello world") { rt_print_str("FAIL: has after remove"); return 13; }
+    if rt_map_len(m) != 6 { rt_print_str("FAIL: len after remove != 6"); return 14; }
+    // Remove missing string key: no-op
+    m = rt_map_remove(m, "zzz");
+    if rt_map_len(m) != 6 { rt_print_str("FAIL: len after remove missing != 6"); return 15; }
+
+    rt_map_free(m);
+    rt_print_str("MAP_STRKEYS: PASS");
+    return 0;
+}

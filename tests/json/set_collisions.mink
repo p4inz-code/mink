@@ -1,0 +1,50 @@
+// Set hash-collision chains (Int values: idx = value & (cap - 1))
+fn main() -> Int {
+    // Part 1: full collision chain without growth (cap 8)
+    let mut s = rt_set_new(8);
+    s = rt_set_insert(s, 1);
+    s = rt_set_insert(s, 9);
+    s = rt_set_insert(s, 17);
+    s = rt_set_insert(s, 25);
+    s = rt_set_insert(s, 33);
+    if rt_set_len(s) != 5 { rt_print_str("FAIL: collision len != 5"); return 1; }
+    if !rt_set_has(s, 1) { rt_print_str("FAIL: has(1)"); return 2; }
+    if !rt_set_has(s, 9) { rt_print_str("FAIL: has(9)"); return 3; }
+    if !rt_set_has(s, 17) { rt_print_str("FAIL: has(17)"); return 4; }
+    if !rt_set_has(s, 25) { rt_print_str("FAIL: has(25)"); return 5; }
+    if !rt_set_has(s, 33) { rt_print_str("FAIL: has(33)"); return 6; }
+    // Negative values colliding on bucket 7
+    s = rt_set_insert(s, -1);
+    s = rt_set_insert(s, -9);
+    if !rt_set_has(s, -1) { rt_print_str("FAIL: has(-1)"); return 7; }
+    if !rt_set_has(s, -9) { rt_print_str("FAIL: has(-9)"); return 8; }
+    // Remove the MIDDLE of the chain: lookups beyond the tombstone must
+    // still succeed
+    s = rt_set_remove(s, 17);
+    if rt_set_has(s, 17) { rt_print_str("FAIL: has(17) after remove"); return 9; }
+    if !rt_set_has(s, 9) { rt_print_str("FAIL: has(9) past tombstone"); return 10; }
+    if !rt_set_has(s, 25) { rt_print_str("FAIL: has(25) past tombstone"); return 11; }
+    if !rt_set_has(s, 33) { rt_print_str("FAIL: has(33) past tombstone"); return 12; }
+    // Re-insert: must reuse the tombstone slot
+    s = rt_set_insert(s, 17);
+    if !rt_set_has(s, 17) { rt_print_str("FAIL: has(17) after reinsert"); return 13; }
+    if rt_set_len(s) != 7 { rt_print_str("FAIL: len after reinsert != 7"); return 14; }
+    rt_set_free(s);
+
+    // Part 2: collisions across repeated growth (cap 4 -> 8 -> 16 -> 32)
+    let mut s2 = rt_set_new(4);
+    let mut i = 1;
+    while i <= 77 {
+        s2 = rt_set_insert(s2, i);
+        i = i + 4;
+    }
+    if rt_set_len(s2) != 20 { rt_print_str("FAIL: growth len != 20"); return 15; }
+    i = 1;
+    while i <= 77 {
+        if !rt_set_has(s2, i) { rt_print_str("FAIL: growth has"); return 16; }
+        i = i + 4;
+    }
+    rt_set_free(s2);
+    rt_print_str("SET_COLLISIONS: PASS");
+    return 0;
+}

@@ -1,0 +1,52 @@
+// Set with string values: comprehensive coverage
+fn main() -> Int {
+    let mut s = rt_set_new(4);
+
+    // Empty string
+    s = rt_set_insert(s, "");
+    if !rt_set_has(s, "") { rt_print_str("FAIL: has(empty) false"); return 1; }
+
+    // Single character
+    s = rt_set_insert(s, "a");
+    if !rt_set_has(s, "a") { rt_print_str("FAIL: has(a) false"); return 2; }
+
+    // A space
+    s = rt_set_insert(s, " ");
+    if !rt_set_has(s, " ") { rt_print_str("FAIL: has(space) false"); return 3; }
+
+    // Punctuation
+    s = rt_set_insert(s, "!@#$%^&*()");
+    if !rt_set_has(s, "!@#$%^&*()") { rt_print_str("FAIL: has(punct) false"); return 4; }
+
+    // Long string
+    s = rt_set_insert(s, "the quick brown fox jumps over the lazy dog 0123456789 abcdefghijklmnopqrstuvwxyz");
+    if !rt_set_has(s, "the quick brown fox jumps over the lazy dog 0123456789 abcdefghijklmnopqrstuvwxyz") {
+        rt_print_str("FAIL: has(long) false");
+        return 5;
+    }
+
+    // Independent equal strings: heap-built "abc" then literal "abc"
+    let h = rt_str_alloc(3);
+    rt_str_set_byte(h, 0, 97);
+    rt_str_set_byte(h, 1, 98);
+    rt_str_set_byte(h, 2, 99);
+    s = rt_set_insert(s, h);
+    if !rt_set_has(s, "abc") { rt_print_str("FAIL: has(abc) false via literal"); return 6; }
+    let l6 = rt_set_len(s);
+    if l6 != 6 { rt_print_str("FAIL: len != 6"); return 7; }
+    // Duplicate insert (equal content): no-op
+    s = rt_set_insert(s, "abc");
+    if rt_set_len(s) != 6 { rt_print_str("FAIL: len after dup != 6"); return 8; }
+
+    // Remove by content
+    s = rt_set_remove(s, "a");
+    if rt_set_has(s, "a") { rt_print_str("FAIL: has(a) after remove"); return 10; }
+    if rt_set_len(s) != 5 { rt_print_str("FAIL: len after remove != 5"); return 11; }
+    // Remove missing string: no-op
+    s = rt_set_remove(s, "zzz");
+    if rt_set_len(s) != 5 { rt_print_str("FAIL: len after remove missing != 5"); return 12; }
+
+    rt_set_free(s);
+    rt_print_str("SET_STRVALS: PASS");
+    return 0;
+}
