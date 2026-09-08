@@ -1,0 +1,90 @@
+// Map basic operations comprehensive test
+fn main() -> Int {
+    // Test 1: new + len (should be 0)
+    let mut m = rt_map_new(4);
+    let l0 = rt_map_len(m);
+    if l0 != 0 { rt_print_str("FAIL: new map len != 0"); return 1; }
+
+    // Test 2: insert + len
+    m = rt_map_insert(m, 10, 100);
+    let l1 = rt_map_len(m);
+    if l1 != 1 { rt_print_str("FAIL: len after 1 insert != 1"); return 2; }
+
+    // Test 3: get
+    let v1 = rt_map_get(m, 10);
+    if v1 != 100 { rt_print_str("FAIL: get(10) != 100"); return 3; }
+
+    // Test 4: has
+    let h1 = rt_map_has(m, 10);
+    if !h1 { rt_print_str("FAIL: has(10) should be true"); return 4; }
+
+    // Test 5: missing key
+    let h2 = rt_map_has(m, 99);
+    if h2 { rt_print_str("FAIL: has(99) should be false"); return 5; }
+
+    // Test 6: multiple inserts
+    m = rt_map_insert(m, 20, 200);
+    m = rt_map_insert(m, 30, 300);
+    let l3 = rt_map_len(m);
+    if l3 != 3 { rt_print_str("FAIL: len after 3 inserts != 3"); return 6; }
+
+    // Test 7: get all three
+    let v10 = rt_map_get(m, 10);
+    let v20 = rt_map_get(m, 20);
+    let v30 = rt_map_get(m, 30);
+    if v10 != 100 || v20 != 200 || v30 != 300 {
+        rt_print_str("FAIL: get values incorrect");
+        return 7;
+    }
+
+    // Test 8: update existing key
+    m = rt_map_insert(m, 20, 222);
+    let v20b = rt_map_get(m, 20);
+    if v20b != 222 { rt_print_str("FAIL: update(20) != 222"); return 8; }
+    let l3b = rt_map_len(m);
+    if l3b != 3 { rt_print_str("FAIL: len after update != 3"); return 9; }
+
+    // Test 9: remove
+    m = rt_map_remove(m, 20);
+    let h20 = rt_map_has(m, 20);
+    if h20 { rt_print_str("FAIL: has(20) after remove should be false"); return 10; }
+    let l2 = rt_map_len(m);
+    if l2 != 2 { rt_print_str("FAIL: len after remove != 2"); return 11; }
+
+    // Test 10: get removed key (should raise E-R11)
+    // rt_map_get on missing key raises E-R11, so we must not call it.
+    // Instead verify has() returns false after remove (already tested above).
+
+    // Test 11: remove missing key (should be no-op)
+    m = rt_map_remove(m, 999);
+    let l2b = rt_map_len(m);
+    if l2b != 2 { rt_print_str("FAIL: len after remove missing key != 2"); return 13; }
+
+    // Test 12: insert after remove
+    m = rt_map_insert(m, 20, 250);
+    let h20b = rt_map_has(m, 20);
+    if !h20b { rt_print_str("FAIL: has(20) after re-insert should be true"); return 14; }
+    let v20d = rt_map_get(m, 20);
+    if v20d != 250 { rt_print_str("FAIL: get(20) after re-insert != 250"); return 15; }
+    let l3c = rt_map_len(m);
+    if l3c != 3 { rt_print_str("FAIL: len after re-insert != 3"); return 16; }
+
+    // Test 13: key zero
+    m = rt_map_insert(m, 0, 777);
+    let v0 = rt_map_get(m, 0);
+    if v0 != 777 { rt_print_str("FAIL: get(0) != 777"); return 17; }
+
+    // Test 14: large values
+    m = rt_map_insert(m, 999999, 888888);
+    let vl = rt_map_get(m, 999999);
+    if vl != 888888 { rt_print_str("FAIL: large value incorrect"); return 18; }
+
+    // Test 15: negative keys (if supported — stored as raw i64 in word slots)
+    m = rt_map_insert(m, -1, 42);
+    let vn = rt_map_get(m, -1);
+    if vn != 42 { rt_print_str("FAIL: negative key incorrect"); return 19; }
+
+    rt_map_free(m);
+    rt_print_str("MAP_BASIC: PASS");
+    return 0;
+}

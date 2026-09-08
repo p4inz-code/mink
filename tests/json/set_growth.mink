@@ -1,0 +1,60 @@
+// Set growth test: force multiple table growths
+fn main() -> Int {
+    let mut s = rt_set_new(2);
+    let mut i = 0;
+
+    // Insert 64 entries
+    while i < 64 {
+        s = rt_set_insert(s, i);
+        i = i + 1;
+    }
+
+    let l = rt_set_len(s);
+    if l != 64 { rt_print_str("FAIL: len != 64"); return 1; }
+
+    // Verify all present
+    i = 0;
+    while i < 64 {
+        let h = rt_set_has(s, i);
+        if !h { rt_print_str("FAIL: missing key after growth"); return 2; }
+        i = i + 1;
+    }
+
+    // Duplicate inserts (should not change len)
+    i = 0;
+    while i < 64 {
+        s = rt_set_insert(s, i);
+        i = i + 1;
+    }
+    let l2 = rt_set_len(s);
+    if l2 != 64 { rt_print_str("FAIL: len after dups != 64"); return 3; }
+
+    // Remove first half
+    i = 0;
+    while i < 32 {
+        s = rt_set_remove(s, i);
+        i = i + 1;
+    }
+    let l3 = rt_set_len(s);
+    if l3 != 32 { rt_print_str("FAIL: len after removes != 32"); return 4; }
+
+    // Verify removed
+    i = 0;
+    while i < 32 {
+        let h = rt_set_has(s, i);
+        if h { rt_print_str("FAIL: removed key still present"); return 5; }
+        i = i + 1;
+    }
+
+    // Verify remaining
+    i = 32;
+    while i < 64 {
+        let h = rt_set_has(s, i);
+        if !h { rt_print_str("FAIL: remaining key missing"); return 6; }
+        i = i + 1;
+    }
+
+    rt_set_free(s);
+    rt_print_str("SET_GROWTH: PASS");
+    return 0;
+}

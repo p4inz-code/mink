@@ -1,0 +1,33 @@
+// Minimal test: insert elements that trigger growth, then check has
+fn main() -> Int {
+    let mut s = rt_set_new(2);
+    // Insert first element (no growth yet)
+    s = rt_set_insert(s, 5);
+    let h5a = rt_set_has(s, 5);
+    if !h5a { rt_print_str("FAIL: has(5) after 1st insert"); return 1; }
+
+    // Insert second element (triggers growth: 4*(2+0)=8 >= 3*2=6)
+    s = rt_set_insert(s, 10);
+
+    // Check the element that was inserted BEFORE growth
+    let h5b = rt_set_has(s, 5);
+    rt_print_str("has(5) after grow=");
+    if h5b { rt_print_str("T"); } else { rt_print_str("F"); }
+    rt_print_str("\n");
+
+    // Check the element that triggered growth
+    let h10 = rt_set_has(s, 10);
+    rt_print_str("has(10) after grow=");
+    if h10 { rt_print_str("T"); } else { rt_print_str("F"); }
+    rt_print_str("\n");
+
+    let l = rt_set_len(s);
+    rt_print_str("len=");
+    rt_print_int(l);
+    rt_print_str("\n");
+
+    if !h5b || !h10 { rt_print_str("FAIL"); return 2; }
+    rt_print_str("PASS");
+    rt_set_free(s);
+    return 0;
+}

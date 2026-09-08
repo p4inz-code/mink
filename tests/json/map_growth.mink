@@ -1,0 +1,23 @@
+// Test map has after growth
+fn main() -> Int {
+    let mut m = rt_map_new(2);
+    m = rt_map_insert(m, 5, 500);
+    m = rt_map_insert(m, 10, 1000);
+    
+    let h5 = rt_map_has(m, 5);
+    let h10 = rt_map_has(m, 10);
+    let l = rt_map_len(m);
+    
+    rt_print_str("len=");
+    rt_print_int(l);
+    rt_print_str(" has(5)=");
+    if h5 { rt_print_str("T"); } else { rt_print_str("F"); }
+    rt_print_str(" has(10)=");
+    if h10 { rt_print_str("T"); } else { rt_print_str("F"); }
+    rt_print_str("\n");
+    
+    if !h5 || !h10 { rt_print_str("FAIL"); return 1; }
+    rt_print_str("PASS");
+    rt_map_free(m);
+    return 0;
+}

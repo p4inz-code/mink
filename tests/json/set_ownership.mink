@@ -1,0 +1,65 @@
+// Set ownership test: free and leak verification
+fn main() -> Int {
+    // Test 1: create and free empty set
+    let s1 = rt_set_new(4);
+    rt_set_free(s1);
+
+    // Test 2: create, populate, free
+    let mut s2 = rt_set_new(4);
+    s2 = rt_set_insert(s2, 1);
+    s2 = rt_set_insert(s2, 2);
+    s2 = rt_set_insert(s2, 3);
+    rt_set_free(s2);
+
+    // Test 3: large set free
+    let mut s3 = rt_set_new(2);
+    let mut i = 0;
+    while i < 100 {
+        s3 = rt_set_insert(s3, i);
+        i = i + 1;
+    }
+    rt_set_free(s3);
+
+    // Test 4: free after removes
+    let mut s4 = rt_set_new(4);
+    s4 = rt_set_insert(s4, 1);
+    s4 = rt_set_insert(s4, 2);
+    s4 = rt_set_remove(s4, 1);
+    s4 = rt_set_remove(s4, 2);
+    rt_set_free(s4);
+
+    // Test 5: free after growth + partial remove
+    let mut s5 = rt_set_new(2);
+    i = 0;
+    while i < 50 {
+        s5 = rt_set_insert(s5, i);
+        i = i + 1;
+    }
+    i = 0;
+    while i < 25 {
+        s5 = rt_set_remove(s5, i);
+        i = i + 1;
+    }
+    rt_set_free(s5);
+
+    // Test 6: multiple set instances
+    let mut sa = rt_set_new(4);
+    let mut sb = rt_set_new(4);
+    let mut sc = rt_set_new(4);
+    sa = rt_set_insert(sa, 100);
+    sb = rt_set_insert(sb, 200);
+    sc = rt_set_insert(sc, 300);
+    let ha = rt_set_has(sa, 100);
+    let hb = rt_set_has(sb, 200);
+    let hc = rt_set_has(sc, 300);
+    if !ha || !hb || !hc {
+        rt_print_str("FAIL: multi-set has wrong");
+        return 1;
+    }
+    rt_set_free(sa);
+    rt_set_free(sb);
+    rt_set_free(sc);
+
+    rt_print_str("SET_OWNERSHIP: PASS");
+    return 0;
+}

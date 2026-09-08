@@ -3854,6 +3854,24 @@ fn emit_map_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
     code.mov_mem_r(Reg::Rax, 32, Reg::Rcx);
+    // Clear every bucket's occupied word (reused free-list blocks retain
+    // stale entries; unmarked buckets would make probing spin). Session
+    // 106 fix, mirroring the constructors.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -56); // bucket_size
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -16); // new_cap
+    code.mov_rr(Reg::R10, Reg::Rax);
+    code.add_r_imm8(Reg::R10, MAP_HEADER as u8); // first bucket
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // i = 0
+    let clear_loop = code.label();
+    let clear_done = code.label();
+    code.bind_label(clear_loop);
+    code.cmp_rr(Reg::Rcx, Reg::R9);
+    code.jcc_label(0x8D, clear_done); // jge
+    code.mov_mem_imm32(Reg::R10, 0, 0);
+    code.add_rr(Reg::R10, Reg::R8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.jmp_label(clear_loop);
+    code.bind_label(clear_done);
     // Walk the old buckets, rehashing live keys into the new table.
     code.mov_r32_imm32(Reg::Rcx, 0);
     code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // i = 0
@@ -3899,8 +3917,8 @@ fn emit_map_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.add_rr(Reg::Rax, Reg::Rdx);
     code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // b_new
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
-    code.test_rr(Reg::Rcx, Reg::Rcx);
-    code.jcc_label(0x84, probe_done); // jz — empty slot
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, probe_done); // jne — not live, insert here
     // idx = (idx + 1) & (new_cap - 1).
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
     code.add_rax_one();
@@ -3910,6 +3928,13 @@ fn emit_map_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rbp, -80, Reg::Rax);
     code.jmp_label(probe_loop);
     code.bind_label(probe_done);
+    // Mark the bucket live FIRST, while [rbp-104] is still the bucket
+    // base (b_new). Session 106 fix: the previous code wrote the flag
+    // after [rbp-104] had been converted to the value address, so the
+    // occupied word was never set and the value data was clobbered with
+    // 1 — every rehashed entry became invisible.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    code.mov_mem_imm32(Reg::Rax, 0, 1); // occupied = 1
     // Move the key verbatim: src = bucket + 8, dst = b_new + 8.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
     code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
@@ -3934,9 +3959,7 @@ fn emit_map_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
     code.mov_r_mem(Reg::R8, Reg::Rbp, -40); // value_size
     emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
-    // Mark the bucket live and bump the length.
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
-    code.mov_mem_imm32(Reg::Rax, 0, 1); // occupied = 1
+    // Bump the length.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -96); // new
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
     code.add_r_imm8(Reg::Rcx, 1);
@@ -3982,7 +4005,7 @@ fn emit_set_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.sub_rsp(8);
     code.mov_mem_r(Reg::Rsp, 0, Reg::Rax);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
-    code.add_rsp(16);
+    code.add_rsp(8);
     code.mov_mem_r(Reg::Rbp, -96, Reg::Rax); // new
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
@@ -3990,6 +4013,24 @@ fn emit_set_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_imm32(Reg::Rax, 16, 0);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
     code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
+    // Clear every bucket's occupied word (reused free-list blocks retain
+    // stale entries; unmarked buckets would make probing spin). Session
+    // 106 fix, mirroring the constructors.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -56); // bucket_size
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -16); // new_cap
+    code.mov_rr(Reg::R10, Reg::Rax);
+    code.add_r_imm8(Reg::R10, SET_HEADER as u8); // first bucket
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // i = 0
+    let clear_loop = code.label();
+    let clear_done = code.label();
+    code.bind_label(clear_loop);
+    code.cmp_rr(Reg::Rcx, Reg::R9);
+    code.jcc_label(0x8D, clear_done); // jge
+    code.mov_mem_imm32(Reg::R10, 0, 0);
+    code.add_rr(Reg::R10, Reg::R8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.jmp_label(clear_loop);
+    code.bind_label(clear_done);
     // Walk the old buckets.
     code.mov_r32_imm32(Reg::Rcx, 0);
     code.mov_mem_r(Reg::Rbp, -72, Reg::Rcx); // i = 0
@@ -4035,8 +4076,8 @@ fn emit_set_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.add_rr(Reg::Rax, Reg::Rdx);
     code.mov_mem_r(Reg::Rbp, -104, Reg::Rax); // b_new
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // occupied
-    code.test_rr(Reg::Rcx, Reg::Rcx);
-    code.jcc_label(0x84, probe_done); // jz
+    code.cmp_r_imm8(Reg::Rcx, 1);
+    code.jcc_label(0x85, probe_done); // jne — not live, insert here
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
     code.add_rax_one();
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
@@ -4045,6 +4086,13 @@ fn emit_set_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rbp, -80, Reg::Rax);
     code.jmp_label(probe_loop);
     code.bind_label(probe_done);
+    // Mark the bucket live FIRST, while [rbp-104] is still the bucket
+    // base (b_new). Session 106 fix: the previous code wrote the flag
+    // after [rbp-104] had been converted to the element address, so the
+    // occupied word was never set and the first element word was
+    // clobbered with 1 — every rehashed entry became invisible.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    code.mov_mem_imm32(Reg::Rax, 0, 1);
     // Move the element verbatim: src = bucket + 8, dst = b_new + 8.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
     code.add_r_imm8(Reg::Rax, BUCKET_HEADER as u8);
@@ -4056,9 +4104,7 @@ fn emit_set_rebuild(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
     code.mov_r_mem(Reg::R8, Reg::Rbp, -40); // elem_size
     emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
-    // Mark the bucket live and bump the length.
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
-    code.mov_mem_imm32(Reg::Rax, 0, 1);
+    // Bump the length.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -96);
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8);
     code.add_r_imm8(Reg::Rcx, 1);
@@ -4102,6 +4148,7 @@ fn emit_map_new(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32);
     code.add_rr(Reg::Rcx, Reg::Rdx);
     code.add_r_imm8(Reg::Rcx, BUCKET_HEADER as u8);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // bucket_size (value_size done)
     // size = MAP_HEADER + capacity * bucket_size.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.imul_rax_rcx();
@@ -4118,6 +4165,25 @@ fn emit_map_new(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
     code.mov_mem_r(Reg::Rax, 32, Reg::Rcx);
+    // Clear every bucket's occupied word. A fresh bump is loader-zeroed,
+    // but a free-list-reused block retains stale entries from its
+    // previous life; unmarked buckets would poison probing (spurious
+    // hits, probe-chain loops). Session 106 fix.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // bucket_size (spilled above)
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // capacity
+    code.mov_rr(Reg::R10, Reg::Rax);
+    code.add_r_imm8(Reg::R10, MAP_HEADER as u8); // first bucket
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // i = 0
+    let clear_loop = code.label();
+    let clear_done = code.label();
+    code.bind_label(clear_loop);
+    code.cmp_rr(Reg::Rcx, Reg::R9);
+    code.jcc_label(0x8D, clear_done); // jge
+    code.mov_mem_imm32(Reg::R10, 0, 0);
+    code.add_rr(Reg::R10, Reg::R8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.jmp_label(clear_loop);
+    code.bind_label(clear_done);
     code.add_rsp(32);
     code.leave_ret();
     code.bind_label(bad);
@@ -4929,6 +4995,25 @@ fn emit_set_new(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_imm32(Reg::Rax, 16, 0);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
     code.mov_mem_r(Reg::Rax, 24, Reg::Rcx);
+    // Clear every bucket's occupied word. A fresh bump is loader-zeroed,
+    // but a free-list-reused block retains stale entries from its
+    // previous life; unmarked buckets would poison probing (spurious
+    // hits, probe-chain loops). Session 106 fix.
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // bucket_size
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // capacity
+    code.mov_rr(Reg::R10, Reg::Rax);
+    code.add_r_imm8(Reg::R10, SET_HEADER as u8); // first bucket
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // i = 0
+    let clear_loop = code.label();
+    let clear_done = code.label();
+    code.bind_label(clear_loop);
+    code.cmp_rr(Reg::Rcx, Reg::R9);
+    code.jcc_label(0x8D, clear_done); // jge
+    code.mov_mem_imm32(Reg::R10, 0, 0);
+    code.add_rr(Reg::R10, Reg::R8);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.jmp_label(clear_loop);
+    code.bind_label(clear_done);
     code.add_rsp(32);
     code.leave_ret();
     code.bind_label(bad);

@@ -1,0 +1,65 @@
+// Map ownership test: free and leak verification
+fn main() -> Int {
+    // Test 1: create and free empty map
+    let m1 = rt_map_new(4);
+    rt_map_free(m1);
+
+    // Test 2: create, populate, free
+    let mut m2 = rt_map_new(4);
+    m2 = rt_map_insert(m2, 1, 10);
+    m2 = rt_map_insert(m2, 2, 20);
+    m2 = rt_map_insert(m2, 3, 30);
+    rt_map_free(m2);
+
+    // Test 3: large map free
+    let mut m3 = rt_map_new(2);
+    let mut i = 0;
+    while i < 100 {
+        m3 = rt_map_insert(m3, i, i * 7);
+        i = i + 1;
+    }
+    rt_map_free(m3);
+
+    // Test 4: free after removes
+    let mut m4 = rt_map_new(4);
+    m4 = rt_map_insert(m4, 1, 10);
+    m4 = rt_map_insert(m4, 2, 20);
+    m4 = rt_map_remove(m4, 1);
+    m4 = rt_map_remove(m4, 2);
+    rt_map_free(m4);
+
+    // Test 5: free after growth + partial remove
+    let mut m5 = rt_map_new(2);
+    i = 0;
+    while i < 50 {
+        m5 = rt_map_insert(m5, i, i);
+        i = i + 1;
+    }
+    i = 0;
+    while i < 25 {
+        m5 = rt_map_remove(m5, i);
+        i = i + 1;
+    }
+    rt_map_free(m5);
+
+    // Test 6: multiple map instances
+    let mut ma = rt_map_new(4);
+    let mut mb = rt_map_new(4);
+    let mut mc = rt_map_new(4);
+    ma = rt_map_insert(ma, 1, 100);
+    mb = rt_map_insert(mb, 2, 200);
+    mc = rt_map_insert(mc, 3, 300);
+    let va = rt_map_get(ma, 1);
+    let vb = rt_map_get(mb, 2);
+    let vc = rt_map_get(mc, 3);
+    if va != 100 || vb != 200 || vc != 300 {
+        rt_print_str("FAIL: multi-map values wrong");
+        return 1;
+    }
+    rt_map_free(ma);
+    rt_map_free(mb);
+    rt_map_free(mc);
+
+    rt_print_str("MAP_OWNERSHIP: PASS");
+    return 0;
+}

@@ -1,0 +1,86 @@
+// Set basic operations comprehensive test
+fn main() -> Int {
+    // Test 1: new + len (should be 0)
+    let mut s = rt_set_new(4);
+    let l0 = rt_set_len(s);
+    if l0 != 0 { rt_print_str("FAIL: new set len != 0"); return 1; }
+
+    // Test 2: insert + has
+    s = rt_set_insert(s, 10);
+    let h1 = rt_set_has(s, 10);
+    if !h1 { rt_print_str("FAIL: has(10) after insert should be true"); return 2; }
+    let l1 = rt_set_len(s);
+    if l1 != 1 { rt_print_str("FAIL: len after 1 insert != 1"); return 3; }
+
+    // Test 3: duplicate insert
+    s = rt_set_insert(s, 10);
+    let l1b = rt_set_len(s);
+    if l1b != 1 { rt_print_str("FAIL: len after duplicate insert != 1"); return 4; }
+
+    // Test 4: multiple inserts
+    s = rt_set_insert(s, 20);
+    s = rt_set_insert(s, 30);
+    let l3 = rt_set_len(s);
+    if l3 != 3 { rt_print_str("FAIL: len after 3 unique inserts != 3"); return 5; }
+
+    // Test 5: has all
+    let h10 = rt_set_has(s, 10);
+    let h20 = rt_set_has(s, 20);
+    let h30 = rt_set_has(s, 30);
+    if !h10 || !h20 || !h30 {
+        rt_print_str("FAIL: has missing a key");
+        return 6;
+    }
+
+    // Test 6: missing key
+    let h99 = rt_set_has(s, 99);
+    if h99 { rt_print_str("FAIL: has(99) should be false"); return 7; }
+
+    // Test 7: remove
+    s = rt_set_remove(s, 20);
+    let h20b = rt_set_has(s, 20);
+    if h20b { rt_print_str("FAIL: has(20) after remove should be false"); return 8; }
+    let l2 = rt_set_len(s);
+    if l2 != 2 { rt_print_str("FAIL: len after remove != 2"); return 9; }
+
+    // Test 8: remove missing
+    s = rt_set_remove(s, 999);
+    let l2b = rt_set_len(s);
+    if l2b != 2 { rt_print_str("FAIL: len after remove missing != 2"); return 10; }
+
+    // Test 9: re-insert after remove
+    s = rt_set_insert(s, 20);
+    let h20c = rt_set_has(s, 20);
+    if !h20c { rt_print_str("FAIL: has(20) after re-insert should be true"); return 11; }
+    let l3b = rt_set_len(s);
+    if l3b != 3 { rt_print_str("FAIL: len after re-insert != 3"); return 12; }
+
+    // Test 10: key zero
+    s = rt_set_insert(s, 0);
+    let h0 = rt_set_has(s, 0);
+    if !h0 { rt_print_str("FAIL: has(0) should be true"); return 13; }
+
+    // Test 11: large value
+    s = rt_set_insert(s, 999999);
+    let hl = rt_set_has(s, 999999);
+    if !hl { rt_print_str("FAIL: has(999999) should be true"); return 14; }
+
+    // Test 12: negative value
+    s = rt_set_insert(s, -1);
+    let hn = rt_set_has(s, -1);
+    if !hn { rt_print_str("FAIL: has(-1) should be true"); return 15; }
+
+    // Cleanup
+    s = rt_set_remove(s, 10);
+    s = rt_set_remove(s, 30);
+    s = rt_set_remove(s, 0);
+    s = rt_set_remove(s, 999999);
+    s = rt_set_remove(s, -1);
+    s = rt_set_remove(s, 20);
+    let lf = rt_set_len(s);
+    if lf != 0 { rt_print_str("FAIL: len after removing all != 0"); return 16; }
+
+    rt_set_free(s);
+    rt_print_str("SET_BASIC: PASS");
+    return 0;
+}
