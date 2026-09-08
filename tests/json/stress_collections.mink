@@ -1,0 +1,126 @@
+// Collection stress: thousands of operations with repeated growth,
+// three full iterations.
+fn main() -> Int {
+    let mut iter = 0;
+    while iter < 3 {
+        // --- Vec: 10k pushes across many reallocations ---
+        let mut v = rt_vec_new(4);
+        let mut i = 0;
+        while i < 10000 {
+            v = rt_vec_push(v, i);
+            i = i + 1;
+        }
+        if rt_vec_len(v) != 10000 { rt_print_str("FAIL: vec len"); return 1; }
+        if rt_vec_get(v, 0) != 0 { rt_print_str("FAIL: v[0]"); return 2; }
+        if rt_vec_get(v, 999) != 999 { rt_print_str("FAIL: v[999]"); return 3; }
+        if rt_vec_get(v, 5000) != 5000 { rt_print_str("FAIL: v[5000]"); return 4; }
+        if rt_vec_get(v, 9999) != 9999 { rt_print_str("FAIL: v[9999]"); return 5; }
+        // Overwrite every element via set
+        i = 0;
+        while i < 10000 {
+            v = rt_vec_set(v, i, i * 2);
+            i = i + 1;
+        }
+        if rt_vec_get(v, 7777) != 15554 { rt_print_str("FAIL: v set"); return 6; }
+        // Pop everything back
+        i = 0;
+        while i < 10000 {
+            let p = rt_vec_pop(v);
+            if p != (9999 - i) * 2 { rt_print_str("FAIL: pop value"); return 7; }
+            i = i + 1;
+        }
+        if rt_vec_len(v) != 0 { rt_print_str("FAIL: vec empty"); return 8; }
+        rt_vec_free(v);
+
+        // --- Map: 5k inserts, gets, updates, removes ---
+        let mut m = rt_map_new(4);
+        i = 0;
+        while i < 5000 {
+            m = rt_map_insert(m, i * 3, i * 7);
+            i = i + 1;
+        }
+        if rt_map_len(m) != 5000 { rt_print_str("FAIL: map len"); return 9; }
+        i = 0;
+        while i < 5000 {
+            if rt_map_get(m, i * 3) != i * 7 { rt_print_str("FAIL: map get"); return 10; }
+            i = i + 1;
+        }
+        // Updates
+        i = 0;
+        while i < 2000 {
+            m = rt_map_insert(m, i * 3, i * 13);
+            i = i + 1;
+        }
+        if rt_map_len(m) != 5000 { rt_print_str("FAIL: map len after update"); return 11; }
+        if rt_map_get(m, 1500 * 3) != 1500 * 13 { rt_print_str("FAIL: map updated value"); return 12; }
+        // Removes of every third key
+        i = 0;
+        while i < 5000 {
+            m = rt_map_remove(m, i * 3);
+            i = i + 3;
+        }
+        if rt_map_len(m) != 3333 { rt_print_str("FAIL: map len after remove"); return 13; }
+        if rt_map_has(m, 0) { rt_print_str("FAIL: map removed key"); return 14; }
+        // Re-insert removed keys
+        i = 0;
+        while i < 5000 {
+            m = rt_map_insert(m, i * 3, i * 7);
+            i = i + 3;
+        }
+        if rt_map_len(m) != 5000 { rt_print_str("FAIL: map len after reinsert"); return 15; }
+        i = 0;
+        while i < 5000 {
+            // Keys re-inserted after removal carry i*7; surviving updated
+            // keys (i%3 != 0, i < 2000) carry i*13.
+            let expect = if i >= 2000 || i % 3 == 0 { i * 7 } else { i * 13 };
+            if rt_map_get(m, i * 3) != expect { rt_print_str("FAIL: map re-get"); return 16; }
+            i = i + 1;
+        }
+        rt_map_free(m);
+
+        // --- Set: 5k inserts, has, removes, re-inserts ---
+        let mut s = rt_set_new(4);
+        i = 0;
+        while i < 5000 {
+            s = rt_set_insert(s, i * 5);
+            i = i + 1;
+        }
+        if rt_set_len(s) != 5000 { rt_print_str("FAIL: set len"); return 17; }
+        i = 0;
+        while i < 5000 {
+            if !rt_set_has(s, i * 5) { rt_print_str("FAIL: set has"); return 18; }
+            i = i + 1;
+        }
+        // Duplicates are no-ops
+        i = 0;
+        while i < 1000 {
+            s = rt_set_insert(s, i * 5);
+            i = i + 1;
+        }
+        if rt_set_len(s) != 5000 { rt_print_str("FAIL: set dup len"); return 19; }
+        // Remove every 4th
+        i = 0;
+        while i < 5000 {
+            s = rt_set_remove(s, i * 5);
+            i = i + 4;
+        }
+        if rt_set_len(s) != 3750 { rt_print_str("FAIL: set len after remove"); return 20; }
+        if rt_set_has(s, 0) { rt_print_str("FAIL: set removed"); return 21; }
+        i = 0;
+        while i < 5000 {
+            s = rt_set_insert(s, i * 5);
+            i = i + 4;
+        }
+        if rt_set_len(s) != 5000 { rt_print_str("FAIL: set reinsert len"); return 22; }
+        i = 0;
+        while i < 5000 {
+            if !rt_set_has(s, i * 5) { rt_print_str("FAIL: set re-has"); return 23; }
+            i = i + 1;
+        }
+        rt_set_free(s);
+
+        iter = iter + 1;
+    }
+    rt_print_str("STRESS_COLLECTIONS: PASS\n");
+    return 0;
+}
