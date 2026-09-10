@@ -558,6 +558,143 @@ fn str_join_3(a: Str, b: Str, c: Str) -> Str {
 }
 
 // ============================================================================
+// Split / join with delimiter (Session 107, S01)
+// ============================================================================
+//
+// `str_split(s, delim) -> Vec<Str>` splits `s` on every occurrence of
+// `delim` and returns a NEW Vec owning fresh heap strings, one per part.
+// Contract (deterministic, documented):
+//   - empty parts are preserved: `"a,"` with `","` -> ["a", ""];
+//   - no occurrence: the whole input is one part;
+//   - empty `s`: one empty part (`""` -> [""]);
+//   - empty `delim`: no split, the whole input is one part;
+//   - `delim` longer than `s`: the whole input is one part.
+// The caller owns the returned Vec and frees it with `rt_vec_free` (which
+// frees every contained string). `s` and `delim` are consumed.
+
+fn str_split(s: Str, delim: Str) -> Vec<Str> {
+    let slen = rt_str_len(s);
+    let dlen = rt_str_len(delim);
+    // Count parts = occurrences + 1 (1 when delim is empty or absent).
+    let mut count = 0;
+    if dlen > 0 {
+        if dlen <= slen {
+            let mut pos = 0;
+            while pos <= slen - dlen {
+                let mut mf = true;
+                let mut j = 0;
+                while j < dlen {
+                    if rt_str_byte(s, pos + j) != rt_str_byte(delim, j) {
+                        mf = false;
+                        j = dlen;
+                    } else {
+                        j = j + 1;
+                    }
+                }
+                if mf {
+                    count = count + 1;
+                    pos = pos + dlen;
+                }
+                if !mf {
+                    pos = pos + 1;
+                }
+            }
+        }
+    }
+    let mut parts = count + 1;
+    let mut v = rt_vec_new(parts);
+    // Extract each part into a fresh heap string and push it.
+    let mut start = 0;
+    let mut pi = 0;
+    while pi < parts {
+        // Find the next occurrence at or after `start`; default = end.
+        let mut occ = slen;
+        if dlen > 0 {
+            let mut p = start;
+            let mut done = 0;
+            while p <= slen - dlen && done == 0 {
+                let mut mf = true;
+                let mut j = 0;
+                while j < dlen {
+                    if rt_str_byte(s, p + j) != rt_str_byte(delim, j) {
+                        mf = false;
+                        j = dlen;
+                    } else {
+                        j = j + 1;
+                    }
+                }
+                if mf {
+                    done = 1;
+                }
+                if done == 0 {
+                    p = p + 1;
+                }
+            }
+            if done == 1 {
+                occ = p;
+            }
+        }
+        let plen = occ - start;
+        let part = rt_str_alloc(plen);
+        let mut k = 0;
+        while k < plen {
+            rt_str_set_byte(part, k, rt_str_byte(s, start + k));
+            k = k + 1;
+        }
+        v = rt_vec_push(v, part);
+        pi = pi + 1;
+        start = occ + dlen;
+    }
+    rt_str_free(s);
+    rt_str_free(delim);
+    return v;
+}
+
+// `str_join(parts: Vec<Str>, delim: Str) -> Str` joins every element of
+// `parts` with `delim` between consecutive elements. An empty Vec yields
+// the empty string. The Vec (and every contained string) is consumed and
+// freed by this function; `delim` is consumed.
+
+fn str_join(parts: Vec<Str>, delim: Str) -> Str {
+    let n = rt_vec_len(parts);
+    let dlen = rt_str_len(delim);
+    let mut total = 0;
+    let mut i = 0;
+    while i < n {
+        total = total + rt_str_len(rt_vec_get(parts, i));
+        i = i + 1;
+    }
+    if n > 0 {
+        total = total + dlen * (n - 1);
+    }
+    let out = rt_str_alloc(total);
+    let mut o = 0;
+    let mut i2 = 0;
+    while i2 < n {
+        let part = rt_vec_get(parts, i2);
+        let plen = rt_str_len(part);
+        let mut k = 0;
+        while k < plen {
+            rt_str_set_byte(out, o, rt_str_byte(part, k));
+            o = o + 1;
+            k = k + 1;
+        }
+        if i2 < n - 1 {
+            let mut d = 0;
+            while d < dlen {
+                rt_str_set_byte(out, o, rt_str_byte(delim, d));
+                o = o + 1;
+                d = d + 1;
+            }
+        }
+        i2 = i2 + 1;
+    }
+    rt_str_free(delim);
+    rt_vec_free(parts);
+    return out;
+}
+
+// ============================================================================
 // Char at position — returns byte value
 // ============================================================================
 

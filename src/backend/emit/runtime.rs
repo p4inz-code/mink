@@ -2100,6 +2100,31 @@ fn emit_memcpy_words(code: &mut Code, src: Reg, dst: Reg, size: Reg) {
     code.bind_label(exit);
 }
 
+/// Copies `size` bytes (a register, multiple of 8) from `src` (linear)
+/// into a stack slot using the *chunked* word layout: word 0 at `dst+0`,
+/// word 1 at `dst-8`, word 2 at `dst-16`, etc.  This matches the
+/// calling-convention layout used for multi-word struct/array/enum
+/// return values.
+fn emit_memcpy_words_chunked(code: &mut Code, src: Reg, dst: Reg, size: Reg) {
+    let top = code.label();
+    let exit = code.label();
+    code.mov_r32_imm32(Reg::R9, 0); // k = 0
+    code.bind_label(top);
+    code.cmp_rr(Reg::R9, size);
+    code.jcc_label(0x8D, exit); // jge
+    // Load src[k]
+    code.mov_rr(Reg::R10, Reg::R9);
+    code.add_rr(Reg::R10, src);
+    code.mov_r_mem(Reg::R11, Reg::R10, 0);
+    // Store to dst[k] → dst - k (chunked: word0 at +0, word1 at -8, …)
+    code.mov_rr(Reg::R10, dst);
+    code.sub_rr(Reg::R10, Reg::R9);
+    code.mov_mem_r(Reg::R10, 0, Reg::R11);
+    code.add_r_imm8(Reg::R9, 8);
+    code.jmp_label(top);
+    code.bind_label(exit);
+}
+
 /// Copies `size` bytes (a register) from `src_addr` to `dst_addr` one
 /// byte at a time (for string blobs). `src`/`dst`/`size` must not be
 /// `rax`, `r8`, or `r9` (clobbered).
@@ -3387,7 +3412,7 @@ fn emit_vec_get(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, 32); // slot address
     code.mov_r_mem(Reg::R8, Reg::Rbp, -16); // size
     code.mov_rr(Reg::Rcx, Reg::Rax); // src = elem_addr
-    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    emit_memcpy_words_chunked(code, Reg::Rcx, Reg::Rdx, Reg::R8);
     code.add_rsp(16);
     code.leave_ret();
 
@@ -3489,7 +3514,7 @@ fn emit_vec_pop(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, 24); // slot address
     code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // size
     code.mov_rr(Reg::Rcx, Reg::Rax); // src
-    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    emit_memcpy_words_chunked(code, Reg::Rcx, Reg::Rdx, Reg::R8);
     code.add_rsp(32);
     code.leave_ret();
     code.bind_label(empty);
@@ -3502,7 +3527,7 @@ fn emit_vec_pop(code: &mut Code, offsets: &RuntimeOffsets) {
 /// descriptor-driven. Returns the data pointer (caller reassigns).
 fn emit_vec_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(48);
+    code.sub_rsp(56);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 16);
@@ -3537,10 +3562,17 @@ fn emit_vec_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
     code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // bound = length - 1
     code.sub_r_imm32(Reg::R8, 1);
+    // Session 107 fix: the bound is spilled because the inlined element
+    // copy below reloads `r8` with the element size, which clobbered the
+    // live bound and terminated the shift one iteration early (the last
+    // element was left unshifted and duplicated, causing a double free
+    // on `rt_vec_free` and a leak otherwise).
+    code.mov_mem_r(Reg::Rbp, -56, Reg::R8); // bound (spill)
     let shift_loop = code.label();
     let shift_done = code.label();
     code.bind_label(shift_loop);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48); // k
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -56); // bound (reload)
     code.cmp_rr(Reg::Rcx, Reg::R8);
     code.jcc_label(0x8D, shift_done); // jge
     // src = data + 24 + (k+1) * elem_size.
@@ -3575,7 +3607,7 @@ fn emit_vec_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
     // Return data pointer (caller reassigns v = result).
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.add_rsp(48);
+    code.add_rsp(56);
     code.leave_ret();
     code.bind_label(oob);
     fail(code, 10);
@@ -4473,7 +4505,7 @@ fn emit_map_get(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, 32); // return slot
     code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // value_size
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -88);
-    emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
+    emit_memcpy_words_chunked(code, Reg::Rcx, Reg::Rdx, Reg::R8);
     code.add_rsp(96);
     code.leave_ret();
     code.bind_label(probe_empty);

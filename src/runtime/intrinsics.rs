@@ -201,9 +201,14 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Char],
         result: IntrinsicType::Unit,
     },
-    // --- Vec intrinsics (Session 41) ---
-    // Buffer layout: [capacity: Int][length: Int][elem0][elem1]...
-    // Each element is one word (8 bytes).
+    // --- Vec intrinsics (Session 41, element-typed Session 107) ---
+    // Buffer layout: [capacity: Int][length: Int][elem_desc: Int][elem0]...
+    // Elements are `elem_size` bytes wide (from the descriptor entry), so
+    // Str/Float/aggregate elements are stored and owned descriptor-driven.
+    // `rt_vec_push`/`rt_vec_set` move the value argument into the Vec
+    // (the Vec becomes the sole owner); `rt_vec_get` returns a view (the
+    // caller must not free it); `rt_vec_pop` transfers ownership of the
+    // popped element to the caller (the caller frees it).
     Intrinsic {
         name: "rt_vec_new",
         params: &[IntrinsicType::Int],
@@ -211,13 +216,13 @@ pub const ALL: &[Intrinsic] = &[
     },
     Intrinsic {
         name: "rt_vec_push",
-        params: &[IntrinsicType::Vec, IntrinsicType::Int],
+        params: &[IntrinsicType::Vec, IntrinsicType::Elem],
         result: IntrinsicType::Vec,
     },
     Intrinsic {
         name: "rt_vec_get",
         params: &[IntrinsicType::Vec, IntrinsicType::Int],
-        result: IntrinsicType::Int,
+        result: IntrinsicType::Elem,
     },
     Intrinsic {
         name: "rt_vec_len",
@@ -242,13 +247,13 @@ pub const ALL: &[Intrinsic] = &[
     // --- Vec operations (Session 57) ---
     Intrinsic {
         name: "rt_vec_set",
-        params: &[IntrinsicType::Vec, IntrinsicType::Int, IntrinsicType::Int],
+        params: &[IntrinsicType::Vec, IntrinsicType::Int, IntrinsicType::Elem],
         result: IntrinsicType::Vec,
     },
     Intrinsic {
         name: "rt_vec_pop",
         params: &[IntrinsicType::Vec],
-        result: IntrinsicType::Int,
+        result: IntrinsicType::Elem,
     },
     Intrinsic {
         name: "rt_vec_remove",

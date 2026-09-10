@@ -996,10 +996,16 @@ impl RuntimeService {
             Self::VecRemove => 2,
             Self::MapNew => 3,
             Self::MapInsert => 3,
-            Self::MapGet | Self::MapHas | Self::MapRemove | Self::MapKeys | Self::MapValues => 2,
+            Self::MapGet | Self::MapHas | Self::MapRemove => 2,
+            // MapKeys/MapValues/SetElements take exactly one argument (the
+            // collection): the element descriptor of the produced Vec is
+            // read from the collection's own header at runtime, so no
+            // hidden descriptor argument is appended (Session 107 fix:
+            // the old arity of 2 made every use fail E-B07).
+            Self::MapKeys | Self::MapValues | Self::SetElements => 1,
             Self::MapLen | Self::MapFree => 1,
             Self::SetNew => 2,
-            Self::SetInsert | Self::SetHas | Self::SetRemove | Self::SetElements => 2,
+            Self::SetInsert | Self::SetHas | Self::SetRemove => 2,
             Self::SetLen | Self::SetFree => 1,
             Self::CollFreeValue | Self::CollHash | Self::MapRebuild | Self::SetRebuild => 2,
             Self::CollCloneValue | Self::CollKeyEq => 3,
