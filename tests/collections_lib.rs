@@ -639,3 +639,257 @@ fn main() {
     assert_success(code, &out);
     assert_eq!(first_int(&out), 7, "json integration: {}", out);
 }
+
+// ===========================================================================
+// Session 106 permanent regression tests — 4 bugs fixed
+// ===========================================================================
+
+// BUG 1: Map rebuild wrote occupied flag into element area (wrong address)
+// after growth. has() returned false for all entries after table rebuild.
+#[test]
+fn s106_map_has_after_growth() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut m = rt_map_new(4);
+    let mut i = 0;
+    while i < 10 {
+        m = rt_map_insert(m, i, i * 7);
+        i = i + 1;
+    }
+    // All 10 keys must be findable after growth triggers rebuild
+    i = 0;
+    while i < 10 {
+        if !rt_map_has(m, i) {
+            rt_print_str("FAIL: has after growth");
+            return 1;
+        }
+        if rt_map_get(m, i) != i * 7 {
+            rt_print_str("FAIL: get value after growth");
+            return 2;
+        }
+        i = i + 1;
+    }
+    if rt_map_len(m) != 10 {
+        rt_print_str("FAIL: len");
+        return 3;
+    }
+    rt_map_free(m);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// BUG 2: map_get jumped to E-R11 on key mismatch instead of advancing
+// the probe chain. Any collision-chain lookup failed with E-R11.
+#[test]
+fn s106_map_get_collision_chain() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut m = rt_map_new(4);
+    // Insert 3 keys that hash to same bucket in cap=4: 10%4=2, 30%4=2
+    m = rt_map_insert(m, 2, 100);
+    m = rt_map_insert(m, 10, 200);
+    m = rt_map_insert(m, 30, 300);
+    // get(30) must probe past 2 and 10 to find 30
+    if rt_map_get(m, 30) != 300 {
+        rt_print_str("FAIL: get collision");
+        return 1;
+    }
+    if rt_map_get(m, 10) != 200 {
+        rt_print_str("FAIL: get collided key");
+        return 2;
+    }
+    if rt_map_get(m, 2) != 100 {
+        rt_print_str("FAIL: get first key");
+        return 3;
+    }
+    if !rt_map_has(m, 30) {
+        rt_print_str("FAIL: has collision");
+        return 4;
+    }
+    rt_map_free(m);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// BUG 3: jcc_literal_str inverted upper bound — every heap string freed
+// through collections leaked (treated as literal, not freed).
+#[test]
+fn s106_set_string_values_no_leak() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut s = rt_set_new(4);
+    s = rt_set_insert(s, "alpha");
+    s = rt_set_insert(s, "bravo");
+    s = rt_set_insert(s, "charlie");
+    s = rt_set_insert(s, "delta");
+    s = rt_set_insert(s, "echo");
+    if rt_set_len(s) != 5 {
+        rt_print_str("FAIL: len");
+        return 1;
+    }
+    if !rt_set_has(s, "alpha") {
+        rt_print_str("FAIL: has alpha");
+        return 2;
+    }
+    if !rt_set_has(s, "echo") {
+        rt_print_str("FAIL: has echo");
+        return 3;
+    }
+    rt_set_free(s);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// BUG 3b: Same leak for map with string values.
+#[test]
+fn s106_map_string_values_no_leak() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, "one", 1);
+    m = rt_map_insert(m, "two", 2);
+    m = rt_map_insert(m, "three", 3);
+    m = rt_map_insert(m, "four", 4);
+    m = rt_map_insert(m, "five", 5);
+    if rt_map_len(m) != 5 {
+        rt_print_str("FAIL: len");
+        return 1;
+    }
+    if rt_map_get(m, "one") != 1 {
+        rt_print_str("FAIL: get one");
+        return 2;
+    }
+    rt_map_free(m);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// BUG 4: Allocator free-list reuse returned blocks with stale occupied=1
+// bucket flags, causing insert probe loops to spin forever (hang).
+// Construction + destruction must not hang.
+#[test]
+fn s106_set_construction_destruction_no_hang() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    // Repeat construction + destruction to exercise free-list reuse
+    let mut i = 0;
+    while i < 20 {
+        let mut s = rt_set_new(4);
+        s = rt_set_insert(s, 1);
+        s = rt_set_insert(s, 2);
+        s = rt_set_insert(s, 3);
+        rt_set_free(s);
+        i = i + 1;
+    }
+    // Also test: construct, grow, destroy — the rebuild path must clear buckets
+    let mut s = rt_set_new(4);
+    let mut j = 0;
+    while j < 30 {
+        s = rt_set_insert(s, j);
+        j = j + 1;
+    }
+    if rt_set_len(s) != 30 {
+        rt_print_str("FAIL: len");
+        return 1;
+    }
+    rt_set_free(s);
+    // Final insert into a reused block must not hang
+    let mut s2 = rt_set_new(4);
+    s2 = rt_set_insert(s2, 999);
+    if !rt_set_has(s2, 999) {
+        rt_print_str("FAIL: has after reuse");
+        return 2;
+    }
+    rt_set_free(s2);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// BUG 4b: Same for map construction + destruction + reuse.
+#[test]
+fn s106_map_construction_destruction_no_hang() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut i = 0;
+    while i < 20 {
+        let mut m = rt_map_new(4);
+        m = rt_map_insert(m, 1, 10);
+        m = rt_map_insert(m, 2, 20);
+        rt_map_free(m);
+        i = i + 1;
+    }
+    // Grow, destroy, reuse
+    let mut m = rt_map_new(4);
+    let mut j = 0;
+    while j < 30 {
+        m = rt_map_insert(m, j, j * 5);
+        j = j + 1;
+    }
+    if rt_map_len(m) != 30 {
+        rt_print_str("FAIL: len");
+        return 1;
+    }
+    rt_map_free(m);
+    let mut m2 = rt_map_new(4);
+    m2 = rt_map_insert(m2, 42, 420);
+    if rt_map_get(m2, 42) != 420 {
+        rt_print_str("FAIL: get after reuse");
+        return 2;
+    }
+    rt_map_free(m2);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// VEC E-R04 regression: realloc + free must not corrupt memory.
+#[test]
+fn s106_vec_realloc_free_no_corruption() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut c = 0;
+    while c < 100 {
+        let mut v = rt_vec_new(2);
+        let mut i = 0;
+        while i < 50 {
+            v = rt_vec_push(v, i);
+            i = i + 1;
+        }
+        if rt_vec_len(v) != 50 {
+            rt_print_str("FAIL: vec len");
+            return 1;
+        }
+        if rt_vec_get(v, 0) != 0 {
+            rt_print_str("FAIL: vec[0]");
+            return 2;
+        }
+        if rt_vec_get(v, 49) != 49 {
+            rt_print_str("FAIL: vec[49]");
+            return 3;
+        }
+        rt_vec_free(v);
+        c = c + 1;
+    }
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}

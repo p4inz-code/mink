@@ -1,0 +1,50 @@
+// ============================================================================
+// MINK Frequency Counter — a real collection utility.
+//
+// Counts character frequencies in a fixed sample of text using a Map
+// (integer keys -> integer counts), then reports the top counts via a Set
+// of seen values. Demonstrates Map insert/get/has/update, Set insert/has,
+// string handling, and clean ownership (map/set freed before exit).
+// ============================================================================
+
+fn main() -> Int {
+    // A sample document (repeated characters exercise map updates).
+    let text = "the quick brown fox jumps over the lazy dog the quick brown fox";
+    let mut m = rt_map_new(8);
+    let mut i = 0;
+    let len = rt_str_len(text);
+    while i < len {
+        let c = rt_str_byte(text, i);
+        if c >= 97 && c <= 122 {
+            // Lowercase letter: count it.
+            if rt_map_has(m, c) {
+                let cur = rt_map_get(m, c);
+                m = rt_map_insert(m, c, cur + 1);
+            } else {
+                m = rt_map_insert(m, c, 1);
+            }
+        }
+        i = i + 1;
+    }
+    if rt_map_len(m) != 26 { rt_print_str("FAIL: expected 26 distinct letters"); rt_map_free(m); return 1; }
+
+    // 'o' appears 6 times in the sample; verify a couple of counts.
+    if rt_map_get(m, 111) != 6 { rt_print_str("FAIL: 'o' count != 6"); rt_map_free(m); return 2; }
+    if rt_map_get(m, 120) != 2 { rt_print_str("FAIL: 'x' count != 2"); rt_map_free(m); return 3; }
+
+    // Collect the distinct counts into a Set.
+    let mut s = rt_set_new(8);
+    i = 97;
+    while i <= 122 {
+        s = rt_set_insert(s, rt_map_get(m, i));
+        i = i + 1;
+    }
+    if rt_set_len(s) != 5 { rt_print_str("FAIL: expected 5 distinct frequencies"); rt_set_free(s); rt_map_free(m); return 4; }
+    if !rt_set_has(s, 6) { rt_print_str("FAIL: freq 6 missing"); rt_set_free(s); rt_map_free(m); return 5; }
+
+    rt_print_str("freq: letters=26 distinct_freqs=5 max=");
+    rt_print_int(rt_map_get(m, 111));
+    rt_set_free(s);
+    rt_map_free(m);
+    return 0;
+}

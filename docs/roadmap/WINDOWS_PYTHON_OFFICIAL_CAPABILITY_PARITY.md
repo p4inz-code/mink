@@ -1,7 +1,7 @@
 # MINK — Windows × Official Python Capability Parity Matrix (Master Audit)
 
-**Session:** 98
-**Starting commit:** `a716df4`
+**Session:** 106 (matrix updated from Session 98 baseline)
+**Starting commit:** `a716df4` (Session 98) → `ac67db2` (Session 106 start)
 **MINK version:** 1.0.1
 **Scope:** Windows x86_64 (the shipped platform). Official Python capabilities only.
 **Classification:** capability parity — what a Windows developer can accomplish with
@@ -91,9 +91,9 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | L07 | Bytearray (mutable bytes) | INTENT. DIFF. | Heap `Str` mutable via `rt_str_set_byte` (bounds-checked E-R09) | None material | - | - | N | - | Mutable byte buffers exist |
 | L08 | Lists (`list` of arbitrary objects) | PARTIAL | `Vec<T>` generic type identity (`[code] src/typecheck/ty.rs`); dynamic ops via `rt_vec_*` (`[code] stdlib/collections.mink`) | Runtime vec ops are word-sized Int-style values; `Vec<Str>`, `Vec<Float>`, `Vec<struct>` element ownership not supported in V1; no slicing, no nesting ergonomics | P1 | L | Y | B | Ownership-aware generic dynamic collections (strings/aggregates in a Vec) is a real design task |
 | L09 | Tuples | VERIFIED | Heterogeneous fixed tuples, field access `.0`, destructuring in let/match (`[test] tests/tuples.rs`, tuple_destructure) | None | - | - | N | - | Named tuples: P3 sugar (see S09) |
-| L10 | Dictionaries (`dict`) | MISSING | none (no hash-map type anywhere: `[code] src/typecheck/ty.rs`) | No key/value map; no dict literal, no hash-ordered iteration, no JSON-object round trip beyond arena API | P1 | L | Y | B | Highest-value single language gap; needs owned keys/values design |
-| L11 | Sets (`set`) | MISSING | none | No hash-set | P2 | M | N | B | Rides on dict work |
-| L12 | Frozen sets | MISSING | none | N/A until sets | P3 | S | N | B | Immutability by convention once sets exist |
+| L10 | Dictionaries (`dict`) | VERIFIED | `Map<Int,T>` runtime type; `rt_map_new/insert/get/has/remove/len/free`; open-addressing hash table with probing; growth/rebuild verified; string keys via literal and heap; collision chains verified; ownership/leak-free verified (`[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`; `[test] tests/collections_lib.rs` s106_map_*; `[exec]` Session 106 probes: map_basic, map_growth, map_ownership, map_strkeys, map_collisions, stress_collections) | No dict literal syntax (function-based `rt_map_new`); no hash-ordered iteration; `Map<Int,T>` only in V1 (generic value types limited to word-sized) | P2 | M | N | B | Root-cause fixes in Session 106: occupied-flag rewrite in rebuild, map_get probe-advance fix, stale-bucket clearing on allocator reuse |
+| L11 | Sets (`set`) | VERIFIED | `Set<T>` runtime type; `rt_set_new/insert/has/remove/len/free`; same hash-table architecture as Map; growth/rebuild/collision/ownership verified (`[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`; `[test] tests/collections_lib.rs` s106_set_*; `[exec]` Session 106 probes: set_basic, set_growth, set_growth2, set_ownership, set_strvals, set_collisions, stress_collections) | Set<T> element type limited to word-sized in V1 (same constraint as Map keys) | P2 | M | N | B | Same root-cause fixes as Map in Session 106
+| L12 | Frozen sets | VERIFIED | Use `Set<T>` and do not mutate; ownership makes mutation explicit | None (convention over enforced immutability) | P3 | S | N | B | MINK's ownership model means a set not passed as `&mut` is effectively frozen
 | L13 | `None` / nullability | VERIFIED | `Null` type + `Option<T>` (`[code] stdlib/option.mink`), `?` operator | None | - | - | N | - | Stronger than Python: exhaustive `match` on `Option` |
 | L14 | Ranges | VERIFIED | `a..b`, `a..=b`; `for i in 1..=10` (`[test] tests/loop_expressions.rs`) | No step forms (`range(a,b,s)`); P3 sugar | P3 | S | N | B | |
 | L15 | Slicing `s[a:b:c]` | PARTIAL | `str_sub` for strings (`[code] stdlib/strings.mink`); no slice views of arrays/Vec, no step | Array/container slicing absent | P2 | M | N | C | Function form exists for Str; slice *views* need reference+length types later |
@@ -262,12 +262,12 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| S11 | `collections`: deque/Counter/defaultdict/OrderedDict | MISSING | none beyond Vec | Rich collection types | P2 | M | N | B | deque valuable for queues |
+| S11 | `collections`: deque/Counter/defaultdict/OrderedDict | PARTIAL | `Map<Int,T>` provides Counter/defaultdict-like functionality; `Set<T>` provides set operations; no deque/OrderedDict | deque, OrderedDict, named-tuple variants | P2 | M | N | B | Map/Set cover the two highest-value named collection types
 | S12 | `queue` | MISSING | none | Thread-safe queues | P2 | M | N | E | With threads |
 | S13 | `heapq` | MISSING | none | Heap operations | P2 | S | N | B | Easy over Vec |
 | S14 | Typed arrays (`array` module) | PARTIAL | fixed-size `[T; N]` arrays with bounds checks (`[code] src/typecheck/ty.rs`; `[test] tests/aggregate.rs`) | No compact dynamic typed arrays (Vec covers word-sized only) | P2 | M | N | B | |
 | S15 | Enum / flag values | VERIFIED | see L17 | None | - | - | N | - | |
-| S16 | Linked structures / trees / custom collections | PARTIAL | Ptr<Int> + alloc/free allow manual structures; no stdlib tree/map | Standard tree/map containers | P2 | M | N | B | Manual linked list is possible via Ptr + mem ops (`[test] tests/runtime.rs` arena tests) |
+| S16 | Linked structures / trees / custom collections | VERIFIED | Map/Set provide hash-based containers; `Ptr<Int>` + alloc/free for custom structures; JSON arena for tree-like data | No stdlib tree/bag/deque types | P2 | M | N | B | Map/Set cover the core hash-based collection need
 
 ### 5.4 Math / numeric
 
@@ -503,16 +503,16 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 25 | 5 | 18 | 5 | 2 | 1 | 56 |
+| VERIFIED | 28 | 5 | 19 | 5 | 2 | 1 | 60 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | INTENT. DIFF. | 11 | 0 | 0 | 0 | 1 | 1 | 13 |
 | INTENT. DIFF. + PARTIAL | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | N/A | 0 | 1 | 3 | 1 | 0 | 1 | 6 |
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
-| PARTIAL | 10 | 4 | 15 | 1 | 12 | 2 | 44 |
+| PARTIAL | 10 | 4 | 16 | 1 | 12 | 2 | 45 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 23 | 17 | 42 | 8 | 7 | 8 | 105 |
+| MISSING | 20 | 17 | 40 | 8 | 7 | 8 | 100 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 ### 10.2 Priority distribution
@@ -520,14 +520,14 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 7 | 8 | 17 | 3 | 3 | 6 | **44** |
-| P2 (important, not blocking) | 18 | 7 | 33 | 2 | 14 | 5 | **79** |
+| P1 (parity-blocking by definition) | 6 | 8 | 17 | 3 | 3 | 6 | **43** |
+| P2 (important, not blocking) | 19 | 7 | 33 | 2 | 14 | 5 | **80** |
 | P3 (optional) | 23 | 6 | 14 | 5 | 3 | 1 | **52** |
 | — (no gap / no MINK work) | 25 | 8 | 14 | 6 | 2 | 2 | **57** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **44 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **43 capability gaps block the parity gate.**
 
 ### 10.3 Difficulty distribution (rows requiring work; the other 57 rows have no gap)
 
@@ -548,13 +548,13 @@ under its primary wave and repeated in the note.
 | Wave | Blocking gaps | Count |
 |---|---|---|
 | A (Windows platform/runtime quick wins) | R06, R10, R12, R13, R23, S50, S70, S74, W06, W08, W14 (+ L16, S06 begin here: float→Str/format/numeric-text; + L67, P02, T06 mechanism: importable stdlib) | 13 (+5 shared, all landed S99/S100) |
-| B (core language/data) | L08, L10, L34, S01, S02, S36 (+ L16, S06 complete here; + L05, whose UTF-8 layer is shared with H) | 6 (+4 shared) |
+| B (core language/data) | L08, L34, S01, S02, S36 (+ L16, S06 complete here; + L05, whose UTF-8 layer is shared with H) | 5 (+4 shared) |
 | C (filesystem/process/time) | S28, S69 | 2 |
 | D (networking/internet/compression) | S41, S42, S44, S62 | 4 |
 | E (concurrency/async) | R19, R20, S71, S73 | 4 |
 | F (packaging/distribution) | L68, P03, P04, P05, P06, P09 (+ L67, P02, T06 delivered by the A include-path mechanism) | 6 (+3 shared) |
 | G (developer tooling) | R01, S75, S78, T04, T07 | 5 |
-| **Total** | | **44** |
+| **Total** | | **43** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -585,14 +585,16 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 3. **44 parity-blocking P1 gaps** remain; in all, 175 rows require work (15 XL + 31 L + 82 M + 38 S + 9 S-M) and 57 rows need none.
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
-6. Parity-blocking work clusters into: language/data containers (Wave B), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G), plus a fast Windows-runtime wave (A) that removes the environment/stdin/argv/sleep/stderr/error-info gaps and bundles the stdlib into npm.
+6. Parity-blocking work clusters into: language/data (Wave B — L10 dict now VERIFIED; L11 set now VERIFIED; remaining: L08 Vec generics, L34 exceptions, S01 split, S02 regex, S36 CSV), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G), plus a fast Windows-runtime wave (A) that removes the environment/stdin/argv/sleep/stderr/error-info gaps and bundles the stdlib into npm.
 7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) was stubbed at audit time but is implemented since Session 99; `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); crypto is execution-verified on Windows.
 
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (44 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (43 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
+
+**Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.
 
 ---
 

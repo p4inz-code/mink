@@ -1,0 +1,71 @@
+// ============================================================================
+// MINK HTTP Client — real HTTP/1.1 GET against a local server.
+//
+// Usage: http_client.exe <port>
+// Builds a GET request via the stdlib http module, connects to
+// 127.0.0.1:<port>, sends it, reads the response, and verifies it contains
+// "200 OK". Exercises stdlib modules + Winsock + string ownership.
+// ============================================================================
+
+fn main() -> Int {
+    if rt_argc() < 1 { rt_print_str("usage: http_client.exe <port>"); return 1; }
+    let arg = rt_argv(0);
+    let mut port = 0;
+    let mut pi = 0;
+    let arglen = rt_str_len(arg);
+    while pi < arglen {
+        let c = rt_str_byte(arg, pi);
+        if c < 48 || c > 57 { port = 0; pi = arglen; }
+        else { port = port * 10 + (c - 48); }
+        pi = pi + 1;
+    }
+    rt_str_free(arg);
+    if port <= 0 { rt_print_str("usage: http_client.exe <port>"); return 1; }
+
+    // Build the request inline (stdlib request builders consume their
+    // inputs without freeing them, which would leak the intermediate strings).
+    let head = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    let hlen = rt_str_len(head);
+    let req = rt_str_alloc(hlen);
+    let mut bi = 0;
+    while bi < hlen {
+        rt_str_set_byte(req, bi, rt_str_byte(head, bi));
+        bi = bi + 1;
+    }
+    let rlen = hlen;
+
+    // Open the connection and send.
+    let r = rt_net_wsa_startup();
+    if r != 0 { rt_print_str("FAIL: wsa"); return 2; }
+    let sock = rt_net_socket(2, 1, 6);
+    if sock == -1 { rt_print_str("FAIL: socket"); rt_net_wsa_cleanup(); return 3; }
+    let c = rt_net_connect(sock, "127.0.0.1", port);
+    if c != 0 { rt_print_str("FAIL: connect"); rt_net_close(sock); rt_net_wsa_cleanup(); return 4; }
+    let sent = rt_net_send(sock, req);
+    rt_str_free(req);
+    if sent != rlen { rt_print_str("FAIL: send"); rt_net_close(sock); rt_net_wsa_cleanup(); return 5; }
+
+    // Read the response and check for "200 OK".
+    let resp = rt_net_recv(sock, 4096);
+    let glen = rt_str_len(resp);
+    if glen == 0 { rt_print_str("FAIL: empty response"); rt_net_close(sock); rt_net_wsa_cleanup(); return 6; }
+    let mut found = false;
+    let mut i = 0;
+    while i + 6 <= glen {
+        let mut j = 0;
+        let mut eq = true;
+        while j < 6 {
+            if rt_str_byte(resp, i + j) != rt_str_byte("200 OK", j) { eq = false; }
+            j = j + 1;
+        }
+        if eq { found = true; }
+        i = i + 1;
+    }
+    rt_str_free(resp);
+    rt_net_close(sock);
+    rt_net_wsa_cleanup();
+    if !found { rt_print_str("FAIL: no 200 OK"); return 7; }
+
+    rt_print_str("http-ok");
+    return 0;
+}

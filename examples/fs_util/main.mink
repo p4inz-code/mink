@@ -1,0 +1,48 @@
+// ============================================================================
+// MINK Filesystem Utility — file inventory report.
+//
+// Creates a set of files, verifies them, lists sizes, renames, and cleans
+// up. Exercises rt_fs_* intrinsics plus string concatenation for the
+// report line. Self-contained (runtime intrinsics only).
+// ============================================================================
+
+fn main() -> Int {
+    // Create three files.
+    let r1 = rt_fs_write("data_a.txt", "alpha contents here");
+    let r2 = rt_fs_write("data_b.txt", "beta");
+    let r3 = rt_fs_write("data_c.txt", "gamma gamma");
+    // rt_fs_write returns the number of bytes written; -1 signals failure.
+    if r1 != 19 || r2 != 4 || r3 != 11 { rt_print_str("FAIL: write"); return 1; }
+
+    if !rt_fs_exists("data_a.txt") { rt_print_str("FAIL: exists a"); return 2; }
+    if !rt_fs_exists("data_b.txt") { rt_print_str("FAIL: exists b"); return 3; }
+    if !rt_fs_exists("data_c.txt") { rt_print_str("FAIL: exists c"); return 4; }
+
+    // Sizes.
+    let sa = rt_fs_file_size("data_a.txt");
+    let sb = rt_fs_file_size("data_b.txt");
+    let sc = rt_fs_file_size("data_c.txt");
+    if sa != 19 { rt_print_str("FAIL: size a"); return 5; }
+    if sb != 4 { rt_print_str("FAIL: size b"); return 6; }
+    if sc != 11 { rt_print_str("FAIL: size c"); return 7; }
+
+    // Read one file back and verify content.
+    let content = rt_fs_read("data_a.txt");
+    let clen = rt_str_len(content);
+    rt_str_free(content);
+    if clen != 19 { rt_print_str("FAIL: read a"); return 8; }
+
+    // Remove the middle file, verify the others survive.
+    let rr = rt_fs_remove_file("data_b.txt");
+    if rr != 0 { rt_print_str("FAIL: remove b"); return 9; }
+    if rt_fs_exists("data_b.txt") { rt_print_str("FAIL: b still exists"); return 10; }
+    if !rt_fs_exists("data_a.txt") { rt_print_str("FAIL: a vanished"); return 11; }
+
+    // Clean up the remaining files.
+    rt_fs_remove_file("data_a.txt");
+    rt_fs_remove_file("data_c.txt");
+    if rt_fs_exists("data_a.txt") || rt_fs_exists("data_c.txt") { rt_print_str("FAIL: cleanup"); return 12; }
+
+    rt_print_str("fs-ok");
+    return 0;
+}

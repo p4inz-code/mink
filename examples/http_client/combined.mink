@@ -1,0 +1,1352 @@
+// ==========================================================================
+// MINK Networking Library — Session 67
+//
+// TCP/UDP socket networking (Winsock2 on Windows, POSIX sockets on
+// Linux — the runtime intrinsics dispatch to the platform backend).
+//
+// API:
+//   net_init() -> Int                 Initialize networking (0=ok, non-zero=error).
+//   net_cleanup() -> Int              Clean up networking (0=ok).
+//   net_last_error() -> Int           Get last socket error code.
+//   net_socket(af, ty, proto) -> Int  Create a socket (-1 on error).
+//   net_connect(sock, addr, port) -> Int   Connect (0=ok, -1=error).
+//   net_bind(sock, addr, port) -> Int      Bind (0=ok, -1=error).
+//   net_listen(sock, backlog) -> Int       Listen (0=ok, -1=error).
+//   net_accept(sock) -> Int               Accept (new socket or -1).
+//   net_send(sock, data) -> Int            Send data (bytes sent or -1).
+//   net_recv(sock, maxlen) -> Str          Receive data (owned Str).
+//   net_close(sock) -> Int                 Close socket (0=ok, -1=error).
+//   net_shutdown(sock, how) -> Int         Shutdown (0=ok, -1=error).
+//   net_resolve(host, port) -> Str         Resolve host (V1: returns host as-is).
+//   net_hostname() -> Str                  Get local hostname.
+//   net_htons(value) -> Int                Host-to-network byte order.
+//
+// Constants:
+//   AF_INET = 2, SOCK_STREAM = 1, SOCK_DGRAM = 2
+//   IPPROTO_TCP = 6, IPPROTO_UDP = 17
+//   SD_RECEIVE = 0, SD_SEND = 1, SD_BOTH = 2
+//
+// Ownership:
+//   net_init() must be called before any other networking function.
+//   net_recv() returns an OWNED heap Str allocated by the runtime.
+//   The caller owns it and must release it with rt_str_free when done.
+//   Each call returns a fresh allocation; results are never reused or
+//   overwritten by later calls. The same rule applies to net_resolve()
+//   and net_hostname().
+//
+// Platform:
+//   Windows via Winsock2 (ws2_32.dll); Linux x86_64 via raw syscalls.
+// ==========================================================================
+
+// --- Constants ---
+
+fn AF_INET() -> Int { return 2; }
+fn SOCK_STREAM() -> Int { return 1; }
+fn SOCK_DGRAM() -> Int { return 2; }
+fn IPPROTO_TCP() -> Int { return 6; }
+fn IPPROTO_UDP() -> Int { return 17; }
+fn SD_RECEIVE() -> Int { return 0; }
+fn SD_SEND() -> Int { return 1; }
+fn SD_BOTH() -> Int { return 2; }
+
+// --- Core initialization ---
+
+// Initialize Winsock2. Must be called before any other networking function.
+// Returns 0 on success, non-zero on error.
+fn net_init() -> Int {
+    return rt_net_wsa_startup();
+}
+
+// Clean up Winsock2. Call when networking is no longer needed.
+fn net_cleanup() -> Int {
+    return rt_net_wsa_cleanup();
+}
+
+// Get the last Winsock error code.
+fn net_last_error() -> Int {
+    return rt_net_wsa_last_error();
+}
+
+// --- Socket operations ---
+
+// Create a TCP socket. Returns socket handle or -1 on error.
+fn net_tcp_socket() -> Int {
+    return rt_net_socket(AF_INET(), SOCK_STREAM(), IPPROTO_TCP());
+}
+
+// Create a UDP socket. Returns socket handle or -1 on error.
+fn net_udp_socket() -> Int {
+    return rt_net_socket(AF_INET(), SOCK_DGRAM(), IPPROTO_UDP());
+}
+
+// Create a raw socket with specified parameters.
+fn net_socket(af: Int, ty: Int, proto: Int) -> Int {
+    return rt_net_socket(af, ty, proto);
+}
+
+// Connect to an IPv4 address and port.
+// addr is an IPv4 string like "127.0.0.1".
+// Returns 0 on success, -1 on error.
+fn net_connect(sock: Int, addr: Str, port: Int) -> Int {
+    let r = rt_net_connect(sock, addr, port);
+    rt_str_free(addr);
+    return r;
+}
+
+// Bind to an address and port.
+// addr is an IPv4 string like "0.0.0.0" for all interfaces.
+// Returns 0 on success, -1 on error.
+fn net_bind(sock: Int, addr: Str, port: Int) -> Int {
+    let r = rt_net_bind(sock, addr, port);
+    rt_str_free(addr);
+    return r;
+}
+
+// Start listening for connections.
+// backlog is the maximum pending connection queue length.
+// Returns 0 on success, -1 on error.
+fn net_listen(sock: Int, backlog: Int) -> Int {
+    return rt_net_listen(sock, backlog);
+}
+
+// Accept an incoming connection.
+// Returns a new socket handle for the connection, or -1 on error.
+fn net_accept(sock: Int) -> Int {
+    return rt_net_accept(sock);
+}
+
+// --- Data transfer ---
+
+// Send data over a connected socket.
+// Returns the number of bytes sent, or -1 on error.
+fn net_send(sock: Int, data: Str) -> Int {
+    let r = rt_net_send(sock, data);
+    rt_str_free(data);
+    return r;
+}
+
+// Receive data from a connected socket.
+// maxlen is the maximum bytes to receive.
+// Returns an OWNED heap Str with the received data (empty on error/close).
+// The caller must rt_str_free the result when done. The result is a fresh
+// allocation every call and is never overwritten by a later net_recv.
+fn net_recv(sock: Int, maxlen: Int) -> Str {
+    return rt_net_recv(sock, maxlen);
+}
+
+// --- Lifecycle ---
+
+// Close a socket. Returns 0 on success, -1 on error.
+fn net_close(sock: Int) -> Int {
+    return rt_net_close(sock);
+}
+
+// Shutdown a socket connection.
+// how: 0=SD_RECEIVE, 1=SD_SEND, 2=SD_BOTH.
+// Returns 0 on success, -1 on error.
+fn net_shutdown(sock: Int, how: Int) -> Int {
+    return rt_net_shutdown(sock, how);
+}
+
+// --- Address resolution ---
+
+// Resolve a hostname to an IP address string.
+// V1: Returns the host string as-is (full DNS via getaddrinfo is V2).
+fn net_resolve(host: Str, port: Int) -> Str {
+    let r = rt_net_getaddrinfo(host, port);
+    rt_str_free(host);
+    return r;
+}
+
+// Free a resolved address (no-op in V1).
+fn net_free_resolve() {
+    rt_net_freeaddrinfo();
+}
+
+// Get the local hostname.
+fn net_hostname() -> Str {
+    return rt_net_gethostname();
+}
+
+// --- Byte order ---
+
+// Convert host byte order to network byte order (16-bit).
+fn net_htons(value: Int) -> Int {
+    return rt_net_htons(value);
+}
+
+// Convert network byte order to host byte order (16-bit).
+// Same as htons (byte swap is symmetric).
+fn net_ntohs(value: Int) -> Int {
+    return rt_net_htons(value);
+}
+
+// --- Convenience helpers ---
+
+// Check if a socket handle is valid (not -1).
+fn net_is_valid_socket(sock: Int) -> Bool {
+    if sock == -1 {
+        return false;
+    }
+    return true;
+}
+
+// Check if an operation succeeded (result is 0).
+fn net_is_ok(result: Int) -> Bool {
+    if result == 0 {
+        return true;
+    }
+    return false;
+}
+
+// Simple TCP connect helper: init + connect in one call.
+// Returns the connected socket, or -1 on error.
+fn net_dial(addr: Str, port: Int) -> Int {
+    let init_result = net_init();
+    if init_result != 0 {
+        return -1;
+    }
+    let sock = net_tcp_socket();
+    if sock == -1 {
+        return -1;
+    }
+    let conn_result = net_connect(sock, addr, port);
+    if conn_result != 0 {
+        net_close(sock);
+        return -1;
+    }
+    return sock;
+}
+
+// Simple TCP listen helper: init + bind + listen in one call.
+// Returns the listening socket, or -1 on error.
+fn net_listen_on(addr: Str, port: Int, backlog: Int) -> Int {
+    let init_result = net_init();
+    if init_result != 0 {
+        return -1;
+    }
+    let sock = net_tcp_socket();
+    if sock == -1 {
+        return -1;
+    }
+    let bind_result = net_bind(sock, addr, port);
+    if bind_result != 0 {
+        net_close(sock);
+        return -1;
+    }
+    let listen_result = net_listen(sock, backlog);
+    if listen_result != 0 {
+        net_close(sock);
+        return -1;
+    }
+    return sock;
+}
+// ==========================================================================
+// MINK HTTP Library V1 — Sessions 69-70
+//
+// HTTP/1.1 client library over TCP sockets.
+//
+// IMPORTANT: MINK strings must be explicitly freed with rt_str_free.
+//   User functions with Str parameters CONSUME (move) the argument.
+//   Runtime intrinsics (rt_str_byte, rt_str_len, rt_str_set_byte) do NOT consume.
+//   All string-building uses rt_str_alloc + rt_str_set_byte.
+//
+// Scope:
+//   - HTTP/1.1 request construction and serialization
+//   - HTTP/1.1 response parsing
+//   - Content-Length body handling
+//   - Case-insensitive header lookup
+//   - Connection: close semantics (no keep-alive)
+//
+// Limits:
+//   - Max body size: 1,048,576 bytes (1 MB)
+//   - Max headers: 64
+//   - No chunked transfer encoding (V1)
+//   - No HTTPS (TLS is a separate library)
+// ==========================================================================
+
+// --- Constants ---
+
+fn MAX_BODY() -> Int { return 1048576; }
+
+// --- Utility Functions ---
+
+// Parse digits from a byte range (non-allocating).
+fn http_parse_int_from_bytes(s: Str, start: Int, end: Int) -> Int {
+    let mut result = 0;
+    let mut i = start;
+    while i < end {
+        let b = rt_str_byte(s, i);
+        let digit = b - 48;
+        if digit >= 0 {
+            if digit <= 9 {
+                result = result * 10 + digit;
+            }
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+// Parse a string to integer.
+fn rt_str_parse_int(s: Str) -> Int {
+    let len = rt_str_len(s);
+    let mut result = 0;
+    let mut negative = false;
+    let mut i = 0;
+    if len > 0 {
+        if rt_str_byte(s, 0) == 45 {
+            negative = true;
+            i = 1;
+        }
+    }
+    while i < len {
+        let b = rt_str_byte(s, i);
+        let digit = b - 48;
+        if digit >= 0 {
+            if digit <= 9 {
+                result = result * 10 + digit;
+            }
+        }
+        i = i + 1;
+    }
+    if negative == true {
+        result = 0 - result;
+    }
+    return result;
+}
+
+// Build a substring by reading bytes into a new allocation.
+fn http_sub_bytes(s: Str, start: Int, end: Int) -> Str {
+    let len = rt_str_len(s);
+    let mut actual_end = end;
+    if actual_end > len {
+        actual_end = len;
+    }
+    let size = actual_end - start;
+    if size <= 0 {
+        return "";
+    }
+    let result = rt_str_alloc(size);
+    let mut i = 0;
+    while i < size {
+        rt_str_set_byte(result, i, rt_str_byte(s, start + i));
+        i = i + 1;
+    }
+    return result;
+}
+
+// Convert a single byte to a one-character string.
+fn rt_str_from_char(b: Int) -> Str {
+    let result = rt_str_alloc(1);
+    rt_str_set_byte(result, 0, b);
+    return result;
+}
+
+// Check if byte is in [A-Z] range.
+fn http_is_upper(b: Int) -> Bool {
+    if b >= 65 {
+        if b <= 90 {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Convert byte to lowercase.
+fn http_to_lower(b: Int) -> Int {
+    if http_is_upper(b) == true {
+        return b + 32;
+    }
+    return b;
+}
+
+// Compare two bytes case-insensitively.
+fn http_byte_eq_ci(a: Int, b: Int) -> Bool {
+    if http_to_lower(a) == http_to_lower(b) {
+        return true;
+    }
+    return false;
+}
+
+// --- URL Parsing ---
+
+// Extract the host from a URL string. Caller must rt_str_free the result.
+fn http_url_host(url: Str) -> Str {
+    let len = rt_str_len(url);
+    let mut skip = 0;
+    if len >= 7 {
+        if rt_str_byte(url, 0) == 104 {
+            if rt_str_byte(url, 1) == 116 {
+                if rt_str_byte(url, 2) == 116 {
+                    if rt_str_byte(url, 3) == 112 {
+                        if rt_str_byte(url, 4) == 58 {
+                            if rt_str_byte(url, 5) == 47 {
+                                if rt_str_byte(url, 6) == 47 {
+                                    skip = 7;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut host_end = len;
+    let mut i = skip;
+    while i < len {
+        let b = rt_str_byte(url, i);
+        if b == 58 {
+            host_end = i;
+            break;
+        }
+        if b == 47 {
+            host_end = i;
+            break;
+        }
+        i = i + 1;
+    }
+    return http_sub_bytes(url, skip, host_end);
+}
+
+// Extract the port from a URL string. Returns Int directly (no string alloc).
+fn http_url_port(url: Str) -> Int {
+    let len = rt_str_len(url);
+    let mut skip = 0;
+    if len >= 7 {
+        if rt_str_byte(url, 0) == 104 {
+            if rt_str_byte(url, 1) == 116 {
+                if rt_str_byte(url, 2) == 116 {
+                    if rt_str_byte(url, 3) == 112 {
+                        if rt_str_byte(url, 4) == 58 {
+                            if rt_str_byte(url, 5) == 47 {
+                                if rt_str_byte(url, 6) == 47 {
+                                    skip = 7;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut i = skip;
+    while i < len {
+        let b = rt_str_byte(url, i);
+        if b == 58 {
+            let port_start = i + 1;
+            let mut port_end = len;
+            let mut j = port_start;
+            while j < len {
+                if rt_str_byte(url, j) == 47 {
+                    port_end = j;
+                    break;
+                }
+                j = j + 1;
+            }
+            return http_parse_int_from_bytes(url, port_start, port_end);
+        }
+        i = i + 1;
+    }
+    return 80;
+}
+
+// Extract the path from a URL string. Caller must rt_str_free the result.
+fn http_url_path(url: Str) -> Str {
+    let len = rt_str_len(url);
+    let mut skip = 0;
+    if len >= 7 {
+        if rt_str_byte(url, 0) == 104 {
+            if rt_str_byte(url, 1) == 116 {
+                if rt_str_byte(url, 2) == 116 {
+                    if rt_str_byte(url, 3) == 112 {
+                        if rt_str_byte(url, 4) == 58 {
+                            if rt_str_byte(url, 5) == 47 {
+                                if rt_str_byte(url, 6) == 47 {
+                                    skip = 7;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut path_start = len;
+    let mut i = skip;
+    while i < len {
+        if rt_str_byte(url, i) == 47 {
+            path_start = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if path_start == len {
+        return "/";
+    }
+    return http_sub_bytes(url, path_start, len);
+}
+
+// --- Request Creation ---
+
+// Create an HTTP request line. Caller must rt_str_free the result.
+fn http_request(method: Str, path: Str) -> Str {
+    let m_len = rt_str_len(method);
+    let p_len = rt_str_len(path);
+    let suffix = " HTTP/1.1\r\n";
+    let s_len = rt_str_len(suffix);
+    let total = m_len + 1 + p_len + s_len;
+    let result = rt_str_alloc(total);
+    // Copy method
+    let mut i = 0;
+    while i < m_len {
+        rt_str_set_byte(result, i, rt_str_byte(method, i));
+        i = i + 1;
+    }
+    rt_str_set_byte(result, m_len, 32);
+    // Copy path
+    i = 0;
+    while i < p_len {
+        rt_str_set_byte(result, m_len + 1 + i, rt_str_byte(path, i));
+        i = i + 1;
+    }
+    // Copy suffix
+    i = 0;
+    while i < s_len {
+        rt_str_set_byte(result, m_len + 1 + p_len + i, rt_str_byte(suffix, i));
+        i = i + 1;
+    }
+    return result;
+}
+
+// Create an HTTP GET request line.
+fn http_get(path: Str) -> Str {
+    return http_request("GET", path);
+}
+
+// --- Header Management ---
+
+// Add a header to an HTTP request string. Caller must rt_str_free the result.
+fn http_add_header(request: Str, name: Str, value: Str) -> Str {
+    let r_len = rt_str_len(request);
+    let n_len = rt_str_len(name);
+    let v_len = rt_str_len(value);
+    let colon = ": ";
+    let crlf = "\r\n";
+    let c_len = rt_str_len(colon);
+    let cr_len = rt_str_len(crlf);
+    let total = r_len + n_len + c_len + v_len + cr_len;
+    let result = rt_str_alloc(total);
+    let mut pos = 0;
+    let mut i = 0;
+    while i < r_len {
+        rt_str_set_byte(result, pos + i, rt_str_byte(request, i));
+        i = i + 1;
+    }
+    pos = pos + r_len;
+    i = 0;
+    while i < n_len {
+        rt_str_set_byte(result, pos + i, rt_str_byte(name, i));
+        i = i + 1;
+    }
+    pos = pos + n_len;
+    i = 0;
+    while i < c_len {
+        rt_str_set_byte(result, pos + i, rt_str_byte(colon, i));
+        i = i + 1;
+    }
+    pos = pos + c_len;
+    i = 0;
+    while i < v_len {
+        rt_str_set_byte(result, pos + i, rt_str_byte(value, i));
+        i = i + 1;
+    }
+    pos = pos + v_len;
+    i = 0;
+    while i < cr_len {
+        rt_str_set_byte(result, pos + i, rt_str_byte(crlf, i));
+        i = i + 1;
+    }
+    return result;
+}
+
+// Finalize a request by adding the empty line after headers.
+fn http_finalize_request(request: Str) -> Str {
+    let r_len = rt_str_len(request);
+    let crlf = "\r\n";
+    let c_len = rt_str_len(crlf);
+    let total = r_len + c_len;
+    let result = rt_str_alloc(total);
+    let mut i = 0;
+    while i < r_len {
+        rt_str_set_byte(result, i, rt_str_byte(request, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < c_len {
+        rt_str_set_byte(result, r_len + i, rt_str_byte(crlf, i));
+        i = i + 1;
+    }
+    return result;
+}
+
+// --- Header Extraction ---
+
+// Find a header value by name (case-insensitive). Returns "" if not found.
+fn http_header(response: Str, name: Str) -> Str {
+    let len = rt_str_len(response);
+    let name_len = rt_str_len(name);
+    let mut i = 0;
+    while i < len - 1 {
+        let b1 = rt_str_byte(response, i);
+        let b2 = rt_str_byte(response, i + 1);
+        if b1 == 13 {
+            if b2 == 10 {
+                i = i + 2;
+                let mut header_count = 0;
+                while i < len - 1 {
+                    let h1 = rt_str_byte(response, i);
+                    let h2 = rt_str_byte(response, i + 1);
+                    if h1 == 13 {
+                        if h2 == 10 {
+                            return "";
+                        }
+                    }
+                    if header_count >= 64 {
+                        return "";
+                    }
+                    let mut colon_pos = i;
+                    while colon_pos < len {
+                        if rt_str_byte(response, colon_pos) == 58 {
+                            break;
+                        }
+                        colon_pos = colon_pos + 1;
+                    }
+                    let mut name_match = true;
+                    let mut j = 0;
+                    while j < name_len {
+                        if j >= colon_pos - i {
+                            name_match = false;
+                            break;
+                        }
+                        let hb = rt_str_byte(response, i + j);
+                        let nb = rt_str_byte(name, j);
+                        if http_byte_eq_ci(hb, nb) == false {
+                            name_match = false;
+                            break;
+                        }
+                        j = j + 1;
+                    }
+                    if name_match == true {
+                        if j == name_len {
+                            let mut vs = colon_pos + 1;
+                            if vs < len {
+                                if rt_str_byte(response, vs) == 32 {
+                                    vs = vs + 1;
+                                }
+                            }
+                            let mut ve = vs;
+                            while ve < len - 1 {
+                                if rt_str_byte(response, ve) == 13 {
+                                    break;
+                                }
+                                ve = ve + 1;
+                            }
+                            let vsize = ve - vs;
+                            if vsize <= 0 {
+                                return "";
+                            }
+                            let result = rt_str_alloc(vsize);
+                            let mut vi = 0;
+                            while vi < vsize {
+                                rt_str_set_byte(result, vi, rt_str_byte(response, vs + vi));
+                                vi = vi + 1;
+                            }
+                            return result;
+                        }
+                    }
+                    while i < len - 1 {
+                        let hb1 = rt_str_byte(response, i);
+                        let hb2 = rt_str_byte(response, i + 1);
+                        if hb1 == 13 {
+                            if hb2 == 10 {
+                                i = i + 2;
+                                break;
+                            }
+                        }
+                        i = i + 1;
+                    }
+                    header_count = header_count + 1;
+                }
+                return "";
+            }
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+// Get Content-Length from response. Returns -1 if not found.
+fn http_content_length(response: Str) -> Int {
+    let len = rt_str_len(response);
+    let mut i = 0;
+    while i < len - 1 {
+        let b1 = rt_str_byte(response, i);
+        let b2 = rt_str_byte(response, i + 1);
+        if b1 == 13 {
+            if b2 == 10 {
+                i = i + 2;
+                let mut header_count = 0;
+                while i < len - 1 {
+                    let h1 = rt_str_byte(response, i);
+                    let h2 = rt_str_byte(response, i + 1);
+                    if h1 == 13 {
+                        if h2 == 10 {
+                            return -1;
+                        }
+                    }
+                    if header_count >= 64 {
+                        return -1;
+                    }
+                    let mut is_cl = true;
+                    let cl_upper = "Content-Length";
+                    let cl_lower = "content-length";
+                    let cl_len = 14;
+                    if i + cl_len < len {
+                        let mut k = 0;
+                        while k < cl_len {
+                            let hb = rt_str_byte(response, i + k);
+                            let ub = rt_str_byte(cl_upper, k);
+                            let lb = rt_str_byte(cl_lower, k);
+                            if hb != ub {
+                                if hb != lb {
+                                    is_cl = false;
+                                    break;
+                                }
+                            }
+                            k = k + 1;
+                        }
+                    } else {
+                        is_cl = false;
+                    }
+                    if is_cl == true {
+                        let mut colon_pos = i;
+                        while colon_pos < len {
+                            if rt_str_byte(response, colon_pos) == 58 {
+                                break;
+                            }
+                            colon_pos = colon_pos + 1;
+                        }
+                        let mut vs = colon_pos + 1;
+                        if vs < len {
+                            if rt_str_byte(response, vs) == 32 {
+                                vs = vs + 1;
+                            }
+                        }
+                        let mut ve = vs;
+                        while ve < len {
+                            if rt_str_byte(response, ve) == 13 {
+                                break;
+                            }
+                            ve = ve + 1;
+                        }
+                        // Parse Content-Length value inline (non-consuming)
+                        let mut cl_val = 0;
+                        let mut ci = vs;
+                        while ci < ve {
+                            let cb = rt_str_byte(response, ci);
+                            cl_val = cl_val * 10 + (cb - 48);
+                            ci = ci + 1;
+                        }
+                        return cl_val;
+                    }
+                    while i < len - 1 {
+                        let hb1 = rt_str_byte(response, i);
+                        let hb2 = rt_str_byte(response, i + 1);
+                        if hb1 == 13 {
+                            if hb2 == 10 {
+                                i = i + 2;
+                                break;
+                            }
+                        }
+                        i = i + 1;
+                    }
+                    header_count = header_count + 1;
+                }
+                return -1;
+            }
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// --- Response Parsing ---
+
+// Parse status code from HTTP response (directly from bytes, no alloc).
+fn http_status_code(response: Str) -> Int {
+    let len = rt_str_len(response);
+    if len < 12 {
+        return 0;
+    }
+    let mut code = 0;
+    let mut ci = 9;
+    while ci < len {
+        let b = rt_str_byte(response, ci);
+        if b == 32 {
+            break;
+        }
+        code = code * 10 + (b - 48);
+        ci = ci + 1;
+    }
+    return code;
+}
+
+// Parse reason phrase from HTTP response. Caller must rt_str_free the result.
+fn http_status_text(response: Str) -> Str {
+    let len = rt_str_len(response);
+    if len < 12 {
+        return "";
+    }
+    let mut status_end = 9;
+    while status_end < len {
+        if rt_str_byte(response, status_end) == 32 {
+            break;
+        }
+        status_end = status_end + 1;
+    }
+    let reason_start = status_end + 1;
+    if reason_start >= len {
+        return "";
+    }
+    let mut reason_end = reason_start;
+    while reason_end < len - 1 {
+        if rt_str_byte(response, reason_end) == 13 {
+            break;
+        }
+        reason_end = reason_end + 1;
+    }
+    let size = reason_end - reason_start;
+    if size <= 0 {
+        return "";
+    }
+    let result = rt_str_alloc(size);
+    let mut ti = 0;
+    while ti < size {
+        rt_str_set_byte(result, ti, rt_str_byte(response, reason_start + ti));
+        ti = ti + 1;
+    }
+    return result;
+}
+
+// --- Body Extraction ---
+
+// Extract body from HTTP response (after first \r\n\r\n).
+fn http_body(response: Str) -> Str {
+    let len = rt_str_len(response);
+    let mut i = 0;
+    while i < len - 3 {
+        let b1 = rt_str_byte(response, i);
+        let b2 = rt_str_byte(response, i + 1);
+        let b3 = rt_str_byte(response, i + 2);
+        let b4 = rt_str_byte(response, i + 3);
+        if b1 == 13 {
+            if b2 == 10 {
+                if b3 == 13 {
+                    if b4 == 10 {
+                        let body_start = i + 4;
+                        let size = len - body_start;
+                        if size <= 0 {
+                            return "";
+                        }
+                        let result = rt_str_alloc(size);
+                        let mut bi = 0;
+                        while bi < size {
+                            rt_str_set_byte(result, bi, rt_str_byte(response, body_start + bi));
+                            bi = bi + 1;
+                        }
+                        return result;
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+// --- Client ---
+
+// Receive all data from a socket until connection close.
+fn http_recv_all(sock: Int) -> Str {
+    let max_size = MAX_BODY() + 8192;
+    let buf = rt_str_alloc(max_size);
+    let mut total = 0;
+    let mut chunk_count = 0;
+    // open tracks whether the peer is still sending. V1 move semantics
+    // forbid freeing `data` in an early-exit branch and then using it
+    // again textually, so each chunk is freed exactly once, at the
+    // bottom of the loop body.
+    let mut open = 1;
+    while total < max_size && open == 1 && chunk_count < 1024 {
+        let data = net_recv(sock, 4096);
+        let data_len = rt_str_len(data);
+        if data_len == 0 {
+            open = 0;
+        }
+        let mut ci = 0;
+        if open == 1 {
+            while ci < data_len {
+                if total + ci < max_size {
+                    rt_str_set_byte(buf, total + ci, rt_str_byte(data, ci));
+                }
+                ci = ci + 1;
+            }
+        }
+        rt_str_free(data);
+        if open == 1 {
+            total = total + data_len;
+            chunk_count = chunk_count + 1;
+        }
+    }
+    // Copy the received bytes into an exact-length result so that
+    // rt_str_len(result) equals the number of bytes actually received
+    // (the accumulation buffer is capacity-sized, not data-sized).
+    let result = rt_str_alloc(total);
+    let mut ri = 0;
+    while ri < total {
+        rt_str_set_byte(result, ri, rt_str_byte(buf, ri));
+        ri = ri + 1;
+    }
+    rt_str_free(buf);
+    return result;
+}
+
+// Send an HTTP request and return the complete response.
+// Consumes `request` and `host` (freed on every path). The raw rt_net_*
+// intrinsics below borrow their string arguments, so both parameters stay
+// live here and are freed exactly once, at the single textual exit.
+fn http_send(request: Str, host: Str, port: Int) -> Str {
+    let sock = net_tcp_socket();
+    let mut can_send = 0;
+    if sock != -1 {
+        can_send = 1;
+    }
+    let mut sent_ok = 0;
+    if can_send == 1 {
+        let conn = rt_net_connect(sock, host, port);
+        if conn == 0 {
+            sent_ok = 1;
+        }
+    }
+    if sent_ok == 1 {
+        let sent = rt_net_send(sock, request);
+        if sent == -1 {
+            sent_ok = 0;
+        }
+    }
+    let mut response = "";
+    if sent_ok == 1 {
+        response = http_recv_all(sock);
+    }
+    if sock != -1 {
+        net_close(sock);
+    }
+    rt_str_free(request);
+    rt_str_free(host);
+    return response;
+}
+
+// --- Low-Level Client ---
+
+// Build a GET request with Host and Connection headers, send it.
+fn http_client_get_with(host: Str, port: Int, path: Str) -> Str {
+    // Build full request using only intrinsics (non-consuming)
+    let p_len = rt_str_len(path);
+    let h_len = rt_str_len(host);
+    // "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
+    let head = "GET ";
+    let mid = " HTTP/1.1\r\nHost: ";
+    let tail = "\r\nConnection: close\r\n\r\n";
+    let sp = rt_str_len(head);
+    let sm = rt_str_len(mid);
+    let st = rt_str_len(tail);
+    let total = sp + p_len + sm + h_len + st;
+    let result = rt_str_alloc(total);
+    // "GET "
+    rt_str_set_byte(result, 0, 71); // G
+    rt_str_set_byte(result, 1, 69); // E
+    rt_str_set_byte(result, 2, 84); // T
+    rt_str_set_byte(result, 3, 32); // space
+    // path
+    let mut i = 0;
+    while i < p_len {
+        rt_str_set_byte(result, sp + i, rt_str_byte(path, i));
+        i = i + 1;
+    }
+    // " HTTP/1.1\r\nHost: "
+    i = 0;
+    while i < sm {
+        rt_str_set_byte(result, sp + p_len + i, rt_str_byte(mid, i));
+        i = i + 1;
+    }
+    // host
+    i = 0;
+    while i < h_len {
+        rt_str_set_byte(result, sp + p_len + sm + i, rt_str_byte(host, i));
+        i = i + 1;
+    }
+    // "\r\nConnection: close\r\n\r\n"
+    i = 0;
+    while i < st {
+        rt_str_set_byte(result, sp + p_len + sm + h_len + i, rt_str_byte(tail, i));
+        i = i + 1;
+    }
+    let response = http_send(result, host, port);
+    rt_str_free(path);
+    return response;
+}
+
+// Build a POST request with body, send it.
+fn http_client_post_with(host: Str, port: Int, path: Str, body: Str) -> Str {
+    let p_len = rt_str_len(path);
+    let h_len = rt_str_len(host);
+    let b_len = rt_str_len(body);
+    let prefix = "POST ";
+    let suffix1 = " HTTP/1.1\r\nHost: ";
+    let suffix2 = "\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: ";
+    let suffix3 = "\r\n\r\n";
+    let sp1 = rt_str_len(prefix);
+    let ss1 = rt_str_len(suffix1);
+    let ss2 = rt_str_len(suffix2);
+    let ss3 = rt_str_len(suffix3);
+    let mut cl_digits = 1;
+    let mut cl_temp = b_len;
+    if cl_temp >= 10 { cl_digits = 2; }
+    if cl_temp >= 100 { cl_digits = 3; }
+    if cl_temp >= 1000 { cl_digits = 4; }
+    if cl_temp >= 10000 { cl_digits = 5; }
+    if cl_temp >= 100000 { cl_digits = 6; }
+    if cl_temp >= 1000000 { cl_digits = 7; }
+    let total = sp1 + p_len + ss1 + h_len + ss2 + cl_digits + ss3 + b_len;
+    let result = rt_str_alloc(total);
+    let mut pos = 0;
+    // Copy prefix
+    let mut i = 0;
+    while i < sp1 {
+        rt_str_set_byte(result, pos + i, rt_str_byte(prefix, i));
+        i = i + 1;
+    }
+    pos = pos + sp1;
+    // Copy path
+    i = 0;
+    while i < p_len {
+        rt_str_set_byte(result, pos + i, rt_str_byte(path, i));
+        i = i + 1;
+    }
+    pos = pos + p_len;
+    // Copy suffix1
+    i = 0;
+    while i < ss1 {
+        rt_str_set_byte(result, pos + i, rt_str_byte(suffix1, i));
+        i = i + 1;
+    }
+    pos = pos + ss1;
+    // Copy host
+    i = 0;
+    while i < h_len {
+        rt_str_set_byte(result, pos + i, rt_str_byte(host, i));
+        i = i + 1;
+    }
+    pos = pos + h_len;
+    // Copy suffix2
+    i = 0;
+    while i < ss2 {
+        rt_str_set_byte(result, pos + i, rt_str_byte(suffix2, i));
+        i = i + 1;
+    }
+    pos = pos + ss2;
+    // Write Content-Length digits inline
+    let mut cd = 1;
+    if cl_digits >= 2 { cd = 10; }
+    if cl_digits >= 3 { cd = 100; }
+    if cl_digits >= 4 { cd = 1000; }
+    if cl_digits >= 5 { cd = 10000; }
+    if cl_digits >= 6 { cd = 100000; }
+    if cl_digits >= 7 { cd = 1000000; }
+    let mut di = 0;
+    while di < cl_digits {
+        let digit_val = (b_len / cd) - ((b_len / cd) / 10) * 10;
+        rt_str_set_byte(result, pos + di, 48 + digit_val);
+        cd = cd / 10;
+        di = di + 1;
+    }
+    pos = pos + cl_digits;
+    // Copy suffix3
+    i = 0;
+    while i < ss3 {
+        rt_str_set_byte(result, pos + i, rt_str_byte(suffix3, i));
+        i = i + 1;
+    }
+    pos = pos + ss3;
+    // Copy body
+    i = 0;
+    while i < b_len {
+        rt_str_set_byte(result, pos + i, rt_str_byte(body, i));
+        i = i + 1;
+    }
+    let response = http_send(result, host, port);
+    rt_str_free(path);
+    rt_str_free(body);
+    return response;
+}
+
+// --- High-Level Client ---
+// All URL parsing uses rt_str_byte (non-consuming intrinsic).
+// No user function is called on `url` except http_sub_bytes at the end.
+
+// Perform an HTTP GET request from a URL string.
+fn http_client_get(url: Str) -> Str {
+    let len = rt_str_len(url);
+    let mut skip = 0;
+    if len >= 7 {
+        if rt_str_byte(url, 0) == 104 {
+            if rt_str_byte(url, 1) == 116 {
+                if rt_str_byte(url, 2) == 116 {
+                    if rt_str_byte(url, 3) == 112 {
+                        if rt_str_byte(url, 4) == 58 {
+                            if rt_str_byte(url, 5) == 47 {
+                                if rt_str_byte(url, 6) == 47 {
+                                    skip = 7;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut host_end = len;
+    let mut colon_pos = len;
+    let mut path_start = len;
+    let mut i = skip;
+    while i < len {
+        let b = rt_str_byte(url, i);
+        if b == 58 {
+            host_end = i;
+            colon_pos = i;
+        }
+        if b == 47 {
+            if path_start == len {
+                path_start = i;
+            }
+        }
+        i = i + 1;
+    }
+    if colon_pos == len {
+        host_end = path_start;
+    }
+    // Build host string (non-consuming)
+    let host_size = host_end - skip;
+    let mut host = "";
+    if host_size > 0 {
+        host = rt_str_alloc(host_size);
+        i = skip;
+        while i < host_end {
+            rt_str_set_byte(host, i - skip, rt_str_byte(url, i));
+            i = i + 1;
+        }
+    }
+    // Build path string (non-consuming)
+    let mut use_path = "/";
+    if path_start < len {
+        let path_size = len - path_start;
+        use_path = rt_str_alloc(path_size);
+        i = path_start;
+        while i < len {
+            rt_str_set_byte(use_path, i - path_start, rt_str_byte(url, i));
+            i = i + 1;
+        }
+    }
+    // Parse port inline (non-consuming)
+    let mut port = 80;
+    if colon_pos < len {
+        let port_start = colon_pos + 1;
+        let mut port_end = len;
+        i = port_start;
+        while i < len {
+            if rt_str_byte(url, i) == 47 {
+                port_end = i;
+                break;
+            }
+            i = i + 1;
+        }
+        let mut pv = 0;
+        i = port_start;
+        while i < port_end {
+            pv = pv * 10 + (rt_str_byte(url, i) - 48);
+            i = i + 1;
+        }
+        port = pv;
+    }
+    let response = http_client_get_with(host, port, use_path);
+    rt_str_free(url);
+    return response;
+}
+
+// Perform an HTTP POST request from a URL string with a body.
+fn http_client_post(url: Str, body: Str) -> Str {
+    let len = rt_str_len(url);
+    let mut skip = 0;
+    if len >= 7 {
+        if rt_str_byte(url, 0) == 104 {
+            if rt_str_byte(url, 1) == 116 {
+                if rt_str_byte(url, 2) == 116 {
+                    if rt_str_byte(url, 3) == 112 {
+                        if rt_str_byte(url, 4) == 58 {
+                            if rt_str_byte(url, 5) == 47 {
+                                if rt_str_byte(url, 6) == 47 {
+                                    skip = 7;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut host_end = len;
+    let mut colon_pos = len;
+    let mut path_start = len;
+    let mut i = skip;
+    while i < len {
+        let b = rt_str_byte(url, i);
+        if b == 58 {
+            host_end = i;
+            colon_pos = i;
+        }
+        if b == 47 {
+            if path_start == len {
+                path_start = i;
+            }
+        }
+        i = i + 1;
+    }
+    if colon_pos == len {
+        host_end = path_start;
+    }
+    let host_size = host_end - skip;
+    let mut host = "";
+    if host_size > 0 {
+        host = rt_str_alloc(host_size);
+        i = skip;
+        while i < host_end {
+            rt_str_set_byte(host, i - skip, rt_str_byte(url, i));
+            i = i + 1;
+        }
+    }
+    let mut use_path = "/";
+    if path_start < len {
+        let path_size = len - path_start;
+        use_path = rt_str_alloc(path_size);
+        i = path_start;
+        while i < len {
+            rt_str_set_byte(use_path, i - path_start, rt_str_byte(url, i));
+            i = i + 1;
+        }
+    }
+    let mut port = 80;
+    if colon_pos < len {
+        let port_start = colon_pos + 1;
+        let mut port_end = len;
+        i = port_start;
+        while i < len {
+            if rt_str_byte(url, i) == 47 {
+                port_end = i;
+                break;
+            }
+            i = i + 1;
+        }
+        let mut pv = 0;
+        i = port_start;
+        while i < port_end {
+            pv = pv * 10 + (rt_str_byte(url, i) - 48);
+            i = i + 1;
+        }
+        port = pv;
+    }
+    let response = http_client_post_with(host, port, use_path, body);
+    rt_str_free(url);
+    return response;
+}
+// ============================================================================
+// MINK HTTP Client — real HTTP/1.1 GET against a local server.
+//
+// Usage: http_client.exe <port>
+// Builds a GET request via the stdlib http module, connects to
+// 127.0.0.1:<port>, sends it, reads the response, and verifies it contains
+// "200 OK". Exercises stdlib modules + Winsock + string ownership.
+// ============================================================================
+
+fn main() -> Int {
+    if rt_argc() < 1 { rt_print_str("usage: http_client.exe <port>"); return 1; }
+    let arg = rt_argv(0);
+    let mut port = 0;
+    let mut pi = 0;
+    let arglen = rt_str_len(arg);
+    while pi < arglen {
+        let c = rt_str_byte(arg, pi);
+        if c < 48 || c > 57 { port = 0; pi = arglen; }
+        else { port = port * 10 + (c - 48); }
+        pi = pi + 1;
+    }
+    rt_str_free(arg);
+    if port <= 0 { rt_print_str("usage: http_client.exe <port>"); return 1; }
+
+    // Build the request inline (stdlib request builders consume their
+    // inputs without freeing them, which would leak the intermediate strings).
+    let head = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    let hlen = rt_str_len(head);
+    let req = rt_str_alloc(hlen);
+    let mut bi = 0;
+    while bi < hlen {
+        rt_str_set_byte(req, bi, rt_str_byte(head, bi));
+        bi = bi + 1;
+    }
+    let rlen = hlen;
+
+    // Open the connection and send.
+    let r = rt_net_wsa_startup();
+    if r != 0 { rt_print_str("FAIL: wsa"); return 2; }
+    let sock = rt_net_socket(2, 1, 6);
+    if sock == -1 { rt_print_str("FAIL: socket"); rt_net_wsa_cleanup(); return 3; }
+    let c = rt_net_connect(sock, "127.0.0.1", port);
+    if c != 0 { rt_print_str("FAIL: connect"); rt_net_close(sock); rt_net_wsa_cleanup(); return 4; }
+    let sent = rt_net_send(sock, req);
+    rt_str_free(req);
+    if sent != rlen { rt_print_str("FAIL: send"); rt_net_close(sock); rt_net_wsa_cleanup(); return 5; }
+
+    // Read the response and check for "200 OK".
+    let resp = rt_net_recv(sock, 4096);
+    let glen = rt_str_len(resp);
+    if glen == 0 { rt_print_str("FAIL: empty response"); rt_net_close(sock); rt_net_wsa_cleanup(); return 6; }
+    let mut found = false;
+    let mut i = 0;
+    while i + 6 <= glen {
+        let mut j = 0;
+        let mut eq = true;
+        while j < 6 {
+            if rt_str_byte(resp, i + j) != rt_str_byte("200 OK", j) { eq = false; }
+            j = j + 1;
+        }
+        if eq { found = true; }
+        i = i + 1;
+    }
+    rt_str_free(resp);
+    rt_net_close(sock);
+    rt_net_wsa_cleanup();
+    if !found { rt_print_str("FAIL: no 200 OK"); return 7; }
+
+    rt_print_str("http-ok");
+    return 0;
+}

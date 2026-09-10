@@ -1,0 +1,41 @@
+// ============================================================================
+// MINK Process Utility — run a child command and report its output.
+//
+// Runs `cmd /c echo mink-process-ok` and verifies stdout is captured.
+// Exercises rt_process_run, rt_process_stdout/len, string handling, and
+// ownership (captured output freed).
+// ============================================================================
+
+fn main() -> Int {
+    let code = rt_process_run("cmd /c echo mink-process-ok");
+    if code != 0 { rt_print_str("FAIL: process exit"); return 1; }
+    let out = rt_process_stdout();
+    let olen = rt_process_stdout_len();
+    if olen == 0 { rt_print_str("FAIL: empty stdout"); return 2; }
+
+    // Search the captured output for our marker (byte scan).
+    let marker = "mink-process-ok";
+    let mut found = false;
+    let mut i = 0;
+    while i + 15 <= olen {
+        let mut j = 0;
+        let mut eq = true;
+        while j < 15 {
+            if rt_str_byte(out, i + j) != rt_str_byte(marker, j) { eq = false; }
+            j = j + 1;
+        }
+        if eq { found = true; }
+        i = i + 1;
+    }
+    if !found { rt_print_str("FAIL: marker not found"); return 3; }
+
+    let err = rt_process_stderr();
+    let elen = rt_process_stderr_len();
+    // Process stdout/stderr are BSS-backed capture buffers: print, do not free.
+
+    rt_print_str("proc: exit=0 stdout=");
+    rt_print_int(olen);
+    rt_print_str(" stderr=");
+    rt_print_int(elen);
+    return 0;
+}
