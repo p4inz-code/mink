@@ -893,3 +893,146 @@ fn main() -> Int {
     );
     assert_success(code, &out);
 }
+
+// Session 107 regression: VecRemove R8 clobber.
+// The inner memcpy in the shift loop reloaded R8 with elem_size,
+// clobbering the live shift-loop bound.  The last element was left
+// unshifted and duplicated, causing a double-free on rt_vec_free.
+// This only triggers for elem_size >= 9 and length >= 9.
+#[test]
+fn s107_vec_remove_r8_clobber_no_double_free() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    // Force elem_size = 16 (a 2-field Int struct).
+    let mut v = rt_vec_new(2);
+    let mut i = 0;
+    while i < 20 {
+        v = rt_vec_push(v, i * 100);
+        i = i + 1;
+    }
+    if rt_vec_len(v) != 20 { return 1; }
+    // Remove the first element (triggers the shift of all 19 remaining).
+    v = rt_vec_remove(v, 0);
+    if rt_vec_len(v) != 19 { return 2; }
+    // Verify the shift: the old vec[1] (value 100) is now at vec[0].
+    if rt_vec_get(v, 0) != 100 { return 3; }
+    if rt_vec_get(v, 18) != 1900 { return 4; }
+    // Remove from the middle.
+    v = rt_vec_remove(v, 9);
+    if rt_vec_len(v) != 18 { return 5; }
+    // Remove from the end.
+    v = rt_vec_remove(v, 17);
+    if rt_vec_len(v) != 17 { return 6; }
+    rt_vec_free(v);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// Session 107 regression: MapKeys/MapValues/SetElements arity.
+// These services take exactly one argument (the collection), but the
+// IR arity table listed them as 2-arg, which caused every call to
+// fail with E-B07 (wrong number of arguments).
+#[test]
+fn s107_map_keys_values_set_elements_arity() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    // Map keys.
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, 1, 10);
+    m = rt_map_insert(m, 2, 20);
+    let k = rt_map_keys(m);
+    if rt_vec_len(k) != 2 { return 1; }
+    rt_vec_free(k);
+    // Map values.
+    let v = rt_map_values(m);
+    if rt_vec_len(v) != 2 { return 2; }
+    rt_vec_free(v);
+    rt_map_free(m);
+    // Set elements.
+    let mut s = rt_set_new(4);
+    s = rt_set_insert(s, 10);
+    s = rt_set_insert(s, 20);
+    let e = rt_set_elements(s);
+    if rt_vec_len(e) != 2 { return 3; }
+    rt_vec_free(e);
+    rt_set_free(s);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// Session 107 regression: chunked return-slot memcpy for multi-word
+// struct elements.  The runtime services (vec_get, vec_pop, map_get)
+// copied multi-word elements linearly into the hidden return slot, but
+// the calling convention stores word0 at base, word1 at base-8, etc.
+// This caused struct field reads to return garbage (or crash).
+#[test]
+fn s107_chunked_return_slot_struct_fields() {
+    let (code, out) = build_and_run(
+        r#"
+struct Point { x: Int, y: Int }
+
+fn main() -> Int {
+    // Vec<struct> — read both fields.
+    let mut v = rt_vec_new(2);
+    let a = Point { x: 3, y: 4 };
+    v = rt_vec_push(v, a);
+    let b = Point { x: 5, y: 6 };
+    v = rt_vec_push(v, b);
+    let g0 = rt_vec_get(v, 0);
+    let g1 = rt_vec_get(v, 1);
+    if g0.x != 3 { return 1; }
+    if g0.y != 4 { return 2; }
+    if g1.x != 5 { return 3; }
+    if g1.y != 6 { return 4; }
+    rt_vec_free(v);
+    // Map<Str, Int> — read multi-word values.
+    let mut m = rt_map_new(2);
+    m = rt_map_insert(m, "hello", 42);
+    m = rt_map_insert(m, "world", 99);
+    let v0 = rt_map_get(m, "hello");
+    if v0 != 42 { return 5; }
+    let v1 = rt_map_get(m, "world");
+    if v1 != 99 { return 6; }
+    rt_map_free(m);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// Session 107 regression: Vec<Str> push/get/free lifecycle.
+// Before the catalog signature change, Vec push/get returned Int
+// regardless of the actual element type, making typed collections
+// unusable.  This test verifies the full lifecycle with string
+// elements including ownership (no leaks, no double-frees).
+#[test]
+fn s107_vec_str_lifecycle() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut v = rt_vec_new(2);
+    v = rt_vec_push(v, "hello");
+    v = rt_vec_push(v, "world");
+    if rt_vec_len(v) != 2 { return 1; }
+    let s0 = rt_vec_get(v, 0);
+    if rt_str_len(s0) != 5 { return 2; }
+    if rt_str_byte(s0, 0) != 104 { return 3; } // 'h'
+    let s1 = rt_vec_get(v, 1);
+    if rt_str_len(s1) != 5 { return 4; }
+    if rt_str_byte(s1, 0) != 119 { return 5; } // 'w'
+    // Pop transfers ownership.
+    let popped = rt_vec_pop(v);
+    if rt_vec_len(v) != 1 { return 6; }
+    rt_str_free(popped);
+    rt_vec_free(v);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
