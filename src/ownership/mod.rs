@@ -2320,11 +2320,7 @@ impl<'a> Analyzer<'a> {
             let is_str_arg = matches!(intrinsic.params.get(index), Some(IntrinsicType::Str));
             let is_coll_arg = matches!(
                 intrinsic.params.get(index),
-                Some(
-                    IntrinsicType::Vec
-                        | IntrinsicType::Map
-                        | IntrinsicType::Set
-                )
+                Some(IntrinsicType::Vec | IntrinsicType::Map | IntrinsicType::Set)
             );
             if is_coll_arg {
                 if frees_collection {
@@ -2359,7 +2355,8 @@ impl<'a> Analyzer<'a> {
                     if value.view.is_some() {
                         self.errors.push(SemanticError::borrow_conflict_detail(
                             arg.span,
-                            "cannot move a string through a reference into a collection".to_string(),
+                            "cannot move a string through a reference into a collection"
+                                .to_string(),
                         ));
                     }
                     continue;

@@ -1658,47 +1658,44 @@ impl<'a> Lowerer<'a> {
                         // strategy from the moment it is created.
                         let mut args = lowered_args;
                         match service {
-                        RuntimeService::VecNew => {
-                            let elem = self.collection_element_type(
-                                target,
-                                rvalue.span,
-                                "rt_vec_new",
-                            )?;
-                            let id = match elem {
-                                Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
-                                None => self.desc_table.desc_word(),
-                            };
-                            args.push(BOperand::Const(id as i64));
-                        }
-                        RuntimeService::MapNew => {
-                            let (key, value) = self.collection_map_types(
-                                target,
-                                rvalue.span,
-                                "rt_map_new",
-                            )?;
-                            let key_id = match key {
-                                Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
-                                None => self.desc_table.desc_word(),
-                            };
-                            let value_id = match value {
-                                Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
-                                None => self.desc_table.desc_word(),
-                            };
-                            args.push(BOperand::Const(key_id as i64));
-                            args.push(BOperand::Const(value_id as i64));
-                        }
-                        RuntimeService::SetNew => {
-                            let elem = self.collection_element_type(
-                                target,
-                                rvalue.span,
-                                "rt_set_new",
-                            )?;
-                            let id = match elem {
-                                Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
-                                None => self.desc_table.desc_word(),
-                            };
-                            args.push(BOperand::Const(id as i64));
-                        }
+                            RuntimeService::VecNew => {
+                                let elem = self.collection_element_type(
+                                    target,
+                                    rvalue.span,
+                                    "rt_vec_new",
+                                )?;
+                                let id = match elem {
+                                    Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
+                                    None => self.desc_table.desc_word(),
+                                };
+                                args.push(BOperand::Const(id as i64));
+                            }
+                            RuntimeService::MapNew => {
+                                let (key, value) =
+                                    self.collection_map_types(target, rvalue.span, "rt_map_new")?;
+                                let key_id = match key {
+                                    Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
+                                    None => self.desc_table.desc_word(),
+                                };
+                                let value_id = match value {
+                                    Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
+                                    None => self.desc_table.desc_word(),
+                                };
+                                args.push(BOperand::Const(key_id as i64));
+                                args.push(BOperand::Const(value_id as i64));
+                            }
+                            RuntimeService::SetNew => {
+                                let elem = self.collection_element_type(
+                                    target,
+                                    rvalue.span,
+                                    "rt_set_new",
+                                )?;
+                                let id = match elem {
+                                    Some(ty) => self.collection_desc_id(ty, rvalue.span)?,
+                                    None => self.desc_table.desc_word(),
+                                };
+                                args.push(BOperand::Const(id as i64));
+                            }
                             _ => {}
                         }
                         BInstKind::RuntimeCall {

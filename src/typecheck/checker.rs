@@ -1215,11 +1215,8 @@ impl<'a> Checker<'a> {
                     return self.types.push(TypeKind::Map(key, value));
                 }
                 if name.name == "Map" {
-                    self.errors.push(TypeError::wrong_arg_count(
-                        name.span,
-                        2,
-                        args.len(),
-                    ));
+                    self.errors
+                        .push(TypeError::wrong_arg_count(name.span, 2, args.len()));
                     return self.types.push(TypeKind::Error);
                 }
                 if name.name == "Set" && args.len() == 1 {
@@ -1234,11 +1231,8 @@ impl<'a> Checker<'a> {
                     return self.types.push(TypeKind::Set(elem));
                 }
                 if name.name == "Set" {
-                    self.errors.push(TypeError::wrong_arg_count(
-                        name.span,
-                        1,
-                        args.len(),
-                    ));
+                    self.errors
+                        .push(TypeError::wrong_arg_count(name.span, 1, args.len()));
                     return self.types.push(TypeKind::Error);
                 }
                 // Resolve each argument type first.

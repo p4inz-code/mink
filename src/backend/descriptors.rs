@@ -214,8 +214,8 @@ impl<'a> DescBuilder<'a> {
                 ref2: self.desc(*value)?,
             }),
             Some(K::Struct(id)) => {
-                let layout = layout::struct_layout(*id, self.types)
-                    .map_err(|e| layout_error_message(&e))?;
+                let layout =
+                    layout::struct_layout(*id, self.types).map_err(|e| layout_error_message(&e))?;
                 let info = self
                     .types
                     .struct_info(*id)
@@ -258,8 +258,8 @@ impl<'a> DescBuilder<'a> {
                     .types
                     .enum_info(*id)
                     .expect("enum ids always resolve in the owning table");
-                let layout = layout::enum_layout(*id, self.types)
-                    .map_err(|e| layout_error_message(&e))?;
+                let layout =
+                    layout::enum_layout(*id, self.types).map_err(|e| layout_error_message(&e))?;
                 if !layout.tagged {
                     // Unit-only enum: a single word holding the
                     // discriminant; word-hashable as a Map/Set key.
@@ -293,8 +293,8 @@ impl<'a> DescBuilder<'a> {
                 })
             }
             Some(K::Array { elem, len }) => {
-                let layout = layout::array_layout(ty, self.types)
-                    .map_err(|e| layout_error_message(&e))?;
+                let layout =
+                    layout::array_layout(ty, self.types).map_err(|e| layout_error_message(&e))?;
                 Ok(CollDesc {
                     elem_size: layout.size as u32,
                     tag: TAG_ARRAY,

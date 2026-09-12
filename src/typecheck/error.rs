@@ -861,7 +861,9 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::UnknownStructFieldInPattern
             | TypeErrorKind::MissingStructFieldInPattern
             | TypeErrorKind::StructPatternTypeMismatch
-            | TypeErrorKind::InvalidCollectionKey => format!("`{expected}` is not a valid key type: {actual}"),
+            | TypeErrorKind::InvalidCollectionKey => {
+                format!("`{expected}` is not a valid key type: {actual}")
+            }
         };
         f.write_str(&message)
     }
