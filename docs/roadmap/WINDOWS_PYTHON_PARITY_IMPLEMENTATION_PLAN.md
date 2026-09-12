@@ -1,9 +1,19 @@
 # MINK — Windows Official-Python Parity: Implementation Plan
 
-**Session:** 98 · **Starting commit:** `a716df4` · **MINK version:** 1.0.1
+**Session:** 98 (with a Session 107 reconciliation note) · **Starting commit:** `a716df4` · **MINK version:** 1.0.1
 **Input:** `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md` (the master matrix,
-232 audited capability rows, 175 rows requiring work, 44 parity-blocking P1 gaps).
+232 audited capability rows). Session 98 planning baseline: 175 rows requiring work, 44
+parity-blocking P1 gaps. **Current, evidence-derived figures (Session 107): 171 rows
+requiring work, 26 parity-blocking P1 gaps.**
 **Date:** September 4, 2026
+
+> **Session 107 note.** This plan is the Session 98 sequencing document. The wave map in
+> §1, the per-wave blocker counts in §6, and the "44 today" reference in §0 are the
+> Session 98 baseline, kept for traceability. The matrix §10 (10.1-10.7) is authoritative
+> for current counts: 26 blockers, distributed A 1 · B 4 · C 2 · D 4 · E 4 · F 6 · G 5
+> (§10.4). The rows delivered across Sessions 99-107 no longer appear in that list. The
+> Session 107 additions were the UTF-8 text layer (L05) and the reconciliation of stale
+> `P1`/`Blocks = Y` flags on already-verified rows (R06, W14, P02, T06).
 
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
@@ -16,7 +26,8 @@ completion gate; nothing in a later wave may silently redefine an earlier wave's
 
 - Parity = **capability coverage**, not syntax identity. The anti-clone register (matrix
   §9, X01–X21) is part of this plan's contract.
-- Parity is declared complete only when the matrix shows **zero P1 gaps** (44 today) and
+- Parity is declared complete only when the matrix shows **zero P1 gaps** (44 at the
+  Session 98 baseline, **26** as of Session 107) and
   every status is VERIFIED/IMPLEMENTED/INTENT. DIFF./N/A with an execution-verified or
   test-backed trace, per the proof strategy in §6.
 - Community/pip ecosystem parity is out of scope forever for this gate.
@@ -135,12 +146,13 @@ earlier wave.
 | H | 0 | ~10 | 3-4-5 (calendar-parallel) |
 | I | 0 | ~8 apps | 4-5-7 |
 | J | 0 | re-audit | 1-2-2 |
-| **Total** | **44** (all 44 unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** |
+| **Total** | **44 at the Session 98 baseline · 26 as of Session 107** (matrix §10.4; all unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** (Session 98 estimate) |
 
 Interpretation:
 
-- **Minimum (≈ 46 sessions):** the 44 blockers only, tightest sequencing, no P2/P3 items,
-  H fully inside other waves, proofs minimal per category.
+- **Minimum (≈ 46 sessions at the Session 98 baseline):** the then-44 blockers only,
+  tightest sequencing, no P2/P3 items, H fully inside other waves, proofs minimal per
+  category.
 - **Realistic (≈ 58-64 sessions):** blockers + important P2 items (process stdin, HTTP
   completion, sockets select, profiler/debugger first pass, long paths, wide APIs) +
   interleaved wave H + one proof app per category.
@@ -169,8 +181,10 @@ Largest risks (ranked):
    mechanical pass with byte-identical test vectors.
 6. **Linux freeze discipline**: several frozen Linux files contain working env/net code;
    copy, do not share code paths.
-7. **Test-infra flakiness**: two loopback network tests are timing-flaky under full
-   parallel load; fix the harness before concurrency work multiplies network tests (P3).
+7. **Test-infra flakiness**: loopback network tests are timing-flaky under full parallel
+   load (Session 106: TCP timing; Session 107: the WSL Linux HTTP client test, 3/3 in
+   isolation) and pass individually; fix the harness before concurrency work multiplies
+   network tests (P3).
 
 ## 7. Final parity gate (Wave J exit criteria)
 

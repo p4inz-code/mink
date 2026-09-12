@@ -14,7 +14,7 @@ The session then resumed from that checkpoint to complete Phase 5+ verification,
 
 ## 2. End commit
 
-`HEAD == origin/main` (post-session push); exact hash verified below.
+`48ed337` (`HEAD == origin/main` after the push; verified in §19).
 
 ## 3. Selected parity tranche
 
@@ -309,28 +309,35 @@ The Session 106 report flagged 1 flaky TCP timing test in `windows_hardening` (7
 
 The architecture changes (chunked return-slot layout, typed-element descriptors) are already cross-platform in design (descriptors exist for both backends; the chunked layout is a calling-convention detail that the Linux backend would also need to match when Linux support is revived). No Windows-only abstraction was introduced.
 
-## 18. Commit list
+## 18. Commit list (completed 2026-09-12)
 
 | # | Commit | Description |
 |---|---|---|
-| 1 | `0c0ab7a` | fix: typed collection catalog + string split/join stdlib + first 3 regression tests (checkpoint from prior session — Vec push/set/get/pop Int→Elem, str_split, str_join, s107_chunked_return_slot_struct_fields, s107_vec_remove_r8_clobber_no_double_free, s107_map_keys_values_set_elements_arity) |
+| 1 | `0c0ab7a` | fix: typed collection catalog (Vec push/set/get/pop `Int`→`Elem`), `str_split`/`str_join`, first 3 regression tests — includes the B2 chunked return-slot memcpy fix, the B3 VecRemove R8-clobber spill, and the B4 MapKeys/MapValues/SetElements IR arity fix, all of which were found before this checkpoint was taken |
+| 2 | `48ed337` | test+docs: the 4 permanent `s107_*` regressions in `tests/collections_lib.rs` (B2/B3/B4/b1 typed-Vec lifecycle), the L08 and S01 matrix promotions, and this report |
 
-Session 107 additional commits (to be made below):
+Session 107 continued after `48ed337` with the UTF-8 code-point layer (L05); that half is
+recorded separately in `docs/implementation/SESSION_107_UTF8_TEXT_LAYER.md`, whose commits
+(`5f2a935`, `c3b8091` and its documentation commit) are listed there.
 
-| # | Commit | Description |
-|---|---|---|
-| 2 | (this session) | fix: chunked return-slot memcpy for multi-word runtime results (B2 fix) + VecRemove R8 clobber spill (B3 fix) |
-| 3 | (this session) | fix: MapKeys/MapValues/SetElements IR arity (B4 fix) + s107_vec_str_lifecycle regression test |
-| 4 | (this session) | docs: update parity matrix (L08, S01, S19, stats) + SESSION_107 report |
+## 19. Push verification (completed 2026-09-12)
 
-## 19. Push verification
+At the start of the continuation half, `git status -sb` reported `## main...origin/main`
+with no ahead/behind marker and `git rev-parse HEAD` ==
+`git rev-parse origin/main` == `48ed337`, so both commits of this half were already on
+`origin/main`. The continuation's own pushes were verified the same way (`HEAD` ==
+`origin/main` == `c3b8091` after the feature and formatting commits; the continuation's
+documentation commit is the session's final commit and is verified at the Session 107
+continuation push checkpoint). `AHEAD == 0`, `BEHIND == 0`.
 
-To be verified after commits: `git status -sb`, `git rev-parse HEAD`, `git rev-parse origin/main`, `LOCAL HEAD == origin/main`, `AHEAD == 0`, `BEHIND == 0`.
+## 20. Pause-safety status (completed 2026-09-12)
 
-## 20. Pause-safety status
-
-**PAUSE-SAFE after commits + push below.** All completed work commits and pushed to origin/main. Working tree clean (except `tmp/` probes which are scratch and will be removed before final commit).
+**PAUSE SAFETY: PASS.** All completed work is committed and pushed; the repository is
+recoverable with `git pull --ff-only origin main`. The untracked generated artifacts that
+were present in the working tree at the start of the continuation (`examples/*/*.exe`,
+`examples/env_report/env_report.txt`, `examples/system_report/report.json`) and the `tmp/`
+scratch probes were deleted, so no work remains only locally and the tree is clean.
 
 ---
 
-*End of Session 107 report draft.*
+*End of Session 107 report.*

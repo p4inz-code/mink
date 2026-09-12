@@ -1,14 +1,21 @@
 # MINK — Windows × Official Python Capability Parity Matrix (Master Audit)
 
-**Session:** 106 (matrix updated from Session 98 baseline)
-**Starting commit:** `a716df4` (Session 98) → `ac67db2` (Session 106 start)
+**Session:** 107 (matrix reconciled from the Session 106 rows)
+**Starting commit:** `568dc04` (Session 106 close) → `48ed337` (Session 107 start) → `c3b8091` (Session 107 push)
 **MINK version:** 1.0.1
 **Scope:** Windows x86_64 (the shipped platform). Official Python capabilities only.
 **Classification:** capability parity — what a Windows developer can accomplish with
 official Python must be accomplishable with MINK's own architecture. Syntax imitation is
 explicitly out of scope. PyPI / third-party ecosystem parity is out of scope.
-**Date:** September 4, 2026
+**Date:** September 12, 2026
 **Auditor:** Buffy (Codebuff)
+
+> **Session 107 reconciliation note.** Earlier sessions flipped individual rows to
+> VERIFIED/EXECUTION VERIFIED but did not re-derive the aggregate counts, and some rows
+> kept `P1`/`Blocks = Y` after their own evidence showed the capability delivered. Section
+> 10's totals are now computed **from the rows** (see the per-row anchors), and the rows
+> whose flags contradicted their own evidence were corrected with the evidence named
+> inline. The session's own tranche (L05) is recorded with native execution evidence.
 
 This document is the durable, evidence-based master map. Companion documents:
 
@@ -60,7 +67,7 @@ probes). Every "every major claim must be traceable" row carries anchors in Note
 | Starting commit | `a716df4`, clean tree | `git rev-parse HEAD`, `git status` |
 | Version | `mink 1.0.1` | `target/release/mink.exe --version` |
 | Release build | clean | `cargo build --release` |
-| Test suite | 2547 tests / 56 test targets; full run 2545 pass + 2 timing-flaky loopback network tests that pass in isolation | `cargo test` ×2; isolated reruns of `windows_hardening` |
+| Test suite | 56 test targets + lib/main; Session 107 regression: 2 461 passed, 2 ignored, 0 product failures, 1 parallel-load loopback flake (WSL Linux HTTP client, 3/3 in isolation) | `cargo test` (two invocations under the command cap) + grouped/isolated reruns of `windows_hardening`; see the Session 107 report |
 | Smoke/CLI/release suites | smoke 13/13 · release 66/66 · cli 74/74 | `cargo test --test {smoke,release,cli}` |
 | Windows target | `x86_64-windows-pe` implemented | `[code] src/backend/target.rs` |
 | Linux target | `x86_64-linux-elf` implemented but FROZEN by policy; not part of this audit | `[code] src/backend/target.rs`; session policy |
@@ -86,14 +93,14 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | L02 | Floating point (`float`, IEEE-754 binary64) | VERIFIED | `Float` = f64, exact 17-digit print, conversions (`[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`; `[test] tests/math_lib.rs`, scalar_types) | None material | - | - | N | - | Both Python and MINK use binary64; print round-trip exact |
 | L03 | Complex numbers + `cmath` | MISSING | none | No complex type/ops | P3 | L | N | B | Niche; stdlib `cmath` functions are rare outside scientific code |
 | L04 | Booleans | VERIFIED | `Bool`; `&&`/`\|\|` short-circuit (probed native this session); `!` | None | - | - | N | - | Note: Session 82 audit claimed no short-circuit; probe proves otherwise |
-| L05 | Strings as Unicode text (`str`) | INTENT. DIFF. + PARTIAL | `Str` = length-prefixed byte buffer, heap-owned or immutable image literal; byte access `rt_str_byte/set_byte` (`[code] src/runtime/intrinsics.rs`) | No UTF-8 validation/decoding, no code-point iteration, ASCII-only case ops, length is bytes not code points | P1 | M | Y | B/H | MINK's native text model is bytes (deterministic); a UTF-8 layer (validate, decode, iterate, non-ASCII-aware ops) is the parity item; full Unicode DB (categories/normalization/collation) is P3 |
+| L05 | Strings as Unicode text (`str`) | INTENT. DIFF. + PARTIAL | `Str` = length-prefixed byte buffer, heap-owned or immutable image literal; **UTF-8 code-point layer** in `stdlib/encoding.mink`: `utf8_validate` (strict — rejects overlong C0/C1, 3-byte overlong, UTF-16 surrogates, > U+10FFFF, stray/truncated bytes), `utf8_decode`, `utf8_encode`, `utf8_char_count`, `utf8_char_at`, `utf8_byte_index`, `utf8_slice` (`[code] stdlib/encoding.mink`, `npm/mink/stdlib/encoding.mink`; `[test] tests/encoding_lib.rs` 18 strict exit-0 s107_utf8_* tests; `[exec]` Session 107 native PE probes: valid 2/3/4-byte, overlong, surrogate and boundary validation, decode/encode round trip, code-point indexing/slicing, leak-free on heap input) | No non-ASCII case ops (`str_to_upper`/`str_to_lower` are ASCII) and no Unicode DB (categories/normalization/collation) — the latter is S03 (P3); the native `rt_str_len` remains a byte length by design | P2 | M | N | B/H | **P1 blocker CLOSED in Session 107**: validation, decoding, encoding and code-point iteration/length/slicing now exist and are native-verified. Two latent defects fixed on the way: `utf8_validate`/`utf8_char_count` leaked their heap `Str` argument (E-R06), and `utf8_validate` accepted overlong 2-byte forms and surrogates. Byte-oriented storage remains the native model (INTENT. DIFF.) |
 | L06 | Bytes (`bytes`, immutable) | INTENT. DIFF. | Byte model IS the native string model; image literals immutable | None material | - | - | N | - | Binary data is the default, not a special case |
 | L07 | Bytearray (mutable bytes) | INTENT. DIFF. | Heap `Str` mutable via `rt_str_set_byte` (bounds-checked E-R09) | None material | - | - | N | - | Mutable byte buffers exist |
-| L08 | Lists (`list` of arbitrary objects) | EXECUTION VERIFIED | `Vec<T>` generic type identity (`[code] src/typecheck/ty.rs`); dynamic ops via `rt_vec_*` (`[code] stdlib/collections.mink`); runtime ops on multi-word element types now supported (Str, Float, struct, multi-struct, enum) — generic result typing via `rt_vec_get`/`rt_vec_pop` hidden return slot with chunked layout; element ownership/lifecycle verified for Vec<Str>, Vec<struct>, Vec<struct-with-Str>, Vec<Float> (`[code] src/runtime/intrinsics.rs src/backend/emit/runtime.rs src/backend/ir.rs`; `[test] tests/collections_lib.rs` s107_chunked_return_slot_struct_fields, s107_vec_remove_r8_clobber_no_double_free, s107_vec_str_lifecycle, s107_map_keys_values_set_elements_arity; `[exec]` Session 107 native probes: probe_vecstr, vecstr_growth, vecstr_ownership, vec_typed, vec_cross, vec_struct_only, vec_struct_heap, vec_struct_get, vec_struct_remove, vec_struct_combo, vec_struct_str, vec_float_push, dict_with_vec, map_of_vec, stress_vec_multiple_types, stress_vec_regression, stress_small_ints) | Multi-word return-slot memcpy was writing in linear order but the hidden slot uses chunked layout — FIXED (Session 107); VecRemove shift-loop bound (R8) was clobbered by inner memcpy reload — FIXED (Session 107, latent double-free for elem_size ≥ 9 and len ≥ 9); Vec<Str>/<Float>/<struct> element push/insert/shift/get/pop/remove ownership now verified across types; Vec<Float> comparison path has a pre-existing unreported live-block leak (not a Session 107 regression; not product-parity-blocking for Vec itself); no slicing, no append/extend convenience, no filter/map (P3) | P1 | L | N | B | Ownership-aware generic dynamic collections (strings/aggregates in a Vec) is the real design task — now DEMONSTRATED WORKING for Str/Float/struct/multi-struct; Float comparison leak is a separate pre-existing item to triage
+| L08 | Lists (`list` of arbitrary objects) | EXECUTION VERIFIED | `Vec<T>` generic type identity (`[code] src/typecheck/ty.rs`); dynamic ops via `rt_vec_*` (`[code] stdlib/collections.mink`); runtime ops on multi-word element types now supported (Str, Float, struct, multi-struct, enum) — generic result typing via `rt_vec_get`/`rt_vec_pop` hidden return slot with chunked layout; element ownership/lifecycle verified for Vec<Str>, Vec<struct>, Vec<struct-with-Str>, Vec<Float> (`[code] src/runtime/intrinsics.rs src/backend/emit/runtime.rs src/backend/ir.rs`; `[test] tests/collections_lib.rs` s107_chunked_return_slot_struct_fields, s107_vec_remove_r8_clobber_no_double_free, s107_vec_str_lifecycle, s107_map_keys_values_set_elements_arity; `[exec]` Session 107 native probes: probe_vecstr, vecstr_growth, vecstr_ownership, vec_typed, vec_cross, vec_struct_only, vec_struct_heap, vec_struct_get, vec_struct_remove, vec_struct_combo, vec_struct_str, vec_float_push, dict_with_vec, map_of_vec, stress_vec_multiple_types, stress_vec_regression, stress_small_ints) | Multi-word return-slot memcpy was writing in linear order but the hidden slot uses chunked layout — FIXED (Session 107); VecRemove shift-loop bound (R8) was clobbered by inner memcpy reload — FIXED (Session 107, latent double-free for elem_size ≥ 9 and len ≥ 9); Vec<Str>/<Float>/<struct> element push/insert/shift/get/pop/remove ownership now verified across types; Vec<Float> comparison path has a pre-existing unreported live-block leak (not a Session 107 regression; not product-parity-blocking for Vec itself); no slicing, no append/extend convenience, no filter/map (P3) | P2 | L | N | B | Ownership-aware generic dynamic collections (strings/aggregates in a Vec) is the real design task — now DEMONSTRATED WORKING for Str/Float/struct/multi-struct; Float comparison leak is a separate pre-existing item to triage. Session 107: stale `P1` cleared (the row is execution-verified; remaining items are P3 ergonomics) |
 | L09 | Tuples | VERIFIED | Heterogeneous fixed tuples, field access `.0`, destructuring in let/match (`[test] tests/tuples.rs`, tuple_destructure) | None | - | - | N | - | Named tuples: P3 sugar (see S09) |
 | L10 | Dictionaries (`dict`) | VERIFIED | `Map<Int,T>` runtime type; `rt_map_new/insert/get/has/remove/len/free`; open-addressing hash table with probing; growth/rebuild verified; string keys via literal and heap; collision chains verified; ownership/leak-free verified (`[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`; `[test] tests/collections_lib.rs` s106_map_*; `[exec]` Session 106 probes: map_basic, map_growth, map_ownership, map_strkeys, map_collisions, stress_collections) | No dict literal syntax (function-based `rt_map_new`); no hash-ordered iteration; `Map<Int,T>` only in V1 (generic value types limited to word-sized) | P2 | M | N | B | Root-cause fixes in Session 106: occupied-flag rewrite in rebuild, map_get probe-advance fix, stale-bucket clearing on allocator reuse |
-| L11 | Sets (`set`) | VERIFIED | `Set<T>` runtime type; `rt_set_new/insert/has/remove/len/free`; same hash-table architecture as Map; growth/rebuild/collision/ownership verified (`[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`; `[test] tests/collections_lib.rs` s106_set_*; `[exec]` Session 106 probes: set_basic, set_growth, set_growth2, set_ownership, set_strvals, set_collisions, stress_collections) | Set<T> element type limited to word-sized in V1 (same constraint as Map keys) | P2 | M | N | B | Same root-cause fixes as Map in Session 106
-| L12 | Frozen sets | VERIFIED | Use `Set<T>` and do not mutate; ownership makes mutation explicit | None (convention over enforced immutability) | P3 | S | N | B | MINK's ownership model means a set not passed as `&mut` is effectively frozen
+| L11 | Sets (`set`) | VERIFIED | `Set<T>` runtime type; `rt_set_new/insert/has/remove/len/free`; same hash-table architecture as Map; growth/rebuild/collision/ownership verified (`[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`; `[test] tests/collections_lib.rs` s106_set_*; `[exec]` Session 106 probes: set_basic, set_growth, set_growth2, set_ownership, set_strvals, set_collisions, stress_collections) | Set<T> element type limited to word-sized in V1 (same constraint as Map keys) | P2 | M | N | B | Same root-cause fixes as Map in Session 106 |
+| L12 | Frozen sets | VERIFIED | Use `Set<T>` and do not mutate; ownership makes mutation explicit | None (convention over enforced immutability) | P3 | S | N | B | MINK's ownership model means a set not passed as `&mut` is effectively frozen |
 | L13 | `None` / nullability | VERIFIED | `Null` type + `Option<T>` (`[code] stdlib/option.mink`), `?` operator | None | - | - | N | - | Stronger than Python: exhaustive `match` on `Option` |
 | L14 | Ranges | VERIFIED | `a..b`, `a..=b`; `for i in 1..=10` (`[test] tests/loop_expressions.rs`) | No step forms (`range(a,b,s)`); P3 sugar | P3 | S | N | B | |
 | L15 | Slicing `s[a:b:c]` | PARTIAL | `str_sub` for strings (`[code] stdlib/strings.mink`); no slice views of arrays/Vec, no step | Array/container slicing absent | P2 | M | N | C | Function form exists for Str; slice *views* need reference+length types later |
@@ -198,7 +205,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 ### 3.10 Language section totals
 
-73 rows: EXECUTION VERIFIED 2 · VERIFIED 24 · INTENT. DIFF. 11 · INTENT. DIFF. + PARTIAL 1 · PARTIAL 9 · PLANNED 2 · N/A (INTENT.) 1 · MISSING 23. Parity blockers: 6 (L05, L10, L16, L34, L67, L68) — L08 closed in Session 107.
+73 rows: EXECUTION VERIFIED 1 · VERIFIED 29 · INTENT. DIFF. 11 · INTENT. DIFF. + PARTIAL 1 · PARTIAL 9 · PLANNED 2 · N/A (INTENT.) 1 · MISSING 19. Priorities: P1 2 · P2 22 · P3 23 · no-gap 26. **Parity blockers (Blocks = Y): 2 — L34 (exceptions), L68 (packages).** L08 closed in Session 106/107 and **L05 closed in Session 107**. The prior totals on this line were stale: they still listed L10/L16/L67 (VERIFIED, `Blocks = N`) and missed the L08 status change.
 
 ---
 
@@ -211,7 +218,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | R03 | Module execution (`python -m pkg`) | MISSING | `mink run <file>` only | Package/module runner | P3 | M | N | F | Comes with package system |
 | R04 | Compiled standalone program | VERIFIED | `mink build` → zero-dependency PE (`[exec]` Session 97: standalone exe outside repo) | None — MINK is stronger (Python needs an interpreter + packaging to ship) | - | - | N | - | |
 | R05 | Import caching / bytecode cache | N/A | AOT compilation; no cache concept | — | - | - | N | - | |
-| R06 | Traceback / error reporting w/ location | VERIFIED | compile-time errors carry file:line:col; runtime faults now print `mink: runtime error[E-Rxx]: msg (file:line)` — per-function fail-site location table embedded in the image (BSS `fail_loc` cell + patch-time span resolution; `[code] src/backend/emit/runtime.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/abi.rs`) | Runtime faults carry no call stack (V1 contract: location yes, stack no) | P1 | M | Y | A | IMPLEMENTED Session 100: `[test] tests/session100.rs` (9 tests incl. exact file/line), `[exec] examples/runtime_error_report/main.mink` (E-R10 at main.mink:20, exit 110); determinism tests pin same-path builds (image embeds path as given) |
+| R06 | Traceback / error reporting w/ location | VERIFIED | compile-time errors carry file:line:col; runtime faults now print `mink: runtime error[E-Rxx]: msg (file:line)` — per-function fail-site location table embedded in the image (BSS `fail_loc` cell + patch-time span resolution; `[code] src/backend/emit/runtime.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/abi.rs`) | Runtime faults carry no call stack (V1 contract: location yes, stack no) | P2 | M | N | A | IMPLEMENTED Session 100: `[test] tests/session100.rs` (9 tests incl. exact file/line), `[exec] examples/runtime_error_report/main.mink` (E-R10 at main.mink:20, exit 110); determinism tests pin same-path builds (image embeds path as given). Session 107: the row was already VERIFIED; the stale `P1`/`Blocks = Y` flags are cleared (the remaining item is the P3 call-stack extension) |
 | R07 | Warnings (`warnings` module) | MISSING | none | Warning channel | P3 | S | N | - | |
 | R08 | stdout output | VERIFIED | `rt_print_str/int/float/char` (+CRLF), write thunks via kernel32 (`[code] src/runtime/intrinsics.rs`) | None | - | - | N | - | Python `print()` equivalent |
 | R09 | User-facing stderr write | VERIFIED | `rt_stderr_write(Str) -> Int` writes exact bytes to stderr (`[code] src/runtime/intrinsics.rs`; `[test] tests/session99.rs` stderr_write_is_separate_from_stdout; `[exec]` env_report example) | Writes are synchronous; stdout/stderr interleaving order not guaranteed | P3 | S | N | - | |
@@ -242,10 +249,10 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| S01 | String methods (search/replace/trim/case/…) | EXECUTION VERIFIED | `str_*`: cmp, index_of, contains, starts/ends_with, count, sub, trim, upper/lower (ASCII), repeat, pad, reverse, replace(_all), join_2/3, **split** (`[code] stdlib/strings.mink`; `[test] tests/strings_lib.rs`; `[exec]` Session 107 native probes: split_basic, split_empty, split_single delim, split_long, split_stress, join_basic, join_strings, join_repeat, join_empty, join_vec_str, stress_split_join) | Case ops ASCII-only; no partition (P3); no unicode-aware split (L05) | P1 | M | Y | B | `split`/`join` are the daily text workhorses (CSV row depends) — split now implemented; join generalized from join_2/3
+| S01 | String methods (search/replace/trim/case/…) | EXECUTION VERIFIED | `str_*`: cmp, index_of, contains, starts/ends_with, count, sub, trim, upper/lower (ASCII), repeat, pad, reverse, replace(_all), join_2/3, **split** (`[code] stdlib/strings.mink`; `[test] tests/strings_lib.rs`; `[exec]` Session 107 native probes: split_basic, split_empty, split_single delim, split_long, split_stress, join_basic, join_strings, join_repeat, join_empty, join_vec_str, stress_split_join) | Case ops ASCII-only; no partition (P3); no unicode-aware split (L05) | P2 | M | N | B | `split`/`join` are the daily text workhorses (CSV row depends) — split now implemented; join generalized from join_2/3. Session 107: the P1 blocker is closed (remaining items are P3 partition and L05 Unicode-aware split), so the flag is cleared |
 | S02 | Regular expressions (`re`) | MISSING | none | No regex anywhere | P1 | XL | Y | B | Major subsystem; no third-party deps allowed, engine must be self-written (or generated) |
 | S03 | Unicode data (categories/normalization/casefold) | MISSING | none (byte model) | Full Unicode DB | P3 | L | N | H | Minimal UTF-8 layer is L05 (P1); full DB optional |
-| S04 | Codecs / encodings (`codecs`, utf-8/16, latin-1…) | PARTIAL | `encoding.mink`: hex/base64(url)/url + `str_is_ascii` (`[code] stdlib/encoding.mink`; `[test] tests/encoding_lib.rs`) | No UTF-8 encode/decode, no text codecs | P2 | M | N | H | |
+| S04 | Codecs / encodings (`codecs`, utf-8/16, latin-1…) | PARTIAL | `encoding.mink`: hex/base64(url)/url + `str_is_ascii` + **UTF-8** `utf8_validate`/`utf8_decode`/`utf8_encode`/`utf8_char_count`/`utf8_char_at`/`utf8_byte_index`/`utf8_slice` (`[code] stdlib/encoding.mink`; `[test] tests/encoding_lib.rs` incl. s107_utf8_*) | UTF-8 is covered (Session 107); no UTF-16/latin-1 or other text codecs | P2 | M | N | H | |
 | S05 | Text wrapping / formatting helpers (`textwrap`) | MISSING | none | Wrap/pad paragraph text | P3 | S | N | - | |
 | S06 | String parsing: int/float ↔ text | PARTIAL | `rt_str_from_int/bool/float` + `rt_str_format` (Session 99, `[test] tests/session99.rs`); `rt_str_parse_int` helper in http.mink | No robust parse-to-float, no general str→int | P1 | M | Y | B | Formatting side VERIFIED; parsing side is the remaining Wave B item |
 
@@ -262,19 +269,21 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| S11 | `collections`: deque/Counter/defaultdict/OrderedDict | PARTIAL | `Map<Int,T>` provides Counter/defaultdict-like functionality; `Set<T>` provides set operations; no deque/OrderedDict | deque, OrderedDict, named-tuple variants | P2 | M | N | B | Map/Set cover the two highest-value named collection types
+| S11 | `collections`: deque/Counter/defaultdict/OrderedDict | PARTIAL | `Map<Int,T>` provides Counter/defaultdict-like functionality; `Set<T>` provides set operations; no deque/OrderedDict | deque, OrderedDict, named-tuple variants | P2 | M | N | B | Map/Set cover the two highest-value named collection types |
 | S12 | `queue` | MISSING | none | Thread-safe queues | P2 | M | N | E | With threads |
 | S13 | `heapq` | MISSING | none | Heap operations | P2 | S | N | B | Easy over Vec |
 | S14 | Typed arrays (`array` module) | PARTIAL | fixed-size `[T; N]` arrays with bounds checks (`[code] src/typecheck/ty.rs`; `[test] tests/aggregate.rs`) | No compact dynamic typed arrays (Vec covers word-sized only) | P2 | M | N | B | |
 | S15 | Enum / flag values | VERIFIED | see L17 | None | - | - | N | - | |
-| S16 | Linked structures / trees / custom collections | VERIFIED | Map/Set provide hash-based containers; `Ptr<Int>` + alloc/free for custom structures; JSON arena for tree-like data | No stdlib tree/bag/deque types | P2 | M | N | B | Map/Set cover the core hash-based collection need
+| S16 | Linked structures / trees / custom collections | VERIFIED | Map/Set provide hash-based containers; `Ptr<Int>` + alloc/free for custom structures; JSON arena for tree-like data | No stdlib tree/bag/deque types | P2 | M | N | B | Map/Set cover the core hash-based collection need |
 
 ### 5.4 Math / numeric
 
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | S17 | `math` module | VERIFIED | constants; int helpers; float sqrt/pow/ln/log/exp/trig/hyperbolic/round via pure-MINK series (`[code] stdlib/math.mink`; `[test] tests/math_lib.rs` 106 tests) | Accuracy of series approximations vs libm (documented); no isfinite/isnan helpers exposed | P3 | M | N | - | Native float print is exact; series math is adequate |
-| S18 | `random` | VERIFIED | seeded xorshift: ints/bytes/bool; crypto-secure random via BCrypt (`[code] stdlib/random.mink`, `stdlib/crypto.mink`; `[test] tests/random_lib.rs`, crypto_lib) | No distribution helpers (uniform/gauss/choice/shuffle) | P2 | S-M | N | B | choice/shuffle need containers || S19 | `statistics` | MISSING | none | mean/median/stdev | P2 | S | N | B | Trivial once numeric Vec works | S20 | `decimal` | MISSING | none | Exact decimal arithmetic | P2 | L | N | B | Money/finance; alternative: fixed-point lib |
+| S18 | `random` | VERIFIED | seeded xorshift: ints/bytes/bool; crypto-secure random via BCrypt (`[code] stdlib/random.mink`, `stdlib/crypto.mink`; `[test] tests/random_lib.rs`, crypto_lib) | No distribution helpers (uniform/gauss/choice/shuffle) | P2 | S-M | N | B | choice/shuffle need containers |
+| S19 | `statistics` | MISSING | none | mean/median/stdev | P2 | S | N | B | Trivial once numeric Vec works |
+| S20 | `decimal` | MISSING | none | Exact decimal arithmetic | P2 | L | N | B | Money/finance; alternative: fixed-point lib |
 | S21 | `fractions` | MISSING | none | Rationals | P3 | M | N | - | |
 | S22 | `cmath` / complex | MISSING | see L03 | — | P3 | L | N | B | |
 
@@ -400,7 +409,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | T03 | Check/typecheck without output | VERIFIED | `mink check` runs parse→semantics→types→HIR→MIR (and ownership) (`[code] src/driver.rs`) | None | - | - | N | - | Equivalent of a lint+typecheck pass; no official Python equivalent exists (py_compile is weaker) |
 | T04 | REPL / interactive | MISSING | none | see R01 | P1 | L | Y | G | |
 | T05 | Module execution `python -m` | MISSING | none | see R03 | P3 | M | N | F | |
-| T06 | Import search paths / installed stdlib | PARTIAL | module resolution is root-file-relative only (`[code] src/module/mod.rs` module_file_path) | see L67 | P1 | S-M | Y | A/F | |
+| T06 | Import search paths / installed stdlib | VERIFIED | `mod name;` searches the declaring file's directory, then `<exe>/../stdlib`, then `cwd/stdlib` (`[code] src/driver.rs` resolve_module_path; `[test] tests/modules_check.rs`; `[exec]` Session 99 clean install and Session 107 probes importing `encoding` through `cwd/stdlib`) | None for V1 | - | - | N | - | **Reclassified in Session 107**: the stale evidence cited `src/module/mod.rs`; the delivered mechanism is `src/driver.rs` resolve_module_path (see L67 VERIFIED) |
 | T07 | Test runner (unittest equivalent) | MISSING | Rust-side harness only | `mink test` runner | P1 | M | Y | G | |
 | T08 | Debugger (pdb equivalent) | MISSING | none | breakpoints/step/inspect | P2 | XL | N | G | Major subsystem; parity of pdb is desirable but the parity gate can pass with strong error diagnostics + print debugging; revisit at wave G |
 | T09 | Profiler (cProfile/timeit) | MISSING | none | performance measurement | P2 | L | N | G | |
@@ -431,7 +440,7 @@ Classification prefix in Notes: **REQ** = required for MINK Windows parity · **
 | W11 | Signals/control events | MISSING | none | SetConsoleCtrlHandler | P2 | M | N | H | OPT (graceful shutdown) |
 | W12 | Executable discovery / PATH resolution | PARTIAL | child commands run through shell resolution; direct CreateProcessA path behavior untested | PATH search semantics | P2 | S | N | C | REQ (CLI tools) |
 | W13 | Temp dirs | MISSING | none | GetTempPath/GetTempFileName | P2 | S | N | C | REQ |
-| W14 | User/home/known folders | VERIFIED | `rt_home_dir` intrinsic: USERPROFILE, falling back to HOMEDRIVE+HOMEPATH (`[code] src/backend/emit/runtime.rs` emit_home_dir) | APPDATA/known-folders via SHGetKnownFolderPath still MISSING (P2, Wave H) | P1 | S | Y | A | IMPLEMENTED Session 100: `[test] tests/session100.rs` (5 tests: USERPROFILE, both fallback branches, missing-vars, path correctness) |
+| W14 | User/home/known folders | VERIFIED | `rt_home_dir` intrinsic: USERPROFILE, falling back to HOMEDRIVE+HOMEPATH (`[code] src/backend/emit/runtime.rs` emit_home_dir) | APPDATA/known-folders via SHGetKnownFolderPath still MISSING (P2, Wave H) | P2 | S | N | A | IMPLEMENTED Session 100: `[test] tests/session100.rs` (5 tests: USERPROFILE, both fallback branches, missing-vars, path correctness). Session 107: the row was already VERIFIED; the stale `P1`/`Blocks = Y` flags are cleared |
 | W15 | Registry (winreg) | MISSING | none | registry access | P2 | M | N | H | OPT — Python winreg is official; materially useful for Windows automation but not gate-blocking |
 | W16 | DLL/shared-library loading | MISSING | internal LoadLibrary/GetProcAddress only (ws2_32, bcrypt) (`[code] src/backend/emit/pe.rs`) | user-level FFI | P2 | L | N | I | OPT-to-REQ depending on interop ambitions; C ABI spec exists |
 | W17 | Terminal colors/ANSI/interactive UX | MISSING | none | console capability APIs | P3 | L | N | H | OPT |
@@ -450,7 +459,7 @@ distribution of the compiler is complete and does NOT constitute a MINK package 
 | ID | Python concept | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | P01 | Distributing the tool itself | VERIFIED | npm `@p4inz-code/mink` 1.0.1, clean install ×2, standalone exe (`[exec]` Session 97; `[code] npm/mink/package.json`) | None | - | - | N | - | Category (B) is done |
-| P02 | Standard-library source available to installed users | MISSING | npm ships only `bin/mink.exe`; stdlib `.mink` sources live in the repo only | Installed users cannot `use strings` without copying sources | P1 | S-M | Y | A/F | Quick win: bundle `stdlib/` + a module include path (see L67/T06) |
+| P02 | Standard-library source available to installed users | VERIFIED | npm `@p4inz-code/mink` ships `npm/mink/stdlib/*.mink` (all 16 modules) beside `bin/mink.exe`, and `mod name;` resolves it via `<exe>/../stdlib` with no config (`[code] npm/mink/package.json` `files`, `src/driver.rs` resolve_module_path; `[test] tests/release.rs` s107_npm_stdlib_bundle_matches_repo_stdlib — bundle byte-identical to `stdlib/`; `[exec]` Session 99 clean-install stdlib import) | None for V1 | - | - | N | - | **Reclassified in Session 107**: the row still said MISSING although the bundled stdlib landed in Session 99 (see the §2 baseline row). Session 107 also synced the drifted copy (`str_split`/`str_join`, the UTF-8 layer) and added the permanent drift guard |
 | P03 | Import package (`import pkg`) | PARTIAL | file `mod`/`use` (see L65-L67) | package directory concept | P1 | M | Y | F | |
 | P04 | Installed package / site-packages | MISSING | none | project-local dependency installation | P1 | M | Y | F | |
 | P05 | Dependency declaration + install (`pip`) | MISSING | none | dependency install/update | P1 | XL | Y | F | Major subsystem (package manager) |
@@ -501,16 +510,17 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 28 | 5 | 19 | 5 | 2 | 1 | 60 |
+| VERIFIED | 29 | 11 | 20 | 6 | 5 | 2 | 73 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
+| EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
 | INTENT. DIFF. | 11 | 0 | 0 | 0 | 1 | 1 | 13 |
 | INTENT. DIFF. + PARTIAL | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | N/A | 0 | 1 | 3 | 1 | 0 | 1 | 6 |
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
-| PARTIAL | 10 | 4 | 16 | 1 | 12 | 2 | 45 |
+| PARTIAL | 9 | 2 | 14 | 0 | 10 | 2 | 37 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 20 | 17 | 40 | 8 | 7 | 8 | 100 |
+| MISSING | 19 | 13 | 40 | 8 | 6 | 7 | 93 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 ### 10.2 Priority distribution
@@ -518,41 +528,47 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 6 | 8 | 17 | 3 | 3 | 6 | **43** |
-| P2 (important, not blocking) | 19 | 7 | 33 | 2 | 14 | 5 | **80** |
-| P3 (optional) | 23 | 6 | 14 | 5 | 3 | 1 | **52** |
-| — (no gap / no MINK work) | 25 | 8 | 14 | 6 | 2 | 2 | **57** |
+| P1 (parity-blocking by definition) | 2 | 3 | 14 | 2 | 0 | 5 | **26** |
+| P2 (important, not blocking) | 22 | 10 | 35 | 2 | 17 | 5 | **91** |
+| P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
+| — (no gap / no MINK work) | 26 | 8 | 15 | 7 | 2 | 3 | **61** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **43 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **26 capability gaps block the parity gate.**
+
+Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
+already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
+`src/driver.rs` mechanism behind the VERIFIED L67), so P1 now equals the `Blocks = Y`
+set exactly.
 
 ### 10.3 Difficulty distribution (rows requiring work; the other 57 rows have no gap)
 
 | Difficulty | Rows | Meaning |
 |---|---|---|
-| S-M (small-to-medium) | 9 | small change with a medium tail |
-| S (small) | 38 | one focused change, low risk |
-| M (medium) | 82 | multiple components, contained |
-| L (large) | 31 | major feature area |
+| S-M (small-to-medium) | 6 | small change with a medium tail |
+| S (small) | 37 | one focused change, low risk |
+| M (medium) | 83 | multiple components, contained |
+| L (large) | 30 | major feature area |
 | XL (major subsystem) | 15 | dedicated multi-session subsystem |
-| **Rows requiring work** | **175** | 175 + 57 no-gap rows = 232 |
+| **Rows requiring work** | **171** | 171 + 61 no-gap rows = 232 |
 
-### 10.4 Parity-blocking gaps (44, all P1) by wave
+### 10.4 Parity-blocking gaps (26, all P1) by wave
 
-Wave tags are exact matrix values; where a gap spans waves (A/B, A/F, B/H) it is listed
-under its primary wave and repeated in the note.
+Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
+primary wave. The rows Session 99–107 delivered (R06, R10, R12, R13, R23, S50, S70,
+W06, W08, W14, L16, L67, P02, T06, L05, L08, S01) no longer appear.
 
 | Wave | Blocking gaps | Count |
 |---|---|---|
-| A (Windows platform/runtime quick wins) | R06, R10, R12, R13, R23, S50, S70, S74, W06, W08, W14 (+ L16, S06 begin here: float→Str/format/numeric-text; + L67, P02, T06 mechanism: importable stdlib) | 13 (+5 shared, all landed S99/S100) |
-| B (core language/data) | L08, L34, S01, S02, S36 (+ L16, S06 complete here; + L05, whose UTF-8 layer is shared with H) | 5 (+4 shared) |
+| A (Windows platform/runtime quick wins) | S74 (logging module) | 1 |
+| B (core language/data) | L34, S02, S06, S36 | 4 |
 | C (filesystem/process/time) | S28, S69 | 2 |
 | D (networking/internet/compression) | S41, S42, S44, S62 | 4 |
 | E (concurrency/async) | R19, R20, S71, S73 | 4 |
-| F (packaging/distribution) | L68, P03, P04, P05, P06, P09 (+ L67, P02, T06 delivered by the A include-path mechanism) | 6 (+3 shared) |
+| F (packaging/distribution) | L68, P03, P04, P05, P06, P09 | 6 |
 | G (developer tooling) | R01, S75, S78, T04, T07 | 5 |
-| **Total** | | **43** |
+| **Total** | | **26** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -579,20 +595,22 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.6 Headline conclusions
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
-2. **Official-Python-capability parity is PARTIAL**: 56+3 VERIFIED rows, 44 PARTIAL rows, 105 MISSING rows, 13+4 intentionally-different/NA rows, 3 PLANNED rows.
-3. **44 parity-blocking P1 gaps** remain; in all, 175 rows require work (15 XL + 31 L + 82 M + 38 S + 9 S-M) and 57 rows need none.
+2. **Official-Python-capability parity is PARTIAL**: 77 execution-verified rows (VERIFIED 73 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 37 PARTIAL rows, 93 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
+3. **26 parity-blocking P1 gaps** remain; in all, 171 rows require work (15 XL + 30 L + 83 M + 37 S + 6 S-M) and 61 rows need none.
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
-6. Parity-blocking work clusters into: language/data (Wave B — L10 dict now VERIFIED; L11 set now VERIFIED; remaining: L08 Vec generics, L34 exceptions, S01 split, S02 regex, S36 CSV), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G), plus a fast Windows-runtime wave (A) that removes the environment/stdin/argv/sleep/stderr/error-info gaps and bundles the stdlib into npm.
+6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01 and the UTF-8 layer L05 are now VERIFIED; remaining: L34 exceptions, S02 regex, S06 numeric parsing, S36 CSV), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G), and logging (Wave A, S74). Waves A and the shared A/F include-path mechanism landed across Sessions 99–107.
 7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) was stubbed at audit time but is implemented since Session 99; `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); crypto is execution-verified on Windows.
 
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (43 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (26 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
 
 **Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.
+
+**Session 107 updates:** L05 (Unicode text) **P1 blocker CLOSED** — the UTF-8 code-point layer (`utf8_validate`/`decode`/`encode`/`char_count`/`char_at`/`byte_index`/`slice`) was added, native-verified and leak-checked, fixing two latent defects on the way (heap-argument leak; acceptance of overlong 2-byte forms and surrogates). S01 (string methods) and L08 (lists) `P1` flags cleared after their Session 106/107 closures. Row flags reconciled against each row's own evidence for R06, W14, P02 and T06, and every count in §10 recomputed **from the rows** (stale aggregate tables and five rows with a missing trailing pipe were corrected). The npm stdlib bundle was re-synced (`str_split`/`str_join` plus the UTF-8 layer) with a permanent drift guard.
 
 ---
 
