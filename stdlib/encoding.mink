@@ -245,73 +245,289 @@ fn base64_url_decode_alloc(s: Str) -> (Str, Int) {
 }
 
 // ============================================================================
-// UTF-8
+// UTF-8 — code-point layer (Session 107, L05)
 // ============================================================================
+//
+// MINK's native text model is a byte buffer.  This section adds the UTF-8
+// code-point layer on top of it: strict validation, decoding to code points,
+// encoding code points back to bytes, and code-point indexing/slicing.
+//
+// Ownership: every `Str` parameter is CONSUMED (the V1 user-function
+// convention) and freed before the function returns.  An immutable image
+// literal is not heap-owned, so freeing it is a no-op; a heap string is
+// released, so these functions are leak-free for both kinds of input.
+//
+// Invalid input is handled deterministically, never with a runtime error:
+//   - validation rejects overlong forms (C0/C1, E0 80.., F0 80..), UTF-16
+//     surrogates (ED A0 80 .. ED BF BF), stray continuation bytes, and code
+//     points above U+10FFFF;
+//   - decode replaces each invalid byte with U+FFFD and advances one byte;
+//   - encode replaces an invalid code point (negative, above U+10FFFF, or a
+//     surrogate) with U+FFFD.
+// This is the "replace" policy of Python's UTF-8 codec for the invalid
+// classes Python rejects.  The byte-level grouping of replacements for
+// malformed input follows the one-invalid-byte-at-a-time rule above; it is
+// MINK-native and documented rather than inherited.
 
+/// Decodes the sequence starting at lead byte `b`.
+///
+/// `b2`/`b3`/`b4` are the following bytes, or `-1` when the input ends
+/// first.  Returns `(advance, code_point)`:
+///   - a well-formed sequence: `advance` is its length (1..4) and
+///     `code_point` is its value;
+///   - anything else: `advance` is `1` and `code_point` is `-1`, so the
+///     invalid byte is consumed alone and a caller can keep making progress.
+fn _utf8_seq(b: Int, b2: Int, b3: Int, b4: Int) -> (Int, Int) {
+    if b <= 127 { return (1, b); }
+    if b >= 194 && b <= 223 {
+        if b2 >= 128 && b2 <= 191 { return (2, (b - 192) * 64 + (b2 - 128)); }
+        return (1, -1);
+    }
+    if b >= 224 && b <= 239 {
+        if b2 >= 128 && b2 <= 191 && b3 >= 128 && b3 <= 191 {
+            let cp = (b - 224) * 4096 + (b2 - 128) * 64 + (b3 - 128);
+            if cp >= 2048 {
+                if cp < 55296 { return (3, cp); }
+                if cp > 57343 { return (3, cp); }
+            }
+        }
+        return (1, -1);
+    }
+    if b >= 240 && b <= 244 {
+        if b2 >= 128 && b2 <= 191 && b3 >= 128 && b3 <= 191 && b4 >= 128 && b4 <= 191 {
+            let cp = (b - 240) * 262144 + (b2 - 128) * 4096 + (b3 - 128) * 64 + (b4 - 128);
+            if cp >= 65536 {
+                if cp <= 1114111 { return (4, cp); }
+            }
+        }
+        return (1, -1);
+    }
+    return (1, -1);
+}
+
+/// Maps a code point to its encodable value: itself when valid, otherwise
+/// `U+FFFD`.  Negative values, values above `U+10FFFF`, and UTF-16
+/// surrogates are not encodable.
+fn _utf8_fix(cp: Int) -> Int {
+    if cp < 0 { return 65533; }
+    if cp > 1114111 { return 65533; }
+    if cp >= 55296 && cp <= 57343 { return 65533; }
+    return cp;
+}
+
+/// The UTF-8 byte length of `cp` after [`_utf8_fix`].
+fn _utf8_enc_len(cp: Int) -> Int {
+    let c = _utf8_fix(cp);
+    if c <= 127 { return 1; }
+    if c <= 2047 { return 2; }
+    if c <= 65535 { return 3; }
+    return 4;
+}
+
+/// Whether `s` is well-formed UTF-8.
+///
+/// Empty input is valid.  `s` is consumed and freed.
 fn utf8_validate(s: Str) -> Bool {
     let len = rt_str_len(s);
     let mut i = 0;
     let mut valid = 1;
     while i < len && valid == 1 {
+        let avail = len - i;
         let b = rt_str_byte(s, i);
-        if b <= 127 {
-            i = i + 1;
-        } else if b >= 192 && b <= 223 {
-            if i + 1 >= len { valid = 0; }
-            else {
-                let b2 = rt_str_byte(s, i + 1);
-                if b2 < 128 || b2 > 191 { valid = 0; }
-                else { i = i + 2; }
-            }
-        } else if b >= 224 && b <= 239 {
-            if i + 2 >= len { valid = 0; }
-            else {
-                let b2 = rt_str_byte(s, i + 1);
-                let b3 = rt_str_byte(s, i + 2);
-                if b2 < 128 || b2 > 191 { valid = 0; }
-                else if b3 < 128 || b3 > 191 { valid = 0; }
-                else {
-                    let cp = (b - 224) * 4096 + (b2 - 128) * 64 + (b3 - 128);
-                    if cp < 2048 { valid = 0; }
-                    else { i = i + 3; }
-                }
-            }
-        } else if b >= 240 && b <= 244 {
-            if i + 3 >= len { valid = 0; }
-            else {
-                let b2 = rt_str_byte(s, i + 1);
-                let b3 = rt_str_byte(s, i + 2);
-                let b4 = rt_str_byte(s, i + 3);
-                if b2 < 128 || b2 > 191 { valid = 0; }
-                else if b3 < 128 || b3 > 191 { valid = 0; }
-                else if b4 < 128 || b4 > 191 { valid = 0; }
-                else {
-                    let cp = (b - 240) * 262144 + (b2 - 128) * 4096 + (b3 - 128) * 64 + (b4 - 128);
-                    if cp < 65536 || cp > 1114111 { valid = 0; }
-                    else { i = i + 4; }
-                }
-            }
-        } else {
-            valid = 0;
-        }
+        let mut b2 = -1;
+        let mut b3 = -1;
+        let mut b4 = -1;
+        if avail > 1 { b2 = rt_str_byte(s, i + 1); }
+        if avail > 2 { b3 = rt_str_byte(s, i + 2); }
+        if avail > 3 { b4 = rt_str_byte(s, i + 3); }
+        let r = _utf8_seq(b, b2, b3, b4);
+        if r.1 < 0 { valid = 0; }
+        if r.1 >= 0 { i = i + r.0; }
     }
+    rt_str_free(s);
     return valid == 1;
 }
 
+/// The number of code points in `s`, using the same replacement rule as
+/// [`utf8_decode`] (each invalid byte counts as one code point).  `s` is
+/// consumed and freed.
 fn utf8_char_count(s: Str) -> Int {
+    let codes = utf8_decode(s);
+    let n = rt_vec_len(codes);
+    rt_vec_free(codes);
+    return n;
+}
+
+/// Decodes `s` into its code points.
+///
+/// Each invalid byte decodes to `U+FFFD` (65533) and is consumed alone, so
+/// the result length is the code-point count.  The returned `Vec<Int>` is
+/// owned by the caller ([`rt_vec_free`]); `s` is consumed and freed.
+fn utf8_decode(s: Str) -> Vec<Int> {
     let len = rt_str_len(s);
-    let mut count = 0;
+    // `rt_vec_new` rejects a zero capacity (E-R08), so an empty string gets
+    // a capacity of one and simply never grows.
+    let mut cap = len;
+    if cap < 1 { cap = 1; }
+    let mut codes = rt_vec_new(cap);
     let mut i = 0;
     while i < len {
+        let avail = len - i;
         let b = rt_str_byte(s, i);
-        if b <= 127 { i = i + 1; }
-        else if b >= 192 && b <= 223 { i = i + 2; }
-        else if b >= 224 && b <= 239 { i = i + 3; }
-        else if b >= 240 && b <= 244 { i = i + 4; }
-        else { i = i + 1; }
-        count = count + 1;
+        let mut b2 = -1;
+        let mut b3 = -1;
+        let mut b4 = -1;
+        if avail > 1 { b2 = rt_str_byte(s, i + 1); }
+        if avail > 2 { b3 = rt_str_byte(s, i + 2); }
+        if avail > 3 { b4 = rt_str_byte(s, i + 3); }
+        let r = _utf8_seq(b, b2, b3, b4);
+        let mut cp = r.1;
+        let mut adv = r.0;
+        if cp < 0 {
+            cp = 65533;
+            adv = 1;
+        }
+        codes = rt_vec_push(codes, cp);
+        i = i + adv;
     }
-    return count;
+    rt_str_free(s);
+    return codes;
+}
+
+/// Encodes `codes` as UTF-8 bytes.
+///
+/// An unencodable code point becomes `U+FFFD`.  `codes` is consumed and
+/// freed; the returned `Str` is owned by the caller.
+fn utf8_encode(codes: Vec<Int>) -> Str {
+    let n = rt_vec_len(codes);
+    let mut total = 0;
+    let mut i = 0;
+    while i < n {
+        total = total + _utf8_enc_len(rt_vec_get(codes, i));
+        i = i + 1;
+    }
+    let out = rt_str_alloc(total);
+    let mut o = 0;
+    let mut j = 0;
+    while j < n {
+        let cp = _utf8_fix(rt_vec_get(codes, j));
+        if cp <= 127 {
+            rt_str_set_byte(out, o, cp);
+            o = o + 1;
+        }
+        if cp >= 128 && cp <= 2047 {
+            rt_str_set_byte(out, o, 192 + (cp >> 6));
+            rt_str_set_byte(out, o + 1, 128 + (cp & 63));
+            o = o + 2;
+        }
+        if cp >= 2048 && cp <= 65535 {
+            rt_str_set_byte(out, o, 224 + (cp >> 12));
+            rt_str_set_byte(out, o + 1, 128 + ((cp >> 6) & 63));
+            rt_str_set_byte(out, o + 2, 128 + (cp & 63));
+            o = o + 3;
+        }
+        if cp >= 65536 {
+            rt_str_set_byte(out, o, 240 + (cp >> 18));
+            rt_str_set_byte(out, o + 1, 128 + ((cp >> 12) & 63));
+            rt_str_set_byte(out, o + 2, 128 + ((cp >> 6) & 63));
+            rt_str_set_byte(out, o + 3, 128 + (cp & 63));
+            o = o + 4;
+        }
+        j = j + 1;
+    }
+    rt_vec_free(codes);
+    return out;
+}
+
+/// The code point at code-point index `index`, or `-1` when `index` is
+/// negative or past the last code point.  `s` is consumed and freed.
+fn utf8_char_at(s: Str, index: Int) -> Int {
+    let codes = utf8_decode(s);
+    let n = rt_vec_len(codes);
+    let mut result = -1;
+    if index >= 0 && index < n { result = rt_vec_get(codes, index); }
+    rt_vec_free(codes);
+    return result;
+}
+
+/// The byte offset of code point `char_index` in `s`.
+///
+/// `char_index == utf8_char_count(s)` yields the byte length (one past the
+/// last code point, i.e. an end iterator); any other out-of-range value
+/// yields `-1`.  `s` is consumed and freed.
+fn utf8_byte_index(s: Str, char_index: Int) -> Int {
+    let len = rt_str_len(s);
+    let mut i = 0;
+    let mut n = 0;
+    let mut result = -1;
+    let mut done = 0;
+    while done == 0 {
+        if n == char_index {
+            result = i;
+            done = 1;
+        } else if i >= len {
+            done = 1;
+        } else {
+            let avail = len - i;
+            let b = rt_str_byte(s, i);
+            let mut b2 = -1;
+            let mut b3 = -1;
+            let mut b4 = -1;
+            if avail > 1 { b2 = rt_str_byte(s, i + 1); }
+            if avail > 2 { b3 = rt_str_byte(s, i + 2); }
+            if avail > 3 { b4 = rt_str_byte(s, i + 3); }
+            let r = _utf8_seq(b, b2, b3, b4);
+            i = i + r.0;
+            n = n + 1;
+        }
+    }
+    rt_str_free(s);
+    return result;
+}
+
+/// The code-point slice `s[start..end]` as a new `Str`.
+///
+/// `start`/`end` are code-point indices, clamped to `[0, count]`; an
+/// inverted or empty range yields the empty string.  Only whole code points
+/// are included, so the result is valid UTF-8 whenever the input is.  `s` is
+/// consumed and freed; the returned `Str` is owned by the caller.
+fn utf8_slice(s: Str, start: Int, end: Int) -> Str {
+    let len = rt_str_len(s);
+    let mut si = 0;
+    if start > 0 { si = len; }
+    let mut ei = 0;
+    if end > 0 { ei = len; }
+    let mut i = 0;
+    let mut n = 0;
+    let mut done = 0;
+    while done == 0 {
+        if n == start { si = i; }
+        if n == end { ei = i; }
+        if i >= len {
+            done = 1;
+        } else {
+            let avail = len - i;
+            let b = rt_str_byte(s, i);
+            let mut b2 = -1;
+            let mut b3 = -1;
+            let mut b4 = -1;
+            if avail > 1 { b2 = rt_str_byte(s, i + 1); }
+            if avail > 2 { b3 = rt_str_byte(s, i + 2); }
+            if avail > 3 { b4 = rt_str_byte(s, i + 3); }
+            let r = _utf8_seq(b, b2, b3, b4);
+            i = i + r.0;
+            n = n + 1;
+        }
+    }
+    if ei < si { ei = si; }
+    let out = rt_str_alloc(ei - si);
+    let mut k = 0;
+    while k < ei - si {
+        rt_str_set_byte(out, k, rt_str_byte(s, si + k));
+        k = k + 1;
+    }
+    rt_str_free(s);
+    return out;
 }
 
 // ============================================================================

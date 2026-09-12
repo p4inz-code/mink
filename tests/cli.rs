@@ -1315,3 +1315,57 @@ fn explain_rejects_extra_arguments() {
         "stderr was: {stderr}"
     );
 }
+
+// ============================================================================
+// Known compiler defect (recorded Session 107, NOT fixed)
+// ============================================================================
+
+/// A program that imports a module and calls one of its functions several
+/// times must compile. It does not.
+///
+/// Reproduction: `mod encoding;` (the stdlib module resolves through
+/// `cwd/stdlib`), then nine `if utf8_validate("...") { .. } else { .. }`
+/// statements. Lowering fails with `E-M04` ("cannot lower: identifier has
+/// no corresponding local") on the `rt_print_int` of a later `else` block;
+/// a nested-call variant fails type checking with `E-T05`
+/// ("expected `1` arguments, found `4`") on an unrelated call.
+///
+/// Characterization (probed with the repository compiler and with the
+/// shipped `npm/mink/bin/mink.exe` 1.0.1):
+///   - identical shape with a LOCALLY defined function compiles;
+///   - a minimal custom module reproduces nothing;
+///   - the trigger is content-dependent (which module is imported) and
+///     call-count dependent, and is deterministic for a given input;
+///   - the defect is PRE-EXISTING in the shipped 1.0.1 compiler, so it is
+///     not a Session 107 regression.
+///
+/// Ignored until fixed: it documents the exact reproduction so the defect
+/// cannot be lost. It is unrelated to the Session 107 UTF-8 tranche, and
+/// diagnosing it was out of scope for that session.
+#[test]
+#[ignore = "pre-existing defect: imported module function calls stop resolving after repeated calls (E-M04/E-T05)"]
+fn imported_function_calls_are_not_limited() {
+    let dir = std::env::temp_dir().join(format!("mink_cli_s107_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.mink");
+
+    let mut src = String::from("mod encoding;\n\nfn main() -> Int {\n");
+    for i in 0..9 {
+        let literal = "x".repeat(i + 1);
+        src.push_str(&format!(
+            "    if utf8_validate(\"{literal}\") {{ rt_print_int(1); }} else {{ rt_print_int(0); }}\n"
+        ));
+    }
+    src.push_str("    return 0;\n}\n");
+    std::fs::write(&path, &src).unwrap();
+
+    let output = mink().arg("build").arg(&path).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("exe"));
+    let _ = std::fs::remove_dir(&dir);
+    assert!(
+        output.status.success(),
+        "module-imported function calls must compile; stderr:\n{stderr}"
+    );
+}

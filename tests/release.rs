@@ -43,6 +43,52 @@ fn assert_exit_code(src: &str, expected: i32) {
     assert_eq!(actual, expected, "expected exit {expected}, got {actual}");
 }
 
+// ============================================================================
+// Standard-library bundle shipped with the npm package
+// ============================================================================
+
+/// The npm package ships `npm/mink/stdlib/*.mink` beside the compiler so an
+/// installed user can `mod strings;` without copying sources. That bundle is
+/// a hand-maintained copy, so each module must stay byte-identical to the
+/// repository's `stdlib/`.
+///
+/// This guard exists because Session 107 changed `stdlib/strings.mink`
+/// (adding `str_split`/`str_join`) without updating the copy, so installed
+/// users silently did not receive either function while the matrix reported
+/// the string-methods row as execution-verified.
+#[test]
+fn s107_npm_stdlib_bundle_matches_repo_stdlib() {
+    fn modules(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".mink"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    let repo = std::path::Path::new("stdlib");
+    let bundle = std::path::Path::new("npm/mink/stdlib");
+    let repo_names = modules(repo);
+    let bundle_names = modules(bundle);
+
+    assert!(!repo_names.is_empty(), "no stdlib modules found");
+    assert_eq!(
+        repo_names, bundle_names,
+        "the bundled stdlib module set differs from stdlib/"
+    );
+
+    for name in &repo_names {
+        let repo_src = std::fs::read(repo.join(name)).unwrap();
+        let bundle_src = std::fs::read(bundle.join(name)).unwrap();
+        assert_eq!(
+            repo_src, bundle_src,
+            "{name} differs between stdlib/ and npm/mink/stdlib/ — re-copy the module"
+        );
+    }
+}
+
 /// Assert check fails with given error code.
 fn assert_check_err(src: &str, error_code: &str) {
     let path = temp_source("chk.mink", src);

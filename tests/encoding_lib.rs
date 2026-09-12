@@ -326,14 +326,19 @@ fn e26_utf8_valid_ascii() {
 fn e27_utf8_valid_empty() {
     assert_bool_op("utf8_empty", "utf8_validate(\"\")", true);
 }
+// Session 107: the input was `C8 80`, which is a WELL-FORMED 2-byte
+// sequence (U+0200), so the original expectation of "0" was wrong. The
+// assertion never ran either, because `utf8_validate` leaked its argument
+// and the test exited 106. With the leak fixed (and the assertion now
+// live), the input is corrected to `C8 20` — a genuine invalid
+// continuation (0x20 is not a continuation byte) — and the exit code is
+// required to be clean.
 #[test]
 fn e28_utf8_invalid_continuation() {
-    let test = "fn main() { let s = rt_str_alloc(2); rt_str_set_byte(s, 0, 200); rt_str_set_byte(s, 1, 128); if utf8_validate(s) { rt_print_int(1); } else { rt_print_int(0); } rt_exit(0); }";
+    let test = "fn main() { let s = rt_str_alloc(2); rt_str_set_byte(s, 0, 200); rt_str_set_byte(s, 1, 32); if utf8_validate(s) { rt_print_int(1); } else { rt_print_int(0); } rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
-    if code == 0 {
-        assert_eq!(output, "0");
-    }
+    assert_eq!(code, 0, "e28 must be leak-free, got {code}");
+    assert_eq!(output, "0");
 }
 #[test]
 fn e29_utf8_2byte() {
@@ -569,4 +574,292 @@ fn e57_hex_decode_all_valid() {
     if code == 0 {
         assert_eq!(output.trim(), "11");
     }
+}
+
+// ============================================================================
+// UTF-8 code-point layer (Session 107, L05)
+//
+// These tests are STRICT. The harness (and the runtime) exit 106 on a live
+// allocation (E-R06), so asserting `code == 0` proves each call is leak-free
+// for HEAP-OWNED input as well as for immutable literals. The earlier UTF-8
+// tests (e26-e31) accept `0 || 106` and therefore cannot detect the
+// ownership bug these tests pin down.
+// ============================================================================
+
+/// `"h" + U+00E9 + "llo"` — mixed 1-byte and 2-byte code points.
+const UTF8_HELLO: [i64; 6] = [104, 195, 169, 108, 108, 111];
+
+/// Builds `let <name> = rt_str_alloc(n); rt_str_set_byte(...);`.
+fn utf8_bytes(name: &str, bytes: &[i64]) -> String {
+    let mut s = format!("let {name} = rt_str_alloc({});", bytes.len());
+    for (i, b) in bytes.iter().enumerate() {
+        s.push_str(&format!(" rt_str_set_byte({name}, {i}, {b});"));
+    }
+    s
+}
+
+/// Builds `let mut v = rt_vec_new(n); v = rt_vec_push(v, c); ...`.
+fn utf8_vec(codes: &[i64]) -> String {
+    let mut s = format!("let mut v = rt_vec_new({});", codes.len().max(1));
+    for c in codes {
+        s.push_str(&format!(" v = rt_vec_push(v, {c});"));
+    }
+    s
+}
+
+/// A `dump` helper that prints a heap string's length then its bytes and
+/// frees it, so callers never leak the string they were given.
+const UTF8_DUMP: &str = "fn dump(s: Str) -> Int { let n = rt_str_len(s); rt_print_int(n); let mut i = 0; while i < n { rt_print_int(rt_str_byte(s, i)); i = i + 1; } rt_str_free(s); return 0; }";
+
+/// Wraps `body` in a `main` that returns 0, optionally after `helpers`.
+fn utf8_program_with(helpers: &str, body: &str) -> String {
+    format!("{helpers} fn main() -> Int {{ {body} return 0; }}")
+}
+
+fn utf8_program(body: &str) -> String {
+    utf8_program_with("", body)
+}
+
+/// All integer lines of the output (CRLF or LF separated).
+fn utf8_ints(output: &str) -> Vec<i64> {
+    output
+        .split(['\n', '\r'])
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| l.parse::<i64>().ok())
+        .collect()
+}
+
+/// Runs a program and requires a clean exit (no leak, no runtime error).
+fn utf8_clean(name: &str, source: &str) -> Vec<i64> {
+    let (code, output) = run_with_output(source);
+    assert_eq!(
+        code, 0,
+        "{name}: expected leak-free exit 0, got {code} ({output})"
+    );
+    utf8_ints(&output)
+}
+
+/// Validates every case and returns the 1/0 verdicts.
+fn utf8_validate_cases(cases: &[&[i64]]) -> Vec<i64> {
+    let mut body = String::new();
+    for (i, case) in cases.iter().enumerate() {
+        body.push_str(&utf8_bytes(&format!("s{i}"), case));
+        body.push_str(&format!(
+            " if utf8_validate(s{i}) {{ rt_print_int(1); }} else {{ rt_print_int(0); }}"
+        ));
+    }
+    utf8_clean("utf8_validate cases", &utf8_program(&body))
+}
+
+// --- ownership: heap input must not leak (regression: pre-Session-107
+//     utf8_validate/utf8_char_count consumed the string without freeing it) ---
+
+#[test]
+fn s107_utf8_validate_heap_input_is_leak_free() {
+    let src = utf8_program(&format!(
+        "{} if utf8_validate(a) {{ rt_print_int(1); }} else {{ rt_print_int(0); }}",
+        utf8_bytes("a", &UTF8_HELLO)
+    ));
+    assert_eq!(utf8_clean("validate heap", &src), vec![1]);
+}
+
+#[test]
+fn s107_utf8_char_count_heap_input_is_leak_free() {
+    let src = utf8_program(&format!(
+        "{} rt_print_int(utf8_char_count(a));",
+        utf8_bytes("a", &UTF8_HELLO)
+    ));
+    assert_eq!(utf8_clean("char_count heap", &src), vec![5]);
+}
+
+#[test]
+fn s107_utf8_validate_empty_literal_is_valid() {
+    let src = utf8_program("if utf8_validate(\"\") { rt_print_int(1); } else { rt_print_int(0); }");
+    assert_eq!(utf8_clean("validate empty", &src), vec![1]);
+}
+
+// --- validation correctness (regressions: overlong 2-byte forms and
+//     UTF-16 surrogates were accepted before this session) ---
+
+#[test]
+fn s107_utf8_validate_rejects_overlong_two_byte() {
+    let got = utf8_validate_cases(&[&[192, 128], &[193, 191], &[194, 128], &[223, 191]]);
+    assert_eq!(
+        got,
+        vec![0, 0, 1, 1],
+        "C0/C1 must be rejected; C2/DF accepted"
+    );
+}
+
+#[test]
+fn s107_utf8_validate_rejects_surrogates() {
+    let got = utf8_validate_cases(&[
+        &[237, 160, 128],
+        &[237, 191, 191],
+        &[237, 159, 191],
+        &[238, 128, 128],
+    ]);
+    assert_eq!(got, vec![0, 0, 1, 1], "U+D800..U+DFFF must be rejected");
+}
+
+#[test]
+fn s107_utf8_validate_boundaries() {
+    let got = utf8_validate_cases(&[
+        &[224, 128, 128],
+        &[224, 160, 128],
+        &[240, 128, 128, 128],
+        &[240, 144, 128, 128],
+        &[244, 143, 191, 191],
+        &[244, 144, 128, 128],
+        &[245, 128, 128, 128],
+        &[128],
+        &[195],
+    ]);
+    assert_eq!(got, vec![0, 1, 0, 1, 1, 0, 0, 0, 0]);
+}
+
+// --- decode ---
+
+#[test]
+fn s107_utf8_decode_multibyte() {
+    let mut body = utf8_bytes("a", &UTF8_HELLO);
+    body.push_str(" let c = utf8_decode(a); let n = rt_vec_len(c); rt_print_int(n); let mut i = 0; while i < n { rt_print_int(rt_vec_get(c, i)); i = i + 1; } rt_vec_free(c);");
+    assert_eq!(
+        utf8_clean("decode multibyte", &utf8_program(&body)),
+        vec![5, 104, 233, 108, 108, 111]
+    );
+}
+
+#[test]
+fn s107_utf8_decode_four_byte() {
+    let mut body = utf8_bytes("a", &[240, 159, 152, 128]);
+    body.push_str(" let c = utf8_decode(a); let n = rt_vec_len(c); rt_print_int(n); let mut i = 0; while i < n { rt_print_int(rt_vec_get(c, i)); i = i + 1; } rt_vec_free(c);");
+    assert_eq!(
+        utf8_clean("decode four byte", &utf8_program(&body)),
+        vec![1, 128512]
+    );
+}
+
+#[test]
+fn s107_utf8_decode_empty_is_empty() {
+    // regression: `rt_vec_new(0)` raises E-R08, so decoding an empty string
+    // must not ask for a zero-capacity vector.
+    let mut body = String::new();
+    body.push_str("let c = utf8_decode(\"\"); rt_print_int(rt_vec_len(c)); rt_vec_free(c);");
+    assert_eq!(utf8_clean("decode empty", &utf8_program(&body)), vec![0]);
+}
+
+#[test]
+fn s107_utf8_decode_invalid_uses_replacement() {
+    let mut body = utf8_bytes("a", &[192, 128, 255]);
+    body.push_str(" let c = utf8_decode(a); let n = rt_vec_len(c); rt_print_int(n); let mut i = 0; while i < n { rt_print_int(rt_vec_get(c, i)); i = i + 1; } rt_vec_free(c);");
+    assert_eq!(
+        utf8_clean("decode invalid", &utf8_program(&body)),
+        vec![3, 65533, 65533, 65533]
+    );
+}
+
+#[test]
+fn s107_utf8_char_count_matches_decode_length() {
+    let mut body = String::new();
+    body.push_str(&utf8_bytes("a", &UTF8_HELLO));
+    body.push_str(" rt_print_int(utf8_char_count(a));");
+    body.push_str(&utf8_bytes("b", &[192, 128, 255]));
+    body.push_str(" rt_print_int(utf8_char_count(b));");
+    body.push_str(&utf8_bytes("c", &UTF8_HELLO));
+    body.push_str(" let v = utf8_decode(c); rt_print_int(rt_vec_len(v)); rt_vec_free(v);");
+    body.push_str(&utf8_bytes("d", &[192, 128, 255]));
+    body.push_str(" let w = utf8_decode(d); rt_print_int(rt_vec_len(w)); rt_vec_free(w);");
+    assert_eq!(
+        utf8_clean("count == decode len", &utf8_program(&body)),
+        vec![5, 3, 5, 3]
+    );
+}
+
+// --- encode ---
+
+#[test]
+fn s107_utf8_encode_multibyte() {
+    let body = format!("{} dump(utf8_encode(v));", utf8_vec(&[104, 233, 108]));
+    assert_eq!(
+        utf8_clean("encode multibyte", &utf8_program_with(UTF8_DUMP, &body)),
+        vec![4, 104, 195, 169, 108]
+    );
+}
+
+#[test]
+fn s107_utf8_encode_replaces_unencodable() {
+    let body = format!("{} dump(utf8_encode(v));", utf8_vec(&[55296, -1, 1114112]));
+    assert_eq!(
+        utf8_clean("encode invalid", &utf8_program_with(UTF8_DUMP, &body)),
+        vec![9, 239, 191, 189, 239, 191, 189, 239, 191, 189]
+    );
+}
+
+#[test]
+fn s107_utf8_encode_four_byte() {
+    let body = format!("{} dump(utf8_encode(v));", utf8_vec(&[128512, 2048]));
+    assert_eq!(
+        utf8_clean("encode four byte", &utf8_program_with(UTF8_DUMP, &body)),
+        vec![7, 240, 159, 152, 128, 224, 160, 128]
+    );
+}
+
+#[test]
+fn s107_utf8_encode_empty_is_empty() {
+    let body = "dump(utf8_encode(rt_vec_new(1)));";
+    assert_eq!(
+        utf8_clean("encode empty", &utf8_program_with(UTF8_DUMP, body)),
+        vec![0]
+    );
+}
+
+#[test]
+fn s107_utf8_roundtrip_encode_decode_is_byte_exact() {
+    // "H" U+20AC "!" — 1-byte, 3-byte, 1-byte.
+    let mut body = utf8_bytes("a", &[72, 226, 130, 172, 33]);
+    body.push_str(" dump(utf8_encode(utf8_decode(a)));");
+    assert_eq!(
+        utf8_clean("roundtrip", &utf8_program_with(UTF8_DUMP, &body)),
+        vec![5, 72, 226, 130, 172, 33]
+    );
+}
+
+// --- code-point indexing and slicing ---
+
+#[test]
+fn s107_utf8_char_at_and_byte_index() {
+    let mut body = String::new();
+    body.push_str(&utf8_bytes("a", &UTF8_HELLO));
+    body.push_str(" rt_print_int(utf8_char_at(a, 1));");
+    body.push_str(&utf8_bytes("b", &UTF8_HELLO));
+    body.push_str(" rt_print_int(utf8_char_at(b, 9));");
+    body.push_str(&utf8_bytes("c", &UTF8_HELLO));
+    body.push_str(" rt_print_int(utf8_char_at(c, -1));");
+    body.push_str(&utf8_bytes("d", &UTF8_HELLO));
+    body.push_str(" rt_print_int(utf8_byte_index(d, 5));");
+    body.push_str(&utf8_bytes("e", &UTF8_HELLO));
+    body.push_str(" rt_print_int(utf8_byte_index(e, 6));");
+    assert_eq!(
+        utf8_clean("char_at / byte_index", &utf8_program(&body)),
+        vec![233, -1, -1, 6, -1]
+    );
+}
+
+#[test]
+fn s107_utf8_slice_on_code_points() {
+    let mut body = String::new();
+    body.push_str(&utf8_bytes("a", &UTF8_HELLO));
+    body.push_str(" dump(utf8_slice(a, 1, 4));");
+    body.push_str(&utf8_bytes("b", &UTF8_HELLO));
+    body.push_str(" dump(utf8_slice(b, 3, 1));");
+    body.push_str(&utf8_bytes("c", &UTF8_HELLO));
+    body.push_str(" dump(utf8_slice(c, 0, 5));");
+    body.push_str(&utf8_bytes("d", &UTF8_HELLO));
+    body.push_str(" dump(utf8_slice(d, 9, 12));");
+    assert_eq!(
+        utf8_clean("slice", &utf8_program_with(UTF8_DUMP, &body)),
+        vec![4, 195, 169, 108, 108, 0, 6, 104, 195, 169, 108, 108, 111, 0]
+    );
 }
