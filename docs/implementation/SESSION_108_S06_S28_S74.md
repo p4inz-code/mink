@@ -1,8 +1,43 @@
-# Session 108 — S28 Directory listing and S74 Logging (two P1 closures)
+# Session 108 — S06, S28 and S74 (three P1 closures)
 
 **Predecessor:** Session 107 (L05 UTF-8 text layer) at `66e43639`.
 **Scope:** Windows x86_64 Python-capability parity. Linux untouched (frozen).
-**Effect:** parity-blocking P1 gaps 26 → 24; Wave A empty.
+**Effect:** parity-blocking P1 gaps 26 → 23; Wave A empty; Wave B reduced to
+L34/S02/S36.
+
+---
+
+## 0. S06 — String parsing: int/float ↔ text
+
+### Capability
+
+Parse decimal integers and floating-point numbers out of text, matching
+Python's `int()`/`float()` grammar for the common cases.
+
+### Design (MINK-native)
+
+`stdlib/strings.mink` (mirrored to `npm/mink/stdlib/strings.mink`):
+
+- `str_parse_int(s: Str) -> (Int, Bool)` — optional sign, ASCII whitespace,
+  `_` digit separators (Python 3.6+), and rejection of values beyond the
+  64-bit signed range (`i64::MAX`/`i64::MIN` accepted exactly).
+- `str_parse_float(s: Str) -> (Float, Bool)` — optional sign, integer part,
+  optional fraction, optional `e`/`E` exponent with sign; assembled as
+  `int + frac/10^k` scaled by `10^exp`; extreme exponents are clamped to
+  400 iterations so `1e999999999` saturates to infinity instead of spinning.
+- Python's `ValueError` maps to the `ok = false` flag, matching MINK's
+  existing tuple-result idiom (`str_char_at`, the JSON parsers).
+
+### Verification (native Windows PE)
+
+`tests/strings_lib.rs` `p01`–`p12`: basics, whitespace, separators,
+malformed inputs, i64 max/min boundaries, exponents, saturating extreme
+exponents, fraction precision, and a 200-heap-string ownership run.
+
+### Known limits
+
+No `inf`/`nan` keywords, no base-prefixed parsing (`int(s, 16)`); float
+assembly is arithmetic-based rather than bit-exact `strtod`.
 
 ---
 
@@ -138,6 +173,7 @@ DEBUG/INFO/WARNING/ERROR records and suppressing the post-threshold INFO.
 | `cargo build` / `cargo build --release` | clean |
 | `cargo test --test filesystem_lib` | 45 passed |
 | `cargo test --test logging_lib` | 13 passed |
+| `cargo test --test strings_lib` | 85 passed |
 | `cargo test --test runtime` / `--test smoke` | 24 / 13 passed |
 | `cargo test --test backend` | 46 passed |
 | `cargo test --test release` | 67 passed (npm stdlib drift guard green) |
@@ -152,7 +188,9 @@ changed. This is the known flakiness class from Sessions 106/107.
 
 ## 4. Matrix effect
 
-- S28: MISSING → **VERIFIED**; S74: MISSING → **VERIFIED** (`Blocks = N`).
-- Aggregates recomputed from the rows: VERIFIED 73 → **75**, MISSING 93 →
-  **91**, PARTIAL 37, total 232; P1 parity blockers 26 → **24**; rows
-  requiring work 171 → **169**; Wave A empty.
+- S28: MISSING → **VERIFIED**; S74: MISSING → **VERIFIED**; S06: PARTIAL →
+  **VERIFIED** (`Blocks = N` on all three).
+- Aggregates recomputed from the rows: VERIFIED 73 → **76**, MISSING 93 →
+  **91**, PARTIAL 37 → **36**, total 232; P1 parity blockers 26 → **23**;
+  rows requiring work 171 → **168**; Wave A empty; Wave B now
+  L34/S02/S36.

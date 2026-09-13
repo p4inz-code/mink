@@ -1143,3 +1143,276 @@ fn main() {
     // V1: str_index_of on arena strings may leak the pass-back tuple
     assert!(code == 0 || code == 106, "unexpected exit code: {code}");
 }
+
+// =============================================================================
+// SESSION 108 — S06: string → number parsing (str_parse_int / str_parse_float)
+// =============================================================================
+// Each parser returns a `(value, ok)` tuple; `ok` is the "was a valid
+// number" flag and `value` is 0 when `ok` is false. The tests print both
+// fields and assert the flattened stream.
+
+fn stdout_text(stdout: &[u8]) -> String {
+    String::from_utf8_lossy(stdout).to_string()
+}
+
+fn ints_of(stdout: &[u8]) -> Vec<i64> {
+    stdout_text(stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| l.trim().parse::<i64>().ok())
+        .collect()
+}
+
+fn floats_of(stdout: &[u8]) -> Vec<f64> {
+    stdout_text(stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| l.trim().parse::<f64>().ok())
+        .collect()
+}
+
+#[test]
+fn p01_parse_int_basics() {
+    let test = r#"
+fn main() {
+    let a = str_parse_int("42");
+    rt_print_int(a.0);
+    if a.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let b = str_parse_int("-7");
+    rt_print_int(b.0);
+    if b.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let c = str_parse_int("+8");
+    rt_print_int(c.0);
+    if c.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let d = str_parse_int("0");
+    rt_print_int(d.0);
+    if d.1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(ints_of(&out), vec![42, 1, -7, 1, 8, 1, 0, 1]);
+}
+
+#[test]
+fn p02_parse_int_whitespace() {
+    let test = r#"
+fn main() {
+    let a = str_parse_int(" 12 ");
+    rt_print_int(a.0);
+    if a.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let b = str_parse_int("\t-3\n");
+    rt_print_int(b.0);
+    if b.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let c = str_parse_int("   ");
+    if c.1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(ints_of(&out), vec![12, 1, -3, 1, 0]);
+}
+
+#[test]
+fn p03_parse_int_digit_separators() {
+    let test = r#"
+fn main() {
+    let a = str_parse_int("1_000");
+    rt_print_int(a.0);
+    if a.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let b = str_parse_int("1_0_0");
+    rt_print_int(b.0);
+    if b.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let c = str_parse_int("_1");
+    if c.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let d = str_parse_int("1_");
+    if d.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let e = str_parse_int("1__0");
+    if e.1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(ints_of(&out), vec![1000, 1, 100, 1, 0, 0, 0]);
+}
+
+#[test]
+fn p04_parse_int_invalid() {
+    let test = r#"
+fn main() {
+    if str_parse_int("").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_int("+").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_int("-").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_int("12x").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_int("x12").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_int("1 2").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_int("--1").1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(ints_of(&out), vec![0, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn p05_parse_int_boundaries() {
+    let test = r#"
+fn main() {
+    let a = str_parse_int("9223372036854775807");
+    rt_print_int(a.0);
+    if a.1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_int("9223372036854775808").1 { rt_print_int(1); } else { rt_print_int(0); }
+    let c = str_parse_int("-9223372036854775808");
+    rt_print_int(c.0);
+    if c.1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_int("-9223372036854775809").1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(
+        ints_of(&out),
+        vec![9223372036854775807, 1, 0, -9223372036854775808, 1, 0]
+    );
+}
+
+#[test]
+fn p06_parse_float_basics() {
+    let test = r#"
+fn main() {
+    let a = str_parse_float("3.5");
+    rt_print_float(a.0);
+    if a.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let b = str_parse_float("-2.5");
+    rt_print_float(b.0);
+    if b.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let c = str_parse_float("42");
+    rt_print_float(c.0);
+    if c.1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(floats_of(&out), vec![3.5, 1.0, -2.5, 1.0, 42.0, 1.0]);
+}
+
+#[test]
+fn p07_parse_float_exponents() {
+    let test = r#"
+fn main() {
+    let a = str_parse_float("1e2");
+    rt_print_float(a.0);
+    if a.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let b = str_parse_float("1.5e1");
+    rt_print_float(b.0);
+    if b.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let c = str_parse_float("2E-1");
+    rt_print_float(c.0);
+    if c.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let d = str_parse_float("  2.5E1  ");
+    rt_print_float(d.0);
+    if d.1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(
+        floats_of(&out),
+        vec![100.0, 1.0, 15.0, 1.0, 0.2, 1.0, 25.0, 1.0]
+    );
+}
+
+#[test]
+fn p08_parse_float_invalid() {
+    let test = r#"
+fn main() {
+    if str_parse_float("").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_float(".").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_float("1e").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_float("1e+").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_float(".e1").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_float("1.2.3").1 { rt_print_int(1); } else { rt_print_int(0); }
+    if str_parse_float("-").1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(ints_of(&out), vec![0, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn p09_parse_float_extreme_exponents_terminate() {
+    let test = r#"
+fn main() {
+    // Must not spin on a huge exponent: 400 iterations already saturate f64.
+    let a = str_parse_float("1e999999999");
+    rt_print_float(a.0);
+    if a.1 { rt_print_int(1); } else { rt_print_int(0); }
+    let b = str_parse_float("1e-999999999");
+    rt_print_float(b.0);
+    if b.1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(ints_of(&out), vec![1, 0, 1]);
+    assert!(
+        stdout_text(&out).starts_with("Inf"),
+        "{:?}",
+        stdout_text(&out)
+    );
+}
+
+#[test]
+fn p10_parse_float_fraction_precision() {
+    let test = r#"
+fn main() {
+    let a = str_parse_float("0.125");
+    rt_print_float(a.0);
+    let b = str_parse_float("12.75");
+    rt_print_float(b.0);
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    let vals = floats_of(&out);
+    assert!((vals[0] - 0.125).abs() < 1e-12, "{:?}", vals);
+    assert!((vals[1] - 12.75).abs() < 1e-12, "{:?}", vals);
+}
+
+/// The parsers consume their input, so 200 heap-produced strings must not
+/// leak (E-R06 would make the exit code nonzero).
+#[test]
+fn p11_parse_consumes_heap_input() {
+    let test = r#"
+fn main() {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < 200 {
+        let s = rt_str_from_int(i);
+        let r = str_parse_int(s);
+        if r.1 { acc = acc + r.0; }
+        i = i + 1;
+    }
+    rt_print_int(acc);
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(ints_of(&out), vec![19900]);
+}
+
+#[test]
+fn p12_parse_float_of_int_text() {
+    let test = r#"
+fn main() {
+    let i = str_parse_int("123");
+    let f = str_parse_float(rt_str_from_int(i.0));
+    rt_print_float(f.0);
+    if f.1 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run(test);
+    assert_eq!(code, 0);
+    assert_eq!(floats_of(&out), vec![123.0, 1.0]);
+}

@@ -702,3 +702,224 @@ fn str_char_at(s: Str, index: Int) -> (Int, Str) {
     return (rt_str_byte(s, index), s);
 }
 
+// ============================================================================
+// String → number parsing (Session 108, S06)
+// ============================================================================
+// Python's `int()`/`float()` raise ValueError on malformed input. MINK has no
+// exceptions, so each parser returns a `(value, ok)` tuple instead: `ok` is
+// the "the text was a valid number" flag, and `value` is 0 when `ok` is
+// false. This mirrors MINK's existing tuple-result idiom (`str_char_at`,
+// the JSON parsers) and its INTENT. DIFF. error model.
+//
+// Accepted grammar (ASCII whitespace, matching the common Python cases):
+//   int:   [ws] [+|-] digits-with-optional-'_'-separators [ws]
+//   float: [ws] [+|-] digits [ '.' digits ] [ ('e'|'E') [+|-] digits ] [ws]
+// At least one digit is required; a sign, a bare '.', a bare exponent, and
+// trailing junk all report `ok = false`.
+
+/// Internal: ASCII whitespace test (space, tab, LF, VT, FF, CR).
+fn str_is_space(b: Int) -> Bool {
+    let mut r = false;
+    if b == 32 { r = true; }
+    if b == 9 { r = true; }
+    if b == 10 { r = true; }
+    if b == 11 { r = true; }
+    if b == 12 { r = true; }
+    if b == 13 { r = true; }
+    return r;
+}
+
+/// str_parse_int(s): parse a decimal integer. `(value, true)` on success,
+/// `(0, false)` otherwise. Consumes `s`. Magnitudes beyond the 64-bit
+/// signed range report `ok = false`.
+fn str_parse_int(s: Str) -> (Int, Bool) {
+    let n = rt_str_len(s);
+    let mut i = 0;
+    while i < n {
+        if str_is_space(rt_str_byte(s, i)) { i = i + 1; } else { break; }
+    }
+    let mut neg = 1;
+    if i < n {
+        let sign = rt_str_byte(s, i);
+        if sign == 45 { neg = 0 - 1; i = i + 1; }
+        if sign == 43 { i = i + 1; }
+    }
+    let mut value = 0;
+    let mut digits = 0;
+    let mut overflow = 0;
+    let mut prev_digit = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b == 95 {
+            // '_' is a separator only between digits (Python 3.6+).
+            if prev_digit == 1 {
+                prev_digit = 0;
+                i = i + 1;
+            } else {
+                break;
+            }
+        } else {
+            if b >= 48 {
+                if b <= 57 {
+                    let d = b - 48;
+                    if value > 922337203685477580 { overflow = 1; }
+                    if value == 922337203685477580 {
+                        // i64::MAX ends in 7; i64::MIN's magnitude ends in 8.
+                        let mut limit = 7;
+                        if neg == -1 { limit = 8; }
+                        if d > limit { overflow = 1; }
+                    }
+                    value = value * 10 + d;
+                    digits = digits + 1;
+                    prev_digit = 1;
+                    i = i + 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    let mut junk = 0;
+    while i < n {
+        if str_is_space(rt_str_byte(s, i)) { i = i + 1; } else { junk = 1; break; }
+    }
+    let mut ok = true;
+    if digits == 0 { ok = false; }
+    if prev_digit == 0 { ok = false; }
+    if overflow == 1 { ok = false; }
+    if junk == 1 { ok = false; }
+    let mut result = value;
+    if neg == -1 { result = 0 - value; }
+    if ok == false { result = 0; }
+    rt_str_free(s);
+    return (result, ok);
+}
+
+/// str_parse_float(s): parse a decimal floating-point number with an
+/// optional fraction and exponent. `(value, true)` on success,
+/// `(0.0, false)` otherwise. Consumes `s`.
+///
+/// The result is assembled with Float arithmetic (`int + frac/10^k` scaled
+/// by `10^exp`), so very long fractions/exponents lose low-order precision;
+/// this is capability parity, not bit-exact `strtod`.
+fn str_parse_float(s: Str) -> (Float, Bool) {
+    let n = rt_str_len(s);
+    let mut i = 0;
+    while i < n {
+        if str_is_space(rt_str_byte(s, i)) { i = i + 1; } else { break; }
+    }
+    let mut neg = 1;
+    if i < n {
+        let sign = rt_str_byte(s, i);
+        if sign == 45 { neg = 0 - 1; i = i + 1; }
+        if sign == 43 { i = i + 1; }
+    }
+    let mut int_digits = 0;
+    let mut int_val = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b >= 48 {
+            if b <= 57 {
+                int_val = int_val * 10 + (b - 48);
+                int_digits = int_digits + 1;
+                i = i + 1;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    let mut frac_digits = 0;
+    let mut frac_val = 0;
+    if i < n {
+        if rt_str_byte(s, i) == 46 {
+            i = i + 1;
+            while i < n {
+                let b = rt_str_byte(s, i);
+                if b >= 48 {
+                    if b <= 57 {
+                        frac_val = frac_val * 10 + (b - 48);
+                        frac_digits = frac_digits + 1;
+                        i = i + 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    let mut exp_val = 0;
+    let mut exp_digits = 0;
+    let mut exp_neg = 1;
+    let mut has_exp = 0;
+    if i < n {
+        let e = rt_str_byte(s, i);
+        if e == 101 {
+            has_exp = 1;
+        }
+        if e == 69 {
+            has_exp = 1;
+        }
+        if has_exp == 1 {
+            i = i + 1;
+            if i < n {
+                let sign = rt_str_byte(s, i);
+                if sign == 45 { exp_neg = 0 - 1; i = i + 1; }
+                if sign == 43 { i = i + 1; }
+            }
+            while i < n {
+                let b = rt_str_byte(s, i);
+                if b >= 48 {
+                    if b <= 57 {
+                        exp_val = exp_val * 10 + (b - 48);
+                        exp_digits = exp_digits + 1;
+                        i = i + 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    let mut junk = 0;
+    while i < n {
+        if str_is_space(rt_str_byte(s, i)) { i = i + 1; } else { junk = 1; break; }
+    }
+    let mut value = rt_int_to_float(int_val);
+    if frac_digits > 0 {
+        let mut scale = 1.0;
+        let mut k = 0;
+        while k < frac_digits {
+            scale = scale * 10.0;
+            k = k + 1;
+        }
+        value = value + rt_int_to_float(frac_val) / scale;
+    }
+    // Clamp the exponent so a pathological input such as "1e999999999"
+    // converges to 0/inf instead of spinning; 400 iterations already
+    // over/underflows f64.
+    if exp_val > 400 { exp_val = 400; }
+    let mut k2 = 0;
+    while k2 < exp_val {
+        if exp_neg == 1 { value = value * 10.0; } else { value = value / 10.0; }
+        k2 = k2 + 1;
+    }
+    if neg == -1 { value = 0.0 - value; }
+    let mut ok = true;
+    if int_digits + frac_digits == 0 { ok = false; }
+    if has_exp == 1 {
+        if exp_digits == 0 { ok = false; }
+    }
+    if junk == 1 { ok = false; }
+    if ok == false { value = 0.0; }
+    rt_str_free(s);
+    return (value, ok);
+}
+
