@@ -457,6 +457,16 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::FsSetCwd, |code, _| {
         emit_fs_set_cwd(code)
     });
+    // --- Directory enumeration (Session 108, S28) ---
+    emit(code, RuntimeService::FsDirOpen, |code, _| {
+        emit_dir_open(code)
+    });
+    emit(code, RuntimeService::FsDirNext, |code, _| {
+        emit_dir_next(code)
+    });
+    emit(code, RuntimeService::FsDirClose, |code, _| {
+        emit_dir_close(code)
+    });
     emit(code, RuntimeService::ToCstr, |code, _| emit_to_cstr(code));
     emit(code, RuntimeService::FreeCstr, |code, _| {
         emit_free_cstr(code)
@@ -8460,6 +8470,9 @@ const IAT_CLOSE_HANDLE: u32 = 3;
 const IAT_READ_FILE: u32 = 4;
 const IAT_GET_FILE_ATTRIBUTES_A: u32 = 5;
 const IAT_GET_FILE_SIZE: u32 = 6;
+const IAT_FIND_FIRST_FILE_A: u32 = 7;
+const IAT_FIND_NEXT_FILE_A: u32 = 8;
+const IAT_FIND_CLOSE: u32 = 9;
 const IAT_CREATE_DIRECTORY_A: u32 = 10;
 const IAT_REMOVE_DIRECTORY_A: u32 = 11;
 const IAT_DELETE_FILE_A: u32 = 12;
@@ -8759,6 +8772,252 @@ fn emit_fs_create_dir(code: &mut Code) {
     free_cstr(code, Reg::Rcx);
     // Restore return value
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+// ---------------------------------------------------------------------------
+// Directory enumeration (Session 108, S28)
+// ---------------------------------------------------------------------------
+
+/// `WIN32_FIND_DATAA` size in bytes.
+const FIND_DATA_SIZE: i32 = 320;
+/// Offset of `cFileName` within `WIN32_FIND_DATAA`.
+const FIND_DATA_NAME_OFFSET: i32 = 44;
+/// Byte offset of the `WIN32_FIND_DATAA` record inside the handle block.
+const DIR_STATE_DATA: i32 = 8;
+/// Size of the opaque enumeration handle block (handle + find data).
+const DIR_STATE_SIZE: u32 = (DIR_STATE_DATA as u32) + (FIND_DATA_SIZE as u32);
+
+/// `rt_dir_open(path: Str) -> Ptr<Int>` (Session 108, S28).
+///
+/// Builds the wildcard pattern `path\*`, opens a `FindFirstFileA`
+/// enumeration, and returns an opaque handle to a heap block holding the
+/// Win32 find handle plus the `WIN32_FIND_DATAA` record. The caller owns
+/// the handle and must release it with `rt_dir_close`; an unclosed handle
+/// is reported as a leak by `rt_exit`, matching MINK's ownership rules.
+/// Returns 0 when the directory cannot be opened.
+fn emit_dir_open(code: &mut Code) {
+    prologue(code);
+    // [rbp+16] = path Str ptr
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    to_cstr(code, Reg::Rax); // Rax = CStr
+    // Frame: [rbp-8]=cstr [rbp-16]=pattern [rbp-24]=state [rbp-32]=path_len
+    code.sub_rsp(64);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // strlen(cstr)
+    code.mov_rr(Reg::R10, Reg::Rax);
+    code.xor_rr32(Reg::Rcx, Reg::Rcx);
+    let len_loop = code.label();
+    let len_done = code.label();
+    code.bind_label(len_loop);
+    code.movzx_byte(Reg::Rdx, Reg::R10, 0);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, len_done);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.jmp_label(len_loop);
+    code.bind_label(len_done);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // path_len
+    // pattern = rt_alloc(path_len + 3) — '\' '*' NUL
+    code.add_r_imm8(Reg::Rcx, 3);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    code.sub_rsp(8);
+    code.u8(0x50); // push size
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // pattern
+    // Copy the path, then append '\', '*', NUL.
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, copy_done);
+    code.movzx_byte(Reg::Rdx, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R11, 0, Reg::Rdx);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R11, 1);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    code.mov_mem_imm8(Reg::R11, 0, 92); // '\'
+    code.mov_mem_imm8(Reg::R11, 1, 42); // '*'
+    code.mov_mem_imm8(Reg::R11, 2, 0); // NUL
+    // state = rt_alloc(336)
+    code.mov_r32_imm32(Reg::Rax, DIR_STATE_SIZE);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // state
+    // FindFirstFileA(pattern, state + 8)
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_rr(Reg::Rdx, Reg::Rax);
+    code.add_r_imm8(Reg::Rdx, DIR_STATE_DATA as u8);
+    code.call_rip(PatchKind::Iat(IAT_FIND_FIRST_FILE_A));
+    code.add_rsp(32);
+    code.cmp_r_imm32(Reg::Rax, 0xFF_FF_FF_FFu32);
+    let bad = code.label();
+    let end = code.label();
+    code.jcc_label(0x84, bad);
+    // state->handle = handle
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -24);
+    code.mov_mem_r(Reg::R9, 0, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(16);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.jmp_label(end);
+    code.bind_label(bad);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(16);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    free_cstr(code, Reg::Rcx);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(end);
+    code.leave_ret();
+}
+
+/// `rt_dir_next(handle: Ptr<Int>) -> Str` (Session 108, S28).
+///
+/// Advances the enumeration and returns the next entry name as a fresh
+/// `Str`. Returns an empty `Str` when the enumeration is exhausted or the
+/// handle is null. The caller owns the returned string.
+fn emit_dir_next(code: &mut Code) {
+    prologue(code);
+    // [rbp+16] = state ptr. Frame: [rbp-8]=state [rbp-16]=len [rbp-24]=result
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    let not_found = code.label();
+    let end = code.label();
+    let attempt = code.label();
+    let accept = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, not_found);
+    // FindNextFileA(state->handle, state + 8). The FakeDirectoryEntries
+    // "." and ".." are skipped so the stream matches Python's
+    // os.scandir()/os.listdir(), which never yield them.
+    code.bind_label(attempt);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rcx, 0); // state->handle
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rdx, DIR_STATE_DATA as u8);
+    code.call_rip(PatchKind::Iat(IAT_FIND_NEXT_FILE_A));
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, not_found);
+    // Skip "." and "..".
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::R10, (DIR_STATE_DATA + FIND_DATA_NAME_OFFSET) as u8);
+    code.movzx_byte(Reg::Rdx, Reg::R10, 0);
+    code.cmp_r_imm8(Reg::Rdx, 46); // '.'
+    code.jcc_label(0x85, accept); // jne — ordinary name
+    code.movzx_byte(Reg::Rdx, Reg::R10, 1);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, attempt); // "\0" after '.': "."
+    code.cmp_r_imm8(Reg::Rdx, 46);
+    code.jcc_label(0x85, accept);
+    code.movzx_byte(Reg::Rdx, Reg::R10, 2);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, attempt); // ".\0": ".."
+    code.bind_label(accept);
+    // strlen(state + 8 + 44) — cFileName
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::R10, (DIR_STATE_DATA + FIND_DATA_NAME_OFFSET) as u8);
+    code.xor_rr32(Reg::Rcx, Reg::Rcx);
+    let len_loop = code.label();
+    let len_done = code.label();
+    code.bind_label(len_loop);
+    code.movzx_byte(Reg::Rdx, Reg::R10, 0);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, len_done);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.jmp_label(len_loop);
+    code.bind_label(len_done);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rcx); // len
+    code.mov_rr(Reg::Rax, Reg::Rcx); // StrAlloc(size = len)
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // result
+    // Copy the name into result[8..].
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::R10, (DIR_STATE_DATA + FIND_DATA_NAME_OFFSET) as u8);
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -24);
+    code.add_r_imm8(Reg::R11, 8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, copy_done);
+    code.movzx_byte(Reg::Rdx, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R11, 0, Reg::Rdx);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R11, 1);
+    code.sub_r_imm32(Reg::Rcx, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.jmp_label(end);
+    code.bind_label(not_found);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.bind_label(end);
+    code.leave_ret();
+}
+
+/// `rt_dir_close(handle: Ptr<Int>) -> Int` (Session 108, S28).
+///
+/// Closes the Win32 enumeration and releases the handle block. Returns 0
+/// on success and -1 for a null handle.
+fn emit_dir_close(code: &mut Code) {
+    prologue(code);
+    // [rbp+16] = state ptr
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    let bad = code.label();
+    let end = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, bad);
+    // FindClose(state->handle)
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.call_rip(PatchKind::Iat(IAT_FIND_CLOSE));
+    code.add_rsp(32);
+    // rt_free(state)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.sub_rsp(8);
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(16);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.jmp_label(end);
+    code.bind_label(bad);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.bind_label(end);
     code.leave_ret();
 }
 

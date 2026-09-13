@@ -398,6 +398,36 @@ fn fs_set_cwd(path: Str) -> Int {
 }
 
 // ============================================================
+// DIRECTORY ENUMERATION (Session 108, S28)
+// ============================================================
+// The streaming trio mirrors Python's os.scandir(): open a directory,
+// pull one entry name at a time, then close it. The handle is an opaque
+// owned pointer: forgetting fs_dir_close is a leak, exactly like any
+// other MINK allocation.
+
+/// fs_dir_open(path): open `path` for enumeration. Returns an opaque
+/// handle, or 0 when the directory cannot be opened. The caller owns the
+/// handle and must release it with fs_dir_close.
+fn fs_dir_open(path: Str) -> Int {
+    let h = rt_dir_open(path);
+    rt_str_free(path);
+    return h;
+}
+
+/// fs_dir_next(handle): the next entry name as a fresh Str, or the empty
+/// string once the enumeration is exhausted (or `handle` is 0). The
+/// caller owns the returned string. Entries are not ordered.
+fn fs_dir_next(handle: Int) -> Str {
+    return rt_dir_next(handle);
+}
+
+/// fs_dir_close(handle): release a handle from fs_dir_open. Returns 0 on
+/// success and -1 for a null handle.
+fn fs_dir_close(handle: Int) -> Int {
+    return rt_dir_close(handle);
+}
+
+// ============================================================
 // UTILITY
 // ============================================================
 

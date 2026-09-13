@@ -440,6 +440,24 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Str],
         result: IntrinsicType::Int,
     },
+    // --- Directory enumeration (Session 108, S28) ---
+    // The handle is an opaque `Int` (a raw address) so programs can test
+    // `handle == 0`; the type system has no pointer/null comparison.
+    Intrinsic {
+        name: "rt_dir_open",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_dir_next",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_dir_close",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
     Intrinsic {
         name: "rt_to_cstr",
         params: &[IntrinsicType::Str],

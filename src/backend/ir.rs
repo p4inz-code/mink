@@ -959,6 +959,18 @@ pub enum RuntimeService {
     StrFormat,
     /// Internal: lazily parse the command line into the argv table.
     ArgvParse,
+    // --- Directory listing (Session 108, S28) ---
+    /// `rt_dir_open(path: Str) -> Int`: open a directory for enumeration.
+    /// Returns an opaque handle, or 0 on error. The handle owns a heap
+    /// block and must be released with `rt_dir_close`.
+    FsDirOpen,
+    /// `rt_dir_next(handle: Int) -> Str`: get the next entry name.
+    /// Returns an owned string, or an empty string when exhausted. Each
+    /// result must be freed by the caller.
+    FsDirNext,
+    /// `rt_dir_close(handle: Int) -> Int`: close a directory handle.
+    /// Returns 0 on success, -1 for a null handle.
+    FsDirClose,
 }
 
 impl RuntimeService {
@@ -982,7 +994,10 @@ impl RuntimeService {
             | Self::Exit
             | Self::PrintInt
             | Self::PrintFloat
-            | Self::PrintChar => 1,
+            | Self::PrintChar
+            | Self::FsDirOpen
+            | Self::FsDirNext
+            | Self::FsDirClose => 1,
             Self::MemStore | Self::StrByte => 2,
             Self::StrSetByte => 3,
             Self::VecPush | Self::VecGet => 2,
@@ -1125,6 +1140,9 @@ impl RuntimeService {
                 | Self::FsMove
                 | Self::FsGetCwd
                 | Self::FsSetCwd
+                | Self::FsDirOpen
+                | Self::FsDirNext
+                | Self::FsDirClose
                 | Self::ToCstr
                 | Self::FreeCstr
                 | Self::ProcessRun

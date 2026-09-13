@@ -1,6 +1,6 @@
 # MINK — Windows × Official Python Capability Parity Matrix (Master Audit)
 
-**Session:** 107 (matrix reconciled from the Session 106 rows)
+**Session:** 108 (matrix reconciled from the Session 107 rows)
 **Starting commit:** `568dc04` (Session 106 close) → `48ed337` (Session 107 start) → `c3b8091` (Session 107 push)
 **MINK version:** 1.0.1
 **Scope:** Windows x86_64 (the shipped platform). Official Python capabilities only.
@@ -301,7 +301,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 |---|---|---|---|---|---|---|---|---|---|
 | S26 | File read/write | VERIFIED | `fs_read/write` byte-exact (`[code] stdlib/filesystem.mink`; `[test] tests/filesystem_lib.rs`, windows_hardening real ops) | None | - | - | N | - | |
 | S27 | Path manipulation (pathlib-style) | VERIFIED | `path_join/parent/filename/extension/stem/with_extension/normalize/is_absolute` (`[code] stdlib/filesystem.mink`) | Drive-letter/UNC-aware semantics not execution-proven | P3 | S | N | C | NEEDS PROOF for `C:` handling |
-| S28 | Directory listing / traversal (`os.listdir`, `os.walk`) | MISSING | none | No directory enumeration | P1 | M | Y | C | First-class daily capability (find files, iterate dirs) — FindFirstFileA/FindNextFileA already understood in the codebase (`[code] src/backend/emit/pe.rs` imports) |
+| S28 | Directory listing / traversal (`os.listdir`, `os.walk`) | VERIFIED | `fs_dir_open`/`fs_dir_next`/`fs_dir_close` streaming enumeration over `rt_dir_open`/`rt_dir_next`/`rt_dir_close` (Win32 `FindFirstFileA`/`FindNextFileA`/`FindClose`); `.`/`..` are skipped so the stream matches `os.scandir()` (`[code] stdlib/filesystem.mink`, `src/backend/emit/runtime.rs`, `src/backend/ir.rs`, `src/runtime/intrinsics.rs`; `[test] tests/filesystem_lib.rs` d01-d11: entry counts, empty dir, missing dir = 0, null handle = inert, trailing separator, spaced path, interleaved handles, 300 open/enumerate/close cycles, one-level walk, 45-entry dir, unclosed handle = E-R06 leak; `[exec]` native PE runs) | No recursion helper (`os.walk`-style) in the stdlib — build it from the streaming trio (proven in d09); no sorted order; ANSI names (shares the FS layer's MAX_PATH/ANSI limits, see W03); no per-entry metadata (S31); no glob (S29) | - | M | N | C | `os.scandir()`/`os.listdir()` parity delivered in Session 108. The handle is an owned allocation, so an unclosed enumeration is reported as a leak like any other MINK allocation |
 | S29 | Glob | MISSING | none | Pattern-based file matching | P2 | M | N | C | After listdir |
 | S30 | Temp files/dirs (`tempfile`) | MISSING | none | Temp location + unique names | P2 | S | N | C | GetTempPath is one import |
 | S31 | File metadata (size/mtime/attrs) | PARTIAL | `fs_file_size` only (`[code] stdlib/filesystem.mink`) | mtime, permissions/attributes | P2 | M | N | C | |
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 29 | 11 | 20 | 6 | 5 | 2 | 73 |
+| VERIFIED | 29 | 11 | 21 | 6 | 5 | 2 | 74 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -520,7 +520,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | PARTIAL | 9 | 2 | 14 | 0 | 10 | 2 | 37 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 19 | 13 | 40 | 8 | 6 | 7 | 93 |
+| MISSING | 19 | 13 | 39 | 8 | 6 | 7 | 92 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 ### 10.2 Priority distribution
@@ -528,47 +528,47 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 2 | 3 | 14 | 2 | 0 | 5 | **26** |
+| P1 (parity-blocking by definition) | 2 | 3 | 13 | 2 | 0 | 5 | **25** |
 | P2 (important, not blocking) | 22 | 10 | 35 | 2 | 17 | 5 | **91** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
 | — (no gap / no MINK work) | 26 | 8 | 15 | 7 | 2 | 3 | **61** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **26 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **25 capability gaps block the parity gate.**
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
 `src/driver.rs` mechanism behind the VERIFIED L67), so P1 now equals the `Blocks = Y`
 set exactly.
 
-### 10.3 Difficulty distribution (rows requiring work; the other 57 rows have no gap)
+### 10.3 Difficulty distribution (rows requiring work; the other 62 rows have no gap)
 
 | Difficulty | Rows | Meaning |
 |---|---|---|
 | S-M (small-to-medium) | 6 | small change with a medium tail |
 | S (small) | 37 | one focused change, low risk |
-| M (medium) | 83 | multiple components, contained |
+| M (medium) | 82 | multiple components, contained |
 | L (large) | 30 | major feature area |
 | XL (major subsystem) | 15 | dedicated multi-session subsystem |
-| **Rows requiring work** | **171** | 171 + 61 no-gap rows = 232 |
+| **Rows requiring work** | **170** | 170 + 62 no-gap rows = 232 |
 
-### 10.4 Parity-blocking gaps (26, all P1) by wave
+### 10.4 Parity-blocking gaps (25, all P1) by wave
 
 Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
 primary wave. The rows Session 99–107 delivered (R06, R10, R12, R13, R23, S50, S70,
-W06, W08, W14, L16, L67, P02, T06, L05, L08, S01) no longer appear.
+W06, W08, W14, L16, L67, P02, T06, L05, L08, S01, S28) no longer appear.
 
 | Wave | Blocking gaps | Count |
 |---|---|---|
 | A (Windows platform/runtime quick wins) | S74 (logging module) | 1 |
 | B (core language/data) | L34, S02, S06, S36 | 4 |
-| C (filesystem/process/time) | S28, S69 | 2 |
+| C (filesystem/process/time) | S69 | 1 |
 | D (networking/internet/compression) | S41, S42, S44, S62 | 4 |
 | E (concurrency/async) | R19, R20, S71, S73 | 4 |
 | F (packaging/distribution) | L68, P03, P04, P05, P06, P09 | 6 |
 | G (developer tooling) | R01, S75, S78, T04, T07 | 5 |
-| **Total** | | **26** |
+| **Total** | | **25** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -581,7 +581,7 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 - Functions: positional params, recursion, lambdas/closures (L38-L45)
 - Modules: file modules, `use`/`pub`, multi-file compilation (L65/L66)
 - Memory/runtime: deterministic arena + ownership + leak check (R17/R18)
-- Filesystem: read/write/copy/move/remove/mkdir/cwd/path ops (S26/S27/S32/S33)
+- Filesystem: read/write/copy/move/remove/mkdir/cwd/path ops, directory enumeration/traversal (S26/S27/S28/S32/S33)
 - Process: run + output capture + exit codes + PID (R22 core)
 - Network: TCP/UDP/DNS/hostname/byte-order (S56-S58, S65)
 - HTTP/1.1 client GET/POST core (S59 core)
@@ -595,8 +595,8 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.6 Headline conclusions
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
-2. **Official-Python-capability parity is PARTIAL**: 77 execution-verified rows (VERIFIED 73 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 37 PARTIAL rows, 93 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
-3. **26 parity-blocking P1 gaps** remain; in all, 171 rows require work (15 XL + 30 L + 83 M + 37 S + 6 S-M) and 61 rows need none.
+2. **Official-Python-capability parity is PARTIAL**: 78 execution-verified rows (VERIFIED 74 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 37 PARTIAL rows, 92 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
+3. **25 parity-blocking P1 gaps** remain; in all, 170 rows require work (15 XL + 30 L + 82 M + 37 S + 6 S-M) and 62 rows need none.
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
 6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01 and the UTF-8 layer L05 are now VERIFIED; remaining: L34 exceptions, S02 regex, S06 numeric parsing, S36 CSV), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G), and logging (Wave A, S74). Waves A and the shared A/F include-path mechanism landed across Sessions 99–107.
@@ -605,10 +605,12 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (26 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (25 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
 
 **Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.
+
+**Session 108 updates:** S28 (directory listing / traversal) **P1 blocker CLOSED** — `fs_dir_open`/`fs_dir_next`/`fs_dir_close` were added over new Windows runtime services (`rt_dir_open`/`rt_dir_next`/`rt_dir_close`, `FindFirstFileA`/`FindNextFileA`/`FindClose`), with `.`/`..` filtered so the stream matches `os.scandir()`. The handle is an owned allocation, so an unclosed enumeration is a leak (E-R06), consistent with MINK's ownership model. Permanent regression coverage: `tests/filesystem_lib.rs` d01–d11 (including 300 open/close cycles, a one-level walk, and the leak path). Every count above is recomputed from the rows.
 
 **Session 107 updates:** L05 (Unicode text) **P1 blocker CLOSED** — the UTF-8 code-point layer (`utf8_validate`/`decode`/`encode`/`char_count`/`char_at`/`byte_index`/`slice`) was added, native-verified and leak-checked, fixing two latent defects on the way (heap-argument leak; acceptance of overlong 2-byte forms and surrogates). S01 (string methods) and L08 (lists) `P1` flags cleared after their Session 106/107 closures. Row flags reconciled against each row's own evidence for R06, W14, P02 and T06, and every count in §10 recomputed **from the rows** (stale aggregate tables and five rows with a missing trailing pipe were corrected). The npm stdlib bundle was re-synced (`str_split`/`str_join` plus the UTF-8 layer) with a permanent drift guard.
 

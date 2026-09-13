@@ -686,3 +686,301 @@ fn main() {{
     assert_success(code, &out);
     assert_eq!(code, 0, "wrapper sequence must exit 0: {out}");
 }
+
+// ---------------------------------------------------------------------------
+// Session 108 (S28): directory enumeration — os.scandir()/os.listdir() parity.
+// ---------------------------------------------------------------------------
+
+/// Creates a fixture tree under the temp directory:
+///   `<dir>/a.txt`, `<dir>/b.txt`, `<dir>/sub/`, `<dir>/empty/`,
+///   `<dir>/with space/inner.txt`
+/// and returns the root path rendered with forward slashes.
+fn dir_fixture(tag: &str) -> (std::path::PathBuf, String) {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mink_fs_dir_{tag}_{}_{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::create_dir_all(dir.join("empty")).unwrap();
+    std::fs::create_dir_all(dir.join("with space")).unwrap();
+    std::fs::write(dir.join("a.txt"), b"a").unwrap();
+    std::fs::write(dir.join("b.txt"), b"b").unwrap();
+    std::fs::write(dir.join("with space").join("inner.txt"), b"i").unwrap();
+    let rendered = dir.to_str().unwrap().replace('\\', "/");
+    (dir, rendered)
+}
+
+/// MINK helper: count the entries the enumeration yields, or -1 when the
+/// directory cannot be opened. Frees every name and closes the handle.
+const DIR_COUNT_HELPER: &str = r#"
+fn count_entries(dir: Str) -> Int {
+    let h = fs_dir_open(dir);
+    if h == 0 { return -1; }
+    let mut n = 0;
+    let mut done = 0;
+    while done == 0 {
+        let name = fs_dir_next(h);
+        if rt_str_len(name) == 0 { done = 1; } else { n = n + 1; }
+        rt_str_free(name);
+    }
+    fs_dir_close(h);
+    return n;
+}
+"#;
+
+#[test]
+fn d01_dir_enumerates_entries() {
+    let (dir, root) = dir_fixture("count");
+    let body = format!(
+        r#"
+fn main() {{
+    rt_print_int(count_entries("{root}"));
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&format!("{DIR_COUNT_HELPER}\n{body}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(first_int(&out), 5, "5 entries (dot entries skipped): {out}");
+}
+
+#[test]
+fn d02_dir_empty_directory() {
+    let (dir, root) = dir_fixture("empty");
+    let body = format!(
+        r#"
+fn main() {{
+    rt_print_int(count_entries("{root}/empty"));
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&format!("{DIR_COUNT_HELPER}\n{body}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(first_int(&out), 0, "empty directory: {out}");
+}
+
+#[test]
+fn d03_dir_open_missing_returns_zero() {
+    let body = r#"
+fn main() {
+    let h = fs_dir_open("no_such_directory_xyz_108");
+    rt_print_int(h);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run(body);
+    assert_success(code, &out);
+    assert_eq!(first_int(&out), 0, "missing directory opens as 0: {out}");
+}
+
+#[test]
+fn d04_dir_null_handle_is_inert() {
+    let body = r#"
+fn main() {
+    let s = fs_dir_next(0);
+    rt_print_int(rt_str_len(s));
+    rt_str_free(s);
+    rt_print_int(fs_dir_close(0));
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run(body);
+    assert_success(code, &out);
+    assert_eq!(all_ints(&out), vec![0, -1], "null handle: {out}");
+}
+
+#[test]
+fn d05_dir_trailing_separator() {
+    let (dir, root) = dir_fixture("slash");
+    let body = format!(
+        r#"
+fn main() {{
+    rt_print_int(count_entries("{root}/"));
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&format!("{DIR_COUNT_HELPER}\n{body}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(first_int(&out), 5, "trailing separator: {out}");
+}
+
+#[test]
+fn d06_dir_path_with_spaces() {
+    let (dir, root) = dir_fixture("spaces");
+    let body = format!(
+        r#"
+fn main() {{
+    rt_print_int(count_entries("{root}/with space"));
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&format!("{DIR_COUNT_HELPER}\n{body}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(first_int(&out), 1, "path with spaces: {out}");
+}
+
+#[test]
+fn d07_dir_two_handles_interleaved() {
+    let (dir, root) = dir_fixture("interleave");
+    let body = format!(
+        r#"
+fn main() {{
+    let h1 = fs_dir_open("{root}");
+    let h2 = fs_dir_open("{root}/empty");
+    let a = fs_dir_next(h1);
+    let b = fs_dir_next(h2);
+    rt_print_int(rt_str_len(b));
+    rt_str_free(b);
+    let alen = rt_str_len(a);
+    rt_str_free(a);
+    if alen > 0 {{ rt_print_int(1); }} else {{ rt_print_int(0); }}
+    let mut n = 1;
+    let mut done = 0;
+    while done == 0 {{
+        let x = fs_dir_next(h1);
+        if rt_str_len(x) == 0 {{ done = 1; }} else {{ n = n + 1; }}
+        rt_str_free(x);
+    }}
+    rt_print_int(n);
+    rt_print_int(fs_dir_close(h1));
+    rt_print_int(fs_dir_close(h2));
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&body);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(
+        all_ints(&out),
+        vec![0, 1, 5, 0, 0],
+        "interleaved handles: {out}"
+    );
+}
+
+#[test]
+fn d08_dir_repeated_open_close_stress() {
+    let (dir, root) = dir_fixture("stress");
+    let body = format!(
+        r#"
+fn main() {{
+    let mut bad = 0;
+    let mut i = 0;
+    while i < 300 {{
+        let h = fs_dir_open("{root}");
+        if h == 0 {{ bad = bad + 1; }}
+        let mut c = 0;
+        let mut done = 0;
+        while done == 0 {{
+            let nm = fs_dir_next(h);
+            if rt_str_len(nm) == 0 {{ done = 1; }} else {{ c = c + 1; }}
+            rt_str_free(nm);
+        }}
+        if c != 5 {{ bad = bad + 1; }}
+        let r = fs_dir_close(h);
+        if r != 0 {{ bad = bad + 1; }}
+        i = i + 1;
+    }}
+    rt_print_int(bad);
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&body);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(first_int(&out), 0, "300 open/enumerate/close cycles: {out}");
+}
+
+#[test]
+fn d09_dir_recursive_walk() {
+    let (dir, root) = dir_fixture("walk");
+    let body = format!(
+        r#"
+fn main() {{
+    let h = fs_dir_open("{root}");
+    if h == 0 {{ rt_print_int(-1); rt_exit(1); }}
+    let mut n = 0;
+    let mut done = 0;
+    while done == 0 {{
+        let name = fs_dir_next(h);
+        let l = rt_str_len(name);
+        if l == 0 {{ done = 1; }} else {{ n = n + 1; }}
+        // Build `<root>/<name>` and descend one level. Directories are
+        // enumerated; file paths fail to open and contribute nothing.
+        let child = path_join(path_join("{root}", ""), name);
+        if l != 0 {{
+            let ch = rt_dir_open(child);
+            let mut cdone = 0;
+            while cdone == 0 {{
+                let cn = rt_dir_next(ch);
+                if rt_str_len(cn) == 0 {{ cdone = 1; }} else {{ n = n + 1; }}
+                rt_str_free(cn);
+            }}
+            rt_dir_close(ch);
+        }}
+        rt_str_free(child);
+    }}
+    fs_dir_close(h);
+    rt_print_int(n);
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&body);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(
+        first_int(&out),
+        6,
+        "walk counts 5 root entries plus `with space/inner.txt`: {out}"
+    );
+}
+
+#[test]
+fn d10_dir_many_entries() {
+    let (dir, root) = dir_fixture("many");
+    for i in 0..40 {
+        std::fs::write(dir.join(format!("f{i:02}.dat")), b"x").unwrap();
+    }
+    let body = format!(
+        r#"
+fn main() {{
+    rt_print_int(count_entries("{root}"));
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&format!("{DIR_COUNT_HELPER}\n{body}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_success(code, &out);
+    assert_eq!(first_int(&out), 45, "40 files + 5 fixture entries: {out}");
+}
+
+/// Ownership: an enumeration handle that is never closed is a live
+/// allocation, so the leak checker must reject the program (E-R06,
+/// exit 106). This proves `fs_dir_open` participates in MINK's ownership
+/// model instead of leaking silently.
+#[test]
+fn d11_dir_unclosed_handle_is_a_leak() {
+    let (dir, root) = dir_fixture("leak");
+    let body = format!(
+        r#"
+fn main() {{
+    let h = fs_dir_open("{root}");
+    rt_print_int(h);
+    rt_exit(0);
+}}
+"#
+    );
+    let (code, out) = build_and_run(&body);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 106, "unclosed handle must leak-check: {out}");
+    assert!(out.contains("E-R06"), "expected E-R06 leak report: {out}");
+}

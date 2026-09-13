@@ -2081,6 +2081,10 @@ impl<'a> Lowerer<'a> {
             "rt_fs_move" => RuntimeService::FsMove,
             "rt_fs_get_cwd" => RuntimeService::FsGetCwd,
             "rt_fs_set_cwd" => RuntimeService::FsSetCwd,
+            // --- Directory enumeration (Session 108, S28) ---
+            "rt_dir_open" => RuntimeService::FsDirOpen,
+            "rt_dir_next" => RuntimeService::FsDirNext,
+            "rt_dir_close" => RuntimeService::FsDirClose,
             "rt_to_cstr" => RuntimeService::ToCstr,
             "rt_free_cstr" => RuntimeService::FreeCstr,
             // --- Process (Session 59) ---
