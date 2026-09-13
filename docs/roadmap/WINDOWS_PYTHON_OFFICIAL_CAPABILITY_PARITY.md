@@ -314,7 +314,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | S35 | JSON | VERIFIED | parse + serialize over an arena (`[code] stdlib/json.mink`; `[test] tests/json.rs`; `[exec]` system_report example) | No JSON Schema/streaming | P2 | M | N | B | Core capability solid |
-| S36 | CSV | MISSING | none | CSV read/write | P1 | M | Y | B | Proof-app category in plan; split (S01) is the dependency |
+| S36 | CSV | VERIFIED | `stdlib/csv.mink`: `csv_parse_row` (RFC 4180 subset — quoted fields, `""` escapes, CR/LF/CRLF terminators, empty fields, quotes kept literal mid-field), `csv_write_row` (quotes and doubles only when needed), `csv_escape`, `csv_field_count`, `csv_round_trip` (`[code] stdlib/csv.mink`, `npm/mink/stdlib/csv.mink`; `[test] tests/csv_lib.rs` c01-c14: plain/quoted/escaped/empty fields, all terminators, empty input, write quoting, round trip, 100-field row, embedded newline inside quotes, 100 parse/write cycles; `[exec]` native PE runs) | Records are `Vec<Str>` rather than nested lists (MINK has no nested collection in this layer), so a document is parsed record by record; no dialect options (delimiter/quote char), no `DictReader`; no type inference/marshalling | - | M | N | B | Closed in Session 108 — the `str_split` (S01) dependency was already resolved. The write path sizes its buffer from the quoted length, so embedded quotes cannot overflow it (regression covered by c08/c10) |
 | S37 | Config files (`configparser`, INI) | MISSING | none | INI config | P2 | S | N | C | |
 | S38 | TOML (`tomllib`, read) | MISSING | none | TOML parsing | P3 | M | N | C | |
 | S39 | Binary serialization (`pickle`) | N/A | native binary + JSON exist; deterministic formats by design | — | P3 | M | N | - | Pickle is Python-object-graph magic; not a parity requirement |
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 29 | 11 | 23 | 6 | 5 | 2 | 76 |
+| VERIFIED | 29 | 11 | 24 | 6 | 5 | 2 | 77 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -520,7 +520,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | PARTIAL | 9 | 2 | 13 | 0 | 10 | 2 | 36 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 19 | 13 | 38 | 8 | 6 | 7 | 91 |
+| MISSING | 19 | 13 | 37 | 8 | 6 | 7 | 90 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 ### 10.2 Priority distribution
@@ -528,47 +528,47 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 2 | 3 | 11 | 2 | 0 | 5 | **23** |
+| P1 (parity-blocking by definition) | 2 | 3 | 10 | 2 | 0 | 5 | **22** |
 | P2 (important, not blocking) | 22 | 10 | 35 | 2 | 17 | 5 | **91** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
 | — (no gap / no MINK work) | 26 | 8 | 15 | 7 | 2 | 3 | **61** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **23 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **22 capability gaps block the parity gate.**
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
 `src/driver.rs` mechanism behind the VERIFIED L67), so P1 now equals the `Blocks = Y`
 set exactly.
 
-### 10.3 Difficulty distribution (rows requiring work; the other 64 rows have no gap)
+### 10.3 Difficulty distribution (rows requiring work; the other 65 rows have no gap)
 
 | Difficulty | Rows | Meaning |
 |---|---|---|
 | S-M (small-to-medium) | 5 | small change with a medium tail |
 | S (small) | 37 | one focused change, low risk |
-| M (medium) | 81 | multiple components, contained |
+| M (medium) | 80 | multiple components, contained |
 | L (large) | 30 | major feature area |
 | XL (major subsystem) | 15 | dedicated multi-session subsystem |
-| **Rows requiring work** | **168** | 168 + 64 no-gap rows = 232 |
+| **Rows requiring work** | **167** | 167 + 65 no-gap rows = 232 |
 
-### 10.4 Parity-blocking gaps (23, all P1) by wave
+### 10.4 Parity-blocking gaps (22, all P1) by wave
 
 Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
 primary wave. The rows Session 99–107 delivered (R06, R10, R12, R13, R23, S50, S70,
-W06, W08, W14, L16, L67, P02, T06, L05, L08, S01, S06, S28, S74) no longer appear. Wave A is now empty.
+W06, W08, W14, L16, L67, P02, T06, L05, L08, S01, S06, S28, S36, S74) no longer appear. Wave A is now empty.
 
 | Wave | Blocking gaps | Count |
 |---|---|---|
 | A (Windows platform/runtime quick wins) | (none) | 0 |
-| B (core language/data) | L34, S02, S36 | 3 |
+| B (core language/data) | L34, S02 | 2 |
 | C (filesystem/process/time) | S69 | 1 |
 | D (networking/internet/compression) | S41, S42, S44, S62 | 4 |
 | E (concurrency/async) | R19, R20, S71, S73 | 4 |
 | F (packaging/distribution) | L68, P03, P04, P05, P06, P09 | 6 |
 | G (developer tooling) | R01, S75, S78, T04, T07 | 5 |
-| **Total** | | **23** |
+| **Total** | | **22** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -585,7 +585,7 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 - Process: run + output capture + exit codes + PID (R22 core)
 - Network: TCP/UDP/DNS/hostname/byte-order (S56-S58, S65)
 - HTTP/1.1 client GET/POST core (S59 core)
-- Data formats: JSON parse/serialize (S35), base64/hex/url encode-decode (S09), SHA-256/HMAC/secure-random (S46-S48)
+- Data formats: JSON parse/serialize (S35), CSV read/write (S36), base64/hex/url encode-decode (S09), SHA-256/HMAC/secure-random (S46-S48)
 - Time: epoch/millis/monotonic/ticks (R29, S66)
 - Math: float+int helper library (S17), random (S18 core)
 - Tooling: CLI build/run/check/explain/`--json`, exit codes, `--target` selection, error-code docs (T01-T03, T11, T13, T14)
@@ -595,22 +595,24 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.6 Headline conclusions
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
-2. **Official-Python-capability parity is PARTIAL**: 80 execution-verified rows (VERIFIED 76 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 36 PARTIAL rows, 91 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
-3. **23 parity-blocking P1 gaps** remain; in all, 168 rows require work (15 XL + 30 L + 81 M + 37 S + 5 S-M) and 64 rows need none.
+2. **Official-Python-capability parity is PARTIAL**: 81 execution-verified rows (VERIFIED 77 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 36 PARTIAL rows, 90 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
+3. **22 parity-blocking P1 gaps** remain; in all, 167 rows require work (15 XL + 30 L + 80 M + 37 S + 5 S-M) and 65 rows need none.
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
-6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01 and the UTF-8 layer L05 are now VERIFIED; remaining: L34 exceptions, S02 regex, S36 CSV), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G). Wave A is fully closed (S74 in Session 108); the shared A/F include-path mechanism landed across Sessions 99–107.
+6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01 and the UTF-8 layer L05 are now VERIFIED; remaining: L34 exceptions, S02 regex), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G). Wave A is fully closed (S74 in Session 108); the shared A/F include-path mechanism landed across Sessions 99–107.
 7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) was stubbed at audit time but is implemented since Session 99; `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); crypto is execution-verified on Windows.
 
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (23 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (22 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
 
 **Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.
 
-**Session 108 updates:** three P1 blockers **CLOSED** — **S28** (directory listing / traversal), **S74** (logging) and **S06** (string parsing) — taking the parity-blocking set from 26 to 23 and emptying Wave A.
+**Session 108 updates:** four P1 blockers **CLOSED** — **S28** (directory listing / traversal), **S74** (logging), **S06** (string parsing) and **S36** (CSV) — taking the parity-blocking set from 26 to 22, emptying Wave A and reducing Wave B to L34/S02.
+
+- **S36** adds `stdlib/csv.mink`: `csv_parse_row` (RFC 4180 subset with quoted fields, `""` escapes and CR/LF/CRLF terminators), `csv_write_row`/`csv_escape` (quote-and-double only when needed), `csv_field_count` and `csv_round_trip`. Coverage: `tests/csv_lib.rs` c01–c14. A buffer-sizing defect found while testing (embedded quotes were not counted against the quoted length) was fixed with permanent coverage.
 
 - **S06** adds `str_parse_int`/`str_parse_float` to `stdlib/strings.mink`: `(value, ok)` tuple results replacing Python's `int()`/`float()` exceptions, with sign/whitespace/`_`-separator handling, fraction/exponent parsing, i64 boundary rejection, and saturating extreme exponents. Coverage: `tests/strings_lib.rs` p01–p12.
 
@@ -628,8 +630,8 @@ Every count in §10 was recomputed from the rows after both closures.
 Compiler pipeline and targets: `[code] src/{lexer,parser,ast,semantics,typecheck,ownership,hir,mir,monomorphize,backend}`, `src/backend/target.rs`.
 Entry/CLI: `[code] src/cli.rs`, `src/driver.rs`, `src/backend/mod.rs`. Modules: `src/module/mod.rs`.
 Runtime services/intrinsics: `[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`, `src/backend/emit/pe.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/{allocator,error,abi}.rs`.
-Standard library: `[code] stdlib/*.mink` (17 modules: collections, crypto, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, result, strings, time).
-Test suite (execution-verified native runs): `[test] tests/*.rs` (56 targets, 2547 tests) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, windows_hardening, release, cli, smoke.
+Standard library: `[code] stdlib/*.mink` (18 modules: collections, crypto, csv, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, result, strings, time).
+Test suite (execution-verified native runs): `[test] tests/*.rs` (56 targets, 2547 tests) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, windows_hardening, release, cli, smoke.
 Recorded real execution: `[exec]` SESSION_92..97 docs (crypto vectors, HTTP POST byte-exact echo, process 1 MB drain, npm clean installs ×2, standalone exe) and this session's native probes (short-circuit, div-by-zero fault status 148).
 Specs/plans: `[doc] docs/core/*`, `docs/language/*`, `docs/ecosystem/*` (C_ABI_SPEC, PACKAGE_ARCHITECTURE, SECURITY_ARCHITECTURE, STDLIB_ARCHITECTURE), `docs/roadmap/*`, `docs/implementation/SESSION_*`.
 

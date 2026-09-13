@@ -1,0 +1,261 @@
+// MINK Standard Library — CSV
+// Session 108: CSV read/write (S36) — Python `csv` capability parity.
+//
+// RFC 4180 subset, comma-delimited:
+//   - fields are separated by ',' and records by CR / LF / CRLF
+//   - a field may be wrapped in double quotes; inside quotes, ',' and the
+//     record separators are literal, and "" is an escaped double quote
+//   - a quote that does not start a field is treated as a literal byte
+//
+// Python's `csv` yields a list of lists. MINK has no nested collections in
+// this layer, so records are values of `Vec<Str>`: read one record with
+// `csv_parse_row`, write one with `csv_write_row`, and split a document on
+// its line endings before parsing. Records whose quoted fields contain
+// embedded newlines are preserved by `csv_parse_row` (the newline inside
+// quotes is data, not a terminator), but the caller must pass the whole
+// record text.
+//
+// OWNERSHIP
+//   - `csv_parse_row(line)` consumes `line` and returns a `Vec<Str>` of
+//     freshly allocated fields; free the vector with `rt_vec_free`, which
+//     releases the element strings.
+//   - `csv_write_row(fields)` does not consume `fields` (Vec is passed by
+//     value, not moved); it returns a new string the caller owns.
+//   - `csv_escape(field)` consumes `field` and returns a new string.
+
+// ============================================================
+// READING
+// ============================================================
+
+/// csv_parse_row(line): parse one CSV record. `line` may include a trailing
+/// CR/LF, which terminates the record. Returns a `Vec<Str>` of decoded
+/// fields (empty for an empty input). Consumes `line`.
+fn csv_parse_row(line: Str) -> Vec<Str> {
+    let n = rt_str_len(line);
+    let mut fields = rt_vec_new(4);
+    // A decoded field is never longer than the input, so n + 2 is enough
+    // for the scratch buffer.
+    let mut buf = rt_str_alloc(n + 2);
+    let mut flen = 0;
+    let mut i = 0;
+    let mut in_quotes = 0;
+    let mut done = 0;
+    if n > 0 {
+        while done == 0 {
+            let mut b = -1;
+            if i < n { b = rt_str_byte(line, i); }
+            let mut flush = 0;
+            if b == -1 {
+                // End of input: emit the field in progress.
+                flush = 1;
+                done = 1;
+            } else {
+                if in_quotes == 1 {
+                    if b == 34 {
+                        // "" is an escaped quote; a lone " closes the field.
+                        let mut nxt = -1;
+                        if i + 1 < n { nxt = rt_str_byte(line, i + 1); }
+                        if nxt == 34 {
+                            rt_str_set_byte(buf, flen, 34);
+                            flen = flen + 1;
+                            i = i + 2;
+                        } else {
+                            in_quotes = 0;
+                            i = i + 1;
+                        }
+                    } else {
+                        rt_str_set_byte(buf, flen, b);
+                        flen = flen + 1;
+                        i = i + 1;
+                    }
+                } else {
+                    if b == 44 {
+                        flush = 1;
+                        i = i + 1;
+                    } else {
+                        if b == 10 {
+                            flush = 1;
+                            done = 1;
+                        } else {
+                            if b == 13 {
+                                flush = 1;
+                                done = 1;
+                            } else {
+                                if b == 34 {
+                                    if flen == 0 {
+                                        in_quotes = 1;
+                                    } else {
+                                        rt_str_set_byte(buf, flen, b);
+                                        flen = flen + 1;
+                                    }
+                                } else {
+                                    rt_str_set_byte(buf, flen, b);
+                                    flen = flen + 1;
+                                }
+                                i = i + 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if flush == 1 {
+                let f = rt_str_alloc(flen);
+                let mut j = 0;
+                while j < flen {
+                    rt_str_set_byte(f, j, rt_str_byte(buf, j));
+                    j = j + 1;
+                }
+                fields = rt_vec_push(fields, f);
+                flen = 0;
+            }
+        }
+    }
+    rt_str_free(buf);
+    rt_str_free(line);
+    return fields;
+}
+
+// ============================================================
+// WRITING
+// ============================================================
+
+/// csv_escape(field): return `field` quoted and escaped when it contains a
+/// comma, a double quote, CR or LF; otherwise return a copy. Consumes
+/// `field`.
+fn csv_escape(field: Str) -> Str {
+    let n = rt_str_len(field);
+    let mut need = 0;
+    let mut quotes = 0;
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(field, i);
+        if b == 44 { need = 1; }
+        if b == 34 {
+            need = 1;
+            quotes = quotes + 1;
+        }
+        if b == 10 { need = 1; }
+        if b == 13 { need = 1; }
+        i = i + 1;
+    }
+    let mut out_len = n;
+    if need == 1 { out_len = n + 2 + quotes; }
+    let out = rt_str_alloc(out_len);
+    let mut o = 0;
+    if need == 1 {
+        rt_str_set_byte(out, 0, 34);
+        o = 1;
+    }
+    i = 0;
+    while i < n {
+        let b = rt_str_byte(field, i);
+        if need == 1 {
+            if b == 34 {
+                rt_str_set_byte(out, o, 34);
+                o = o + 1;
+            }
+        }
+        rt_str_set_byte(out, o, b);
+        o = o + 1;
+        i = i + 1;
+    }
+    if need == 1 {
+        rt_str_set_byte(out, o, 34);
+    }
+    rt_str_free(field);
+    return out;
+}
+
+/// csv_write_row(fields): serialize a row to a single CSV record (no
+/// trailing newline). Fields containing the delimiter, a quote or a record
+/// separator are quoted, with embedded quotes doubled. Does not consume
+/// `fields`; returns a new string the caller owns.
+fn csv_write_row(fields: Vec<Str>) -> Str {
+    let count = rt_vec_len(fields);
+    // Pass 1: the exact output length.
+    let mut total = 0;
+    let mut k = 0;
+    while k < count {
+        let f = rt_vec_get(fields, k);
+        let n = rt_str_len(f);
+        let mut need = 0;
+        let mut quotes = 0;
+        let mut i = 0;
+        while i < n {
+            let b = rt_str_byte(f, i);
+            if b == 44 { need = 1; }
+            if b == 34 {
+                need = 1;
+                quotes = quotes + 1;
+            }
+            if b == 10 { need = 1; }
+            if b == 13 { need = 1; }
+            i = i + 1;
+        }
+        total = total + n;
+        if need == 1 { total = total + 2 + quotes; }
+        if k < count - 1 { total = total + 1; }
+        k = k + 1;
+    }
+    let out = rt_str_alloc(total);
+    let mut o = 0;
+    k = 0;
+    while k < count {
+        let f = rt_vec_get(fields, k);
+        let n = rt_str_len(f);
+        let mut need = 0;
+        let mut i = 0;
+        while i < n {
+            let b = rt_str_byte(f, i);
+            if b == 44 { need = 1; }
+            if b == 34 { need = 1; }
+            if b == 10 { need = 1; }
+            if b == 13 { need = 1; }
+            i = i + 1;
+        }
+        if need == 1 {
+            rt_str_set_byte(out, o, 34);
+            o = o + 1;
+        }
+        i = 0;
+        while i < n {
+            let b = rt_str_byte(f, i);
+            if need == 1 {
+                if b == 34 {
+                    rt_str_set_byte(out, o, 34);
+                    o = o + 1;
+                }
+            }
+            rt_str_set_byte(out, o, b);
+            o = o + 1;
+            i = i + 1;
+        }
+        if need == 1 {
+            rt_str_set_byte(out, o, 34);
+            o = o + 1;
+        }
+        if k < count - 1 {
+            rt_str_set_byte(out, o, 44);
+            o = o + 1;
+        }
+        k = k + 1;
+    }
+    return out;
+}
+
+// ============================================================
+// CONVENIENCE
+// ============================================================
+
+/// csv_field_count(row): number of fields in a parsed row.
+fn csv_field_count(row: Vec<Str>) -> Int {
+    return rt_vec_len(row);
+}
+
+/// csv_round_trip(fields): join then re-parse a row, returning the parsed
+/// fields. Useful for validating a write/read pair.
+fn csv_round_trip(fields: Vec<Str>) -> Vec<Str> {
+    let text = csv_write_row(fields);
+    let row = csv_parse_row(text);
+    return row;
+}

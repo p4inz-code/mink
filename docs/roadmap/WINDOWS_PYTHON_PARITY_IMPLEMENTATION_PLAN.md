@@ -79,7 +79,7 @@ completion gate; nothing in a later wave may silently redefine an earlier wave's
 | Temp dirs (`GetTempPath`) + known folders | S30, W13 | intrinsics + stdlib wrapper | S |
 | stdlib sources bundled into the npm package + module include path | P02, L67, T06 | npm ships `stdlib/*.mink`; compiler searches `<exe>/../stdlib` then project dir | S-M |
 | Platform/arch + version constants intrinsic | R15, W21, R27 | small constant return | S |
-| `str_split` / `str_join` (delimiter) + first CSV functions | S01, S36 (seed) | MINK-source string split + join; CSV read/write | M |
+| `str_split` / `str_join` (delimiter) + first CSV functions | S01 (done); S36 done Session 108 | MINK-source string split + join; CSV read/write | M |
 | Process: stdin pipe + no-cap streaming | R22, S51 | extend emit_process_run | M |
 | Windows error exit on failed OS ops instead of bare -1 (docs+contract) | R26 family | stdlib error codes | S |
 
