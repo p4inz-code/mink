@@ -1,0 +1,59 @@
+// ============================================================================
+// MINK Logging Utility — leveled logging to stderr.
+//
+// Demonstrates the standard-library logging module end to end through the
+// public language interface:
+//
+//   - `mod logging; use logging::log_info;` (stdlib module resolution)
+//   - threshold configuration:   log_set_level / log_set_level_name
+//   - leveled records:           log_debug/info/warning/error/critical
+//   - pre-checking a record:     log_enabled
+//   - clean ownership:           the module consumes and frees its messages
+//
+// Build and run:
+//   mink build examples/log_util/main.mink
+//   examples/log_util/main.exe
+//
+// Each record is written to stderr as `LEVEL: message`; stdout stays clean
+// so the program could pipe data through stdout and logs through stderr.
+// ============================================================================
+
+mod logging;
+use logging::log_debug;
+use logging::log_enabled;
+use logging::log_error;
+use logging::log_info;
+use logging::log_set_level;
+use logging::log_set_level_name;
+use logging::log_warning;
+
+fn main() -> Int {
+    // Default threshold is INFO (20); lower it by name so the debug record
+    // below is emitted too.
+    let r = log_set_level_name("DEBUG");
+    if r != 0 {
+        log_error("could not configure the log level");
+        return 1;
+    }
+
+    log_debug("starting inventory");
+    log_info("reading configuration");
+    log_warning("cache directory is missing; using defaults");
+
+    // Guard an expensive record behind `log_enabled` so it is only built
+    // when it will actually be emitted.
+    if log_enabled(10) {
+        log_debug("debug diagnostics enabled");
+    }
+
+    // Raise the threshold and show that lower levels are dropped.
+    let r2 = log_set_level(40);
+    if r2 != 0 {
+        log_error("could not raise the log level");
+        return 2;
+    }
+    log_info("this INFO record is suppressed");
+    log_error("inventory finished with one warning");
+
+    return 0;
+}

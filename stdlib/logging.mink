@@ -1,0 +1,158 @@
+// MINK Standard Library — Logging
+// Session 108: leveled logging (S74) — Python `logging` capability parity.
+//
+// Provides the official-Python `logging` capability in a MINK-native form:
+// numeric levels, a configurable threshold, and one line per record written
+// to stderr as `LEVEL: message\n`.
+//
+// LEVELS (Python's numeric values)
+//   DEBUG    10
+//   INFO     20   (default threshold)
+//   WARNING  30
+//   ERROR    40
+//   CRITICAL 50
+//
+// CONFIGURATION
+//   MINK has no mutable globals, so the threshold lives in the process
+//   environment under `MINK_LOG_LEVEL`. `log_set_level` writes it and
+//   `log_get_level` reads it (defaulting to INFO when unset or empty).
+//   This keeps logging stateless in the language while remaining
+//   deterministic and inspectable; child processes inherit the setting.
+//
+// OWNERSHIP
+//   Every function consumes its `Str` parameters (the standard user-call
+//   contract) and frees every heap string it allocates. Intrinsic calls
+//   (`rt_stderr_write`, `rt_env_*`, `rt_str_*`) do not consume.
+//
+// V1 NOTE: no short-circuit evaluation — combined conditions are nested.
+
+// ============================================================
+// LEVEL VALUES
+// ============================================================
+
+fn log_level_debug() -> Int { return 10; }
+fn log_level_info() -> Int { return 20; }
+fn log_level_warning() -> Int { return 30; }
+fn log_level_error() -> Int { return 40; }
+fn log_level_critical() -> Int { return 50; }
+
+// ============================================================
+// LEVEL NAMES
+// ============================================================
+
+/// log_level_name(level): canonical uppercase name for a numeric level,
+/// or "LEVEL" for an unrecognized value. Frees nothing (may return a
+/// literal, which is a safe no-op to free).
+fn log_level_name(level: Int) -> Str {
+    let mut name = "LEVEL";
+    if level == 10 { name = "DEBUG"; }
+    if level == 20 { name = "INFO"; }
+    if level == 30 { name = "WARNING"; }
+    if level == 40 { name = "ERROR"; }
+    if level == 50 { name = "CRITICAL"; }
+    return name;
+}
+
+/// log_level_from_name(name): numeric level for a name (case-sensitive,
+/// accepts the Python aliases WARN/CRIT). Returns 0 for an unknown name.
+/// Consumes `name`.
+fn log_level_from_name(name: Str) -> Int {
+    let mut level = 0;
+    if rt_str_eq(name, "DEBUG") { level = 10; }
+    if rt_str_eq(name, "INFO") { level = 20; }
+    if rt_str_eq(name, "WARNING") { level = 30; }
+    if rt_str_eq(name, "WARN") { level = 30; }
+    if rt_str_eq(name, "ERROR") { level = 40; }
+    if rt_str_eq(name, "CRITICAL") { level = 50; }
+    if rt_str_eq(name, "CRIT") { level = 50; }
+    rt_str_free(name);
+    return level;
+}
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+/// log_set_level(level): set the minimum level emitted. Returns 0 on
+/// success and -1 on failure.
+fn log_set_level(level: Int) -> Int {
+    let value = rt_str_from_int(level);
+    let r = rt_env_set("MINK_LOG_LEVEL", value);
+    rt_str_free(value);
+    return r;
+}
+
+/// log_get_level(): the current threshold (default 20 = INFO).
+/// The decimal parse is inlined so `raw` is moved exactly once (calling a
+/// helper would consume it on one path only, which the ownership checker
+/// rejects).
+fn log_get_level() -> Int {
+    let raw = rt_env_get("MINK_LOG_LEVEL");
+    let n = rt_str_len(raw);
+    let mut level = 20;
+    if n > 0 {
+        let mut i = 0;
+        let mut neg = 1;
+        let mut v = 0;
+        if rt_str_byte(raw, 0) == 45 { neg = -1; i = 1; }
+        while i < n {
+            let b = rt_str_byte(raw, i);
+            if b >= 48 {
+                if b <= 57 {
+                    v = v * 10 + (b - 48);
+                }
+            }
+            i = i + 1;
+        }
+        level = v * neg;
+    }
+    rt_str_free(raw);
+    return level;
+}
+
+/// log_set_level_name(name): set the threshold from a level name.
+/// Returns 0 on success, -1 for an unknown name. Consumes `name`.
+fn log_set_level_name(name: Str) -> Int {
+    let level = log_level_from_name(name);
+    let mut r = -1;
+    if level > 0 {
+        r = log_set_level(level);
+    }
+    return r;
+}
+
+/// log_enabled(level): true when a record at `level` would be emitted.
+fn log_enabled(level: Int) -> Bool {
+    return level >= log_get_level();
+}
+
+// ============================================================
+// EMISSION
+// ============================================================
+
+/// log_log(level, msg): write `LEVEL: msg\n` to stderr when `level` meets
+/// the threshold. Returns the number of bytes written, or 0 when the
+/// record is suppressed. Consumes `msg`.
+fn log_log(level: Int, msg: Str) -> Int {
+    let threshold = log_get_level();
+    let mut written = 0;
+    if level >= threshold {
+        let label = log_level_name(level);
+        let prefix = rt_str_concat(label, ": ");
+        let line = rt_str_concat(prefix, msg);
+        let full = rt_str_concat(line, "\n");
+        written = rt_stderr_write(full);
+        rt_str_free(full);
+        rt_str_free(line);
+        rt_str_free(prefix);
+        rt_str_free(label);
+    }
+    rt_str_free(msg);
+    return written;
+}
+
+fn log_debug(msg: Str) -> Int { return log_log(10, msg); }
+fn log_info(msg: Str) -> Int { return log_log(20, msg); }
+fn log_warning(msg: Str) -> Int { return log_log(30, msg); }
+fn log_error(msg: Str) -> Int { return log_log(40, msg); }
+fn log_critical(msg: Str) -> Int { return log_log(50, msg); }

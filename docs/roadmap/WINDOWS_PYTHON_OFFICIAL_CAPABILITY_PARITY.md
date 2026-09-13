@@ -392,7 +392,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| S74 | Logging | MISSING | stderr primitive now exists (R09 `rt_stderr_write`); no leveled logging module yet | Leveled logging | P1 | S-M | Y | A | Blocking dependency resolved in Session 99; module still to build |
+| S74 | Logging | VERIFIED | `stdlib/logging.mink`: levels DEBUG/INFO/WARNING/ERROR/CRITICAL (Python numeric values), threshold configuration (`log_set_level`/`log_set_level_name`/`log_get_level`), `log_enabled`, one `LEVEL: message\n` record per call to stderr, level-name lookup both ways (`log_level_name`/`log_level_from_name`) (`[code] stdlib/logging.mink`, `npm/mink/stdlib/logging.mink`; `[test] tests/logging_lib.rs` l01-l13: default threshold, filtering, exact stderr bytes, name round trips, boundaries incl. empty + 4000-byte messages, 200-call and 50-heap-message ownership runs; `[exec]` native PE runs, `examples/log_util/main.mink` via `mod logging;`) | No handlers/formatters/filters hierarchy, no file rotation, no timestamps (a `strftime`-formatted prefix waits on S69), no `%`-style record formatting | - | S-M | N | A | Delivered in Session 108. The threshold lives in the process environment (`MINK_LOG_LEVEL`) because MINK has no mutable globals; `log_set_level` writes it and `log_get_level` reads it (default INFO). No long-lived state, no unsound globals |
 | S75 | Unit-test framework in MINK | MISSING | Rust-hosted suite only | `mink test` + assert macros | P1 | M | Y | G | Tooling row T09 is the same gap |
 | S76 | Profiling | MISSING | none | Timing/profiling tools | P2 | L | N | G | |
 | S77 | Runtime diagnostics / tracing hooks | MISSING | leak checker + error codes only | Tracing | P2 | M | N | G | |
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 29 | 11 | 21 | 6 | 5 | 2 | 74 |
+| VERIFIED | 29 | 11 | 22 | 6 | 5 | 2 | 75 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -520,7 +520,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | PARTIAL | 9 | 2 | 14 | 0 | 10 | 2 | 37 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 19 | 13 | 39 | 8 | 6 | 7 | 92 |
+| MISSING | 19 | 13 | 38 | 8 | 6 | 7 | 91 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 ### 10.2 Priority distribution
@@ -528,47 +528,47 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 2 | 3 | 13 | 2 | 0 | 5 | **25** |
+| P1 (parity-blocking by definition) | 2 | 3 | 12 | 2 | 0 | 5 | **24** |
 | P2 (important, not blocking) | 22 | 10 | 35 | 2 | 17 | 5 | **91** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
 | — (no gap / no MINK work) | 26 | 8 | 15 | 7 | 2 | 3 | **61** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **25 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **24 capability gaps block the parity gate.**
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
 `src/driver.rs` mechanism behind the VERIFIED L67), so P1 now equals the `Blocks = Y`
 set exactly.
 
-### 10.3 Difficulty distribution (rows requiring work; the other 62 rows have no gap)
+### 10.3 Difficulty distribution (rows requiring work; the other 63 rows have no gap)
 
 | Difficulty | Rows | Meaning |
 |---|---|---|
-| S-M (small-to-medium) | 6 | small change with a medium tail |
+| S-M (small-to-medium) | 5 | small change with a medium tail |
 | S (small) | 37 | one focused change, low risk |
 | M (medium) | 82 | multiple components, contained |
 | L (large) | 30 | major feature area |
 | XL (major subsystem) | 15 | dedicated multi-session subsystem |
-| **Rows requiring work** | **170** | 170 + 62 no-gap rows = 232 |
+| **Rows requiring work** | **169** | 169 + 63 no-gap rows = 232 |
 
-### 10.4 Parity-blocking gaps (25, all P1) by wave
+### 10.4 Parity-blocking gaps (24, all P1) by wave
 
 Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
 primary wave. The rows Session 99–107 delivered (R06, R10, R12, R13, R23, S50, S70,
-W06, W08, W14, L16, L67, P02, T06, L05, L08, S01, S28) no longer appear.
+W06, W08, W14, L16, L67, P02, T06, L05, L08, S01, S28, S74) no longer appear. Wave A is now empty.
 
 | Wave | Blocking gaps | Count |
 |---|---|---|
-| A (Windows platform/runtime quick wins) | S74 (logging module) | 1 |
+| A (Windows platform/runtime quick wins) | (none) | 0 |
 | B (core language/data) | L34, S02, S06, S36 | 4 |
 | C (filesystem/process/time) | S69 | 1 |
 | D (networking/internet/compression) | S41, S42, S44, S62 | 4 |
 | E (concurrency/async) | R19, R20, S71, S73 | 4 |
 | F (packaging/distribution) | L68, P03, P04, P05, P06, P09 | 6 |
 | G (developer tooling) | R01, S75, S78, T04, T07 | 5 |
-| **Total** | | **25** |
+| **Total** | | **24** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -595,22 +595,27 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.6 Headline conclusions
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
-2. **Official-Python-capability parity is PARTIAL**: 78 execution-verified rows (VERIFIED 74 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 37 PARTIAL rows, 92 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
-3. **25 parity-blocking P1 gaps** remain; in all, 170 rows require work (15 XL + 30 L + 82 M + 37 S + 6 S-M) and 62 rows need none.
+2. **Official-Python-capability parity is PARTIAL**: 79 execution-verified rows (VERIFIED 75 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 37 PARTIAL rows, 91 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
+3. **24 parity-blocking P1 gaps** remain; in all, 169 rows require work (15 XL + 30 L + 82 M + 37 S + 5 S-M) and 63 rows need none.
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
-6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01 and the UTF-8 layer L05 are now VERIFIED; remaining: L34 exceptions, S02 regex, S06 numeric parsing, S36 CSV), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G), and logging (Wave A, S74). Waves A and the shared A/F include-path mechanism landed across Sessions 99–107.
+6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01 and the UTF-8 layer L05 are now VERIFIED; remaining: L34 exceptions, S02 regex, S06 numeric parsing, S36 CSV), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G). Wave A is fully closed (S74 in Session 108); the shared A/F include-path mechanism landed across Sessions 99–107.
 7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) was stubbed at audit time but is implemented since Session 99; `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); crypto is execution-verified on Windows.
 
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (25 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (24 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
 
 **Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.
 
-**Session 108 updates:** S28 (directory listing / traversal) **P1 blocker CLOSED** — `fs_dir_open`/`fs_dir_next`/`fs_dir_close` were added over new Windows runtime services (`rt_dir_open`/`rt_dir_next`/`rt_dir_close`, `FindFirstFileA`/`FindNextFileA`/`FindClose`), with `.`/`..` filtered so the stream matches `os.scandir()`. The handle is an owned allocation, so an unclosed enumeration is a leak (E-R06), consistent with MINK's ownership model. Permanent regression coverage: `tests/filesystem_lib.rs` d01–d11 (including 300 open/close cycles, a one-level walk, and the leak path). Every count above is recomputed from the rows.
+**Session 108 updates:** two P1 blockers **CLOSED** — **S28** (directory listing / traversal) and **S74** (logging) — taking the parity-blocking set from 26 to 24 and emptying Wave A.
+
+- **S28** adds `fs_dir_open`/`fs_dir_next`/`fs_dir_close` over new Windows runtime services (`rt_dir_open`/`rt_dir_next`/`rt_dir_close`, `FindFirstFileA`/`FindNextFileA`/`FindClose`), with `.`/`..` filtered so the stream matches `os.scandir()`. The handle is an owned allocation, so an unclosed enumeration is a leak (E-R06), consistent with MINK's ownership model. Regression coverage: `tests/filesystem_lib.rs` d01–d11.
+- **S74** adds `stdlib/logging.mink` (levels, threshold, one `LEVEL: message` record per call on stderr, level-name lookup both ways, `log_enabled`). The threshold lives in `MINK_LOG_LEVEL` because MINK has no mutable globals. Regression coverage: `tests/logging_lib.rs` l01–l13, plus `examples/log_util/main.mink` built and run through `mod logging;`.
+
+Every count in §10 was recomputed from the rows after both closures.
 
 **Session 107 updates:** L05 (Unicode text) **P1 blocker CLOSED** — the UTF-8 code-point layer (`utf8_validate`/`decode`/`encode`/`char_count`/`char_at`/`byte_index`/`slice`) was added, native-verified and leak-checked, fixing two latent defects on the way (heap-argument leak; acceptance of overlong 2-byte forms and surrogates). S01 (string methods) and L08 (lists) `P1` flags cleared after their Session 106/107 closures. Row flags reconciled against each row's own evidence for R06, W14, P02 and T06, and every count in §10 recomputed **from the rows** (stale aggregate tables and five rows with a missing trailing pipe were corrected). The npm stdlib bundle was re-synced (`str_split`/`str_join` plus the UTF-8 layer) with a permanent drift guard.
 
@@ -621,8 +626,8 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 Compiler pipeline and targets: `[code] src/{lexer,parser,ast,semantics,typecheck,ownership,hir,mir,monomorphize,backend}`, `src/backend/target.rs`.
 Entry/CLI: `[code] src/cli.rs`, `src/driver.rs`, `src/backend/mod.rs`. Modules: `src/module/mod.rs`.
 Runtime services/intrinsics: `[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`, `src/backend/emit/pe.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/{allocator,error,abi}.rs`.
-Standard library: `[code] stdlib/*.mink` (16 modules: collections, crypto, encoding, environment, filesystem, hashing, http, json, math, network, option, process, random, result, strings, time).
-Test suite (execution-verified native runs): `[test] tests/*.rs` (56 targets, 2547 tests) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, windows_hardening, release, cli, smoke.
+Standard library: `[code] stdlib/*.mink` (17 modules: collections, crypto, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, result, strings, time).
+Test suite (execution-verified native runs): `[test] tests/*.rs` (56 targets, 2547 tests) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, windows_hardening, release, cli, smoke.
 Recorded real execution: `[exec]` SESSION_92..97 docs (crypto vectors, HTTP POST byte-exact echo, process 1 MB drain, npm clean installs ×2, standalone exe) and this session's native probes (short-circuit, div-by-zero fault status 148).
 Specs/plans: `[doc] docs/core/*`, `docs/language/*`, `docs/ecosystem/*` (C_ABI_SPEC, PACKAGE_ARCHITECTURE, SECURITY_ARCHITECTURE, STDLIB_ARCHITECTURE), `docs/roadmap/*`, `docs/implementation/SESSION_*`.
 

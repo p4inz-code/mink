@@ -1,0 +1,158 @@
+# Session 108 — S28 Directory listing and S74 Logging (two P1 closures)
+
+**Predecessor:** Session 107 (L05 UTF-8 text layer) at `66e43639`.
+**Scope:** Windows x86_64 Python-capability parity. Linux untouched (frozen).
+**Effect:** parity-blocking P1 gaps 26 → 24; Wave A empty.
+
+---
+
+## 1. S28 — Directory listing / traversal (`os.listdir`, `os.scandir`, `os.walk`)
+
+### Capability
+
+Enumerate the entries of a directory through MINK's own runtime and stdlib,
+with the same user-facing shape as `os.scandir()`/`os.listdir()`.
+
+### Design (MINK-native)
+
+A streaming trio rather than a collected list:
+
+| Layer | Surface |
+|---|---|
+| Runtime service | `RuntimeService::{FsDirOpen, FsDirNext, FsDirClose}` |
+| Intrinsic | `rt_dir_open(path: Str) -> Int`, `rt_dir_next(handle: Int) -> Str`, `rt_dir_close(handle: Int) -> Int` |
+| Stdlib | `fs_dir_open`, `fs_dir_next`, `fs_dir_close` |
+
+- `rt_dir_open` appends `\*` to the path, calls `FindFirstFileA`, and returns
+  an opaque handle to a heap block holding the Win32 find handle plus the
+  `WIN32_FIND_DATAA` record. The handle is an `Int` because MINK's type
+  system has no pointer/null comparison, so `handle == 0` must be
+  expressible.
+- `rt_dir_next` calls `FindNextFileA`, copies `cFileName` into a fresh `Str`,
+  and skips the `FakeDirectoryEntries` `.` and `..` so the stream matches
+  `os.scandir()`/`os.listdir()`.
+- `rt_dir_close` calls `FindClose` and frees the handle block.
+- `os.walk` is built by composing the trio with `path_join`; no separate
+  runtime recursion is needed (proven by `d09`).
+
+The handle is an **owned allocation**, so forgetting `fs_dir_close` is
+reported by `rt_exit` as `E-R06` (leak) with exit code 106 — the same
+ownership rule as every other MINK allocation.
+
+### Verification (native Windows PE)
+
+Permanent regression: `tests/filesystem_lib.rs` `d01`–`d11`.
+
+| Test | Covers |
+|---|---|
+| d01 | entry count in a fixture tree (dot entries skipped) |
+| d02 | empty directory → 0 entries |
+| d03 | missing directory → handle 0 |
+| d04 | null handle: `next` returns empty, `close` returns -1 |
+| d05 | trailing path separator |
+| d06 | path containing a space |
+| d07 | two interleaved enumerations stay independent |
+| d08 | 300 open/enumerate/close cycles, no drift and no leak |
+| d09 | one-level walk via `path_join` + nested enumeration |
+| d10 | 45-entry directory |
+| d11 | unclosed handle → `E-R06`, exit 106 |
+
+### Known limits (documented, not parity-blocking for S28)
+
+- Entry order is filesystem order, not sorted.
+- Names are ANSI (`FindFirstFileA`), sharing the FS layer's MAX_PATH/ANSI
+  limits (see matrix W03).
+- No per-entry metadata (see S31) and no glob (see S29); a recursive
+  `os.walk` helper is buildable from the streaming trio and demonstrated.
+
+---
+
+## 2. S74 — Logging (Python `logging`)
+
+### Capability
+
+Leveled, threshold-filtered logging written to stderr.
+
+### Design (MINK-native)
+
+`stdlib/logging.mink` (mirrored byte-identically to
+`npm/mink/stdlib/logging.mink`):
+
+- Levels use Python's numeric values: DEBUG 10, INFO 20, WARNING 30,
+  ERROR 40, CRITICAL 50; `log_level_debug()`…`log_level_critical()` expose
+  them as functions.
+- `log_set_level` / `log_get_level` configure and read the threshold;
+  `log_set_level_name` accepts a name; `log_enabled` pre-checks a level.
+- `log_level_name` / `log_level_from_name` map between numeric levels and
+  canonical names (including the `WARN`/`CRIT` aliases).
+- `log_log(level, msg)` and the `log_debug`…`log_critical` wrappers write
+  exactly one `LEVEL: message\n` record to stderr via `rt_stderr_write`.
+- **Configuration storage:** MINK has no mutable globals, so the threshold
+  lives in the process environment as `MINK_LOG_LEVEL`. `log_set_level`
+  writes it and `log_get_level` reads it (default INFO when unset or empty).
+  This is deterministic, inspectable, and inherited by child processes —
+  chosen instead of introducing an unsound global.
+- Ownership: every function consumes its `Str` parameters and frees every
+  heap string it allocates; `l13` runs 50 heap-produced messages to prove
+  no leak or double free.
+
+### Verification (native Windows PE)
+
+Permanent regression: `tests/logging_lib.rs` `l01`–`l13`, capturing stdout
+and stderr separately from the real PE.
+
+| Test | Covers |
+|---|---|
+| l01 | default threshold emits INFO and above, exact stderr bytes |
+| l02 | raising the threshold suppresses lower levels |
+| l03 | CRITICAL visible at the highest threshold |
+| l04 | a suppressed record writes 0 bytes, an emitted one > 0 |
+| l05 | `log_level_from_name` for every name + alias + unknown |
+| l06 | `log_level_name` for every level + unknown → `LEVEL` |
+| l07 | `log_set_level_name` success, unknown name = -1, threshold persists |
+| l08 | `log_enabled` boundaries |
+| l09 | empty message → `INFO: \n` |
+| l10 | unknown numeric level → generic `LEVEL:` label |
+| l11 | 4000-byte message round-trips byte-exact |
+| l12 | 200 mixed calls, only the emitted level appears |
+| l13 | 50 heap messages, ownership clean |
+
+Real-world proof: `examples/log_util/main.mink` builds and runs through the
+public interface (`mod logging; use logging::log_info;`), emitting
+DEBUG/INFO/WARNING/ERROR records and suppressing the post-threshold INFO.
+
+### Known limits (documented, not parity-blocking for S74)
+
+- No handler/formatter/filter hierarchy, no file rotation.
+- No timestamps in the default format (a `strftime` prefix waits on S69).
+- No `%`-style record formatting.
+
+---
+
+## 3. Session verification summary
+
+| Command | Result |
+|---|---|
+| `cargo fmt --check` | clean |
+| `cargo clippy --all-targets` | no new findings |
+| `cargo build` / `cargo build --release` | clean |
+| `cargo test --test filesystem_lib` | 45 passed |
+| `cargo test --test logging_lib` | 13 passed |
+| `cargo test --test runtime` / `--test smoke` | 24 / 13 passed |
+| `cargo test --test backend` | 46 passed |
+| `cargo test --test release` | 67 passed (npm stdlib drift guard green) |
+| `cargo test --test cli modules_check optimization adversarial` | 211 passed |
+| npm mirror | `npm/mink/stdlib/` byte-identical to `stdlib/` (17 modules) |
+
+`windows_hardening` loopback tests (`tcp_mink_server_echo_repeated_connections`,
+`http_windows_post_exact_body_roundtrip`,
+`http_windows_split_server_multi_recv_and_errors`) fail only under parallel
+port contention: each passes in isolation (< 4 s). No network behavior was
+changed. This is the known flakiness class from Sessions 106/107.
+
+## 4. Matrix effect
+
+- S28: MISSING → **VERIFIED**; S74: MISSING → **VERIFIED** (`Blocks = N`).
+- Aggregates recomputed from the rows: VERIFIED 73 → **75**, MISSING 93 →
+  **91**, PARTIAL 37, total 232; P1 parity blockers 26 → **24**; rows
+  requiring work 171 → **169**; Wave A empty.
