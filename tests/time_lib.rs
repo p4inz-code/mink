@@ -1,7 +1,7 @@
 //! Tests for the MINK Time/Date library (Session 60).
 
 use std::process::Command;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -563,4 +563,287 @@ fn main() {
     assert_success(code, &out);
     let ints = all_ints(&out);
     assert_eq!(ints, vec![23, 59, 59]);
+}
+
+// ============================================================
+// S69 — strftime / strptime (Session 108)
+// ============================================================
+// These tests use the full stdlib/time.mink (prepended) so that the
+// time_strftime / time_strptime / time_epoch functions are available.
+
+static COUNTER2: AtomicUsize = AtomicUsize::new(0);
+
+fn time_lib() -> String {
+    std::fs::read_to_string("stdlib/time.mink").expect("failed to read stdlib/time.mink")
+}
+
+fn build_and_run_time(test_body: &str) -> (i32, String) {
+    let lib = time_lib();
+    let source = format!("{}\n{}", lib, test_body);
+    let id = COUNTER2.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("mink_time_s69_{}.mink", id));
+    std::fs::write(&path, &source).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_mink"))
+        .args(["build", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let exe = path.with_extension("exe");
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&exe);
+        return (-1, stderr);
+    }
+    let run = Command::new(&exe).output().unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout).to_string();
+    let code = run.status.code().unwrap_or(-1);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&exe);
+    (code, stdout)
+}
+
+fn lines_of(out: &str) -> Vec<String> {
+    out.lines()
+        .filter(|l| !l.is_empty() && !l.contains("runtime error") && !l.contains("memory leak"))
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+#[test]
+fn s69_strftime_y_m_d() {
+    let body = r#"
+fn main() {
+    let ts = time_epoch(2024, 3, 15, 10, 30, 45);
+    let d = time_strftime(ts, "%Y-%m-%d");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(lines_of(&out), vec!["2024-03-15"]);
+}
+
+#[test]
+fn s69_strftime_h_m_s() {
+    let body = r#"
+fn main() {
+    let ts = time_epoch(2024, 3, 15, 10, 30, 45);
+    let d = time_strftime(ts, "%H:%M:%S");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(lines_of(&out), vec!["10:30:45"]);
+}
+
+#[test]
+fn s69_strftime_percent_f() {
+    let body = r#"
+fn main() {
+    let ts = time_epoch(2000, 1, 1, 0, 0, 0);
+    let d = time_strftime(ts, "%F");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(lines_of(&out), vec!["2000-01-01"]);
+}
+
+#[test]
+fn s69_strftime_percent_t() {
+    let body = r#"
+fn main() {
+    let ts = time_epoch(1970, 1, 1, 23, 59, 59);
+    let d = time_strftime(ts, "%T");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(lines_of(&out), vec!["23:59:59"]);
+}
+
+#[test]
+fn s69_strftime_epoch_zero() {
+    let body = r#"
+fn main() {
+    let d = time_strftime(0, "%Y-%m-%d %T");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(lines_of(&out), vec!["1970-01-01 00:00:00"]);
+}
+
+#[test]
+fn s69_strptime_iso_date() {
+    let body = r#"
+fn main() {
+    let (p, ok) = time_strptime("2024-03-15", "%F");
+    rt_print_int(p);
+    let mut ok_i = 0;
+    if ok { ok_i = 1; }
+    rt_print_int(ok_i);
+    // Verify round-trip
+    let d = time_strftime(p, "%F");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    let ints = all_ints(&out);
+    // epoch for 2024-03-15 00:00:00 UTC, ok=1
+    assert_eq!(ints[1], 1, "parse should succeed");
+    assert_eq!(lines_of(&out)[2], "2024-03-15", "round-trip must match");
+}
+
+#[test]
+fn s69_strptime_epoch_zero_round_trip() {
+    let body = r#"
+fn main() {
+    let (p, ok) = time_strptime("1970-01-01", "%F");
+    let mut ok_i = 0;
+    if ok { ok_i = 1; }
+    rt_print_int(ok_i);
+    rt_print_int(p);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    let ints = all_ints(&out);
+    assert_eq!(ints, vec![1, 0]);
+}
+
+#[test]
+fn s69_strptime_invalid_input_fails() {
+    let body = r#"
+fn main() {
+    let (p, ok) = time_strptime("not-a-date", "%F");
+    let mut ok_i = 0;
+    if ok { ok_i = 1; }
+    rt_print_int(ok_i);
+    rt_print_int(p);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    let ints = all_ints(&out);
+    assert_eq!(ints, vec![0, 0]);
+}
+
+#[test]
+fn s69_strftime_weekday_name() {
+    let body = r#"
+fn main() {
+    // 2024-03-15 = Friday
+    let ts = time_epoch(2024, 3, 15, 12, 0, 0);
+    let d = time_strftime(ts, "%A");
+    rt_print_str(d);
+    rt_str_free(d);
+    let a = time_strftime(ts, "%a");
+    rt_print_str(a);
+    rt_str_free(a);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(lines_of(&out), vec!["Friday", "Fri"]);
+}
+
+#[test]
+fn s69_strftime_month_names() {
+    let body = r#"
+fn main() {
+    let ts = time_epoch(2024, 1, 1, 0, 0, 0);
+    let b = time_strftime(ts, "%B");
+    rt_print_str(b);
+    rt_str_free(b);
+    let ab = time_strftime(ts, "%b");
+    rt_print_str(ab);
+    rt_str_free(ab);
+    let ts2 = time_epoch(2024, 12, 25, 0, 0, 0);
+    let b2 = time_strftime(ts2, "%B");
+    rt_print_str(b2);
+    rt_str_free(b2);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(lines_of(&out), vec!["January", "Jan", "December"]);
+}
+
+#[test]
+fn s69_strftime_literal_percent() {
+    let body = r#"
+fn main() {
+    let ts = time_epoch(2024, 6, 1, 0, 0, 0);
+    let d = time_strftime(ts, "100%%");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(lines_of(&out), vec!["100%"]);
+}
+
+#[test]
+fn s69_strptime_with_time() {
+    let body = r#"
+fn main() {
+    let (p, ok) = time_strptime("14:30:00", "%T");
+    let mut ok_i = 0;
+    if ok { ok_i = 1; }
+    rt_print_int(ok_i);
+    let d = time_strftime(p, "%T");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    let lines = lines_of(&out);
+    assert_eq!(lines[0], "1", "parse should succeed");
+    assert_eq!(lines[1], "14:30:00", "round-trip must match");
+}
+
+#[test]
+fn s69_ownership_repeated_strftime() {
+    let body = r#"
+fn main() {
+    let mut i = 0;
+    while i < 200 {
+        let ts = time_epoch(2000, 1, 1, 0, 0, 0);
+        let d = time_strftime(ts, "%Y-%m-%d %H:%M:%S");
+        rt_str_free(d);
+        i = i + 1;
+    }
+    rt_print_int(1);
+    rt_exit(0);
+}
+"#;
+    let (code, out) = build_and_run_time(body);
+    assert_success(code, &out);
+    assert_eq!(all_ints(&out), vec![1]);
 }

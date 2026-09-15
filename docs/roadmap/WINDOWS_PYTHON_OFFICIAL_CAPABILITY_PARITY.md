@@ -377,7 +377,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | S66 | Epoch/time/monotonic | VERIFIED | see R29 | None | - | - | N | - | |
 | S67 | Date/time decomposition + arithmetic | PARTIAL | year/month/day/hour/min/sec/weekday, leap-year, days-in-month, diff/add (`[code] stdlib/time.mink`) | No date structs/parsing, no timedelta | P2 | M | N | C | |
 | S68 | Timezone | MISSING | UTC epoch only | TZ handling, DST | P2 | M | N | C | Windows TZ API exists |
-| S69 | Formatting / parsing (`strftime`/`strptime`) | PARTIAL | single fixed `time_format(ts)` | Pattern-based formatting + parse-back | P1 | M | Y | C | High daily-use; pattern engine M |
+| S69 | Formatting / parsing (`strftime`/`strptime`) | VERIFIED | `stdlib/time.mink`: `time_strftime(ts, fmt)` renders any strftime-style pattern (year/month/day/hour/min/sec/weekday/month names + %F/%T/%%); `time_strptime(s, fmt)` parses numeric directives + %F/%T/%% back to epoch seconds with full validation; `time_epoch(y,mo,d,h,mi,s)` for direct epoch construction (`[code] stdlib/time.mink`, `npm/mink/stdlib/time.mink`; `[test] tests/time_lib.rs` s69_strftime_y_m_d..s69_ownership_repeated_strftime: 13 tests covering %Y-%m-%d, %H:%M:%S, %F, %T, epoch zero, round-trip parse+format, invalid input rejection, weekday names (%A/%a), month names (%B/%b), literal %%), ownership 200-call run; `[exec]` native PE runs | Name directives (%A/%a/%B/%b) formatting-only (no parse-back), no locale support | - | M | N | C | Delivered in Session 108 |
 | S70 | Sleep / timers | VERIFIED | see R23 — `rt_sleep(ms)` | None | - | - | N | - | |
 
 ### 5.14 Concurrency / async

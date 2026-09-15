@@ -259,3 +259,384 @@ fn time_format(ts: Int) -> Str {
 
     return p13;
 }
+
+// ============================================================
+// Pattern formatting / parsing (Session 108, S69)
+// ============================================================
+// `time_strftime(ts, fmt)` renders a timestamp through a strftime-style
+// pattern; `time_strptime(s, fmt)` parses one back into epoch seconds.
+//
+// Supported directives:
+//   %Y 4-digit year      %y 2-digit year      %m month (01-12)
+//   %d day (01-31)       %H hour (00-23)      %M minute (00-59)
+//   %S second (00-60)    %A weekday name      %a weekday abbreviation
+//   %B month name        %b month abbreviation
+//   %F = %Y-%m-%d        %T = %H:%M:%S         %% literal '%'
+//
+// Unsupported directives are emitted verbatim by `time_strftime`.
+// `time_strptime` accepts the numeric directives plus %F/%T/%%; the name
+// directives (%A/%a/%B/%b) are formatting-only.
+//
+// Weekday numbering matches C's struct tm: 0 = Sunday .. 6 = Saturday.
+// All conversions are UTC, matching the rest of this module.
+
+/// Expand an Int to exactly four decimal digits (0..9999).
+fn time_pad4(n: Int) -> Str {
+    let mut v = n;
+    if v < 0 { v = 0; }
+    if v > 9999 { v = 9999; }
+    let d1 = (v / 1000) - (v / 10000) * 10;
+    let d2 = (v / 100) - (v / 1000) * 10;
+    let d3 = (v / 10) - (v / 100) * 10;
+    let d4 = v - (v / 10) * 10;
+    let s1 = rt_str_from_int(d1);
+    let s2 = rt_str_from_int(d2);
+    let a = rt_str_concat(s1, s2);
+    rt_str_free(s1);
+    rt_str_free(s2);
+    let s3 = rt_str_from_int(d3);
+    let b = rt_str_concat(a, s3);
+    rt_str_free(a);
+    rt_str_free(s3);
+    let s4 = rt_str_from_int(d4);
+    let c = rt_str_concat(b, s4);
+    rt_str_free(b);
+    rt_str_free(s4);
+    return c;
+}
+
+/// Internal: a one-byte Str holding `b`.
+fn time_byte_str(b: Int) -> Str {
+    let s = rt_str_alloc(1);
+    rt_str_set_byte(s, 0, b);
+    return s;
+}
+
+fn time_month_name(m: Int) -> Str {
+    let mut n = "Unknown";
+    if m == 1 { n = "January"; }
+    if m == 2 { n = "February"; }
+    if m == 3 { n = "March"; }
+    if m == 4 { n = "April"; }
+    if m == 5 { n = "May"; }
+    if m == 6 { n = "June"; }
+    if m == 7 { n = "July"; }
+    if m == 8 { n = "August"; }
+    if m == 9 { n = "September"; }
+    if m == 10 { n = "October"; }
+    if m == 11 { n = "November"; }
+    if m == 12 { n = "December"; }
+    return n;
+}
+
+fn time_month_abbr(m: Int) -> Str {
+    let mut n = "Unk";
+    if m == 1 { n = "Jan"; }
+    if m == 2 { n = "Feb"; }
+    if m == 3 { n = "Mar"; }
+    if m == 4 { n = "Apr"; }
+    if m == 5 { n = "May"; }
+    if m == 6 { n = "Jun"; }
+    if m == 7 { n = "Jul"; }
+    if m == 8 { n = "Aug"; }
+    if m == 9 { n = "Sep"; }
+    if m == 10 { n = "Oct"; }
+    if m == 11 { n = "Nov"; }
+    if m == 12 { n = "Dec"; }
+    return n;
+}
+
+fn time_weekday_name(w: Int) -> Str {
+    let mut n = "Unknown";
+    if w == 0 { n = "Sunday"; }
+    if w == 1 { n = "Monday"; }
+    if w == 2 { n = "Tuesday"; }
+    if w == 3 { n = "Wednesday"; }
+    if w == 4 { n = "Thursday"; }
+    if w == 5 { n = "Friday"; }
+    if w == 6 { n = "Saturday"; }
+    return n;
+}
+
+fn time_weekday_abbr(w: Int) -> Str {
+    let mut n = "Unk";
+    if w == 0 { n = "Sun"; }
+    if w == 1 { n = "Mon"; }
+    if w == 2 { n = "Tue"; }
+    if w == 3 { n = "Wed"; }
+    if w == 4 { n = "Thu"; }
+    if w == 5 { n = "Fri"; }
+    if w == 6 { n = "Sat"; }
+    return n;
+}
+
+/// Render the expansion of a single `%` directive.
+fn time_strftime_directive(ts: Int, c: Int) -> Str {
+    if c == 89 { return time_pad4(time_year(ts)); }
+    if c == 121 {
+        let y = time_year(ts);
+        return _pad2(y - (y / 100) * 100);
+    }
+    if c == 109 { return _pad2(time_month(ts)); }
+    if c == 100 { return _pad2(time_day(ts)); }
+    if c == 72 { return _pad2(time_hour(ts)); }
+    if c == 77 { return _pad2(time_minute(ts)); }
+    if c == 83 { return _pad2(time_second(ts)); }
+    if c == 65 { return time_weekday_name(time_weekday(ts)); }
+    if c == 97 { return time_weekday_abbr(time_weekday(ts)); }
+    if c == 66 { return time_month_name(time_month(ts)); }
+    if c == 98 { return time_month_abbr(time_month(ts)); }
+    if c == 37 { return time_byte_str(37); }
+    if c == 70 {
+        // %F = %Y-%m-%d
+        let y = time_pad4(time_year(ts));
+        let one = rt_str_concat(y, "-");
+        rt_str_free(y);
+        let m = _pad2(time_month(ts));
+        let two = rt_str_concat(one, m);
+        rt_str_free(one);
+        rt_str_free(m);
+        let dash = rt_str_concat(two, "-");
+        rt_str_free(two);
+        let d = _pad2(time_day(ts));
+        let full = rt_str_concat(dash, d);
+        rt_str_free(dash);
+        rt_str_free(d);
+        return full;
+    }
+    if c == 84 {
+        // %T = %H:%M:%S
+        let h = _pad2(time_hour(ts));
+        let one = rt_str_concat(h, ":");
+        rt_str_free(h);
+        let m = _pad2(time_minute(ts));
+        let two = rt_str_concat(one, m);
+        rt_str_free(one);
+        rt_str_free(m);
+        let colon = rt_str_concat(two, ":");
+        rt_str_free(two);
+        let s = _pad2(time_second(ts));
+        let full = rt_str_concat(colon, s);
+        rt_str_free(colon);
+        rt_str_free(s);
+        return full;
+    }
+    // Unknown directive: reproduce it verbatim.
+    let pct = time_byte_str(37);
+    let ch = time_byte_str(c);
+    let out = rt_str_concat(pct, ch);
+    rt_str_free(pct);
+    rt_str_free(ch);
+    return out;
+}
+
+/// time_strftime(ts, fmt): render `ts` through an strftime-style pattern.
+/// Consumes `fmt`; returns a new string the caller owns.
+fn time_strftime(ts: Int, fmt: Str) -> Str {
+    let n = rt_str_len(fmt);
+    let mut out = rt_str_alloc(0);
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(fmt, i);
+        if b == 37 {
+            let mut c = 0;
+            if i + 1 < n { c = rt_str_byte(fmt, i + 1); }
+            let piece = time_strftime_directive(ts, c);
+            let merged = rt_str_concat(out, piece);
+            rt_str_free(out);
+            rt_str_free(piece);
+            out = merged;
+            i = i + 2;
+        } else {
+            let ch = time_byte_str(b);
+            let merged = rt_str_concat(out, ch);
+            rt_str_free(out);
+            rt_str_free(ch);
+            out = merged;
+            i = i + 1;
+        }
+    }
+    rt_str_free(fmt);
+    return out;
+}
+
+/// Internal: two ASCII digits to an Int, or -1 when either byte is not a
+/// digit.
+fn time_digits(hi: Int, lo: Int) -> Int {
+    let mut r = -1;
+    if hi >= 48 {
+        if hi <= 57 {
+            if lo >= 48 {
+                if lo <= 57 {
+                    r = (hi - 48) * 10 + (lo - 48);
+                }
+            }
+        }
+    }
+    return r;
+}
+
+/// Hinnant's `days_from_civil`: days since the Unix epoch for a proleptic
+/// Gregorian date (years >= 0).
+fn time_days_from_civil(y0: Int, m: Int, d: Int) -> Int {
+    let mut y = y0;
+    if m <= 2 { y = y0 - 1; }
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let mut mp = m + 9;
+    if m > 2 { mp = m - 3; }
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+/// time_epoch(y, mo, d, h, mi, s): epoch seconds for a UTC civil date.
+fn time_epoch(y: Int, mo: Int, d: Int, h: Int, mi: Int, s: Int) -> Int {
+    return time_days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s;
+}
+
+/// time_strptime(s, fmt): parse `s` against an strftime-style pattern and
+/// return `(epoch_seconds, ok)`. Numeric directives plus %F/%T/%% are
+/// supported; name directives are formatting-only. The whole input must be
+/// consumed and the resulting fields must be in range. Consumes `s` and
+/// `fmt`.
+fn time_strptime(s: Str, fmt: Str) -> (Int, Bool) {
+    let slen = rt_str_len(s);
+    let flen = rt_str_len(fmt);
+    let mut si = 0;
+    let mut fi = 0;
+    let mut ok = true;
+    let mut y = 1970;
+    let mut mo = 1;
+    let mut d = 1;
+    let mut h = 0;
+    let mut mi = 0;
+    let mut sec = 0;
+    while fi < flen {
+        if ok {
+            let fb = rt_str_byte(fmt, fi);
+            if fb == 37 {
+                let mut c = 0;
+                if fi + 1 < flen { c = rt_str_byte(fmt, fi + 1); }
+                fi = fi + 2;
+                if c == 89 {
+                    if si + 4 <= slen {
+                        let v1 = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                        let v2 = time_digits(rt_str_byte(s, si + 2), rt_str_byte(s, si + 3));
+                        if v1 < 0 { ok = false; }
+                        if v2 < 0 { ok = false; }
+                        if ok { y = v1 * 100 + v2; si = si + 4; }
+                    } else { ok = false; }
+                } else {
+                    if c == 121 {
+                        if si + 2 <= slen {
+                            let v = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                            if v < 0 { ok = false; } else { y = 1900 + v; si = si + 2; }
+                        } else { ok = false; }
+                    } else {
+                        if c == 109 {
+                            if si + 2 <= slen {
+                                let v = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                                if v < 0 { ok = false; } else { mo = v; si = si + 2; }
+                            } else { ok = false; }
+                        } else {
+                            if c == 100 {
+                                if si + 2 <= slen {
+                                    let v = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                                    if v < 0 { ok = false; } else { d = v; si = si + 2; }
+                                } else { ok = false; }
+                            } else {
+                                if c == 72 {
+                                    if si + 2 <= slen {
+                                        let v = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                                        if v < 0 { ok = false; } else { h = v; si = si + 2; }
+                                    } else { ok = false; }
+                                } else {
+                                    if c == 77 {
+                                        if si + 2 <= slen {
+                                            let v = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                                            if v < 0 { ok = false; } else { mi = v; si = si + 2; }
+                                        } else { ok = false; }
+                                    } else {
+                                        if c == 83 {
+                                            if si + 2 <= slen {
+                                                let v = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                                                if v < 0 { ok = false; } else { sec = v; si = si + 2; }
+                                            } else { ok = false; }
+                                        } else {
+                                            if c == 37 {
+                                                if si < slen {
+                                                    if rt_str_byte(s, si) == 37 { si = si + 1; } else { ok = false; }
+                                                } else { ok = false; }
+                                            } else {
+                                                // %F / %T expand to fixed patterns; handle the
+                                                // common composite forms by re-reading the input.
+                                                if c == 70 {
+                                                    // YYYY-MM-DD
+                                                    if si + 10 <= slen {
+                                                        let v1 = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                                                        let v2 = time_digits(rt_str_byte(s, si + 2), rt_str_byte(s, si + 3));
+                                                        let vm = time_digits(rt_str_byte(s, si + 5), rt_str_byte(s, si + 6));
+                                                        let vd = time_digits(rt_str_byte(s, si + 8), rt_str_byte(s, si + 9));
+                                                        if rt_str_byte(s, si + 4) != 45 { ok = false; }
+                                                        if rt_str_byte(s, si + 7) != 45 { ok = false; }
+                                                        if v1 < 0 { ok = false; }
+                                                        if v2 < 0 { ok = false; }
+                                                        if vm < 0 { ok = false; }
+                                                        if vd < 0 { ok = false; }
+                                                        if ok { y = v1 * 100 + v2; mo = vm; d = vd; si = si + 10; }
+                                                    } else { ok = false; }
+                                                } else {
+                                                    if c == 84 {
+                                                        // HH:MM:SS
+                                                        if si + 8 <= slen {
+                                                            let vh = time_digits(rt_str_byte(s, si), rt_str_byte(s, si + 1));
+                                                            let vi = time_digits(rt_str_byte(s, si + 3), rt_str_byte(s, si + 4));
+                                                            let vs = time_digits(rt_str_byte(s, si + 6), rt_str_byte(s, si + 7));
+                                                            if rt_str_byte(s, si + 2) != 58 { ok = false; }
+                                                            if rt_str_byte(s, si + 5) != 58 { ok = false; }
+                                                            if vh < 0 { ok = false; }
+                                                            if vi < 0 { ok = false; }
+                                                            if vs < 0 { ok = false; }
+                                                            if ok { h = vh; mi = vi; sec = vs; si = si + 8; }
+                                                        } else { ok = false; }
+                                                    } else { ok = false; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                if si < slen {
+                    if rt_str_byte(s, si) == fb {
+                        si = si + 1;
+                        fi = fi + 1;
+                    } else { ok = false; }
+                } else { ok = false; }
+            }
+        } else {
+            fi = flen;
+        }
+    }
+    if si != slen { ok = false; }
+    if mo < 1 { ok = false; }
+    if mo > 12 { ok = false; }
+    let dim = time_days_in_month(y, mo);
+    if d < 1 { ok = false; }
+    if d > dim { ok = false; }
+    if h < 0 { ok = false; }
+    if h > 23 { ok = false; }
+    if mi < 0 { ok = false; }
+    if mi > 59 { ok = false; }
+    if sec < 0 { ok = false; }
+    if sec > 60 { ok = false; }
+    let mut epoch = 0;
+    if ok { epoch = time_epoch(y, mo, d, h, mi, sec); }
+    rt_str_free(s);
+    rt_str_free(fmt);
+    return (epoch, ok);
+}
