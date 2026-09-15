@@ -396,7 +396,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | S75 | Unit-test framework in MINK | MISSING | Rust-hosted suite only | `mink test` + assert macros | P1 | M | Y | G | Tooling row T09 is the same gap |
 | S76 | Profiling | MISSING | none | Timing/profiling tools | P2 | L | N | G | |
 | S77 | Runtime diagnostics / tracing hooks | MISSING | leak checker + error codes only | Tracing | P2 | M | N | G | |
-| S78 | Assertions for tests | MISSING | none | assert_eq/assert_true | P1 | S | Y | G | Part of S75 |
+| S78 | Assertions for tests | VERIFIED | `stdlib/assert.mink`: `assert_true(cond)`, `assert_false(cond)`, `assert_eq_int(a,b)`, `assert_ne_int(a,b)`, `assert_eq_str(a,b)`, `assert_ne_str(a,b)`, `assert_eq_float(a,b)` — on failure: diagnostic to stderr, exit 1; on success: silent (`[code] stdlib/assert.mink`, `npm/mink/stdlib/assert.mink`; `[test] tests/assert_lib.rs` a01-a30: 16 tests covering pass/fail paths for all assertion functions, zero/int64-extremes/empty-string boundaries, diagnostic content validation, 200-call ownership run; `[exec]` native PE runs) | No deep-equality or struct comparison (use `assert_eq_int`/`assert_eq_str` field-by-field); no `assert_ne_float`; no custom failure messages | - | S | Y | G | Delivered in Session 108. Foundation for S75/T07 test framework |
 
 ---
 

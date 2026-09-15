@@ -1,0 +1,85 @@
+// ============================================================
+// MINK assert library — Session 108 (S78)
+// ============================================================
+// Provides assert_eq, assert_ne, assert_true, assert_false for
+// MINK-native test assertions.
+//
+// On failure: prints a diagnostic to stderr and exits with code 1.
+// On success: silent (exit 0 from caller).
+//
+// All comparisons are value-based.
+// Strings compared byte-by-byte via rt_str_eq.
+
+/// assert_true(cond): pass if cond is true, else fail with diagnostic.
+fn assert_true(cond: Bool) {
+    if !cond {
+        rt_print_str("assertion failed: expected true\n");
+        rt_exit(1);
+    }
+}
+
+/// assert_false(cond): pass if cond is false, else fail with diagnostic.
+fn assert_false(cond: Bool) {
+    if cond {
+        rt_print_str("assertion failed: expected false\n");
+        rt_exit(1);
+    }
+}
+
+/// assert_eq_int(a, b): pass if a == b, else fail with both values.
+fn assert_eq_int(a: Int, b: Int) {
+    if a != b {
+        rt_print_str("assertion failed: expected ");
+        let sa = rt_str_from_int(a);
+        rt_print_str(sa);
+        rt_str_free(sa);
+        rt_print_str(", got ");
+        let sb = rt_str_from_int(b);
+        rt_print_str(sb);
+        rt_str_free(sb);
+        rt_print_str("\n");
+        rt_exit(1);
+    }
+}
+
+/// assert_ne_int(a, b): pass if a != b, else fail.
+fn assert_ne_int(a: Int, b: Int) {
+    if a == b {
+        rt_print_str("assertion failed: values are equal (");
+        let sa = rt_str_from_int(a);
+        rt_print_str(sa);
+        rt_str_free(sa);
+        rt_print_str(")\n");
+        rt_exit(1);
+    }
+}
+
+/// assert_eq_str(a, b): pass if strings are byte-equal, else fail.
+fn assert_eq_str(a: Str, b: Str) {
+    if !rt_str_eq(a, b) {
+        rt_print_str("assertion failed: strings differ\n");
+        rt_print_str("  expected: \"");
+        rt_print_str(b);
+        rt_print_str("\"\n");
+        rt_print_str("  got:      \"");
+        rt_print_str(a);
+        rt_print_str("\"\n");
+        rt_exit(1);
+    }
+}
+
+/// assert_ne_str(a, b): pass if strings differ, else fail.
+fn assert_ne_str(a: Str, b: Str) {
+    if rt_str_eq(a, b) {
+        rt_print_str("assertion failed: strings are equal\n");
+        rt_exit(1);
+    }
+}
+
+/// assert_eq_float(a, b): pass if a == b (exact), else fail.
+fn assert_eq_float(a: Float, b: Float) {
+    if a != b {
+        rt_print_str("assertion failed: floats differ\n");
+        rt_exit(1);
+    }
+}
