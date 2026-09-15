@@ -3,17 +3,18 @@
 **Session:** 98 (with a Session 107 reconciliation note) · **Starting commit:** `a716df4` · **MINK version:** 1.0.1
 **Input:** `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md` (the master matrix,
 232 audited capability rows). Session 98 planning baseline: 175 rows requiring work, 44
-parity-blocking P1 gaps. **Current, evidence-derived figures (Session 107): 171 rows
-requiring work, 26 parity-blocking P1 gaps.**
+parity-blocking P1 gaps. **Current, evidence-derived figures (Session 108): 171 rows
+requiring work, 18 parity-blocking P1 gaps.**
 **Date:** September 4, 2026
 
-> **Session 107 note.** This plan is the Session 98 sequencing document. The wave map in
+> **Session 108 note.** This plan is the Session 98 sequencing document. The wave map in
 > §1, the per-wave blocker counts in §6, and the "44 today" reference in §0 are the
 > Session 98 baseline, kept for traceability. The matrix §10 (10.1-10.7) is authoritative
-> for current counts: 26 blockers, distributed A 1 · B 4 · C 2 · D 4 · E 4 · F 6 · G 5
-> (§10.4). The rows delivered across Sessions 99-107 no longer appear in that list. The
-> Session 107 additions were the UTF-8 text layer (L05) and the reconciliation of stale
-> `P1`/`Blocks = Y` flags on already-verified rows (R06, W14, P02, T06).
+> for current counts: **18 blockers** (down from 26 at Session 107). Session 108 closed
+> 8 P1 blockers: S28 (directory enumeration), S74 (logging), S06 (string parsing),
+> S36 (CSV), S69 (strftime/strptime), S78 (assertions), S75 (test framework),
+> T07 (test runner). The rows delivered across Sessions 99-108 no longer appear in
+> that list.
 
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
@@ -146,7 +147,7 @@ earlier wave.
 | H | 0 | ~10 | 3-4-5 (calendar-parallel) |
 | I | 0 | ~8 apps | 4-5-7 |
 | J | 0 | re-audit | 1-2-2 |
-| **Total** | **44 at the Session 98 baseline · 26 as of Session 107** (matrix §10.4; all unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** (Session 98 estimate) |
+| **Total** | **44 at the Session 98 baseline · 18 as of Session 108** (matrix §10.4; all unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** (Session 98 estimate) |
 
 Interpretation:
 
