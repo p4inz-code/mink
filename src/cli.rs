@@ -27,6 +27,7 @@ Commands:
   run <path>      Compile and execute a MINK source file
   check <path> [--json]
                   Analyze a MINK source file without producing output
+  test <path>     Discover and run test functions (fn test_*) in a source file
   explain [code]  Explain an error code (e.g., mink explain E-T01);
                   with no code, list all documented error codes
   version         Print the compiler version
@@ -43,6 +44,7 @@ Examples:
   mink run hello.mink        Compile and run a program
   mink build hello.mink      Compile without running
   mink check hello.mink      Check for errors
+  mink test hello.mink       Run test functions in hello.mink
   mink explain E-T01         Explain error E-T01
 
 Exit codes:
@@ -57,6 +59,7 @@ enum Command {
     Build { path: PathBuf, target: Target },
     Run { path: PathBuf, target: Target },
     Check { path: PathBuf, json: bool },
+    Test { path: PathBuf, target: Target },
     Explain { code: Option<String> },
 }
 
@@ -214,6 +217,7 @@ pub fn main(args: &[String]) -> ExitCode {
                 }
             }
         }
+        Ok(Command::Test { path, target }) => run_test_command(&path, target),
         Err(message) => {
             eprintln!("mink: error: {message}");
             eprintln!("Run 'mink help' for usage.");
@@ -409,6 +413,212 @@ fn parse(args: &[String]) -> Result<Command, String> {
             Ok(Command::Explain { code })
         }
         "run" => parse_run(&args[1..]),
+        "test" => parse_build(&args[1..]).map(|cmd| match cmd {
+            Command::Build { path, target } => Command::Test { path, target },
+            _ => unreachable!(),
+        }),
         other => Err(format!("unknown command '{other}'")),
+    }
+}
+
+/// Strips the `fn main()` function from source text so the test runner
+/// can replace it with its own wrapper. This is a simple brace-counting
+/// approach — it finds `fn main()` and skips to the matching closing brace
+/// at the top level.
+fn strip_main_fn(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut result = Vec::new();
+    let mut skip = false;
+    let mut brace_depth = 0i32;
+
+    for line in &lines {
+        if skip {
+            // Count braces to find the end of the function body.
+            for ch in line.chars() {
+                match ch {
+                    '{' => brace_depth += 1,
+                    '}' => {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            skip = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("fn main") {
+                // Check if this line opens a body.
+                if line.contains('{') {
+                    skip = true;
+                    for ch in line.chars() {
+                        match ch {
+                            '{' => brace_depth += 1,
+                            '}' => {
+                                brace_depth -= 1;
+                                if brace_depth == 0 {
+                                    skip = false;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            } else {
+                result.push(*line);
+            }
+        }
+    }
+    result.join("\n")
+}
+
+/// Discovers `fn test_*()` functions in `path` and runs each one as a
+/// separate build+run cycle. Reports pass/fail counts.
+fn run_test_command(path: &PathBuf, target: Target) -> ExitCode {
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("mink: error: failed to read '{}': {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+
+    // Discover test functions by scanning for `fn test_` at the start of a line
+    // (or after whitespace).  We require the function name to start with
+    // `test_` and take no parameters (aside from the implicit unit return).
+    let mut test_names: Vec<String> = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("fn test_") {
+            // Extract function name: `fn test_xxx(...`
+            if let Some(rest) = trimmed.strip_prefix("fn ") {
+                if let Some(name_end) = rest.find('(') {
+                    let name = rest[..name_end].trim().to_string();
+                    // Only accept zero-parameter test functions.
+                    if !name.is_empty() && !rest[name_end..].contains(':') {
+                        test_names.push(name);
+                    }
+                }
+            }
+        }
+    }
+
+    if test_names.is_empty() {
+        eprintln!("mink: no test functions found in '{}'", path.display());
+        eprintln!("Test functions must be named `fn test_*(...)`.");
+        return ExitCode::from(1);
+    }
+
+    println!(
+        "mink: test: found {} test(s) in '{}'",
+        test_names.len(),
+        path.display()
+    );
+
+    let mut passed = 0u32;
+    let mut failed = 0u32;
+    let mut failures: Vec<String> = Vec::new();
+
+    // Strip any existing `fn main` from the source so the wrapper can provide its own.
+    let source_no_main = strip_main_fn(&source);
+
+    for test_name in &test_names {
+        // Build a wrapper source that includes the original source (minus main)
+        // and adds a main function calling the test function.
+        let wrapper = format!(
+            "{}\n\nfn main() {{\n    {}();\n    rt_exit(0);\n}}\n",
+            source_no_main, test_name
+        );
+
+        let wrapper_path = std::env::temp_dir().join(format!("mink_test_{}.mink", test_name));
+        if let Err(e) = std::fs::write(&wrapper_path, &wrapper) {
+            eprintln!("mink: error: failed to write temp file: {e}");
+            failed += 1;
+            failures.push(test_name.clone());
+            continue;
+        }
+
+        let mut sources = SourceMap::new();
+        let options = driver::BuildOptions { target };
+        match driver::build(&mut sources, &wrapper_path, options) {
+            Ok(outcome) => {
+                // Run the test executable.
+                let result = std::process::Command::new(&outcome.output).output();
+                let _ = std::fs::remove_file(&wrapper_path);
+                let _ = std::fs::remove_file(&outcome.output);
+                match result {
+                    Ok(output) => {
+                        let code = output.status.code().unwrap_or(1);
+                        if code == 0 {
+                            println!("  PASS: {test_name}");
+                            passed += 1;
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                            let combined = format!("{stdout}{stderr}");
+                            // Extract the first meaningful line for the failure message.
+                            let msg = combined
+                                .lines()
+                                .find(|l| !l.is_empty())
+                                .unwrap_or("(no output)");
+                            println!("  FAIL: {test_name} — {msg}");
+                            failed += 1;
+                            failures.push(test_name.clone());
+                        }
+                    }
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&wrapper_path);
+                        eprintln!("  FAIL: {test_name} — failed to execute: {e}");
+                        failed += 1;
+                        failures.push(test_name.clone());
+                    }
+                }
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&wrapper_path);
+                let msg = match error {
+                    BuildError::FrontEnd(report) => {
+                        // Collect error descriptions.
+                        report
+                            .errors
+                            .iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                    BuildError::Backend(errors) => errors
+                        .iter()
+                        .map(|e| format!("{e}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    _ => format!("{error}"),
+                };
+                println!("  FAIL: {test_name} — compile error: {msg}");
+                failed += 1;
+                failures.push(test_name.clone());
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "mink: test result: {} passed, {} failed, {} total",
+        passed,
+        failed,
+        passed + failed
+    );
+
+    if !failures.is_empty() {
+        println!("Failed tests:");
+        for name in &failures {
+            println!("  {name}");
+        }
+    }
+
+    if failed > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }
