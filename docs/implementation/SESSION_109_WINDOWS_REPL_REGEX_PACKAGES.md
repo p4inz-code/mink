@@ -104,17 +104,57 @@ leak check runs at exit.
 | `aggregate_returns` | 52 passed, 0 failed |
 | `json` | 61 passed, 0 failed |
 | `scalar_types` | 27 passed, 0 failed |
+| `strings_lib` | 83 passed, **2 failed — spawn failure, see §4 note** |
 | `cargo fmt --check` | clean |
 | `cargo clippy --all-targets` | exit 0; no new warnings from this session's changes |
 
-### Known infrastructure flake (classified, not product)
+### Known infrastructure failure: Windows Defender false positive (classified, not product)
 
-Three `strings_lib` tests (`p04_parse_int_invalid`, `s31_to_upper`, `s38_reverse`)
-failed under a full parallel run and pass 3/3 in isolation. The cause is external:
-Windows Defender quarantined the harness's temp executables mid-run
-(`mink_str_test_*.exe` / `*.mink` in `%TEMP%`, visible in the Defender protection
-history). This is a test-harness/environment issue, not a product failure; the
-affected capability is not marked VERIFIED on the strength of a failing run.
+`tests/strings_lib.rs` reported 83 passed / 2 failed (`s31_to_upper`, `s38_reverse`)
+under parallel execution; both pass in isolation, and `p04_parse_int_invalid`
+recovered after the quarantined files were restored manually. Both remaining
+failures panic at `tests/strings_lib.rs:46:43`:
+
+```rust
+let run = Command::new(&exe).output().unwrap();   // line 46
+```
+
+That is a **spawn failure, not an assertion failure** — the build step is reported
+successful and the executable is then gone.
+
+Decisive reproduction (a probe program written to `%TEMP%`):
+
+```
+mink: build: 'C:/Users/Admin/AppData/Local/Temp/mink_av_probe_19.mink'
+           -> 'C:/Users/Admin/AppData/Local/Temp/mink_av_probe_19.exe'
+BUILD_EXIT=0
+--- after 2s ---
+(mink_av_probe_19.mink exists; mink_av_probe_19.exe does NOT exist)
+```
+
+`mink build` exits 0 and names the PE it wrote, and the PE is then absent from
+disk. Windows Defender inspection history shows the same pattern under the
+`til!<hash>` generic-trojan family for `mink_str_test_*.exe`, `*.mink` in `%TEMP%`
+and for freshly linked harness binaries in `target/debug/deps`
+(`LNK1104: cannot open file '...\strings_lib-<hash>.exe'`, i.e. the linker output
+is removed or locked at link time).
+
+**Classification:** test-infrastructure, not product. MINK's compiler, runtime and
+stdlib are unaffected — the artifacts build correctly and are removed by an
+external agent. The affected capability is therefore *not* marked VERIFIED on the
+strength of a failing run; it also is not recorded as a product defect.
+
+**Remediation (requires an administrator shell, outside the repository):**
+
+```
+powershell -Command "Add-MpPreference -ExclusionPath 'C:\Users\Admin\Desktop\Mink'"
+powershell -Command "Add-MpPreference -ExclusionPath '%TEMP%'"
+```
+
+The first covers the cargo target and in-repo fixtures; the second covers the
+temporary sources and PEs the integration harnesses compile and execute. Until an
+exclusion is in place, suite results for harnesses that spawn freshly built
+`%TEMP%` executables are not reproducible and must be read with this caveat.
 
 ---
 
