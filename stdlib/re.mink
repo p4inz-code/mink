@@ -1,0 +1,797 @@
+// MINK Standard Library — Regular Expressions (`re`)
+// Session 109: S02 — Python `re` capability parity on Windows.
+//
+// ARCHITECTURE (MINK-native)
+//   A self-contained backtracking engine with no third-party dependency.
+//   Like the JSON library, the engine pre-reads the pattern and the subject
+//   into `Ptr<Int>` arenas so recursive matching is not constrained by the V1
+//   `Str` user-call ownership contract (Str parameters are consumed by user
+//   functions; Ptr parameters are not).
+//
+//   The matcher is a recursive-descent matcher over the pattern bytes:
+//   `_rx_alt` splits alternatives, `_rx_seq` matches a sequence with
+//   greedy/lazy quantifier backtracking, and `_rx_match_one` matches a single
+//   atom. Quantifier counts are tried by re-deriving the repetition position
+//   (`_rx_rep_pos`) rather than by recording positions, so no per-depth
+//   scratch state is shared between nested quantifiers.
+//
+// SUPPORTED SYNTAX
+//   literals, '.', '^', '$', escapes, '\d \D \w \W \s \S',
+//   classes `[...]` with ranges and negation (`[a-z]`, `[^0-9]`),
+//   groups `(...)` and `(?:...)`, alternation `|`,
+//   quantifiers `*`, `+`, `?`, `{m}`, `{m,}`, `{m,n}`, and their lazy forms
+//   `*?`, `+?`, `??`, `{m,n}?`.
+//
+// OWNERSHIP
+//   Every function consumes its `Str` parameters and frees every arena/string
+//   it allocates. The read-only queries return the subject `Str` back so the
+//   caller keeps it (the standard MINK pass-back idiom).
+//
+// LIMITS (documented)
+//   ASCII/byte semantics (matching MINK's byte-oriented `Str` model).
+//   No capture-group extraction, no backreferences, no Unicode character
+//   classes, no `(?i)`/`(?s)` inline flags. Matching is bounded by a step
+//   budget, so a pathological pattern fails fast with no match instead of
+//   hanging (see `_rx_tick`).
+
+// ============================================================================
+// Arena helpers — byte arena layout: [len, byte0, byte1, ...] as Int words
+// ============================================================================
+
+fn _rx_len(a: Ptr<Int>) -> Int {
+    return rt_mem_load(a);
+}
+
+fn _rx_byte(a: Ptr<Int>, i: Int) -> Int {
+    return rt_mem_load(a + (i + 1) * 8);
+}
+
+/// _rx_bytes(s): copy `s` into a fresh arena of [len, bytes...], consume `s`,
+/// and return the arena.
+fn _rx_bytes(s: Str) -> Ptr<Int> {
+    let n = rt_str_len(s);
+    let a = rt_alloc((n + 1) * 8);
+    rt_mem_store(a, n);
+    let mut i = 0;
+    while i < n {
+        rt_mem_store(a + (i + 1) * 8, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return a;
+}
+
+/// _rx_copy_arena(a, from, to): copy the arena slice into a fresh `Str`.
+fn _rx_copy_arena(a: Ptr<Int>, from: Int, to: Int) -> Str {
+    let len = to - from;
+    let s = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        rt_str_set_byte(s, i, rt_mem_load(a + (from + i + 1) * 8));
+        i = i + 1;
+    }
+    return s;
+}
+
+// ============================================================================
+// Step budget — bounds pathological backtracking
+// ============================================================================
+
+fn _rx_tick(steps: Ptr<Int>) -> Int {
+    let left = rt_mem_load(steps) - 1;
+    rt_mem_store(steps, left);
+    return left;
+}
+
+// ============================================================================
+// Character predicates
+// ============================================================================
+
+fn _rx_digit(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn _rx_word(b: Int) -> Bool {
+    if _rx_digit(b) { return true; }
+    if b >= 65 && b <= 90 { return true; }
+    if b >= 97 && b <= 122 { return true; }
+    return b == 95;
+}
+
+fn _rx_space(b: Int) -> Bool {
+    if b == 32 { return true; }
+    if b == 9 { return true; }
+    if b == 10 { return true; }
+    if b == 13 { return true; }
+    if b == 12 { return true; }
+    return b == 11;
+}
+
+/// _rx_esc(e, b): match a `\`-escape code `e` against byte `b`.
+fn _rx_esc(e: Int, b: Int) -> Bool {
+    if e == 100 { return _rx_digit(b); }  // \d
+    if e == 68 { return !_rx_digit(b); }  // \D
+    if e == 119 { return _rx_word(b); }   // \w
+    if e == 87 { return !_rx_word(b); }   // \W
+    if e == 115 { return _rx_space(b); }  // \s
+    if e == 83 { return !_rx_space(b); }  // \S
+    return b == e;                        // escaped literal
+}
+
+// ============================================================================
+// Pattern scanning
+// ============================================================================
+
+/// _rx_class_end(p, from, pe): index just past the `]` that closes a class
+/// whose body starts at `from` (the index of the byte after `[`).
+fn _rx_class_end(p: Ptr<Int>, from: Int, pe: Int) -> Int {
+    let mut j = from;
+    if j < pe && _rx_byte(p, j) == 94 { j = j + 1; }  // '^'
+    if j < pe && _rx_byte(p, j) == 93 { j = j + 1; }  // leading ']' is literal
+    while j < pe {
+        if _rx_byte(p, j) == 92 {
+            j = j + 2;
+        } else {
+            if _rx_byte(p, j) == 93 { return j + 1; }
+            j = j + 1;
+        }
+    }
+    return pe;
+}
+
+/// _rx_atom_end(p, i, pe): index just past the atom that starts at `i`.
+fn _rx_atom_end(p: Ptr<Int>, i: Int, pe: Int) -> Int {
+    let c = _rx_byte(p, i);
+    if c == 92 {
+        if i + 1 < pe { return i + 2; }
+        return i + 1;
+    }
+    if c == 91 {
+        return _rx_class_end(p, i + 1, pe);
+    }
+    if c == 40 {
+        let mut depth = 1;
+        let mut j = i + 1;
+        while j < pe {
+            let d = _rx_byte(p, j);
+            if d == 92 {
+                j = j + 2;
+            } else {
+                if d == 40 { depth = depth + 1; }
+                if d == 41 {
+                    depth = depth - 1;
+                    if depth == 0 { return j + 1; }
+                }
+                j = j + 1;
+            }
+        }
+        return pe;
+    }
+    return i + 1;
+}
+
+/// _rx_class(p, cs, ce, b): does byte `b` satisfy the class body in
+/// `[cs, ce)` (cs is the index of the byte after `[`, ce the index of `]`)?
+fn _rx_class(p: Ptr<Int>, cs: Int, ce: Int, b: Int) -> Bool {
+    let mut i = cs;
+    let mut neg = 0;
+    if i < ce && _rx_byte(p, i) == 94 {  // '^'
+        neg = 1;
+        i = i + 1;
+    }
+    let mut hit = 0;
+    while i < ce {
+        let c = _rx_byte(p, i);
+        if c == 92 {
+            i = i + 1;
+            if i < ce {
+                if _rx_esc(_rx_byte(p, i), b) { hit = 1; }
+                i = i + 1;
+            }
+        } else if i + 2 < ce && _rx_byte(p, i + 1) == 45 {
+            let lo = c;
+            let hi = _rx_byte(p, i + 2);
+            if b >= lo && b <= hi { hit = 1; }
+            i = i + 3;
+        } else {
+            if b == c { hit = 1; }
+            i = i + 1;
+        }
+    }
+    if neg == 1 { return hit == 0; }
+    return hit == 1;
+}
+
+// ============================================================================
+// Matcher
+// ============================================================================
+
+/// _rx_rep_pos(p, i, aend, t, sp, tlen, cnt): position after matching the atom
+/// `[i, aend)` exactly `cnt` times from `sp`, or -1 if it cannot.
+fn _rx_rep_pos(
+    p: Ptr<Int>,
+    i: Int,
+    aend: Int,
+    t: Ptr<Int>,
+    sp: Int,
+    tlen: Int,
+    cnt: Int,
+    steps: Ptr<Int>,
+) -> Int {
+    let mut cur = sp;
+    let mut j = 0;
+    while j < cnt {
+        if _rx_tick(steps) < 0 { return -1; }
+        let ns = _rx_match_one(p, i, aend, t, cur, tlen, steps);
+        if ns < 0 { return -1; }
+        if ns == cur { return -1; }
+        cur = ns;
+        j = j + 1;
+    }
+    return cur;
+}
+
+/// _rx_match_one(p, i, aend, t, s, tlen, steps): match the single atom
+/// `[i, aend)` against the subject at position `s`; return the new position
+/// or -1.
+fn _rx_match_one(
+    p: Ptr<Int>,
+    i: Int,
+    aend: Int,
+    t: Ptr<Int>,
+    s: Int,
+    tlen: Int,
+    steps: Ptr<Int>,
+) -> Int {
+    let c = _rx_byte(p, i);
+    if c == 46 {  // '.'
+        if s < tlen && _rx_byte(t, s) != 10 { return s + 1; }
+        return -1;
+    }
+    if c == 91 {  // class
+        if s >= tlen { return -1; }
+        if _rx_class(p, i + 1, aend - 1, _rx_byte(t, s)) { return s + 1; }
+        return -1;
+    }
+    if c == 92 {  // escape
+        if s >= tlen { return -1; }
+        if i + 1 < aend && _rx_esc(_rx_byte(p, i + 1), _rx_byte(t, s)) { return s + 1; }
+        return -1;
+    }
+    if c == 40 {  // group
+        let mut inner = i + 1;
+        if inner + 1 < aend {
+            if _rx_byte(p, inner) == 63 && _rx_byte(p, inner + 1) == 58 {
+                inner = inner + 2;
+            }
+        }
+        return _rx_alt(p, inner, aend - 1, t, s, tlen, steps);
+    }
+    if s < tlen && _rx_byte(t, s) == c { return s + 1; }
+    return -1;
+}
+
+/// _rx_seq(p, i, pe, t, sp, tlen, steps): match the sequence `[i, pe)` at
+/// subject position `sp`; return the end position or -1. Stops at a top-level
+/// `|` or `)`.
+fn _rx_seq(
+    p: Ptr<Int>,
+    i: Int,
+    pe: Int,
+    t: Ptr<Int>,
+    sp: Int,
+    tlen: Int,
+    steps: Ptr<Int>,
+) -> Int {
+    if i >= pe { return sp; }
+    if _rx_tick(steps) < 0 { return -1; }
+    let c = _rx_byte(p, i);
+    if c == 124 { return sp; }  // '|'
+    if c == 41 { return sp; }   // ')'
+    if c == 94 {                // '^'
+        if sp != 0 { return -1; }
+        return _rx_seq(p, i + 1, pe, t, sp, tlen, steps);
+    }
+    if c == 36 {                // '$'
+        if sp != tlen { return -1; }
+        return _rx_seq(p, i + 1, pe, t, sp, tlen, steps);
+    }
+
+    let aend = _rx_atom_end(p, i, pe);
+
+    // Quantifier.
+    let mut q = 0;
+    let mut qmin = 0;
+    let mut qmax = 1;
+    let mut after = aend;
+    if aend < pe {
+        let qc = _rx_byte(p, aend);
+        if qc == 42 { q = 1; qmin = 0; qmax = 1000000000; after = aend + 1; }
+        else if qc == 43 { q = 2; qmin = 1; qmax = 1000000000; after = aend + 1; }
+        else if qc == 63 { q = 3; qmin = 0; qmax = 1; after = aend + 1; }
+        else if qc == 123 { q = _rx_brace(p, aend, pe); }
+    }
+    if q == 4 {
+        let after2 = _rx_brace_after(p, aend, pe);
+        let lo = _rx_brace_min(p, aend, pe);
+        let hi = _rx_brace_max(p, aend, pe);
+        qmin = lo;
+        qmax = hi;
+        after = after2;
+    }
+
+    if q == 0 {
+        let ns = _rx_match_one(p, i, aend, t, sp, tlen, steps);
+        if ns < 0 { return -1; }
+        return _rx_seq(p, after, pe, t, ns, tlen, steps);
+    }
+
+    // Lazy quantifier: consume a trailing '?'.
+    let mut lazy = 0;
+    if after < pe && _rx_byte(p, after) == 63 {
+        lazy = 1;
+        after = after + 1;
+    }
+
+    // Greedy count of how many times the atom can match from `sp`.
+    let mut k = 0;
+    let mut cur = sp;
+    let mut stop = 0;
+    while k < qmax && stop == 0 {
+        if _rx_tick(steps) < 0 { stop = 1; }
+        else {
+            let ns = _rx_match_one(p, i, aend, t, cur, tlen, steps);
+            if ns < 0 { stop = 1; }
+            else {
+                if ns == cur { stop = 1; }
+                else {
+                    k = k + 1;
+                    cur = ns;
+                }
+            }
+        }
+    }
+
+    let mut result = -1;
+    if lazy == 1 {
+        let mut cnt = qmin;
+        while cnt <= k && result < 0 {
+            let ps = _rx_rep_pos(p, i, aend, t, sp, tlen, cnt, steps);
+            if ps >= 0 {
+                let rest = _rx_seq(p, after, pe, t, ps, tlen, steps);
+                if rest >= 0 { result = rest; }
+            }
+            cnt = cnt + 1;
+        }
+    } else {
+        let mut cnt = k;
+        while cnt >= qmin && result < 0 {
+            let ps = _rx_rep_pos(p, i, aend, t, sp, tlen, cnt, steps);
+            if ps >= 0 {
+                let rest = _rx_seq(p, after, pe, t, ps, tlen, steps);
+                if rest >= 0 { result = rest; }
+            }
+            cnt = cnt - 1;
+        }
+    }
+    return result;
+}
+
+/// _rx_alt(p, ps, pe, t, sp, tlen, steps): match the alternation `[ps, pe)` at
+/// `sp`; return the end position or -1.
+fn _rx_alt(
+    p: Ptr<Int>,
+    ps: Int,
+    pe: Int,
+    t: Ptr<Int>,
+    sp: Int,
+    tlen: Int,
+    steps: Ptr<Int>,
+) -> Int {
+    if _rx_tick(steps) < 0 { return -1; }
+    let mut i = ps;
+    let mut depth = 0;
+    let mut bar = -1;
+    while i < pe {
+        let c = _rx_byte(p, i);
+        if c == 92 {
+            i = i + 2;
+        } else if c == 91 {
+            i = _rx_class_end(p, i + 1, pe);
+        } else {
+            if c == 40 { depth = depth + 1; }
+            if c == 41 { depth = depth - 1; }
+            if c == 124 && depth == 0 && bar < 0 { bar = i; }
+            i = i + 1;
+        }
+    }
+    if bar < 0 {
+        return _rx_seq(p, ps, pe, t, sp, tlen, steps);
+    }
+    let head = _rx_seq(p, ps, bar, t, sp, tlen, steps);
+    if head >= 0 { return head; }
+    return _rx_alt(p, bar + 1, pe, t, sp, tlen, steps);
+}
+
+// ============================================================================
+// {m,n} brace quantifier parsing
+// ============================================================================
+
+/// _rx_brace(p, aend, pe): 4 when a valid `{...}` quantifier starts at `aend`,
+/// else 0 (so `{` is treated as a literal).
+fn _rx_brace(p: Ptr<Int>, aend: Int, pe: Int) -> Int {
+    let mut j = aend + 1;
+    let mut have = 0;
+    while j < pe && _rx_digit(_rx_byte(p, j)) {
+        j = j + 1;
+        have = 1;
+    }
+    if have == 0 { return 0; }
+    if j < pe && _rx_byte(p, j) == 125 { return 4; }
+    if j < pe && _rx_byte(p, j) == 44 {
+        j = j + 1;
+        while j < pe && _rx_digit(_rx_byte(p, j)) { j = j + 1; }
+        if j < pe && _rx_byte(p, j) == 125 { return 4; }
+    }
+    return 0;
+}
+
+/// _rx_brace_after(p, aend, pe): index just past a valid `{...}` quantifier.
+fn _rx_brace_after(p: Ptr<Int>, aend: Int, pe: Int) -> Int {
+    let mut j = aend + 1;
+    while j < pe {
+        if _rx_byte(p, j) == 125 { return j + 1; }
+        j = j + 1;
+    }
+    return pe;
+}
+
+/// _rx_brace_min(p, aend, pe): the lower bound of a `{m,n}` quantifier.
+fn _rx_brace_min(p: Ptr<Int>, aend: Int, pe: Int) -> Int {
+    let mut j = aend + 1;
+    let mut lo = 0;
+    while j < pe && _rx_digit(_rx_byte(p, j)) {
+        lo = lo * 10 + (_rx_byte(p, j) - 48);
+        j = j + 1;
+    }
+    return lo;
+}
+
+/// _rx_brace_max(p, aend, pe): the upper bound of a `{m,n}` quantifier
+/// (unbounded when the upper bound is omitted).
+fn _rx_brace_max(p: Ptr<Int>, aend: Int, pe: Int) -> Int {
+    let mut j = aend + 1;
+    while j < pe && _rx_digit(_rx_byte(p, j)) { j = j + 1; }
+    if j < pe && _rx_byte(p, j) == 125 { return _rx_brace_min(p, aend, pe); }
+    j = j + 1;  // skip ','
+    let mut hi = 0;
+    let mut have = 0;
+    while j < pe && _rx_digit(_rx_byte(p, j)) {
+        hi = hi * 10 + (_rx_byte(p, j) - 48);
+        j = j + 1;
+        have = 1;
+    }
+    if have == 0 { return 1000000000; }
+    return hi;
+}
+
+// ============================================================================
+// Engine entry — builds the arenas, runs the matcher, frees the arenas
+// ============================================================================
+
+/// _rx_run(pat, text, mode, budget): mode 0 = search anywhere, 1 = anchored at
+/// 0, 2 = full match. Returns (start, end, text) with start = -1 on no match.
+fn _rx_run(pat: Str, text: Str, mode: Int, budget: Int) -> (Int, Int, Str) {
+    let p = _rx_bytes(pat);
+    let n = rt_str_len(text);
+    let t = rt_alloc((n + 1) * 8);
+    rt_mem_store(t, n);
+    let mut j = 0;
+    while j < n {
+        rt_mem_store(t + (j + 1) * 8, rt_str_byte(text, j));
+        j = j + 1;
+    }
+    let steps = rt_alloc(8);
+    let plen = _rx_len(p);
+    let mut limit = n;
+    if mode == 1 { limit = 0; }
+    if mode == 2 { limit = 0; }
+    let mut start = 0;
+    let mut fs = -1;
+    let mut fe = -1;
+    while start <= limit && fs < 0 {
+        rt_mem_store(steps, budget);
+        let e = _rx_alt(p, 0, plen, t, start, n, steps);
+        if e >= 0 {
+            if mode == 2 {
+                if e == n { fs = start; fe = e; }
+            } else {
+                fs = start;
+                fe = e;
+            }
+        }
+        start = start + 1;
+    }
+    rt_free(steps);
+    rt_free(t);
+    rt_free(p);
+    return (fs, fe, text);
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// re_is_match(pat, text): true when `pat` matches anywhere in `text`.
+fn re_is_match(pat: Str, text: Str) -> (Bool, Str) {
+    let r = _rx_run(pat, text, 0, 10000000);
+    return (r.0 >= 0, r.2);
+}
+
+/// re_search(pat, text): index of the leftmost match, or -1.
+fn re_search(pat: Str, text: Str) -> (Int, Str) {
+    let r = _rx_run(pat, text, 0, 10000000);
+    return (r.0, r.2);
+}
+
+/// re_match_end(pat, text): end index of the match anchored at position 0,
+/// or -1 (Python `re.match`).
+fn re_match_end(pat: Str, text: Str) -> (Int, Str) {
+    let r = _rx_run(pat, text, 1, 10000000);
+    return (r.1, r.2);
+}
+
+/// re_full_match(pat, text): true when `pat` matches the whole of `text`
+/// (Python `re.fullmatch`).
+fn re_full_match(pat: Str, text: Str) -> (Bool, Str) {
+    let r = _rx_run(pat, text, 2, 10000000);
+    return (r.0 >= 0, r.2);
+}
+
+/// re_find(pat, text): (start, end) of the leftmost match, or (-1, -1).
+fn re_find(pat: Str, text: Str) -> (Int, Int, Str) {
+    let r = _rx_run(pat, text, 0, 10000000);
+    return (r.0, r.1, r.2);
+}
+
+/// re_count(pat, text): number of non-overlapping matches (Python
+/// `len(re.findall(...))` for a pattern without capture groups).
+fn re_count(pat: Str, text: Str) -> (Int, Str) {
+    let p = _rx_bytes(pat);
+    let n = rt_str_len(text);
+    let t = rt_alloc((n + 1) * 8);
+    rt_mem_store(t, n);
+    let mut j = 0;
+    while j < n {
+        rt_mem_store(t + (j + 1) * 8, rt_str_byte(text, j));
+        j = j + 1;
+    }
+    let steps = rt_alloc(8);
+    let plen = _rx_len(p);
+    let mut total = 0;
+    let mut start = 0;
+    while start <= n {
+        rt_mem_store(steps, 10000000);
+        let e = _rx_alt(p, 0, plen, t, start, n, steps);
+        if e >= 0 {
+            total = total + 1;
+            if e == start { start = start + 1; } else { start = e; }
+        } else {
+            start = start + 1;
+        }
+    }
+    rt_free(steps);
+    rt_free(t);
+    rt_free(p);
+    return (total, text);
+}
+
+/// re_find_all(pat, text): start indices of every non-overlapping match.
+fn re_find_all(pat: Str, text: Str) -> (Vec<Int>, Str) {
+    let p = _rx_bytes(pat);
+    let n = rt_str_len(text);
+    let t = rt_alloc((n + 1) * 8);
+    rt_mem_store(t, n);
+    let mut j = 0;
+    while j < n {
+        rt_mem_store(t + (j + 1) * 8, rt_str_byte(text, j));
+        j = j + 1;
+    }
+    let steps = rt_alloc(8);
+    let plen = _rx_len(p);
+    let mut all = rt_vec_new(4);
+    let mut start = 0;
+    while start <= n {
+        rt_mem_store(steps, 10000000);
+        let e = _rx_alt(p, 0, plen, t, start, n, steps);
+        if e >= 0 {
+            all = rt_vec_push(all, start);
+            if e == start { start = start + 1; } else { start = e; }
+        } else {
+            start = start + 1;
+        }
+    }
+    rt_free(steps);
+    rt_free(t);
+    rt_free(p);
+    return (all, text);
+}
+
+/// re_split(pat, text): split `text` on non-overlapping matches of `pat`.
+/// Returns the pieces plus the original `text` (pass-back idiom).
+fn re_split(pat: Str, text: Str) -> (Vec<Str>, Str) {
+    let p = _rx_bytes(pat);
+    let n = rt_str_len(text);
+    let t = rt_alloc((n + 1) * 8);
+    rt_mem_store(t, n);
+    let mut j = 0;
+    while j < n {
+        rt_mem_store(t + (j + 1) * 8, rt_str_byte(text, j));
+        j = j + 1;
+    }
+    let steps = rt_alloc(8);
+    let plen = _rx_len(p);
+    let mut parts = rt_vec_new(4);
+    let mut cursor = 0;
+    let mut start = 0;
+    while start <= n {
+        rt_mem_store(steps, 10000000);
+        let e = _rx_alt(p, 0, plen, t, start, n, steps);
+        if e >= 0 {
+            if e > start || start == cursor {
+                let piece = _rx_copy_arena(t, cursor, start);
+                parts = rt_vec_push(parts, piece);
+                cursor = e;
+            }
+            if e == start { start = start + 1; } else { start = e; }
+        } else {
+            start = start + 1;
+        }
+    }
+    let tail = _rx_copy_arena(t, cursor, n);
+    parts = rt_vec_push(parts, tail);
+    rt_free(steps);
+    rt_free(t);
+    rt_free(p);
+    return (parts, text);
+}
+
+/// re_replace(pat, text, repl): replace every non-overlapping match with the
+/// literal string `repl` (no backreferences). Consumes all three strings.
+fn re_replace(pat: Str, text: Str, repl: Str) -> Str {
+    let p = _rx_bytes(pat);
+    let r = _rx_bytes(repl);
+    let n = rt_str_len(text);
+    let t = rt_alloc((n + 1) * 8);
+    rt_mem_store(t, n);
+    let mut j = 0;
+    while j < n {
+        rt_mem_store(t + (j + 1) * 8, rt_str_byte(text, j));
+        j = j + 1;
+    }
+    let steps = rt_alloc(8);
+    let plen = _rx_len(p);
+    let rlen = _rx_len(r);
+
+    // Pass 1: size the output.
+    let mut total = 0;
+    let mut cursor = 0;
+    let mut start = 0;
+    while start <= n {
+        rt_mem_store(steps, 10000000);
+        let e = _rx_alt(p, 0, plen, t, start, n, steps);
+        if e >= 0 {
+            total = total + (start - cursor) + rlen;
+            cursor = e;
+            if e == start { start = start + 1; } else { start = e; }
+        } else {
+            start = start + 1;
+        }
+    }
+    total = total + (n - cursor);
+
+    // Pass 2: fill.
+    let mut out = rt_str_alloc(total);
+    let mut o = 0;
+    cursor = 0;
+    start = 0;
+    while start <= n {
+        rt_mem_store(steps, 10000000);
+        let e = _rx_alt(p, 0, plen, t, start, n, steps);
+        if e >= 0 {
+            let mut x = cursor;
+            while x < start {
+                rt_str_set_byte(out, o, rt_mem_load(t + (x + 1) * 8));
+                o = o + 1;
+                x = x + 1;
+            }
+            let mut y = 0;
+            while y < rlen {
+                rt_str_set_byte(out, o, rt_mem_load(r + (y + 1) * 8));
+                o = o + 1;
+                y = y + 1;
+            }
+            cursor = e;
+            if e == start { start = start + 1; } else { start = e; }
+        } else {
+            start = start + 1;
+        }
+    }
+    let mut z = cursor;
+    while z < n {
+        rt_str_set_byte(out, o, rt_mem_load(t + (z + 1) * 8));
+        o = o + 1;
+        z = z + 1;
+    }
+
+    rt_free(steps);
+    rt_free(t);
+    rt_free(p);
+    rt_free(r);
+    rt_str_free(text);
+    return out;
+}
+
+/// re_replace_first(pat, text, repl): replace only the first match.
+fn re_replace_first(pat: Str, text: Str, repl: Str) -> Str {
+    let p = _rx_bytes(pat);
+    let r = _rx_bytes(repl);
+    let n = rt_str_len(text);
+    let t = rt_alloc((n + 1) * 8);
+    rt_mem_store(t, n);
+    let mut j = 0;
+    while j < n {
+        rt_mem_store(t + (j + 1) * 8, rt_str_byte(text, j));
+        j = j + 1;
+    }
+    let steps = rt_alloc(8);
+    let plen = _rx_len(p);
+    let rlen = _rx_len(r);
+    rt_mem_store(steps, 10000000);
+    let mut fs = -1;
+    let mut fe = -1;
+    let mut start = 0;
+    while start <= n && fs < 0 {
+        rt_mem_store(steps, 10000000);
+        let e = _rx_alt(p, 0, plen, t, start, n, steps);
+        if e >= 0 { fs = start; fe = e; }
+        start = start + 1;
+    }
+    let mut total = n;
+    if fs >= 0 { total = n - (fe - fs) + rlen; }
+    let out = rt_str_alloc(total);
+    let mut o = 0;
+    if fs >= 0 {
+        let mut x = 0;
+        while x < fs {
+            rt_str_set_byte(out, o, rt_mem_load(t + (x + 1) * 8));
+            o = o + 1;
+            x = x + 1;
+        }
+        let mut y = 0;
+        while y < rlen {
+            rt_str_set_byte(out, o, rt_mem_load(r + (y + 1) * 8));
+            o = o + 1;
+            y = y + 1;
+        }
+        let mut z = fe;
+        while z < n {
+            rt_str_set_byte(out, o, rt_mem_load(t + (z + 1) * 8));
+            o = o + 1;
+            z = z + 1;
+        }
+    } else {
+        let mut x = 0;
+        while x < n {
+            rt_str_set_byte(out, o, rt_mem_load(t + (x + 1) * 8));
+            o = o + 1;
+            x = x + 1;
+        }
+    }
+    rt_free(steps);
+    rt_free(t);
+    rt_free(p);
+    rt_free(r);
+    rt_str_free(text);
+    return out;
+}
