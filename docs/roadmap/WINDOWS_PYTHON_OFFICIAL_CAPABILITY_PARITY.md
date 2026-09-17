@@ -132,7 +132,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 |---|---|---|---|---|---|---|---|---|---|
 | L32 | `if` / `elif` / `else` | VERIFIED | if statements + if-expressions (`[test] tests/parser.rs`, semantics) | None | - | - | N | - | |
 | L33 | Loops (`while`, `for`) | VERIFIED | `while`, `loop`, `for` over ranges; break-with-value loop expressions (`[test] tests/loop_expressions.rs`) | `for` over containers missing (see L58) | P2 | M | N | B | |
-| L34 | Exceptions (`raise`/`try`/`except`) | INTENT. DIFF. | `Option<T>`/`Result<T,E>` + `?` operator for recoverable errors (`[code] stdlib/result.mink`, `[test] tests/option_result.rs`, try_operator) | Runtime faults (bounds, free misuse, div-by-zero) terminate with E-R codes; no catch-and-resume | P1 | L | Y | B | Parity item is *catchable structured runtime errors with location info* (see R06) and value-based error flow for application errors — not Python stack-unwinding exceptions (see X-register) |
+| L34 | Exceptions (`raise`/`try`/`except`) | INTENT. DIFF. | `Option<T>`/`Result<T,E>` + `?` operator for recoverable errors (`[code] stdlib/result.mink`, `[test] tests/option_result.rs`, try_operator) | Runtime faults (bounds, free misuse, div-by-zero) terminate with E-R codes; no catch-and-resume | P2 | L | N | B | Reclassified P1→P2 Session 111: MINK's value-based error model (`Result<T,E>`/`Option<T>`) is the intentional design (INTENT. DIFF.) — same pattern as L01/L06/L07/L18/L27/L53. Parity item (catchable errors with location info) is covered by R06 (VERIFIED). The `?` operator and pattern matching on generic enums are V1 sugar limitations, not P1 parity gaps |
 | L35 | `finally` / cleanup blocks | MISSING | ownership frees at scope end; no user `defer`/drop hooks | Deterministic cleanup callback on scope exit | P2 | M | N | B | Needed for RAII-style wrappers once handles/FFI exist |
 | L36 | `assert` | MISSING | none (only test-harness asserts in Rust) | Debug assertion in MINK source | P2 | S | N | G | Comes with the MINK test framework |
 | L37 | Pattern matching (`match`) | VERIFIED | literals, bindings, enum variants + payload, ranges, or-patterns, guards, tuple/struct destructure, exhaustiveness (`[test] tests/pattern_matching.rs`, richer_patterns, match_expressions) | None material | - | - | N | - | Statically-checked match is stronger than Python 3.10+ `match` |
@@ -531,14 +531,14 @@ rather than by adjusting the previous table; every column and row sums to 232.)*
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 1 | 2 | 4 | 0 | 0 | 4 | **11** |
-| P2 (important, not blocking) | 22 | 10 | 35 | 2 | 17 | 5 | **91** |
+| P1 (parity-blocking by definition) | 0 | 2 | 4 | 0 | 0 | 4 | **10** |
+| P2 (important, not blocking) | 23 | 10 | 35 | 2 | 17 | 5 | **92** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
 | — (no gap / no MINK work) | 27 | 9 | 25 | 9 | 2 | 4 | **76** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **11 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **10 capability gaps block the parity gate.**
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
@@ -601,16 +601,16 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
 2. **Official-Python-capability parity is PARTIAL**: 92 execution-verified rows (VERIFIED 88 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 81 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
-3. **11 parity-blocking P1 gaps** remain (Wave B 1 · D 2 · E 4 · F 4); in all, 156 rows require work and 76 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
+3. **10 parity-blocking P1 gaps** remain (Wave B 0 · D 2 · E 4 · F 4); in all, 156 rows require work and 76 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
-6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01, the UTF-8 layer L05 and regex S02 are now VERIFIED; remaining: L34 exceptions), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D — S42 zlib/gzip now VERIFIED; remaining SQLite, zip, TLS), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G). Wave A is fully closed (S74 in Session 108); the shared A/F include-path mechanism landed across Sessions 99–107.
+6. Parity-blocking work clusters into: concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D — S42 zlib/gzip now VERIFIED; S44 zip now VERIFIED; remaining SQLite, TLS). Wave A is fully closed (S74 in Session 108); Wave B is fully closed (L34 reclassified P2 Session 111 — MINK's value-based error model is the intentional design); the shared A/F include-path mechanism landed across Sessions 99–107.
 7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) was stubbed at audit time but is implemented since Session 99; `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); crypto is execution-verified on Windows.
 
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (11 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (10 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
 
 **Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.

@@ -31,8 +31,10 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 110): 157 r
 > bidirectionally against CPython 3.11 `zlib` over 77 vectors and native-PE verified.
 > Two real defects were fixed on the way (a non-advancing scan index in the bit-reader
 > fill that looped forever from every entry point, and a free order that stranded a
-> 128 KiB block per compression call). The parity-blocking set is now **12**
-> (Wave B 1 · C 0 · D 3 · E 4 · F 4).
+> 128 KiB block per compression call). The parity-blocking set is now **10**
+> (Wave B 0 · C 0 · D 2 · E 4 · F 4). Sessions 110-111: S42 (zlib/gzip) and S44 (zip)
+> closed; L34 (exceptions) reclassified P1→P2 (INTENT. DIFF. — MINK's value-based
+> error model is the intentional design).
 
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
