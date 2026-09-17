@@ -3,7 +3,7 @@
 **Session:** 98 (with a Session 107 reconciliation note) · **Starting commit:** `a716df4` · **MINK version:** 1.0.1
 **Input:** `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md` (the master matrix,
 232 audited capability rows). Session 98 planning baseline: 175 rows requiring work, 44
-parity-blocking P1 gaps.**Current, evidence-derived figures (Session 109): 158 rows requiring work, 13 parity-blocking P1 gaps.**
+parity-blocking P1 gaps.**Current, evidence-derived figures (Session 110): 157 rows requiring work, 12 parity-blocking P1 gaps.**
 **Date:** September 4, 2026
 
 > **Session 108 note.** This plan is the Session 98 sequencing document. The wave map in
@@ -21,9 +21,18 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 109): 158 r
 > packages). Closing the packages work also uncovered and fixed a latent multi-module
 > defect: declaration lookups in HIR lowering, type checking, and ownership analysis
 > were keyed by byte offset alone, so two modules whose declarations shared an offset
-> collapsed onto one symbol. The parity-blocking set is now **13** (Wave B 1 · C 0 ·
+> collapsed onto one symbol. The parity-blocking set became **13** (Wave B 1 · C 0 ·
 > D 4 · E 4 · F 4), with Waves A, C and G empty; matrix §10 has been recomputed by a
 > direct scan of the 232 rows.
+
+> **Session 110 note.** One more P1 blocker closed — **S42** (zlib/gzip):
+> `stdlib/zlib.mink` is a self-contained DEFLATE codec with raw, zlib and gzip entry
+> points (stored/fixed/dynamic Huffman blocks, CRC-32 and Adler-32), cross-validated
+> bidirectionally against CPython 3.11 `zlib` over 77 vectors and native-PE verified.
+> Two real defects were fixed on the way (a non-advancing scan index in the bit-reader
+> fill that looped forever from every entry point, and a free order that stranded a
+> 128 KiB block per compression call). The parity-blocking set is now **12**
+> (Wave B 1 · C 0 · D 3 · E 4 · F 4).
 
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
@@ -37,7 +46,7 @@ completion gate; nothing in a later wave may silently redefine an earlier wave's
 - Parity = **capability coverage**, not syntax identity. The anti-clone register (matrix
   §9, X01–X21) is part of this plan's contract.
 - Parity is declared complete only when the matrix shows **zero P1 gaps** (44 at the
-  Session 98 baseline, **26** as of Session 107) and
+  Session 98 baseline, **26** as of Session 107, **12** as of Session 110) and
   every status is VERIFIED/IMPLEMENTED/INTENT. DIFF./N/A with an execution-verified or
   test-backed trace, per the proof strategy in §6.
 - Community/pip ecosystem parity is out of scope forever for this gate.
@@ -156,7 +165,7 @@ earlier wave.
 | H | 0 | ~10 | 3-4-5 (calendar-parallel) |
 | I | 0 | ~8 apps | 4-5-7 |
 | J | 0 | re-audit | 1-2-2 |
-| **Total** | **44 at the Session 98 baseline · 18 as of Session 108** (matrix §10.4; all unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** (Session 98 estimate) |
+| **Total** | **44 at the Session 98 baseline · 12 as of Session 110** (matrix §10.4; all unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** (Session 98 estimate) |
 
 Interpretation:
 

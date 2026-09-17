@@ -1,0 +1,1385 @@
+// MINK Standard Library — Compression (`zlib`, `gzip`, raw DEFLATE)
+// Session 110: S42 — Python `zlib` / `gzip` capability parity on Windows.
+//
+// ARCHITECTURE (MINK-native)
+//   A self-contained RFC 1950/1951/1952 implementation with no third-party
+//   dependency and no runtime/FFI addition. Like the JSON and regex libraries
+//   the codec works over `Ptr<Int>` word arenas (`rt_alloc` + `rt_mem_load` /
+//   `rt_mem_store`), which keeps recursive structures free of the V1 `Str`
+//   user-call ownership contract and makes every buffer bounds-checked.
+//
+//   INFLATE reads the bit stream LSB-first (RFC 1951 3.1.1) and decodes
+//   Huffman codes with the canonical "count/offset/symbol" table walking
+//   method (the zlib `puff` algorithm), so no 2^n fast lookup table is needed
+//   and no untrusted input can steer an index out of its arena.
+//
+//   DEFLATE emits fixed-Huffman blocks (BTYPE=01) with a greedy LZ77
+//   hash-chain matcher (window 32768, min match 3, max match 258). Each
+//   65535-byte chunk is emitted as a stored block (BTYPE=00) when that is
+//   smaller, so incompressible data never expands by more than 5 bytes per
+//   chunk. Blocks are byte-aligned, which keeps the writer simple and the
+//   stream unambiguous.
+//
+// OWNERSHIP
+//   Public functions consume their `Str` parameters (V1 user-call rule).
+//   The integer queries use the standard pass-back idiom: they return
+//   `(value, input)` so the caller keeps its string. Every arena is freed.
+//
+// ERROR MODEL
+//   Decoders return `(Str, Int)`: `0` on success and a negative code on
+//   failure. The returned `Str` is empty when a code is returned.
+//     -1  bad zlib header (CM != 8, FCHECK, or truncation)
+//     -2  Adler-32 mismatch
+//     -3  invalid block type (BTYPE=11)
+//     -4  stored block LEN/NLEN mismatch
+//     -5  invalid Huffman code lengths
+//     -6  invalid symbol / distance (or a distance before the output start)
+//     -7  truncated input
+//     -8  bad gzip header / unsupported compression method
+//     -9  gzip CRC-32 or ISIZE mismatch
+//    -10  preset dictionary (FDICT) requested — not supported
+//
+// LIMITS (documented)
+//   Decoders reject a preset dictionary. Size fields are read as unsigned
+//   32-bit little-endian, so single gzip members >= 4 GiB are rejected by
+//   the ISIZE check rather than silently accepted. Level 0 selects stored
+//   blocks; levels 1-9 scale the LZ77 chain search.
+//
+// MEMORY
+//   Buffered only: a call needs roughly 8 bytes of heap per input byte (the
+//   word arenas) plus the compressed result, all released before it returns.
+//   The runtime heap is a fixed 4 MiB arena, so a single call is comfortable
+//   into the tens of kilobytes; larger data needs a larger HEAP_SIZE
+//   (src/runtime/abi.rs) and streaming, which V1 does not provide.
+//
+//   Repeated calls reuse their own buffers: with no caller-side temporaries a
+//   compress/decompress loop ran 7272 / 20000+ cycles on the default heap in
+//   measurement. Loops that interleave caller allocations are bounded lower
+//   (about 470-540 cycles in the same measurement) because the runtime
+//   allocator gives a freed block to the first request that fits it without
+//   splitting, so a mismatched size class costs the surplus. That is a
+//   runtime allocator property shared by every MINK program, not a leak in
+//   this module: no live allocation remains at exit (E-R06 verifies this).
+
+// ============================================================================
+// Arena primitives — word arenas addressed by byte offset (`p + i * 8`)
+// ============================================================================
+
+fn _z_get(p: Ptr<Int>, i: Int) -> Int {
+    return rt_mem_load(p + i * 8);
+}
+
+fn _z_put(p: Ptr<Int>, i: Int, v: Int) {
+    rt_mem_store(p + i * 8, v);
+}
+
+/// _z_err(st, code): record `code` on `st` unless a code is already recorded.
+fn _z_err(st: Ptr<Int>, code: Int) {
+    if _z_get(st, 0) == 0 {
+        _z_put(st, 0, code);
+    }
+}
+
+fn _z_min(a: Int, b: Int) -> Int {
+    let mut r = a;
+    if b < a {
+        r = b;
+    }
+    return r;
+}
+
+// ============================================================================
+// Byte arenas
+//   `_z_bytes`   : [len, b0, b1, ...]      (immutable input)
+//   `_z_out_new` : [cap, len, b0, b1, ...] (growable output)
+// ============================================================================
+
+/// _z_bytes_x(s, extra): copy `s` into a byte arena (word 0 = length, then
+/// the bytes) reserving `extra` trailing words; consumes `s`.
+///
+/// The static tables and the LZ77 scratch live in this same arena. Keeping
+/// every request sized to the input matters because the runtime heap reuses
+/// a freed block only for a request it fits: a fixed-size scratch block of a
+/// different size class is handed to the first smaller request, and its
+/// remainder is unrecoverable. One input-sized arena per call stays matched.
+fn _z_bytes_x(s: Str, extra: Int) -> Ptr<Int> {
+    let n = rt_str_len(s);
+    let a = rt_alloc((n + 1 + extra) * 8);
+    _z_put(a, 0, n);
+    let mut i = 0;
+    while i < n {
+        _z_put(a, i + 1, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return a;
+}
+
+/// _z_bytes(s): copy `s` into a byte arena with no trailing space.
+fn _z_bytes(s: Str) -> Ptr<Int> {
+    return _z_bytes_x(s, 0);
+}
+
+fn _z_out_new(cap: Int) -> Ptr<Int> {
+    let mut c = cap;
+    if c < 16 {
+        c = 16;
+    }
+    let a = rt_alloc((c + 2) * 8);
+    _z_put(a, 0, c);
+    _z_put(a, 1, 0);
+    return a;
+}
+
+/// _z_out_push(out, b): append one byte, growing by doubling when full.
+/// Returns the (possibly moved) arena. Freed with `rt_free`.
+fn _z_out_push(out: Ptr<Int>, b: Int) -> Ptr<Int> {
+    let cap = _z_get(out, 0);
+    let len = _z_get(out, 1);
+    let mut res = out;
+    if len >= cap {
+        let ncap = cap * 2;
+        let nout = rt_alloc((ncap + 2) * 8);
+        _z_put(nout, 0, ncap);
+        _z_put(nout, 1, len);
+        let mut i = 0;
+        while i < len {
+            _z_put(nout, 2 + i, _z_get(out, 2 + i));
+            i = i + 1;
+        }
+        rt_free(out);
+        res = nout;
+    }
+    _z_put(res, 2 + _z_get(res, 1), b);
+    _z_put(res, 1, _z_get(res, 1) + 1);
+    return res;
+}
+
+fn _z_out_len(out: Ptr<Int>) -> Int {
+    return _z_get(out, 1);
+}
+
+fn _z_out_at(out: Ptr<Int>, i: Int) -> Int {
+    return _z_get(out, 2 + i);
+}
+
+/// _z_out_to_str(o): copy the byte arena into a fresh `Str` and free `o`.
+fn _z_out_to_str(o: Ptr<Int>) -> Str {
+    let n = _z_get(o, 1);
+    let s = rt_str_alloc(n);
+    let mut i = 0;
+    while i < n {
+        rt_str_set_byte(s, i, _z_get(o, 2 + i));
+        i = i + 1;
+    }
+    rt_free(o);
+    return s;
+}
+
+/// _z_append(dst, srco): append every byte of `srco` to `dst`.
+fn _z_append(dst: Ptr<Int>, srco: Ptr<Int>) -> Ptr<Int> {
+    let n = _z_get(srco, 1);
+    let mut d = dst;
+    let mut i = 0;
+    while i < n {
+        d = _z_out_push(d, _z_get(srco, 2 + i));
+        i = i + 1;
+    }
+    return d;
+}
+
+/// _z_sat(src, i, st): bounds-checked byte read; records -7 (truncation).
+fn _z_sat(src: Ptr<Int>, i: Int, st: Ptr<Int>) -> Int {
+    let mut v = 0;
+    if i < _z_get(src, 0) {
+        v = _z_get(src, i + 1);
+    } else {
+        _z_err(st, -7);
+    }
+    return v;
+}
+
+// ============================================================================
+// Bit reader — state arena: [pos, bitbuf, bitcnt, err, len]
+// ============================================================================
+
+fn _z_rd_new(start: Int, len: Int) -> Ptr<Int> {
+    let r = rt_alloc(5 * 8);
+    _z_put(r, 0, start);
+    _z_put(r, 1, 0);
+    _z_put(r, 2, 0);
+    _z_put(r, 3, 0);
+    _z_put(r, 4, len);
+    return r;
+}
+
+fn _z_rd_err(r: Ptr<Int>) -> Int {
+    return _z_get(r, 3);
+}
+
+fn _z_rd_seterr(r: Ptr<Int>, code: Int) {
+    if _z_get(r, 3) == 0 {
+        _z_put(r, 3, code);
+    }
+}
+
+/// _z_rd_bits(src, r, n): read `n` bits LSB-first (n <= 16).
+fn _z_rd_bits(src: Ptr<Int>, r: Ptr<Int>, n: Int) -> Int {
+    let mut buf = _z_get(r, 1);
+    let mut cnt = _z_get(r, 2);
+    let mut pos = _z_get(r, 0);
+    let len = _z_get(r, 4);
+    while cnt < n {
+        let mut b = 0;
+        if pos < len {
+            b = _z_get(src, pos + 1);
+        } else {
+            _z_rd_seterr(r, -7);
+        }
+        buf = buf | (b << cnt);
+        cnt = cnt + 8;
+        pos = pos + 1;
+    }
+    let v = buf & ((1 << n) - 1);
+    _z_put(r, 1, buf >> n);
+    _z_put(r, 2, cnt - n);
+    _z_put(r, 0, pos);
+    return v;
+}
+
+/// _z_rd_align(src, r): discard bits up to the next stream byte boundary.
+fn _z_rd_align(src: Ptr<Int>, r: Ptr<Int>) {
+    let c = _z_get(r, 2) & 7;
+    if c != 0 {
+        let d = _z_rd_bits(src, r, c);
+        _z_put(r, 1, _z_get(r, 1) + 0);
+    }
+}
+
+/// _z_rd_offset(r): byte offset of the next unconsumed stream byte.
+fn _z_rd_offset(r: Ptr<Int>) -> Int {
+    return _z_get(r, 0) - (_z_get(r, 2) / 8);
+}
+
+// ============================================================================
+// Canonical Huffman decode tables
+//   layout: [0..15] count[len] | [16] nsym | [17..31] offs[len] | [32..] syms
+// ============================================================================
+
+fn _z_h_new(nsym: Int) -> Ptr<Int> {
+    let h = rt_alloc((32 + nsym) * 8);
+    let mut i = 0;
+    while i < 32 {
+        _z_put(h, i, 0);
+        i = i + 1;
+    }
+    _z_put(h, 16, nsym);
+    return h;
+}
+
+/// _z_h_build(h, lens, at, n): build the table from `n` code lengths.
+/// Returns 0 on success, -5 on an over-subscribed (impossible) code.
+fn _z_h_build(h: Ptr<Int>, lens: Ptr<Int>, at: Int, n: Int) -> Int {
+    let mut res = 0;
+    let mut i = 0;
+    while i < 16 {
+        _z_put(h, i, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        let ln = _z_get(lens, at + i);
+        if ln > 15 {
+            res = -5;
+        }
+        if ln > 0 {
+            _z_put(h, ln, _z_get(h, ln) + 1);
+        }
+        i = i + 1;
+    }
+    let mut left = 1;
+    let mut len = 1;
+    while len <= 15 {
+        left = left * 2 - _z_get(h, len);
+        if left < 0 {
+            res = -5;
+        }
+        len = len + 1;
+    }
+    // offs[1] = 0; offs[len + 1] = offs[len] + count[len]
+    _z_put(h, 17, 0);
+    len = 1;
+    while len <= 14 {
+        _z_put(h, 17 + len, _z_get(h, 16 + len) + _z_get(h, len));
+        len = len + 1;
+    }
+    let mut s = 0;
+    while s < n {
+        let ln = _z_get(lens, at + s);
+        if ln > 0 {
+            let o = _z_get(h, 16 + ln);
+            if o < n {
+                _z_put(h, 32 + o, s);
+            }
+            _z_put(h, 16 + ln, o + 1);
+        }
+        s = s + 1;
+    }
+    return res;
+}
+
+/// _z_h_decode(src, r, h): decode one symbol; -6 if no code matches.
+fn _z_h_decode(src: Ptr<Int>, r: Ptr<Int>, h: Ptr<Int>) -> Int {
+    let mut code = 0;
+    let mut first = 0;
+    let mut index = 0;
+    let mut len = 1;
+    let mut res = -6;
+    let mut done = 0;
+    while len <= 15 {
+        if done == 0 {
+            code = code | _z_rd_bits(src, r, 1);
+            let count = _z_get(h, len);
+            if code - first < count {
+                let si = index + (code - first);
+                if si < _z_get(h, 16) {
+                    res = _z_get(h, 32 + si);
+                }
+                done = 1;
+            }
+            index = index + count;
+            first = (first + count) * 2;
+            code = code * 2;
+        }
+        len = len + 1;
+    }
+    return res;
+}
+
+// ============================================================================
+// Static tables (RFC 1951 3.2.5/3.2.7)
+//   0..28    length base     32..60   length extra bits
+//   64..93   distance base   128..157 distance extra bits
+//   192..210 code-length permutation
+//   224..511 fixed literal/length code lengths
+//   512..541 fixed distance code lengths
+// ============================================================================
+
+/// _z_fill(t, at, spec): store the whitespace-separated decimals of `spec`
+/// into `t` starting at word `at`. Consumes `spec`.
+fn _z_fill(t: Ptr<Int>, at: Int, spec: Str) {
+    let n = rt_str_len(spec);
+    let mut i = 0;
+    let mut idx = at;
+    let mut v = 0;
+    let mut seen = 0;
+    // One forward pass, flushing each completed decimal: `i` advances on
+    // every iteration, so a separator can never stall the scan.
+    while i <= n {
+        let mut b = 0;
+        let mut isd = 0;
+        if i < n {
+            b = rt_str_byte(spec, i);
+            if b >= 48 {
+                if b <= 57 {
+                    isd = 1;
+                }
+            }
+        }
+        if isd == 1 {
+            v = v * 10 + (b - 48);
+            seen = 1;
+        } else {
+            if seen == 1 {
+                _z_put(t, idx, v);
+                idx = idx + 1;
+                v = 0;
+                seen = 0;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+/// _z_fill_tables(t): write the static RFC 1951 tables into `t`.
+fn _z_fill_tables(t: Ptr<Int>) {
+    _z_fill(
+        t,
+        0,
+        "3 4 5 6 7 8 9 10 11 13 15 17 19 23 27 31 35 43 51 59 67 83 99 115 131 163 195 227 258",
+    );
+    _z_fill(
+        t,
+        32,
+        "0 0 0 0 0 0 0 0 1 1 1 1 2 2 2 2 3 3 3 3 4 4 4 4 5 5 5 5 0",
+    );
+    _z_fill(
+        t,
+        64,
+        "1 2 3 4 5 7 9 13 17 25 33 49 65 97 129 193 257 385 513 769 1025 1537 2049 3073 4097 6145 8193 12289 16385 24577",
+    );
+    _z_fill(
+        t,
+        128,
+        "0 0 0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12 13 13",
+    );
+    _z_fill(t, 192, "16 17 18 0 8 7 9 6 10 5 11 4 12 3 13 2 14 1 15");
+    // Fixed literal/length alphabet: 0-143 -> 8, 144-255 -> 9,
+    // 256-279 -> 7, 280-287 -> 8.
+    let mut i = 0;
+    while i < 288 {
+        let mut ln = 8;
+        if i >= 144 {
+            if i < 256 {
+                ln = 9;
+            }
+        }
+        if i >= 256 {
+            if i < 280 {
+                ln = 7;
+            }
+        }
+        _z_put(t, 224 + i, ln);
+        i = i + 1;
+    }
+    // Fixed distance alphabet: 30 five-bit codes.
+    i = 0;
+    while i < 30 {
+        _z_put(t, 512 + i, 5);
+        i = i + 1;
+    }
+}
+
+/// _z_tables(): a fresh 560-word table arena (used where no input arena is
+/// available to host it).
+fn _z_tables() -> Ptr<Int> {
+    let t = rt_alloc(560 * 8);
+    _z_fill_tables(t);
+    return t;
+}
+
+// ============================================================================
+// INFLATE
+// ============================================================================
+
+/// _z_decode_codes: decode literals/matches until the end-of-block symbol.
+fn _z_decode_codes(
+    src: Ptr<Int>,
+    r: Ptr<Int>,
+    out: Ptr<Int>,
+    lh: Ptr<Int>,
+    dh: Ptr<Int>,
+    t: Ptr<Int>,
+) -> Ptr<Int> {
+    let mut o = out;
+    let mut done = 0;
+    while done == 0 {
+        let sym = _z_h_decode(src, r, lh);
+        if sym < 0 {
+            _z_rd_seterr(r, -6);
+            done = 1;
+        } else {
+            if sym < 256 {
+                o = _z_out_push(o, sym);
+            } else {
+                if sym == 256 {
+                    done = 1;
+                } else {
+                    let li = sym - 257;
+                    if li > 28 {
+                        _z_rd_seterr(r, -6);
+                        done = 1;
+                    } else {
+                        let lextra = _z_get(t, 32 + li);
+                        let length = _z_get(t, li) + _z_rd_bits(src, r, lextra);
+                        let dc = _z_h_decode(src, r, dh);
+                        if dc < 0 {
+                            _z_rd_seterr(r, -6);
+                            done = 1;
+                        } else {
+                            if dc > 29 {
+                                _z_rd_seterr(r, -6);
+                                done = 1;
+                            } else {
+                                let dextra = _z_get(t, 128 + dc);
+                                let dist = _z_get(t, 64 + dc) + _z_rd_bits(src, r, dextra);
+                                if dist > _z_get(o, 1) {
+                                    _z_rd_seterr(r, -6);
+                                    done = 1;
+                                } else {
+                                    let mut c = 0;
+                                    while c < length {
+                                        o = _z_out_push(o, _z_get(o, 2 + (_z_get(o, 1) - dist)));
+                                        c = c + 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if _z_rd_err(r) != 0 {
+            done = 1;
+        }
+    }
+    return o;
+}
+
+/// _z_block_stored: BTYPE=00.
+fn _z_block_stored(src: Ptr<Int>, r: Ptr<Int>, out: Ptr<Int>) -> Ptr<Int> {
+    _z_rd_align(src, r);
+    let l0 = _z_rd_bits(src, r, 8);
+    let l1 = _z_rd_bits(src, r, 8);
+    let n0 = _z_rd_bits(src, r, 8);
+    let n1 = _z_rd_bits(src, r, 8);
+    let l = l0 | (l1 << 8);
+    let nl = n0 | (n1 << 8);
+    let mut o = out;
+    if (l ^ 65535) != nl {
+        _z_rd_seterr(r, -4);
+    } else {
+        let mut i = 0;
+        while i < l {
+            o = _z_out_push(o, _z_rd_bits(src, r, 8));
+            i = i + 1;
+        }
+    }
+    return o;
+}
+
+/// _z_block_fixed: BTYPE=01.
+fn _z_block_fixed(src: Ptr<Int>, r: Ptr<Int>, out: Ptr<Int>, t: Ptr<Int>) -> Ptr<Int> {
+    let lh = _z_h_new(288);
+    let dh = _z_h_new(30);
+    let e = _z_h_build(lh, t, 224, 288);
+    let e2 = _z_h_build(dh, t, 512, 30);
+    if e != 0 {
+        _z_rd_seterr(r, -5);
+    }
+    if e2 != 0 {
+        _z_rd_seterr(r, -5);
+    }
+    let o = _z_decode_codes(src, r, out, lh, dh, t);
+    rt_free(lh);
+    rt_free(dh);
+    return o;
+}
+
+/// _z_block_dynamic: BTYPE=10 — dynamic Huffman codes.
+fn _z_block_dynamic(src: Ptr<Int>, r: Ptr<Int>, out: Ptr<Int>, t: Ptr<Int>) -> Ptr<Int> {
+    let hlit = _z_rd_bits(src, r, 5) + 257;
+    let hdist = _z_rd_bits(src, r, 5) + 1;
+    let hclen = _z_rd_bits(src, r, 4) + 4;
+    let total = hlit + hdist;
+    let cl = rt_alloc(19 * 8);
+    let lens = rt_alloc(total * 8);
+    let mut i = 0;
+    while i < 19 {
+        _z_put(cl, i, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < hclen {
+        _z_put(cl, _z_get(t, 192 + i), _z_rd_bits(src, r, 3));
+        i = i + 1;
+    }
+    let clh = _z_h_new(19);
+    let e = _z_h_build(clh, cl, 0, 19);
+    if e != 0 {
+        _z_rd_seterr(r, -5);
+    }
+    let mut k = 0;
+    while k < total {
+        let sym = _z_h_decode(src, r, clh);
+        if sym < 0 {
+            _z_rd_seterr(r, -5);
+            k = total;
+        } else {
+            if sym < 16 {
+                _z_put(lens, k, sym);
+                k = k + 1;
+            } else {
+                let mut rep = 0;
+                let mut val = 0;
+                if sym == 16 {
+                    rep = 3 + _z_rd_bits(src, r, 2);
+                    if k > 0 {
+                        val = _z_get(lens, k - 1);
+                    } else {
+                        _z_rd_seterr(r, -5);
+                    }
+                }
+                if sym == 17 {
+                    rep = 3 + _z_rd_bits(src, r, 3);
+                }
+                if sym == 18 {
+                    rep = 11 + _z_rd_bits(src, r, 7);
+                }
+                if sym > 18 {
+                    _z_rd_seterr(r, -5);
+                }
+                let mut j = 0;
+                while j < rep {
+                    if k < total {
+                        _z_put(lens, k, val);
+                        k = k + 1;
+                    }
+                    j = j + 1;
+                }
+            }
+        }
+    }
+    let lh = _z_h_new(hlit);
+    let dh = _z_h_new(hdist);
+    let e2 = _z_h_build(lh, lens, 0, hlit);
+    let e3 = _z_h_build(dh, lens, hlit, hdist);
+    if e2 != 0 {
+        _z_rd_seterr(r, -5);
+    }
+    if e3 != 0 {
+        _z_rd_seterr(r, -5);
+    }
+    let o = _z_decode_codes(src, r, out, lh, dh, t);
+    rt_free(cl);
+    rt_free(lens);
+    rt_free(clh);
+    rt_free(lh);
+    rt_free(dh);
+    return o;
+}
+
+/// _z_inflate(src, out, st, start): raw DEFLATE from byte offset `start`.
+/// The error code and the trailer offset land in `st` ([0] code, [1] offset).
+fn _z_inflate(src: Ptr<Int>, out: Ptr<Int>, st: Ptr<Int>, start: Int, t: Ptr<Int>) -> Ptr<Int> {
+    let r = _z_rd_new(start, _z_get(src, 0));
+    let mut o = out;
+    let mut last = 0;
+    while last == 0 {
+        if _z_rd_err(r) == 0 {
+            last = _z_rd_bits(src, r, 1);
+            let btype = _z_rd_bits(src, r, 2);
+            if btype == 0 {
+                o = _z_block_stored(src, r, o);
+            }
+            if btype == 1 {
+                o = _z_block_fixed(src, r, o, t);
+            }
+            if btype == 2 {
+                o = _z_block_dynamic(src, r, o, t);
+            }
+            if btype == 3 {
+                _z_rd_seterr(r, -3);
+            }
+        } else {
+            last = 1;
+        }
+    }
+    _z_rd_align(src, r);
+    if _z_get(st, 1) == 0 {
+        _z_put(st, 1, _z_rd_offset(r));
+    }
+    if _z_get(st, 0) == 0 {
+        _z_put(st, 0, _z_rd_err(r));
+    }
+    rt_free(r);
+    return o;
+}
+
+// ============================================================================
+// Checksums
+// ============================================================================
+
+fn _z_adler_core(a: Ptr<Int>, base: Int, n: Int) -> Int {
+    let mut s1 = 1;
+    let mut s2 = 0;
+    let mut i = 0;
+    while i < n {
+        s1 = s1 + _z_get(a, base + i);
+        if s1 >= 65521 {
+            s1 = s1 - 65521;
+        }
+        s2 = s2 + s1;
+        if s2 >= 65521 {
+            s2 = s2 - 65521;
+        }
+        i = i + 1;
+    }
+    return (s2 << 16) | s1;
+}
+
+fn _z_crc_core(a: Ptr<Int>, base: Int, n: Int) -> Int {
+    let tbl = rt_alloc(256 * 8);
+    let mut i = 0;
+    while i < 256 {
+        let mut c = i;
+        let mut k = 0;
+        while k < 8 {
+            if (c & 1) == 1 {
+                c = 0xEDB88320 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+            k = k + 1;
+        }
+        _z_put(tbl, i, c & 0xFFFFFFFF);
+        i = i + 1;
+    }
+    let mut crc = 0xFFFFFFFF;
+    i = 0;
+    while i < n {
+        crc = (crc >> 8) ^ _z_get(tbl, (crc ^ _z_get(a, base + i)) & 255);
+        i = i + 1;
+    }
+    rt_free(tbl);
+    return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF;
+}
+
+/// _z_adler_str(data): pass-back read-only Adler-32 over `data`.
+fn _z_adler_str(data: Str) -> (Int, Str) {
+    let n = rt_str_len(data);
+    let mut s1 = 1;
+    let mut s2 = 0;
+    let mut i = 0;
+    while i < n {
+        s1 = s1 + rt_str_byte(data, i);
+        if s1 >= 65521 {
+            s1 = s1 - 65521;
+        }
+        s2 = s2 + s1;
+        if s2 >= 65521 {
+            s2 = s2 - 65521;
+        }
+        i = i + 1;
+    }
+    return ((s2 << 16) | s1, data);
+}
+
+/// _z_crc_str(data): pass-back read-only CRC-32 over `data`.
+fn _z_crc_str(data: Str) -> (Int, Str) {
+    let tbl = rt_alloc(256 * 8);
+    let mut i = 0;
+    while i < 256 {
+        let mut c = i;
+        let mut k = 0;
+        while k < 8 {
+            if (c & 1) == 1 {
+                c = 0xEDB88320 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+            k = k + 1;
+        }
+        _z_put(tbl, i, c & 0xFFFFFFFF);
+        i = i + 1;
+    }
+    let mut crc = 0xFFFFFFFF;
+    let n = rt_str_len(data);
+    i = 0;
+    while i < n {
+        crc = (crc >> 8) ^ _z_get(tbl, (crc ^ rt_str_byte(data, i)) & 255);
+        i = i + 1;
+    }
+    rt_free(tbl);
+    return ((crc ^ 0xFFFFFFFF) & 0xFFFFFFFF, data);
+}
+
+// ============================================================================
+// DEFLATE (fixed-Huffman + LZ77)
+// ============================================================================
+
+fn _z_rev(v: Int, n: Int) -> Int {
+    let mut r = 0;
+    let mut x = v;
+    let mut i = 0;
+    while i < n {
+        r = (r * 2) | (x & 1);
+        x = x >> 1;
+        i = i + 1;
+    }
+    return r;
+}
+
+fn _z_fixed_code(sym: Int) -> Int {
+    let mut c = 48 + sym;
+    if sym >= 144 {
+        c = 400 + (sym - 144);
+    }
+    if sym >= 256 {
+        c = sym - 256;
+    }
+    if sym >= 280 {
+        c = 192 + (sym - 280);
+    }
+    return c;
+}
+
+fn _z_fixed_bits(sym: Int) -> Int {
+    let mut b = 8;
+    if sym >= 144 {
+        if sym < 256 {
+            b = 9;
+        }
+    }
+    if sym >= 256 {
+        if sym < 280 {
+            b = 7;
+        }
+    }
+    return b;
+}
+
+/// _z_bw_*: bit writer over a byte arena. State arena [bitbuf, bitcnt].
+fn _z_bw_new() -> Ptr<Int> {
+    let b = rt_alloc(2 * 8);
+    _z_put(b, 0, 0);
+    _z_put(b, 1, 0);
+    return b;
+}
+
+fn _z_bw_bits(bw: Ptr<Int>, bytes: Ptr<Int>, value: Int, n: Int) -> Ptr<Int> {
+    let mut buf = _z_get(bw, 0) | (value << _z_get(bw, 1));
+    let mut cnt = _z_get(bw, 1) + n;
+    let mut out = bytes;
+    while cnt >= 8 {
+        out = _z_out_push(out, buf & 255);
+        buf = buf >> 8;
+        cnt = cnt - 8;
+    }
+    _z_put(bw, 0, buf);
+    _z_put(bw, 1, cnt);
+    return out;
+}
+
+/// _z_bw_symbol: write a Huffman code MSB-first (RFC 1951 3.1.1).
+fn _z_bw_symbol(bw: Ptr<Int>, bytes: Ptr<Int>, sym: Int) -> Ptr<Int> {
+    let n = _z_fixed_bits(sym);
+    return _z_bw_bits(bw, bytes, _z_rev(_z_fixed_code(sym), n), n);
+}
+
+fn _z_bw_flush(bw: Ptr<Int>, bytes: Ptr<Int>) -> Ptr<Int> {
+    let mut out = bytes;
+    if _z_get(bw, 1) > 0 {
+        out = _z_out_push(out, _z_get(bw, 0) & 255);
+        _z_put(bw, 0, 0);
+        _z_put(bw, 1, 0);
+    }
+    return out;
+}
+
+fn _z_hash(src: Ptr<Int>, p: Int, mask: Int) -> Int {
+    let a = _z_get(src, p + 1);
+    let b = _z_get(src, p + 2);
+    let c = _z_get(src, p + 3);
+    return ((a * 251 + b) * 251 + c) & mask;
+}
+
+/// _z_match(src, a, b, max): longest common run from `a` and `b` (a < b).
+fn _z_match(src: Ptr<Int>, a: Int, b: Int, max: Int) -> Int {
+    let mut l = 0;
+    let mut go = 1;
+    while go == 1 {
+        if l < max {
+            if _z_get(src, a + l + 1) == _z_get(src, b + l + 1) {
+                l = l + 1;
+            } else {
+                go = 0;
+            }
+        } else {
+            go = 0;
+        }
+    }
+    return l;
+}
+
+fn _z_len_code(t: Ptr<Int>, len: Int) -> Int {
+    let mut r = 0;
+    let mut i = 0;
+    while i <= 28 {
+        if _z_get(t, i) <= len {
+            r = i;
+        }
+        i = i + 1;
+    }
+    return r;
+}
+
+fn _z_dist_code(t: Ptr<Int>, dist: Int) -> Int {
+    let mut r = 0;
+    let mut i = 0;
+    while i <= 29 {
+        if _z_get(t, 64 + i) <= dist {
+            r = i;
+        }
+        i = i + 1;
+    }
+    return r;
+}
+
+fn _z_chain(level: Int) -> Int {
+    let mut c = 16;
+    if level > 0 {
+        c = level * 24;
+    }
+    if c > 192 {
+        c = 192;
+    }
+    return c;
+}
+
+fn _z_emit_match(bw: Ptr<Int>, bytes: Ptr<Int>, len: Int, dist: Int, t: Ptr<Int>) -> Ptr<Int> {
+    let li = _z_len_code(t, len);
+    let mut o = _z_bw_symbol(bw, bytes, 257 + li);
+    let lextra = _z_get(t, 32 + li);
+    if lextra > 0 {
+        o = _z_bw_bits(bw, o, len - _z_get(t, li), lextra);
+    }
+    let dc = _z_dist_code(t, dist);
+    o = _z_bw_bits(bw, o, _z_rev(dc, 5), 5);
+    let dextra = _z_get(t, 128 + dc);
+    if dextra > 0 {
+        o = _z_bw_bits(bw, o, dist - _z_get(t, 64 + dc), dextra);
+    }
+    return o;
+}
+
+/// _z_enc_fixed(src, from, to, level, last, t): one complete fixed-Huffman
+/// block, byte-aligned, as a fresh byte arena.
+fn _z_enc_fixed(
+    src: Ptr<Int>,
+    from: Int,
+    to: Int,
+    level: Int,
+    last: Int,
+    t: Ptr<Int>,
+    head: Ptr<Int>,
+    prev: Ptr<Int>,
+    mask: Int,
+) -> Ptr<Int> {
+    let raw = to - from;
+    let bytes = _z_out_new(raw + 64);
+    let bw = _z_bw_new();
+    let mut o = _z_bw_bits(bw, bytes, last, 1);
+    o = _z_bw_bits(bw, o, 1, 2);
+    let mut i = 0;
+    let limit = _z_chain(level);
+    let mut pos = from;
+    while pos < to {
+        let mut best_len = 0;
+        let mut best_dist = 0;
+        let avail = to - pos;
+        if avail >= 3 {
+            let h = _z_hash(src, pos, mask);
+            let mut cand = _z_get(head, h);
+            let mut chain = 0;
+            let maxlen = _z_min(258, avail);
+            while cand >= 0 {
+                if chain < limit {
+                    let d = pos - cand;
+                    if d > 0 {
+                        if d <= 32768 {
+                            let l = _z_match(src, cand, pos, maxlen);
+                            if l > best_len {
+                                best_len = l;
+                                best_dist = d;
+                            }
+                        }
+                    }
+                    cand = _z_get(prev, cand & mask);
+                    chain = chain + 1;
+                } else {
+                    cand = -1;
+                }
+            }
+            _z_put(prev, pos & mask, _z_get(head, h));
+            _z_put(head, h, pos);
+        }
+        if best_len >= 3 {
+            o = _z_emit_match(bw, o, best_len, best_dist, t);
+            let mut k = 1;
+            while k < best_len {
+                let p = pos + k;
+                if p + 2 < to {
+                    let h2 = _z_hash(src, p, mask);
+                    _z_put(prev, p & mask, _z_get(head, h2));
+                    _z_put(head, h2, p);
+                }
+                k = k + 1;
+            }
+            pos = pos + best_len;
+        } else {
+            o = _z_bw_symbol(bw, o, _z_get(src, pos + 1));
+            pos = pos + 1;
+        }
+    }
+    o = _z_bw_symbol(bw, o, 256);
+    o = _z_bw_flush(bw, o);
+    rt_free(bw);
+    return o;
+}
+
+/// _z_store_block(o, src, from, len, last): one byte-aligned stored block.
+fn _z_store_block(o: Ptr<Int>, src: Ptr<Int>, from: Int, len: Int, last: Int) -> Ptr<Int> {
+    let mut d = o;
+    let mut hdr = 0;
+    if last == 1 {
+        hdr = 1;
+    }
+    d = _z_out_push(d, hdr);
+    d = _z_out_push(d, len & 255);
+    d = _z_out_push(d, (len >> 8) & 255);
+    let nl = len ^ 65535;
+    d = _z_out_push(d, nl & 255);
+    d = _z_out_push(d, (nl >> 8) & 255);
+    let mut i = 0;
+    while i < len {
+        d = _z_out_push(d, _z_get(src, from + i + 1));
+        i = i + 1;
+    }
+    return d;
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// zlib_adler32(data) -> (adler, data): Adler-32 (RFC 1950 8.2), as
+/// Python's `zlib.adler32`. The input is passed back to the caller.
+fn zlib_adler32(data: Str) -> (Int, Str) {
+    return _z_adler_str(data);
+}
+
+/// zlib_crc32(data) -> (crc, data): CRC-32 (IEEE 802.3), as Python's
+/// `zlib.crc32`. The input is passed back to the caller.
+fn zlib_crc32(data: Str) -> (Int, Str) {
+    return _z_crc_str(data);
+}
+
+/// deflate_raw(data, level) -> Str: raw DEFLATE stream (RFC 1951), as
+/// Python's `zlib.compressobj(wbits=-15)`. level 0 = stored blocks only.
+fn deflate_raw(data: Str, level: Int) -> Str {
+    return _z_deflate(data, level, 0, 0);
+}
+
+/// _z_deflate(data, level, wrap, chk) -> Str
+///
+/// The single compression entry point. `wrap` selects 0 = raw DEFLATE,
+/// 1 = zlib (2-byte header + Adler-32 trailer, `chk` = Adler-32) and
+/// 2 = gzip (10-byte header + CRC-32/ISIZE trailer, `chk` = CRC-32).
+///
+/// MEMORY DISCIPLINE: the runtime heap reuses a freed block for the first
+/// later request that fits it, so a request that has to walk past a smaller
+/// freed block strands that block. Every allocation here is therefore
+/// released in exactly reverse order — the container `Str` is the last
+/// allocation and the scratch arenas are freed newest-first — which keeps
+/// repeated compress cycles on a bounded, fully reused footprint.
+fn _z_deflate(data: Str, level: Int, wrap: Int, chk: Int) -> Str {
+    let isize = rt_str_len(data) & 0xFFFFFFFF;
+    // Hash-chain capacity scaled to the input (power of two, capped at the
+    // 32K window), so the whole call is one size class. See _z_bytes_x.
+    let mut cap = 8;
+    while cap < isize {
+        cap = cap * 2;
+    }
+    if cap > 32768 {
+        cap = 32768;
+    }
+    let mask = cap - 1;
+    // src | static tables (560) | head (cap) | prev (cap)
+    let src = _z_bytes_x(data, 560 + 2 * cap);
+    let n = _z_get(src, 0);
+    let t = src + (n + 1) * 8;
+    _z_fill_tables(t);
+    let tabs = t + 560 * 8;
+    let head = tabs;
+    let prev = tabs + cap * 8;
+    let mut i = 0;
+    while i < 2 * cap {
+        _z_put(tabs, i, -1);
+        i = i + 1;
+    }
+    let mut o = _z_out_new(n + 64);
+    if n == 0 {
+        let enc = _z_enc_fixed(src, 0, 0, 1, 1, t, head, prev, mask);
+        o = _z_append(o, enc);
+        rt_free(enc);
+    }
+    let mut pos = 0;
+    while pos < n {
+        let mut chunk = 65535;
+        if n - pos < 65535 {
+            chunk = n - pos;
+        }
+        let mut last = 0;
+        if pos + chunk == n {
+            last = 1;
+        }
+        let mut use_fixed = 0;
+        let mut enc = rt_alloc(2 * 8);
+        _z_put(enc, 0, 0);
+        _z_put(enc, 1, 0);
+        if level > 0 {
+            rt_free(enc);
+            enc = _z_enc_fixed(src, pos, pos + chunk, level, last, t, head, prev, mask);
+            if _z_out_len(enc) < 5 + chunk {
+                use_fixed = 1;
+            }
+        }
+        if use_fixed == 1 {
+            o = _z_append(o, enc);
+        } else {
+            o = _z_store_block(o, src, pos, chunk, last);
+        }
+        rt_free(enc);
+        pos = pos + chunk;
+    }
+    let blen = _z_out_len(o);
+    let mut hlen = 0;
+    let mut tlen = 0;
+    if wrap == 1 {
+        hlen = 2;
+        tlen = 4;
+    }
+    if wrap == 2 {
+        hlen = 10;
+        tlen = 8;
+    }
+    let out = rt_str_alloc(hlen + blen + tlen);
+    if wrap == 1 {
+        rt_str_set_byte(out, 0, 120); // CM=8, CINFO=7 (32K window)
+        let mut flg = 156; // FLEVEL=2, FDICT=0
+        if level <= 0 {
+            flg = 1; // FLEVEL=0
+        }
+        if level > 0 {
+            if level <= 5 {
+                flg = 94; // FLEVEL=1
+            }
+        }
+        rt_str_set_byte(out, 1, flg);
+    }
+    if wrap == 2 {
+        rt_str_set_byte(out, 0, 31); // ID1
+        rt_str_set_byte(out, 1, 139); // ID2
+        rt_str_set_byte(out, 2, 8); // CM = deflate
+        rt_str_set_byte(out, 3, 0); // FLG
+        let mut w = 4;
+        while w < 10 {
+            rt_str_set_byte(out, w, 0); // MTIME(4) XFL(1) OS(1)
+            w = w + 1;
+        }
+    }
+    i = 0;
+    while i < blen {
+        rt_str_set_byte(out, hlen + i, _z_get(o, 2 + i));
+        i = i + 1;
+    }
+    if wrap == 1 {
+        rt_str_set_byte(out, hlen + blen, (chk >> 24) & 255);
+        rt_str_set_byte(out, hlen + blen + 1, (chk >> 16) & 255);
+        rt_str_set_byte(out, hlen + blen + 2, (chk >> 8) & 255);
+        rt_str_set_byte(out, hlen + blen + 3, chk & 255);
+    }
+    if wrap == 2 {
+        rt_str_set_byte(out, hlen + blen, chk & 255);
+        rt_str_set_byte(out, hlen + blen + 1, (chk >> 8) & 255);
+        rt_str_set_byte(out, hlen + blen + 2, (chk >> 16) & 255);
+        rt_str_set_byte(out, hlen + blen + 3, (chk >> 24) & 255);
+        rt_str_set_byte(out, hlen + blen + 4, isize & 255);
+        rt_str_set_byte(out, hlen + blen + 5, (isize >> 8) & 255);
+        rt_str_set_byte(out, hlen + blen + 6, (isize >> 16) & 255);
+        rt_str_set_byte(out, hlen + blen + 7, (isize >> 24) & 255);
+    }
+    // Exact reverse of the allocation order (src, o) so the free list lines
+    // up one-for-one with this function's own requests.
+    rt_free(o);
+    rt_free(src);
+    return out;
+}
+
+/// inflate_raw(data) -> (Str, Int): raw DEFLATE (no wrapper).
+fn inflate_raw(data: Str) -> (Str, Int) {
+    let src = _z_bytes_x(data, 560);
+    let n = _z_get(src, 0);
+    let t = src + (n + 1) * 8;
+    _z_fill_tables(t);
+    let out = _z_out_new(n * 2 + 64);
+    let st = rt_alloc(2 * 8);
+    _z_put(st, 0, 0);
+    _z_put(st, 1, 0);
+    let o = _z_inflate(src, out, st, 0, t);
+    let e = _z_get(st, 0);
+    rt_free(st);
+    let s = _z_out_to_str(o);
+    rt_free(src);
+    return (s, e);
+}
+
+/// zlib_compress(data, level) -> Str: zlib stream (RFC 1950).
+fn zlib_compress(data: Str, level: Int) -> Str {
+    let (adler, d) = _z_adler_str(data);
+    return _z_deflate(d, level, 1, adler);
+}
+
+/// zlib_decompress(data) -> (Str, Int): decode a zlib stream.
+fn zlib_decompress(data: Str) -> (Str, Int) {
+    let src = _z_bytes_x(data, 560);
+    let n0 = _z_get(src, 0);
+    let t = src + (n0 + 1) * 8;
+    _z_fill_tables(t);
+    let st = rt_alloc(2 * 8);
+    _z_put(st, 0, 0);
+    _z_put(st, 1, 0);
+    let cmf = _z_sat(src, 0, st);
+    let flg = _z_sat(src, 1, st);
+    if (cmf & 15) != 8 {
+        _z_err(st, -1);
+    }
+    if ((cmf * 256) + flg) % 31 != 0 {
+        _z_err(st, -1);
+    }
+    if (flg & 32) != 0 {
+        _z_err(st, -10);
+    }
+    let n = _z_get(src, 0);
+    let mut o = _z_out_new(n * 2 + 64);
+    if _z_get(st, 0) == 0 {
+        o = _z_inflate(src, o, st, 2, t);
+    }
+    let mut check = _z_get(st, 0);
+    if check == 0 {
+        let have = _z_adler_core(o, 2, _z_get(o, 1));
+        let end = _z_get(st, 1);
+        let b0 = _z_sat(src, end, st);
+        let b1 = _z_sat(src, end + 1, st);
+        let b2 = _z_sat(src, end + 2, st);
+        let b3 = _z_sat(src, end + 3, st);
+        check = _z_get(st, 0);
+        if check == 0 {
+            let stored = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+            if stored != have {
+                _z_err(st, -2);
+                check = -2;
+            }
+        }
+    }
+    let mut s = _z_out_to_str(o);
+    if check != 0 {
+        rt_str_free(s);
+        s = rt_str_alloc(0);
+    }
+    rt_free(st);
+    rt_free(src);
+    return (s, check);
+}
+
+/// gzip_compress(data, level) -> Str: single-member gzip stream (RFC 1952).
+/// The MTIME field is written as 0 so output is byte-reproducible.
+fn gzip_compress(data: Str, level: Int) -> Str {
+    let (crc, d) = _z_crc_str(data);
+    return _z_deflate(d, level, 2, crc);
+}
+
+/// gzip_decompress(data) -> (Str, Int): decode a single-member gzip stream,
+/// verifying CRC-32 and ISIZE.
+fn gzip_decompress(data: Str) -> (Str, Int) {
+    let src = _z_bytes_x(data, 560);
+    let n0 = _z_get(src, 0);
+    let t = src + (n0 + 1) * 8;
+    _z_fill_tables(t);
+    let st = rt_alloc(2 * 8);
+    _z_put(st, 0, 0);
+    _z_put(st, 1, 0);
+    let id1 = _z_sat(src, 0, st);
+    let id2 = _z_sat(src, 1, st);
+    let cm = _z_sat(src, 2, st);
+    let flg = _z_sat(src, 3, st);
+    if id1 != 31 {
+        _z_err(st, -8);
+    }
+    if id2 != 139 {
+        _z_err(st, -8);
+    }
+    if cm != 8 {
+        _z_err(st, -8);
+    }
+    let mut start = 10;
+    if (flg & 4) != 0 {
+        let x0 = _z_sat(src, start, st);
+        let x1 = _z_sat(src, start + 1, st);
+        start = start + 2 + (x0 | (x1 << 8));
+    }
+    if (flg & 8) != 0 {
+        let mut go = 1;
+        while go == 1 {
+            if start < _z_get(src, 0) {
+                let b = _z_get(src, start + 1);
+                start = start + 1;
+                if b == 0 {
+                    go = 0;
+                }
+            } else {
+                _z_err(st, -7);
+                go = 0;
+            }
+        }
+    }
+    if (flg & 16) != 0 {
+        let mut go = 1;
+        while go == 1 {
+            if start < _z_get(src, 0) {
+                let b = _z_get(src, start + 1);
+                start = start + 1;
+                if b == 0 {
+                    go = 0;
+                }
+            } else {
+                _z_err(st, -7);
+                go = 0;
+            }
+        }
+    }
+    if (flg & 2) != 0 {
+        start = start + 2;
+    }
+    let n = _z_get(src, 0);
+    let mut o = _z_out_new(n * 2 + 64);
+    if _z_get(st, 0) == 0 {
+        o = _z_inflate(src, o, st, start, t);
+    }
+    let mut check = _z_get(st, 0);
+    if check == 0 {
+        let have_crc = _z_crc_core(o, 2, _z_get(o, 1));
+        let have_size = _z_get(o, 1) & 0xFFFFFFFF;
+        let end = _z_get(st, 1);
+        let c0 = _z_sat(src, end, st);
+        let c1 = _z_sat(src, end + 1, st);
+        let c2 = _z_sat(src, end + 2, st);
+        let c3 = _z_sat(src, end + 3, st);
+        let s0 = _z_sat(src, end + 4, st);
+        let s1 = _z_sat(src, end + 5, st);
+        let s2 = _z_sat(src, end + 6, st);
+        let s3 = _z_sat(src, end + 7, st);
+        check = _z_get(st, 0);
+        if check == 0 {
+            let stored_crc = c0 | (c1 << 8) | (c2 << 16) | (c3 << 24);
+            let stored_size = s0 | (s1 << 8) | (s2 << 16) | (s3 << 24);
+            if stored_crc != have_crc {
+                _z_err(st, -9);
+                check = -9;
+            }
+            if stored_size != have_size {
+                _z_err(st, -9);
+                check = -9;
+            }
+        }
+    }
+    let mut s = _z_out_to_str(o);
+    if check != 0 {
+        rt_str_free(s);
+        s = rt_str_alloc(0);
+    }
+    rt_free(st);
+    rt_free(src);
+    return (s, check);
+}

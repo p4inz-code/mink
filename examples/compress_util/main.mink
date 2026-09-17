@@ -1,0 +1,81 @@
+// compress_util — a small real application over the compression library.
+//
+//   mink build examples/compress_util/main.mink
+//   compress_util c <input> <output.z>       compress with zlib (level 6)
+//   compress_util g <input> <output.gz>      compress with gzip
+//   compress_util d <input.z> <output>       decompress
+//
+// Reads and writes whole files, so it exercises the public `zlib_*` API on
+// real binary data. Exit codes: 0 ok, 1 bad stream, 2 bad usage.
+//
+// Every owned string is released exactly once, at the single exit.
+mod zlib;
+
+fn main() {
+    // `rt_argc` counts arguments after the program name.
+    let argc = rt_argc();
+    let mut status = 0;
+    if argc < 3 {
+        status = 2;
+    }
+    let mut mode = rt_str_alloc(0);
+    let mut input = rt_str_alloc(0);
+    let mut output = rt_str_alloc(0);
+    if argc > 0 {
+        let m = rt_argv(0);
+        rt_str_free(mode);
+        mode = m;
+    }
+    if argc > 1 {
+        let i = rt_argv(1);
+        rt_str_free(input);
+        input = i;
+    }
+    if argc > 2 {
+        let o = rt_argv(2);
+        rt_str_free(output);
+        output = o;
+    }
+    // A `Str` value may be passed to a consuming call at exactly one site, so
+    // each mode reads its own copy of the input (only one branch runs).
+    let mut result = rt_str_alloc(0);
+    let mut handled = 0;
+    if status == 0 {
+        if rt_str_eq(mode, "c") {
+            let d1 = rt_fs_read(input);
+            rt_str_free(result);
+            result = zlib_compress(d1, 6);
+            handled = 1;
+        }
+        if rt_str_eq(mode, "g") {
+            let d2 = rt_fs_read(input);
+            rt_str_free(result);
+            result = gzip_compress(d2, 6);
+            handled = 1;
+        }
+        if rt_str_eq(mode, "d") {
+            let d3 = rt_fs_read(input);
+            let (out, code) = zlib_decompress(d3);
+            rt_str_free(result);
+            result = out;
+            handled = 1;
+            if code != 0 {
+                status = 1;
+                rt_print_str("error: not a valid zlib stream");
+            }
+        }
+        if handled == 0 {
+            status = 2;
+            rt_print_str("usage: compress_util <c|g|d> <input> <output>");
+        }
+    }
+    if status == 0 {
+        rt_fs_write(output, result);
+        rt_print_int(rt_str_len(result));
+    }
+    rt_str_free(result);
+    rt_str_free(mode);
+    rt_str_free(input);
+    rt_str_free(output);
+    rt_exit(status);
+}
