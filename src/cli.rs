@@ -28,6 +28,7 @@ Commands:
   check <path> [--json]
                   Analyze a MINK source file without producing output
   test <path>     Discover and run test functions (fn test_*) in a source file
+  repl [path]     Start an interactive compile-eval session (Ctrl-D/:quit exits)
   explain [code]  Explain an error code (e.g., mink explain E-T01);
                   with no code, list all documented error codes
   version         Print the compiler version
@@ -45,6 +46,7 @@ Examples:
   mink build hello.mink      Compile without running
   mink check hello.mink      Check for errors
   mink test hello.mink       Run test functions in hello.mink
+  mink repl                  Start an interactive session
   mink explain E-T01         Explain error E-T01
 
 Exit codes:
@@ -56,11 +58,29 @@ Exit codes:
 enum Command {
     Version,
     Help,
-    Build { path: PathBuf, target: Target },
-    Run { path: PathBuf, target: Target },
-    Check { path: PathBuf, json: bool },
-    Test { path: PathBuf, target: Target },
-    Explain { code: Option<String> },
+    Build {
+        path: PathBuf,
+        target: Target,
+    },
+    Run {
+        path: PathBuf,
+        target: Target,
+    },
+    Check {
+        path: PathBuf,
+        json: bool,
+    },
+    Test {
+        path: PathBuf,
+        target: Target,
+    },
+    Repl {
+        path: Option<PathBuf>,
+        target: Target,
+    },
+    Explain {
+        code: Option<String>,
+    },
 }
 
 /// Entry point for the compiler process. Returns the process exit code.
@@ -218,6 +238,7 @@ pub fn main(args: &[String]) -> ExitCode {
             }
         }
         Ok(Command::Test { path, target }) => run_test_command(&path, target),
+        Ok(Command::Repl { path, target }) => run_repl(path.as_deref(), target),
         Err(message) => {
             eprintln!("mink: error: {message}");
             eprintln!("Run 'mink help' for usage.");
@@ -413,12 +434,275 @@ fn parse(args: &[String]) -> Result<Command, String> {
             Ok(Command::Explain { code })
         }
         "run" => parse_run(&args[1..]),
+        "repl" => parse_repl(&args[1..]),
         "test" => parse_build(&args[1..]).map(|cmd| match cmd {
             Command::Build { path, target } => Command::Test { path, target },
             _ => unreachable!(),
         }),
         other => Err(format!("unknown command '{other}'")),
     }
+}
+
+/// Parses the arguments of the `repl` command: an optional initial source
+/// file plus an optional `--target <name>` (or `--target=<name>`).
+fn parse_repl(args: &[String]) -> Result<Command, String> {
+    let mut path: Option<PathBuf> = None;
+    let mut target = Target::native();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--target" {
+            index += 1;
+            let name = args.get(index).ok_or(
+                "missing target name after '--target' (usage: mink repl [path] [--target <target>])",
+            )?;
+            target = parse_target(name)?;
+        } else if let Some(name) = arg.strip_prefix("--target=") {
+            target = parse_target(name)?;
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown option '{arg}' for 'repl'"));
+        } else if path.is_none() {
+            path = Some(PathBuf::from(arg));
+        } else {
+            return Err(format!("unexpected argument '{arg}' for 'repl'"));
+        }
+        index += 1;
+    }
+    Ok(Command::Repl { path, target })
+}
+
+/// Returns true when `line` opens a session *declaration* (rather than a
+/// runnable statement). Declarations are accumulated into the REPL session;
+/// statements are compiled and executed against the accumulated declarations.
+fn repl_is_declaration(line: &str) -> bool {
+    const PREFIXES: [&str; 14] = [
+        "fn ",
+        "pub fn ",
+        "struct ",
+        "pub struct ",
+        "enum ",
+        "pub enum ",
+        "use ",
+        "pub use ",
+        "mod ",
+        "pub mod ",
+        "const ",
+        "pub const ",
+        "//",
+        "/*",
+    ];
+    PREFIXES.iter().any(|prefix| line.starts_with(prefix))
+}
+
+/// Returns true when `line` reads as a statement rather than a bare
+/// expression (so it must be placed directly in the generated `main`).
+fn repl_is_statement(line: &str) -> bool {
+    const PREFIXES: [&str; 13] = [
+        "if ", "while ", "for ", "loop", "match ", "return", "break", "continue", "let ", "rt_",
+        "assert_", ";", "//",
+    ];
+    PREFIXES.iter().any(|prefix| line.starts_with(prefix))
+}
+
+/// Returns true when every `{` in `text` has a matching `}`. Used to keep
+/// reading continuation lines for multi-line declarations.
+fn repl_braces_balanced(text: &str) -> bool {
+    let mut depth = 0i32;
+    for ch in text.chars() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// Renders a build failure the way the CLI renders compile errors, into a
+/// string the REPL can print without terminating the session.
+fn render_repl_build_error(sources: &SourceMap, error: &BuildError) -> String {
+    let mut out = String::new();
+    match error {
+        BuildError::FrontEnd(report) => {
+            let Some(file) = sources.get(report.source_id) else {
+                return format!("mink: error: {error}\n");
+            };
+            for item in &report.errors {
+                let line_col = file.line_col(item.span().start());
+                out.push_str(&format!(
+                    "mink: error[{}]: {}\n  --> {}:{}:{}\n",
+                    item.code(),
+                    item,
+                    file.name().display(),
+                    line_col.line,
+                    line_col.column
+                ));
+            }
+        }
+        BuildError::Backend(errors) => {
+            for item in errors {
+                out.push_str(&format!("mink: error[{}]: {item}\n", item.code()));
+            }
+        }
+        other => out.push_str(&format!("mink: error: {other}\n")),
+    }
+    out
+}
+
+/// Builds `source` as a native program and runs it, forwarding the child's
+/// stdout/stderr. Returns the rendered compile error on failure.
+fn repl_build_and_run(
+    source: &str,
+    target: Target,
+    counter: u64,
+    attempt: u64,
+) -> Result<(), String> {
+    let path = std::env::temp_dir().join(format!(
+        "mink_repl_{}_{}_{}.mink",
+        std::process::id(),
+        counter,
+        attempt
+    ));
+    if let Err(error) = std::fs::write(&path, source) {
+        return Err(format!(
+            "mink: repl: failed to write temp source: {error}\n"
+        ));
+    }
+    let mut sources = SourceMap::new();
+    let options = driver::BuildOptions { target };
+    let outcome = match driver::build(&mut sources, &path, options) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path.with_extension("exe"));
+            return Err(render_repl_build_error(&sources, &error));
+        }
+    };
+    let result = std::process::Command::new(&outcome.output).output();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&outcome.output);
+    match result {
+        Ok(output) => {
+            use std::io::Write;
+            let _ = std::io::stdout().write_all(&output.stdout);
+            let _ = std::io::stdout().flush();
+            let _ = std::io::stderr().write_all(&output.stderr);
+            let _ = std::io::stderr().flush();
+            Ok(())
+        }
+        Err(error) => Err(format!("mink: repl: failed to execute: {error}\n")),
+    }
+}
+
+/// Compiles and runs one REPL input against the session declarations.
+///
+/// Bare expressions are printed by trying `rt_print_int(expr)` first and then
+/// `rt_print_str(expr)`, so an interactive line produces a value without the
+/// user writing a print call explicitly.
+fn repl_eval(defs: &str, input: &str, target: Target, counter: u64) {
+    let candidates: Vec<String> = if input.ends_with(';') || repl_is_statement(input) {
+        vec![format!("fn main() {{\n{input}\n}}\n")]
+    } else {
+        vec![
+            format!("fn main() {{\nrt_print_int({input});\n}}\n"),
+            format!("fn main() {{\nrt_print_str({input});\n}}\n"),
+        ]
+    };
+    let mut last_error = String::new();
+    for (index, body) in candidates.iter().enumerate() {
+        let source = format!("{defs}\n{body}");
+        match repl_build_and_run(&source, target, counter, index as u64) {
+            Ok(()) => return,
+            Err(message) => last_error = message,
+        }
+    }
+    eprint!("{last_error}");
+}
+
+/// Runs an interactive compile-eval session: declarations accumulate, bare
+/// expressions and statements are compiled and executed against them.
+fn run_repl(initial: Option<&std::path::Path>, target: Target) -> ExitCode {
+    use std::io::{BufRead, Write};
+
+    let mut defs = String::new();
+    if let Some(path) = initial {
+        match std::fs::read_to_string(path) {
+            Ok(source) => {
+                defs.push_str(&strip_main_fn(&source));
+                defs.push('\n');
+            }
+            Err(error) => {
+                eprintln!("mink: error: failed to read '{}': {error}", path.display());
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    println!("mink {VERSION} interactive (compile-eval). Type :help for help, :quit to exit.");
+    let stdin = std::io::stdin();
+    let mut lines = stdin.lock().lines();
+    let mut counter: u64 = 0;
+    loop {
+        print!(">>> ");
+        let _ = std::io::stdout().flush();
+        let Some(Ok(raw)) = lines.next() else {
+            println!();
+            break;
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(command) = trimmed.strip_prefix(':') {
+            match command.trim() {
+                "quit" | "q" | "exit" => break,
+                "help" | "h" => {
+                    println!("Commands:");
+                    println!("  :help          Show this help");
+                    println!("  :show          Show the accumulated session declarations");
+                    println!("  :clear         Clear the accumulated session declarations");
+                    println!("  :quit, :q      Exit the session (Ctrl-D / EOF also exits)");
+                    println!(
+                        "Enter a declaration (fn/struct/enum/use/mod/const) to add it to the session,"
+                    );
+                    println!("or an expression or statement to compile and run it.");
+                }
+                "show" => {
+                    if defs.trim().is_empty() {
+                        println!("(no session declarations)");
+                    } else {
+                        print!("{defs}");
+                    }
+                }
+                "clear" => {
+                    defs.clear();
+                    println!("(session cleared)");
+                }
+                other => eprintln!("mink: repl: unknown command ':{other}'"),
+            }
+            continue;
+        }
+        if repl_is_declaration(trimmed) {
+            let mut pending = String::from(raw.trim_end());
+            pending.push('\n');
+            while !repl_braces_balanced(&pending) {
+                print!("... ");
+                let _ = std::io::stdout().flush();
+                match lines.next() {
+                    Some(Ok(more)) => {
+                        pending.push_str(&more);
+                        pending.push('\n');
+                    }
+                    _ => break,
+                }
+            }
+            defs.push_str(&pending);
+            continue;
+        }
+        counter += 1;
+        repl_eval(&defs, trimmed, target, counter);
+    }
+    ExitCode::SUCCESS
 }
 
 /// Strips the `fn main()` function from source text so the test runner
