@@ -250,7 +250,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | S01 | String methods (search/replace/trim/case/…) | EXECUTION VERIFIED | `str_*`: cmp, index_of, contains, starts/ends_with, count, sub, trim, upper/lower (ASCII), repeat, pad, reverse, replace(_all), join_2/3, **split** (`[code] stdlib/strings.mink`; `[test] tests/strings_lib.rs`; `[exec]` Session 107 native probes: split_basic, split_empty, split_single delim, split_long, split_stress, join_basic, join_strings, join_repeat, join_empty, join_vec_str, stress_split_join) | Case ops ASCII-only; no partition (P3); no unicode-aware split (L05) | P2 | M | N | B | `split`/`join` are the daily text workhorses (CSV row depends) — split now implemented; join generalized from join_2/3. Session 107: the P1 blocker is closed (remaining items are P3 partition and L05 Unicode-aware split), so the flag is cleared |
-| S02 | Regular expressions (`re`) | VERIFIED | `stdlib/re.mink`: a self-contained backtracking engine (no deps) supporting literals, `.`, `^`/`$`, `\d\D\w\W\s\S`, classes with ranges/negation, groups `()`/`(?:)`, alternation `|`, greedy and lazy `* + ? {m} {m,} {m,n}`, with `re_is_match`, `re_search`, `re_match_end`, `re_full_match`, `re_find`, `re_count`, `re_find_all`, `re_split`, `re_replace`, `re_replace_first` (`[code] stdlib/re.mink`, `npm/mink/stdlib/re.mink`; `[test] tests/re_lib.rs` s02_* 33 tests: leftmost/no-match, empty pattern/text, anchors, full-match, spans, classes/ranges/negation, shorthand classes, quantifiers incl. braces and lazy, alternation/groups, escaped metacharacters, byte semantics over UTF-8, count/find_all/split/replace, malformed patterns, a bounded catastrophic-backtracking probe, 5000-byte input, 200-cycle leak-free ownership run; `[exec]` native PE runs) | No capture-group extraction, no backreferences, no Unicode classes, no inline flags; ASCII/byte semantics (`. ` matches one byte, `\w` is ASCII); matching bounded by a step budget so pathological patterns fail fast | - | XL | N | B | Delivered this session. Architecture mirrors the JSON arena design (pattern + subject pre-read into `Ptr<Int>` arenas) so recursion is not constrained by the V1 Str user-call ownership contract |
+| S02 | Regular expressions (`re`) | VERIFIED | `stdlib/re.mink`: a self-contained backtracking engine (no deps) supporting literals, `.`, `^`/`$`, `\d\D\w\W\s\S`, classes with ranges/negation, groups `()`/`(?:)`, alternation `\|`, greedy and lazy `* + ? {m} {m,} {m,n}`, with `re_is_match`, `re_search`, `re_match_end`, `re_full_match`, `re_find`, `re_count`, `re_find_all`, `re_split`, `re_replace`, `re_replace_first` (`[code] stdlib/re.mink`, `npm/mink/stdlib/re.mink`; `[test] tests/re_lib.rs` s02_* 33 tests: leftmost/no-match, empty pattern/text, anchors, full-match, spans, classes/ranges/negation, shorthand classes, quantifiers incl. braces and lazy, alternation/groups, escaped metacharacters, byte semantics over UTF-8, count/find_all/split/replace, malformed patterns, a bounded catastrophic-backtracking probe, 5000-byte input, 200-cycle leak-free ownership run; `[exec]` native PE runs) | No capture-group extraction, no backreferences, no Unicode classes, no inline flags; ASCII/byte semantics (`. ` matches one byte, `\w` is ASCII); matching bounded by a step budget so pathological patterns fail fast | - | XL | N | B | Delivered this session. Architecture mirrors the JSON arena design (pattern + subject pre-read into `Ptr<Int>` arenas) so recursion is not constrained by the V1 Str user-call ownership contract |
 | S03 | Unicode data (categories/normalization/casefold) | MISSING | none (byte model) | Full Unicode DB | P3 | L | N | H | Minimal UTF-8 layer is L05 (P1); full DB optional |
 | S04 | Codecs / encodings (`codecs`, utf-8/16, latin-1…) | PARTIAL | `encoding.mink`: hex/base64(url)/url + `str_is_ascii` + **UTF-8** `utf8_validate`/`utf8_decode`/`utf8_encode`/`utf8_char_count`/`utf8_char_at`/`utf8_byte_index`/`utf8_slice` (`[code] stdlib/encoding.mink`; `[test] tests/encoding_lib.rs` incl. s107_utf8_*) | UTF-8 is covered (Session 107); no UTF-16/latin-1 or other text codecs | P2 | M | N | H | |
 | S05 | Text wrapping / formatting helpers (`textwrap`) | MISSING | none | Wrap/pad paragraph text | P3 | S | N | - | |
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 29 | 11 | 24 | 6 | 5 | 2 | 77 |
+| VERIFIED | 30 | 12 | 28 | 8 | 5 | 3 | 86 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -518,57 +518,62 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | INTENT. DIFF. + PARTIAL | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | N/A | 0 | 1 | 3 | 1 | 0 | 1 | 6 |
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
-| PARTIAL | 9 | 2 | 13 | 0 | 10 | 2 | 36 |
+| PARTIAL | 9 | 2 | 12 | 0 | 10 | 1 | 34 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 19 | 13 | 37 | 8 | 6 | 7 | 90 |
+| MISSING | 18 | 12 | 34 | 6 | 6 | 7 | 83 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
+
+*(Session 109 recomputation: produced by scanning the 232 capability rows directly
+rather than by adjusting the previous table; every column and row sums to 232.)*
 
 ### 10.2 Priority distribution
 
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 2 | 3 | 10 | 2 | 0 | 5 | **22** |
+| P1 (parity-blocking by definition) | 1 | 2 | 6 | 0 | 0 | 4 | **13** |
 | P2 (important, not blocking) | 22 | 10 | 35 | 2 | 17 | 5 | **91** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
-| — (no gap / no MINK work) | 26 | 8 | 15 | 7 | 2 | 3 | **61** |
+| — (no gap / no MINK work) | 27 | 9 | 23 | 9 | 2 | 4 | **74** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **22 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **13 capability gaps block the parity gate.**
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
 `src/driver.rs` mechanism behind the VERIFIED L67), so P1 now equals the `Blocks = Y`
 set exactly.
 
-### 10.3 Difficulty distribution (rows requiring work; the other 65 rows have no gap)
+### 10.3 Difficulty distribution (rows requiring work; the other 74 rows have no gap)
 
 | Difficulty | Rows | Meaning |
 |---|---|---|
 | S-M (small-to-medium) | 5 | small change with a medium tail |
-| S (small) | 37 | one focused change, low risk |
-| M (medium) | 80 | multiple components, contained |
-| L (large) | 30 | major feature area |
-| XL (major subsystem) | 15 | dedicated multi-session subsystem |
-| **Rows requiring work** | **167** | 167 + 65 no-gap rows = 232 |
+| S (small) | 36 | one focused change, low risk |
+| M (medium) | 75 | multiple components, contained |
+| L (large) | 28 | major feature area |
+| XL (major subsystem) | 14 | dedicated multi-session subsystem |
+| **Rows requiring work** | **158** | 158 + 74 no-gap rows = 232 |
 
-### 10.4 Parity-blocking gaps (22, all P1) by wave
+### 10.4 Parity-blocking gaps (13, all P1) by wave
 
 Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
-primary wave. The rows Session 99–107 delivered (R06, R10, R12, R13, R23, S50, S70,
-W06, W08, W14, L16, L67, P02, T06, L05, L08, S01, S06, S28, S36, S74) no longer appear. Wave A is now empty.
+primary wave. The rows delivered across Sessions 99–109
+(R06, R10, R12, R13, R23, S50, S70, W06, W08, W14, L16, L67, P02, T06, L05, L08, S01,
+S06, S28, S36, S74, S69, S75, S78, T07, R01, T04, S02, L68, P03) no longer appear.
+Waves A, C and G are now empty.
 
 | Wave | Blocking gaps | Count |
 |---|---|---|
 | A (Windows platform/runtime quick wins) | (none) | 0 |
-| B (core language/data) | L34, S02 | 2 |
-| C (filesystem/process/time) | S69 | 1 |
+| B (core language/data) | L34 | 1 |
+| C (filesystem/process/time) | (none) | 0 |
 | D (networking/internet/compression) | S41, S42, S44, S62 | 4 |
 | E (concurrency/async) | R19, R20, S71, S73 | 4 |
-| F (packaging/distribution) | L68, P03, P04, P05, P06, P09 | 6 |
-| G (developer tooling) | R01, S75, S78, T04, T07 | 5 |
-| **Total** | | **22** |
+| F (packaging/distribution) | P04, P05, P06, P09 | 4 |
+| G (developer tooling) | (none) | 0 |
+| **Total** | | **13** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -595,8 +600,8 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.6 Headline conclusions
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
-2. **Official-Python-capability parity is PARTIAL**: 81 execution-verified rows (VERIFIED 77 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 36 PARTIAL rows, 90 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
-3. **22 parity-blocking P1 gaps** remain; in all, 167 rows require work (15 XL + 30 L + 80 M + 37 S + 5 S-M) and 65 rows need none.
+2. **Official-Python-capability parity is PARTIAL**: 90 execution-verified rows (VERIFIED 86 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 83 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
+3. **13 parity-blocking P1 gaps** remain (Wave B 1 · D 4 · E 4 · F 4); in all, 158 rows require work and 74 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
 6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01 and the UTF-8 layer L05 are now VERIFIED; remaining: L34 exceptions, S02 regex), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G). Wave A is fully closed (S74 in Session 108); the shared A/F include-path mechanism landed across Sessions 99–107.
@@ -605,7 +610,7 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (22 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (13 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
 
 **Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.

@@ -3,8 +3,7 @@
 **Session:** 98 (with a Session 107 reconciliation note) · **Starting commit:** `a716df4` · **MINK version:** 1.0.1
 **Input:** `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md` (the master matrix,
 232 audited capability rows). Session 98 planning baseline: 175 rows requiring work, 44
-parity-blocking P1 gaps. **Current, evidence-derived figures (Session 108): 171 rows
-requiring work, 18 parity-blocking P1 gaps.**
+parity-blocking P1 gaps.**Current, evidence-derived figures (Session 109): 158 rows requiring work, 13 parity-blocking P1 gaps.**
 **Date:** September 4, 2026
 
 > **Session 108 note.** This plan is the Session 98 sequencing document. The wave map in
@@ -15,6 +14,16 @@ requiring work, 18 parity-blocking P1 gaps.**
 > S36 (CSV), S69 (strftime/strptime), S78 (assertions), S75 (test framework),
 > T07 (test runner). The rows delivered across Sessions 99-108 no longer appear in
 > that list.
+
+> **Session 109 note.** Five more P1 blockers closed — **R01/T04** (interactive `mink repl`
+> compile-eval session), **S02** (self-contained regex engine in `stdlib/re.mink`),
+> and **L68/P03** (directory packages: `mod name;` → `name/mod.mink`, with nested
+> packages). Closing the packages work also uncovered and fixed a latent multi-module
+> defect: declaration lookups in HIR lowering, type checking, and ownership analysis
+> were keyed by byte offset alone, so two modules whose declarations shared an offset
+> collapsed onto one symbol. The parity-blocking set is now **13** (Wave B 1 · C 0 ·
+> D 4 · E 4 · F 4), with Waves A, C and G empty; matrix §10 has been recomputed by a
+> direct scan of the 232 rows.
 
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
