@@ -151,22 +151,25 @@ pub struct TypeResult {
     errors: Vec<TypeError>,
     /// Per-symbol types, indexed by `SymbolId::raw()`.
     symbol_types: Vec<TypeId>,
-    /// Expression types, sorted by span start.
+    /// Expression types, sorted by `(file, span start)`.
     expr_types: Vec<(Span, TypeId)>,
     types: TypeTable,
 }
 
 impl TypeResult {
-    /// Assembles a result. Errors and expression types are sorted by span
-    /// start so iteration, lookup, and diagnostic order are deterministic.
+    /// Assembles a result. Errors and expression types are sorted by
+    /// `(file, span start)` so iteration, lookup, and diagnostic order are
+    /// deterministic — and, for expression types, *correct* in multi-module
+    /// programs: byte offsets repeat across files, so a lookup keyed by
+    /// offset alone would answer with another file's expression.
     pub(crate) fn new(
         mut errors: Vec<TypeError>,
         symbol_types: Vec<TypeId>,
         mut expr_types: Vec<(Span, TypeId)>,
         types: TypeTable,
     ) -> Self {
-        errors.sort_by_key(|error| error.span().start());
-        expr_types.sort_by_key(|(span, _)| span.start());
+        errors.sort_by_key(|error| (error.span().file(), error.span().start()));
+        expr_types.sort_by_key(|(span, _)| (span.file(), span.start()));
         Self {
             errors,
             symbol_types,
@@ -191,15 +194,28 @@ impl TypeResult {
         self.symbol_types.get(symbol.raw() as usize).copied()
     }
 
-    /// The type of the expression covering exactly `span`, if recorded.
+    /// The type of the expression at `span`, if recorded.
     ///
-    /// Expression nodes cover unique spans within a file, so a span
-    /// identifies one expression; the lookup is a binary search.
+    /// The lookup key is `(file, span start)`: expression nodes cover unique
+    /// spans *within a file*, so a start offset only identifies one expression
+    /// once the file is taken into account. When more than one expression
+    /// starts at that offset because one is a prefix of another (`1` and
+    /// `1 + 2`), an entry whose **full span** equals `span` wins — callers pass
+    /// the span of the node they are asking about — and the first such entry
+    /// is the fallback.
     pub fn expr_type(&self, span: Span) -> Option<TypeId> {
-        self.expr_types
-            .binary_search_by_key(&span.start(), |(expr_span, _)| expr_span.start())
-            .ok()
-            .map(|index| self.expr_types[index].1)
+        self.expr_type_exact(span).or_else(|| {
+            let file = span.file();
+            let start = span.start();
+            let lower = self.expr_types.partition_point(|(expr_span, _)| {
+                (expr_span.file(), expr_span.start()) < (file, start)
+            });
+            self.expr_types[lower..]
+                .iter()
+                .take_while(|(expr_span, _)| expr_span.file() == file && expr_span.start() == start)
+                .next()
+                .map(|(_, ty)| *ty)
+        })
     }
 
     /// The type of the expression covering **exactly** `span`, if recorded.
@@ -214,13 +230,14 @@ impl TypeResult {
     /// hand-built ASTs could contain two nodes with the same exact span,
     /// and for those the first in stable (traversal) order wins.
     pub fn expr_type_exact(&self, span: Span) -> Option<TypeId> {
+        let file = span.file();
         let start = span.start();
         let lower = self
             .expr_types
-            .partition_point(|(expr_span, _)| expr_span.start() < start);
+            .partition_point(|(expr_span, _)| (expr_span.file(), expr_span.start()) < (file, start));
         self.expr_types[lower..]
             .iter()
-            .take_while(|(expr_span, _)| expr_span.start() == start)
+            .take_while(|(expr_span, _)| expr_span.file() == file && expr_span.start() == start)
             .find(|(expr_span, _)| *expr_span == span)
             .map(|(_, ty)| *ty)
     }

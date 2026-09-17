@@ -98,9 +98,12 @@ impl SemanticResult {
         mut binding_aliases: Vec<(Span, SymbolId)>,
         mut errors: Vec<SemanticError>,
     ) -> Self {
-        resolutions.sort_by_key(|(span, _)| span.start());
-        binding_aliases.sort_by_key(|(span, _)| span.start());
-        errors.sort_by_key(|error| error.span().start());
+        // Keyed by `(file, start)`, not by start alone: byte offsets repeat
+        // across the files of a multi-module program, so an offset-only key
+        // would let one module's identifier answer for another's.
+        resolutions.sort_by_key(|(span, _)| (span.file(), span.start()));
+        binding_aliases.sort_by_key(|(span, _)| (span.file(), span.start()));
+        errors.sort_by_key(|error| (error.span().file(), error.span().start()));
         Self {
             symbols,
             scopes,
@@ -151,9 +154,15 @@ impl SemanticResult {
     /// Answers "which symbol does this identifier refer to?" without
     /// re-running name resolution.
     pub fn resolve(&self, span: Span) -> Option<SymbolId> {
-        self.resolutions
-            .binary_search_by_key(&span.start(), |(resolved_span, _)| resolved_span.start())
-            .ok()
-            .map(|index| self.resolutions[index].1)
+        let file = span.file();
+        let start = span.start();
+        let lower = self
+            .resolutions
+            .partition_point(|(resolved_span, _)| (resolved_span.file(), resolved_span.start()) < (file, start));
+        self.resolutions[lower..]
+            .iter()
+            .take_while(|(resolved_span, _)| resolved_span.file() == file && resolved_span.start() == start)
+            .next()
+            .map(|(_, symbol)| *symbol)
     }
 }

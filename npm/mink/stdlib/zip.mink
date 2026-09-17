@@ -1,0 +1,972 @@
+// MINK Standard Library — ZIP archives (`zipfile`)
+// Session 111: S44 — Python `zipfile` capability parity on Windows.
+//
+// ARCHITECTURE (MINK-native)
+//   A self-contained PKZIP (.zip) reader/writer with no third-party dependency
+//   and no runtime/FFI addition. Compression is delegated to the verified
+//   `stdlib/zlib.mink` DEFLATE codec (this module declares `mod zlib;`, so a
+//   program only needs `mod zip;`); path handling is delegated to
+//   `stdlib/filesystem.mink` (`mod filesystem;`).
+//
+//   Ownership drives the shape of this module the same way it does the JSON,
+//   regex and compression libraries: a `Str` argument is *moved* when it is
+//   passed to another function, so a value can be handed on only once. Every
+//   function here therefore converts its `Str` inputs into `Ptr<Int>` byte
+//   arenas once (zlib's `_z_bytes`), does all of its work through those
+//   pointers — which are never consumed — and materialises fresh `Str`
+//   results only where a public contract requires one. Extraction converts
+//   both the archive and the destination directory to arenas for the same
+//   reason.
+//
+//   WRITER — an archive under construction is a single `Ptr<Int>` handle
+//   (MINK has no classes and cannot store a pointer inside an Int word, so the
+//   handle is one word arena returned by value; every mutating call returns
+//   the possibly-moved handle, exactly like `_z_out_push`):
+//
+//     word 0  entry capacity        words 8..        entry records, 8 words each
+//     word 1  entry count             record +0  name offset in the pool
+//     word 2  pool bytes used         record +1  name length
+//     word 3  pool capacity           record +2  payload offset in the pool
+//     word 4  compression level       record +3  payload length (stored form)
+//     word 5..7  reserved             record +4  method (0 stored, 8 deflate)
+//                                     record +5  CRC-32
+//                                     record +6  uncompressed size
+//     pool (one byte per word) starts at word 8 + 8 * capacity
+//
+//   Payloads are compressed at `zip_add` time and held in the pool, so
+//   `zip_finish` is a single serialization pass: local header + payload for
+//   each entry, then the central directory, then the end-of-central-directory
+//   record. `zip_finish` frees the handle.
+//
+//   READER — byte arenas are laid out `[len, b0, b1, ...]`, so byte `i` is at
+//   word `i + 1`. Entries are read through the central directory (never the
+//   local headers), which is the only correct strategy: a streamed archive may
+//   set general purpose bit 3 and leave zeroed sizes in its local headers.
+//   Structures are walked with bounds checks at every field, so a corrupt
+//   archive cannot steer an index outside the buffer.
+//
+// SECURITY (mandatory)
+//   `zip_extract_all` validates **every** entry name before writing anything,
+//   so a hostile archive cannot leave a partially extracted tree behind. A
+//   name is rejected unless it is a plain relative path:
+//     - empty names
+//     - absolute paths ("/x", "\x")
+//     - drive-qualified paths ("C:x", "C:\x") and drive-relative forms
+//     - UNC paths ("\\server\share", "//server/share")
+//     - any ".." path segment (traversal), mixing "/" and "\" freely
+//     - embedded NUL bytes
+//     - any ":" anywhere (NTFS alternate data streams, "name:ads")
+//   Rejected names produce status -4 and nothing is extracted. Because only
+//   simple relative segments survive validation, joining a validated name to
+//   the destination cannot escape it.
+//
+// ERROR MODEL
+//   Status codes are returned as the second tuple element (or as the return
+//   value of the extraction calls), matching the rest of the stdlib. No
+//   exceptions are used; nothing faults.
+//      0  success
+//     -1  not a ZIP archive (no end-of-central-directory record)
+//     -2  entry index out of range
+//     -3  corrupt structure (bad signature, truncation, inconsistent sizes)
+//     -4  unsafe entry name (path traversal / absolute / ADS-shaped)
+//     -5  unsupported feature (encryption, unknown method, ZIP64)
+//     -6  filesystem failure while extracting
+//     -7  CRC-32 or size mismatch (the payload is rejected)
+//
+// LIMITS (documented)
+//   - No ZIP64: archives with >= 65535 entries or 4 GiB-class fields are
+//     rejected with -5 rather than mis-read.
+//   - Stored and DEFLATE (method 0 / 8) only; encrypted entries are rejected.
+//   - No multi-disk archives, no per-entry comments read back, no ZIP
+//     metadata preservation (timestamps are written as a fixed DOS epoch,
+//     1980-01-01, so archives are byte-deterministic).
+//   - Everything is buffered: one call needs roughly 8 bytes of heap per
+//     archive byte (one byte per word in the arenas) plus the output, and the
+//     runtime heap is a fixed 4 MiB arena, so archives are comfortable into
+//     the hundreds of kilobytes; larger data needs a larger HEAP_SIZE
+//     (src/runtime/abi.rs).
+
+mod zlib;
+mod filesystem;
+
+// ============================================================================
+// Little-endian writers (chain through the returned arena, which may move)
+// ============================================================================
+
+fn _zp_byte(o: Ptr<Int>, v: Int) -> Ptr<Int> {
+    return _z_out_push(o, v & 255);
+}
+
+fn _zp_w16(o: Ptr<Int>, v: Int) -> Ptr<Int> {
+    let a = _zp_byte(o, v & 255);
+    return _zp_byte(a, (v >> 8) & 255);
+}
+
+fn _zp_w32(o: Ptr<Int>, v: Int) -> Ptr<Int> {
+    let a = _zp_byte(o, v & 255);
+    let b = _zp_byte(a, (v >> 8) & 255);
+    let c = _zp_byte(b, (v >> 16) & 255);
+    return _zp_byte(c, (v >> 24) & 255);
+}
+
+// ============================================================================
+// Byte-arena readers — layout is `[len, b0, b1, ...]`, so byte i is word i+1
+// ============================================================================
+
+fn _zp_alen(a: Ptr<Int>) -> Int {
+    return _z_get(a, 0);
+}
+
+fn _zp_ab(a: Ptr<Int>, i: Int) -> Int {
+    return _z_get(a, i + 1);
+}
+
+fn _zp_ar16(a: Ptr<Int>, i: Int) -> Int {
+    return _zp_ab(a, i) + _zp_ab(a, i + 1) * 256;
+}
+
+fn _zp_ar32(a: Ptr<Int>, i: Int) -> Int {
+    return _zp_ab(a, i)
+        + _zp_ab(a, i + 1) * 256
+        + _zp_ab(a, i + 2) * 65536
+        + _zp_ab(a, i + 3) * 16777216;
+}
+
+/// _zp_aslice(a, start, n): a fresh `Str` with `n` bytes from the arena.
+fn _zp_aslice(a: Ptr<Int>, start: Int, n: Int) -> Str {
+    let out = rt_str_alloc(n);
+    let mut i = 0;
+    while i < n {
+        rt_str_set_byte(out, i, _zp_ab(a, start + i));
+        i = i + 1;
+    }
+    return out;
+}
+
+// Signatures (little-endian, first four bytes of each record).
+const ZIP_SIG_LOCAL = 67324752;
+const ZIP_SIG_CENTRAL = 33639248;
+const ZIP_SIG_EOCD = 101010256;
+
+// Field offsets inside a central directory header.
+const CD_FLAGS = 8;
+const CD_METHOD = 10;
+const CD_CRC = 16;
+const CD_CSIZE = 20;
+const CD_USIZE = 24;
+const CD_NAMELEN = 28;
+const CD_EXTRALEN = 30;
+const CD_COMMENTLEN = 32;
+const CD_LOCALOFF = 42;
+const CD_NAME = 46;
+
+// Field offsets inside a local file header.
+const LF_NAMELEN = 26;
+const LF_EXTRALEN = 28;
+const LF_NAME = 30;
+
+// ============================================================================
+// Builder handle
+// ============================================================================
+
+fn _zp_pool_base(p: Ptr<Int>) -> Int {
+    return 8 + _z_get(p, 0) * 8;
+}
+
+fn _zp_rec(p: Ptr<Int>, i: Int, f: Int) -> Int {
+    return _z_get(p, 8 + i * 8 + f);
+}
+
+fn _zp_setrec(p: Ptr<Int>, i: Int, f: Int, v: Int) {
+    _z_put(p, 8 + i * 8 + f, v);
+}
+
+/// _zp_grow(p, need_e, need_pool): return a larger handle holding the same
+/// entries, freeing `p`. Entry capacity and pool capacity each double (and at
+/// least meet the request), so a long append sequence is amortized.
+fn _zp_grow(p: Ptr<Int>, need_e: Int, need_pool: Int) -> Ptr<Int> {
+    let ecap = _z_get(p, 0);
+    let cnt = _z_get(p, 1);
+    let plen = _z_get(p, 2);
+    let pcap = _z_get(p, 3);
+    let mut ne = ecap * 2;
+    if ne < need_e {
+        ne = need_e;
+    }
+    if ne < 8 {
+        ne = 8;
+    }
+    let mut np = pcap * 2;
+    if np < need_pool {
+        np = need_pool;
+    }
+    if np < 64 {
+        np = 64;
+    }
+    let n = rt_alloc((8 + 8 * ne + np) * 8);
+    let mut i = 0;
+    while i < 8 {
+        _z_put(n, i, _z_get(p, i));
+        i = i + 1;
+    }
+    _z_put(n, 0, ne);
+    _z_put(n, 3, np);
+    // Records always start at word 8 (after the 8 header words) and the pool
+    // follows them, so the pool base is `8 + 8 * capacity` — the record base
+    // itself does not move when the capacities change.
+    let mut k = 0;
+    while k < cnt * 8 {
+        _z_put(n, 8 + k, _z_get(p, 8 + k));
+        k = k + 1;
+    }
+    let obase = 8 + 8 * ecap;
+    let npo = 8 + 8 * ne;
+    let mut j = 0;
+    while j < plen {
+        _z_put(n, npo + j, _z_get(p, obase + j));
+        j = j + 1;
+    }
+    rt_free(p);
+    return n;
+}
+
+/// _zp_pool_push_str(p, s): append every byte of `s` to the pool, consuming
+/// `s`. Returns the possibly-moved handle.
+fn _zp_pool_push_str(p: Ptr<Int>, s: Str) -> Ptr<Int> {
+    let n = rt_str_len(s);
+    let mut a = p;
+    if _z_get(a, 2) + n > _z_get(a, 3) {
+        a = _zp_grow(a, 0, n + 1);
+    }
+    let base = _zp_pool_base(a);
+    let at = _z_get(a, 2);
+    let mut i = 0;
+    while i < n {
+        _z_put(a, base + at + i, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    _z_put(a, 2, at + n);
+    rt_str_free(s);
+    return a;
+}
+
+/// _zp_pool_copy_to(o, p, off, len): copy pool bytes into an output builder.
+fn _zp_pool_copy_to(o: Ptr<Int>, p: Ptr<Int>, off: Int, len: Int) -> Ptr<Int> {
+    let base = _zp_pool_base(p);
+    let mut d = o;
+    let mut i = 0;
+    while i < len {
+        d = _z_out_push(d, _z_get(p, base + off + i));
+        i = i + 1;
+    }
+    return d;
+}
+
+/// zip_new(): a new archive builder at the default level (6).
+fn zip_new() -> Ptr<Int> {
+    return zip_new_level(6);
+}
+
+/// zip_new_level(level): a new archive builder; `level` is clamped to 0..9
+/// (0 = stored, 1 = fastest, 9 = best — see `stdlib/zlib.mink`).
+fn zip_new_level(level: Int) -> Ptr<Int> {
+    let mut lv = level;
+    if lv < 0 {
+        lv = 0;
+    }
+    if lv > 9 {
+        lv = 9;
+    }
+    let p = rt_alloc((8 + 8 * 8 + 64) * 8);
+    _z_put(p, 0, 8);
+    _z_put(p, 1, 0);
+    _z_put(p, 2, 0);
+    _z_put(p, 3, 64);
+    _z_put(p, 4, lv);
+    _z_put(p, 5, 0);
+    _z_put(p, 6, 0);
+    _z_put(p, 7, 0);
+    return p;
+}
+
+/// zip_free(arc): release a builder without producing an archive.
+fn zip_free(arc: Ptr<Int>) {
+    rt_free(arc);
+}
+
+/// zip_count(arc): number of entries staged in the builder.
+fn zip_count(arc: Ptr<Int>) -> Int {
+    return _z_get(arc, 1);
+}
+
+/// _zp_add_entry(arc, name, payload, method, usize, crc): stage one entry,
+/// consuming `name` and `payload` (the stored-form bytes).
+fn _zp_add_entry(
+    arc: Ptr<Int>,
+    name: Str,
+    payload: Str,
+    method: Int,
+    usize: Int,
+    crc: Int,
+) -> Ptr<Int> {
+    let nlen = rt_str_len(name);
+    let dlen = rt_str_len(payload);
+    let mut a = arc;
+    if _z_get(a, 1) >= _z_get(a, 0) {
+        a = _zp_grow(a, _z_get(a, 1) + 1, 0);
+    }
+    if _z_get(a, 2) + nlen + dlen + 1 > _z_get(a, 3) {
+        a = _zp_grow(a, 0, nlen + dlen + 1);
+    }
+    let noff = _z_get(a, 2);
+    a = _zp_pool_push_str(a, name);
+    let doff = _z_get(a, 2);
+    a = _zp_pool_push_str(a, payload);
+    let i = _z_get(a, 1);
+    _zp_setrec(a, i, 0, noff);
+    _zp_setrec(a, i, 1, nlen);
+    _zp_setrec(a, i, 2, doff);
+    _zp_setrec(a, i, 3, dlen);
+    _zp_setrec(a, i, 4, method);
+    _zp_setrec(a, i, 5, crc);
+    _zp_setrec(a, i, 6, usize);
+    _z_put(a, 1, i + 1);
+    return a;
+}
+
+/// zip_add(arc, name, data): stage a DEFLATE-compressed entry. Consumes
+/// `name` and `data`. Returns the possibly-moved builder handle.
+fn zip_add(arc: Ptr<Int>, name: Str, data: Str) -> Ptr<Int> {
+    let usize = rt_str_len(data);
+    let (crc, back) = zlib_crc32(data);
+    let level = _z_get(arc, 4);
+    let comp = deflate_raw(back, level);
+    return _zp_add_entry(arc, name, comp, 8, usize, crc);
+}
+
+/// zip_add_stored(arc, name, data): stage a stored (uncompressed) entry.
+fn zip_add_stored(arc: Ptr<Int>, name: Str, data: Str) -> Ptr<Int> {
+    let usize = rt_str_len(data);
+    let (crc, back) = zlib_crc32(data);
+    return _zp_add_entry(arc, name, back, 0, usize, crc);
+}
+
+/// zip_add_dir(arc, name): stage a directory entry, appending a trailing "/"
+/// when the caller did not supply one. Consumes `name`.
+fn zip_add_dir(arc: Ptr<Int>, name: Str) -> Ptr<Int> {
+    let n = rt_str_len(name);
+    let mut need = 1;
+    if n > 0 {
+        let last = rt_str_byte(name, n - 1);
+        if last == 47 || last == 92 {
+            need = 0;
+        }
+    }
+    // Build the final name unconditionally: a value may be moved only once in
+    // a function, so `name` must appear as a consumed argument in exactly one
+    // place and the separator decision has to be folded into the copy.
+    let s = rt_str_alloc(n + need);
+    let mut i = 0;
+    while i < n {
+        rt_str_set_byte(s, i, rt_str_byte(name, i));
+        i = i + 1;
+    }
+    if need == 1 {
+        rt_str_set_byte(s, n, 47);
+    }
+    rt_str_free(name);
+    let empty = rt_str_alloc(0);
+    return _zp_add_entry(arc, s, empty, 0, 0, 0);
+}
+
+/// zip_finish(arc): serialize the archive and free the builder. The result is
+/// a complete `.zip` image; an empty builder yields a valid empty archive.
+fn zip_finish(arc: Ptr<Int>) -> Str {
+    let cnt = _z_get(arc, 1);
+    let mut o = _z_out_new(256);
+    let mut c = _z_out_new(256);
+    let mut i = 0;
+    while i < cnt {
+        let noff = _zp_rec(arc, i, 0);
+        let nlen = _zp_rec(arc, i, 1);
+        let doff = _zp_rec(arc, i, 2);
+        let dlen = _zp_rec(arc, i, 3);
+        let method = _zp_rec(arc, i, 4);
+        let crc = _zp_rec(arc, i, 5);
+        let usize = _zp_rec(arc, i, 6);
+        let off = _z_out_len(o);
+        // Local file header: sig, version, flags (bit 11 = UTF-8 names),
+        // method, time, date, CRC-32, sizes, name/extra lengths, then name.
+        o = _zp_w32(o, ZIP_SIG_LOCAL);
+        o = _zp_w16(o, 20);
+        o = _zp_w16(o, 2048);
+        o = _zp_w16(o, method);
+        o = _zp_w16(o, 0);
+        o = _zp_w16(o, 33);
+        o = _zp_w32(o, crc);
+        o = _zp_w32(o, dlen);
+        o = _zp_w32(o, usize);
+        o = _zp_w16(o, nlen);
+        o = _zp_w16(o, 0);
+        o = _zp_pool_copy_to(o, arc, noff, nlen);
+        o = _zp_pool_copy_to(o, arc, doff, dlen);
+        // Central directory header: same fields plus made-by, comment/disk
+        // lengths, attributes and the local header offset.
+        c = _zp_w32(c, ZIP_SIG_CENTRAL);
+        c = _zp_w16(c, 20);
+        c = _zp_w16(c, 20);
+        c = _zp_w16(c, 2048);
+        c = _zp_w16(c, method);
+        c = _zp_w16(c, 0);
+        c = _zp_w16(c, 33);
+        c = _zp_w32(c, crc);
+        c = _zp_w32(c, dlen);
+        c = _zp_w32(c, usize);
+        c = _zp_w16(c, nlen);
+        c = _zp_w16(c, 0);
+        c = _zp_w16(c, 0);
+        c = _zp_w16(c, 0);
+        c = _zp_w16(c, 0);
+        c = _zp_w32(c, 0);
+        c = _zp_w32(c, off);
+        c = _zp_pool_copy_to(c, arc, noff, nlen);
+        i = i + 1;
+    }
+    let cd_len = _z_out_len(c);
+    let cd_off = _z_out_len(o);
+    o = _z_append(o, c);
+    rt_free(c);
+    o = _zp_w32(o, ZIP_SIG_EOCD);
+    o = _zp_w16(o, 0);
+    o = _zp_w16(o, 0);
+    o = _zp_w16(o, cnt);
+    o = _zp_w16(o, cnt);
+    o = _zp_w32(o, cd_len);
+    o = _zp_w32(o, cd_off);
+    o = _zp_w16(o, 0);
+    rt_free(arc);
+    return _z_out_to_str(o);
+}
+
+// ============================================================================
+// Reader — central directory discovery over an archive arena
+// ============================================================================
+
+/// _zp_aeocd(a): byte offset of the end-of-central-directory record, or -1.
+/// Scans backward over the largest comment the format permits.
+fn _zp_aeocd(a: Ptr<Int>) -> Int {
+    let n = _zp_alen(a);
+    if n < 22 {
+        return -1;
+    }
+    let mut bound = n - 22 - 65535;
+    if bound < 0 {
+        bound = 0;
+    }
+    let mut i = n - 22;
+    let mut found = -1;
+    let mut done = 0;
+    while i >= bound && done == 0 {
+        if _zp_ar32(a, i) == ZIP_SIG_EOCD {
+            found = i;
+            done = 1;
+        }
+        i = i - 1;
+    }
+    return found;
+}
+
+/// _zp_atotal(a): entry count from the EOCD, or a negative status.
+fn _zp_atotal(a: Ptr<Int>) -> Int {
+    let e = _zp_aeocd(a);
+    if e < 0 {
+        return -1;
+    }
+    let t = _zp_ar16(a, e + 10);
+    if t == 65535 {
+        return -5;
+    }
+    if _zp_ar32(a, e + 16) == 4294967295 {
+        return -5;
+    }
+    return t;
+}
+
+/// _zp_aentry(a, index): byte offset of entry `index`'s central directory
+/// header, or -1 when the index is out of range or the directory is corrupt.
+fn _zp_aentry(a: Ptr<Int>, index: Int) -> Int {
+    let total = _zp_atotal(a);
+    if total < 0 {
+        return -1;
+    }
+    if index < 0 || index >= total {
+        return -1;
+    }
+    let e = _zp_aeocd(a);
+    let n = _zp_alen(a);
+    let mut pos = _zp_ar32(a, e + 16);
+    let mut k = 0;
+    while k < index {
+        if pos + CD_NAME > n || _zp_ar32(a, pos) != ZIP_SIG_CENTRAL {
+            return -1;
+        }
+        pos = pos + CD_NAME + _zp_ar16(a, pos + CD_NAMELEN)
+            + _zp_ar16(a, pos + CD_EXTRALEN) + _zp_ar16(a, pos + CD_COMMENTLEN);
+        k = k + 1;
+    }
+    if pos + CD_NAME > n || _zp_ar32(a, pos) != ZIP_SIG_CENTRAL {
+        return -1;
+    }
+    return pos;
+}
+
+/// _zp_asafe(a, off, len): whether the name at `[off, off+len)` is a plain
+/// relative path that cannot escape the destination. See the module header.
+fn _zp_asafe(a: Ptr<Int>, off: Int, len: Int) -> Bool {
+    if len == 0 {
+        return false;
+    }
+    let b0 = _zp_ab(a, off);
+    if b0 == 47 || b0 == 92 {
+        return false;
+    }
+    if len >= 2 && _zp_ab(a, off + 1) == 58 {
+        return false;
+    }
+    let mut ok = true;
+    let mut seg = 0;
+    let mut i = 0;
+    while i <= len && ok {
+        let mut b = 47;
+        if i < len {
+            b = _zp_ab(a, off + i);
+        }
+        if b == 0 || b == 58 {
+            ok = false;
+        }
+        if b == 47 || b == 92 || i == len {
+            let sl = i - seg;
+            if sl == 2 && _zp_ab(a, off + seg) == 46 && _zp_ab(a, off + seg + 1) == 46 {
+                ok = false;
+            }
+            seg = i + 1;
+        }
+        i = i + 1;
+    }
+    return ok;
+}
+
+/// _zp_acheck(a, index): structural + security validation of one entry.
+fn _zp_acheck(a: Ptr<Int>, index: Int) -> Int {
+    let off = _zp_aentry(a, index);
+    if off < 0 {
+        return -2;
+    }
+    if !_zp_asafe(a, off + CD_NAME, _zp_ar16(a, off + CD_NAMELEN)) {
+        return -4;
+    }
+    let flags = _zp_ar16(a, off + CD_FLAGS);
+    let method = _zp_ar16(a, off + CD_METHOD);
+    if (flags & 1) != 0 {
+        return -5;
+    }
+    if method != 0 && method != 8 {
+        return -5;
+    }
+    return 0;
+}
+
+/// _zp_adecode(a, start, method, csize, usize): materialise one entry's
+/// stored-form bytes at `[start, start+csize)` as the payload. Called only
+/// after the entry's method, sizes and bounds were validated. Returns
+/// (payload, status).
+fn _zp_adecode(a: Ptr<Int>, start: Int, method: Int, csize: Int, usize: Int) -> (Str, Int) {
+    let mut payload = rt_str_alloc(0);
+    let mut st = 0;
+    if method == 0 {
+        if csize == usize {
+            rt_str_free(payload);
+            payload = _zp_aslice(a, start, csize);
+        } else {
+            st = -3;
+        }
+    } else {
+        let raw = _zp_aslice(a, start, csize);
+        let pair = inflate_raw(raw);
+        let out = pair.0;
+        let code = pair.1;
+        if code == 0 && rt_str_len(out) == usize {
+            rt_str_free(payload);
+            payload = out;
+        } else {
+            st = -3;
+            rt_str_free(out);
+        }
+    }
+    return (payload, st);
+}
+
+/// _zp_apayload(a, index): decode one entry, with CRC-32 and size verified.
+fn _zp_apayload(a: Ptr<Int>, index: Int) -> (Str, Int) {
+    let off = _zp_aentry(a, index);
+    if off < 0 {
+        return (rt_str_alloc(0), -2);
+    }
+    let n = _zp_alen(a);
+    let flags = _zp_ar16(a, off + CD_FLAGS);
+    let method = _zp_ar16(a, off + CD_METHOD);
+    let crc = _zp_ar32(a, off + CD_CRC);
+    let csize = _zp_ar32(a, off + CD_CSIZE);
+    let usize = _zp_ar32(a, off + CD_USIZE);
+    let lho = _zp_ar32(a, off + CD_LOCALOFF);
+    if (flags & 1) != 0 {
+        return (rt_str_alloc(0), -5);
+    }
+    if method != 0 && method != 8 {
+        return (rt_str_alloc(0), -5);
+    }
+    if csize == 4294967295 || usize == 4294967295 || lho == 4294967295 {
+        return (rt_str_alloc(0), -5);
+    }
+    if lho + CD_NAME > n || _zp_ar32(a, lho) != ZIP_SIG_LOCAL {
+        return (rt_str_alloc(0), -3);
+    }
+    let start = lho + LF_NAME + _zp_ar16(a, lho + LF_NAMELEN) + _zp_ar16(a, lho + LF_EXTRALEN);
+    if start + csize > n {
+        return (rt_str_alloc(0), -3);
+    }
+    let pair = _zp_adecode(a, start, method, csize, usize);
+    let payload = pair.0;
+    let dcode = pair.1;
+    let mut res = payload;
+    let mut st = dcode;
+    if st == 0 {
+        let (got, back) = zlib_crc32(res);
+        res = back;
+        if got != crc {
+            st = -7;
+        }
+    }
+    if st != 0 {
+        rt_str_free(res);
+        res = rt_str_alloc(0);
+    }
+    return (res, st);
+}
+
+/// zip_read_count(data): entry count of an archive, or a negative status.
+/// Pass-back idiom: a copy of the archive is returned to the caller.
+fn zip_read_count(data: Str) -> (Int, Str) {
+    let a = _z_bytes(data);
+    let n = _zp_atotal(a);
+    let back = _zp_aslice(a, 0, _zp_alen(a));
+    rt_free(a);
+    return (n, back);
+}
+
+/// zip_list(data): every entry name in central directory order. Consumes
+/// `data`; the caller owns the returned `Vec<Str>` (free it with
+/// `rt_vec_free`, which releases the names).
+fn zip_list(data: Str) -> Vec<Str> {
+    let a = _z_bytes(data);
+    let total = _zp_atotal(a);
+    let mut v = rt_vec_new(4);
+    let mut st = total;
+    if st < 0 {
+        st = 0;
+    }
+    let mut i = 0;
+    while i < st {
+        let off = _zp_aentry(a, i);
+        if off < 0 {
+            i = st;
+        } else {
+            let nm = _zp_aslice(a, off + CD_NAME, _zp_ar16(a, off + CD_NAMELEN));
+            v = rt_vec_push(v, nm);
+            i = i + 1;
+        }
+    }
+    rt_free(a);
+    return v;
+}
+
+/// zip_entry_name(data, index): the entry's stored name. Consumes `data`.
+fn zip_entry_name(data: Str, index: Int) -> (Str, Int) {
+    let a = _z_bytes(data);
+    let off = _zp_aentry(a, index);
+    let mut name = rt_str_alloc(0);
+    let mut st = 0;
+    if off < 0 {
+        st = -2;
+    } else {
+        rt_str_free(name);
+        name = _zp_aslice(a, off + CD_NAME, _zp_ar16(a, off + CD_NAMELEN));
+    }
+    rt_free(a);
+    return (name, st);
+}
+
+/// zip_entry_size(data, index): the entry's uncompressed size. Pass-back.
+fn zip_entry_size(data: Str, index: Int) -> (Int, Str) {
+    let a = _z_bytes(data);
+    let off = _zp_aentry(a, index);
+    let mut size = -2;
+    if off >= 0 {
+        let u = _zp_ar32(a, off + CD_USIZE);
+        if u == 4294967295 {
+            size = -5;
+        } else {
+            size = u;
+        }
+    }
+    let back = _zp_aslice(a, 0, _zp_alen(a));
+    rt_free(a);
+    return (size, back);
+}
+
+/// zip_entry_is_dir(data, index): whether the entry name ends in a separator
+/// (the ZIP convention for a directory). Pass-back.
+fn zip_entry_is_dir(data: Str, index: Int) -> (Bool, Str) {
+    let a = _z_bytes(data);
+    let off = _zp_aentry(a, index);
+    let mut d = false;
+    if off >= 0 {
+        let nl = _zp_ar16(a, off + CD_NAMELEN);
+        if nl > 0 {
+            let last = _zp_ab(a, off + CD_NAME + nl - 1);
+            if last == 47 || last == 92 {
+                d = true;
+            }
+        }
+    }
+    let back = _zp_aslice(a, 0, _zp_alen(a));
+    rt_free(a);
+    return (d, back);
+}
+
+/// zip_is_safe_path(name): whether `name` may be used as an extraction
+/// target. See the module header for the rejection list. Consumes `name`.
+fn zip_is_safe_path(name: Str) -> Bool {
+    let a = _z_bytes(name);
+    let r = _zp_asafe(a, 0, _zp_alen(a));
+    rt_free(a);
+    return r;
+}
+
+/// zip_entry_data(data, index): the entry's decompressed payload, with the
+/// CRC-32 and size verified. Consumes `data`.
+fn zip_entry_data(data: Str, index: Int) -> (Str, Int) {
+    let a = _z_bytes(data);
+    let (payload, code) = _zp_apayload(a, index);
+    rt_free(a);
+    return (payload, code);
+}
+
+/// zip_entry_data_by_name(data, name): the payload of the first entry whose
+/// stored name equals `name` (bytes compared exactly). Consumes both.
+fn zip_entry_data_by_name(data: Str, name: Str) -> (Str, Int) {
+    let a = _z_bytes(data);
+    let want = rt_str_len(name);
+    let total = _zp_atotal(a);
+    let mut idx = -1;
+    let mut i = 0;
+    while i < total && idx < 0 {
+        let off = _zp_aentry(a, i);
+        if off < 0 {
+            i = total;
+        } else {
+            let nl = _zp_ar16(a, off + CD_NAMELEN);
+            let mut same = 0;
+            if nl == want {
+                same = 1;
+                let mut k = 0;
+                while k < nl {
+                    if _zp_ab(a, off + CD_NAME + k) != rt_str_byte(name, k) {
+                        same = 0;
+                        k = nl;
+                    }
+                    k = k + 1;
+                }
+            }
+            if same == 1 {
+                idx = i;
+            }
+            i = i + 1;
+        }
+    }
+    rt_str_free(name);
+    let mut payload = rt_str_alloc(0);
+    let mut code = -2;
+    if idx >= 0 {
+        rt_str_free(payload);
+        let pair = _zp_apayload(a, idx);
+        payload = pair.0;
+        code = pair.1;
+    }
+    rt_free(a);
+    return (payload, code);
+}
+
+// ============================================================================
+// Extraction
+// ============================================================================
+
+/// _zp_join(dir, name): `dir` + one separator + `name` with "/" normalized to
+/// "\". Consumes both and returns a fresh `Str`.
+fn _zp_join(dir: Str, name: Str) -> Str {
+    let dn = rt_str_len(dir);
+    let nn = rt_str_len(name);
+    let mut sep = 1;
+    if dn == 0 {
+        sep = 0;
+    } else {
+        let last = rt_str_byte(dir, dn - 1);
+        if last == 92 || last == 47 {
+            sep = 0;
+        }
+    }
+    let out = rt_str_alloc(dn + sep + nn);
+    let mut i = 0;
+    while i < dn {
+        rt_str_set_byte(out, i, rt_str_byte(dir, i));
+        i = i + 1;
+    }
+    if sep == 1 {
+        rt_str_set_byte(out, dn, 92);
+    }
+    let mut j = 0;
+    while j < nn {
+        let mut b = rt_str_byte(name, j);
+        if b == 47 {
+            b = 92;
+        }
+        rt_str_set_byte(out, dn + sep + j, b);
+        j = j + 1;
+    }
+    rt_str_free(dir);
+    rt_str_free(name);
+    return out;
+}
+
+/// _zp_mkdir_p(path): create `path` and every missing parent, consuming
+/// `path`. Failures are ignored (an existing directory is not an error, and
+/// the subsequent write reports a real problem).
+fn _zp_mkdir_p(path: Str) {
+    let n = rt_str_len(path);
+    let mut i = 1;
+    while i < n {
+        let b = rt_str_byte(path, i);
+        if b == 92 || b == 47 {
+            if rt_str_byte(path, i - 1) != 58 {
+                let pfx = rt_str_alloc(i);
+                let mut k = 0;
+                while k < i {
+                    rt_str_set_byte(pfx, k, rt_str_byte(path, k));
+                    k = k + 1;
+                }
+                fs_create_dir(pfx);
+            }
+        }
+        i = i + 1;
+    }
+    fs_create_dir(path);
+}
+
+/// _zp_aextract(a, d, index): write entry `index` beneath the destination
+/// arena `d`. Returns a status code.
+fn _zp_aextract(a: Ptr<Int>, d: Ptr<Int>, index: Int) -> Int {
+    let off = _zp_aentry(a, index);
+    if off < 0 {
+        return -2;
+    }
+    let nl = _zp_ar16(a, off + CD_NAMELEN);
+    if nl == 0 {
+        return -4;
+    }
+    let last = _zp_ab(a, off + CD_NAME + nl - 1);
+    if last == 47 || last == 92 {
+        let nm = _zp_aslice(a, off + CD_NAME, nl);
+        let dp = _zp_aslice(d, 0, _zp_alen(d));
+        _zp_mkdir_p(_zp_join(dp, nm));
+        return 0;
+    }
+    let mut cut = -1;
+    let mut i = 0;
+    while i < nl {
+        let b = _zp_ab(a, off + CD_NAME + i);
+        if b == 92 || b == 47 {
+            cut = i;
+        }
+        i = i + 1;
+    }
+    if cut > 0 {
+        let pn = _zp_aslice(a, off + CD_NAME, cut);
+        let dp = _zp_aslice(d, 0, _zp_alen(d));
+        _zp_mkdir_p(_zp_join(dp, pn));
+    }
+    let (payload, code) = _zp_apayload(a, index);
+    if code != 0 {
+        return code;
+    }
+    let nm = _zp_aslice(a, off + CD_NAME, nl);
+    let dp = _zp_aslice(d, 0, _zp_alen(d));
+    // `fs_write` returns the byte count on success and a negative code on
+    // failure, so only a negative result is an extraction failure.
+    let w = fs_write(_zp_join(dp, nm), payload);
+    if w < 0 {
+        return -6;
+    }
+    return 0;
+}
+
+/// zip_extract_all(data, dest): extract every entry beneath `dest`, creating
+/// directories as needed. Every entry name is validated before anything is
+/// written. Consumes both arguments and returns a status code.
+fn zip_extract_all(data: Str, dest: Str) -> Int {
+    let a = _z_bytes(data);
+    let d = _z_bytes(dest);
+    let total = _zp_atotal(a);
+    let mut st = 0;
+    if total < 0 {
+        st = total;
+    }
+    // Create the destination root first (mkdir -p): entries are written with
+    // `fs_write`, which does not create missing directories.
+    if st == 0 {
+        _zp_mkdir_p(_zp_aslice(d, 0, _zp_alen(d)));
+    }
+    let mut i = 0;
+    while i < total && st == 0 {
+        let code = _zp_acheck(a, i);
+        if code != 0 {
+            st = code;
+        }
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < total && st == 0 {
+        let code = _zp_aextract(a, d, j);
+        if code != 0 {
+            st = code;
+        }
+        j = j + 1;
+    }
+    rt_free(a);
+    rt_free(d);
+    return st;
+}
+
+/// zip_extract_entry(data, index, dest): extract a single entry beneath
+/// `dest`. Consumes all three arguments and returns a status code.
+fn zip_extract_entry(data: Str, index: Int, dest: Str) -> Int {
+    let a = _z_bytes(data);
+    let d = _z_bytes(dest);
+    let mut st = _zp_acheck(a, index);
+    if st == 0 {
+        _zp_mkdir_p(_zp_aslice(d, 0, _zp_alen(d)));
+        st = _zp_aextract(a, d, index);
+    }
+    rt_free(a);
+    rt_free(d);
+    return st;
+}

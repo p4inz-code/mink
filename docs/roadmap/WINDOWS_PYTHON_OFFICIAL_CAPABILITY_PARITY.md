@@ -72,7 +72,7 @@ probes). Every "every major claim must be traceable" row carries anchors in Note
 | Windows target | `x86_64-windows-pe` implemented | `[code] src/backend/target.rs` |
 | Linux target | `x86_64-linux-elf` implemented but FROZEN by policy; not part of this audit | `[code] src/backend/target.rs`; session policy |
 | Architecture | AOT compiler, no external toolchain, zero Rust crate deps, standalone PE | `[code] Cargo.toml`, `src/backend/emit/*.rs` |
-| Distribution | npm `@p4inz-code/mink` 1.0.1 ships compiler `bin/mink.exe` + bundled `stdlib/` (all 21 `.mink` modules); `mod` resolves via `<exe>/../stdlib` with no config | `[code] npm/mink/package.json`, `src/driver.rs` resolve_module_path; `[exec]` Session 99 clean-install stdlib import |
+| Distribution | npm `@p4inz-code/mink` 1.0.1 ships compiler `bin/mink.exe` + bundled `stdlib/` (all 22 `.mink` modules); `mod` resolves via `<exe>/../stdlib` with no config | `[code] npm/mink/package.json`, `src/driver.rs` resolve_module_path; `[exec]` Session 99 clean-install stdlib import |
 | P0 / P1 on the Windows base | 0 / 0 | Session 97 gate |
 
 Short-circuit semantics of `&&` / `||` were probed natively this session: both **do**
@@ -332,7 +332,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 |---|---|---|---|---|---|---|---|---|---|
 | S42 | zlib/gzip | VERIFIED | `stdlib/zlib.mink` (bundled at `npm/mink/stdlib/zlib.mink`) — a self-contained DEFLATE codec with raw, zlib and gzip entry points: `deflate_raw`/`inflate_raw`, `zlib_compress`/`zlib_decompress`, `gzip_compress`/`gzip_decompress`, `zlib_crc32`, `zlib_adler32`, over stored, fixed-Huffman and dynamic-Huffman blocks with a 256 KB sliding window and level 0/1/6/9 (`[test] tests/zlib_lib.rs` s42_* 15 tests: empty and tiny inputs, repetitive and binary payloads, all three wrappers round-tripped, CPython-compressed streams inflated, level/wrapper interactions, malformed/truncated/corrupt/bad-checksum/bad-block-type rejection, deterministic repeated use, 400+ cycle ownership run; `[exec]` native PE runs; `[exec]` Session 110 cross-validation: 77 vectors verified bidirectionally against CPython 3.11 `zlib` — CPython inflates MINK output and MINK inflates CPython output, with a byte-identical match for `zlib.compress(b"hello", 6)` and 4500→40 bytes on repetitive input) | No bz2/lzma (S43, P3); no streaming/incremental API and no multi-member gzip concatenation; decompression is bounded by the fixed 4 MiB runtime heap, so payloads needing a larger resident window are out of range by construction; fixed-window LZ77 with no optimal parsing, so ratios trail CPython's on non-repetitive data | - | M | N | D | Session 110. Huffman/LZ77 tables are folded into the input-sized arena so every request is input-sized; residual heap growth is caller-side (non-splitting first-fit allocator), measured and documented in the module and test comments. Root-caused on the way: `_z_fill` never advanced its scan index after a separator (infinite loop in every entry point), and the free order in the compression path stranded a 128 KiB skipped block per call. |
 | S43 | bz2 / lzma | MISSING | none | Other codecs | P3 | XL | N | D | After zlib |
-| S44 | zip archives | MISSING | none | Read/write .zip | P1 | L | Y | D | Container over stored/deflate entries |
+| S44 | zip archives | VERIFIED | `stdlib/zip.mink` (bundled at `npm/mink/stdlib/zip.mink`) — a self-contained PKZIP reader/writer over the verified DEFLATE codec (`[code] stdlib/zip.mink`, `npm/mink/stdlib/zip.mink`): archive creation (`zip_new`/`zip_add`/`zip_add_stored`/`zip_add_dir`/`zip_finish`) and reading (`zip_read_count`/`zip_list`/`zip_entry_name`/`zip_entry_data`/`zip_entry_size`/`zip_entry_is_dir`/`zip_entry_data_by_name`), with extraction to disk (`zip_extract_all`/`zip_extract_entry`) including recursive directory creation; CRC-32 verification on decompression; entry capacity and pool doubling for growth; a path-safety predicate rejecting traversal, absolute paths, drive-qualified paths, UNC, NTFS alternate data streams and `..` segments; `[test] tests/zip_lib.rs` s44_* 10 tests: empty archive, single stored entry, deflate+stored+dir multi-entry, entry data round trip, 20-cycle leak-free build loop, deterministic golden bytes, path-safety predicates, empty payload, binary payload, 30-entry capacity-growth stress; `[exec]` native PE runs; `[exec]` Session 111 CPython 3.11 `zipfile` interop: 87 cross-validation checks pass — MINK-written archive read by CPython (7 entries, all names/contents/methods correct), CPython-written archive read by MINK (5 entries, names/lengths/CRC-32 match), MINK extracts CPython archive (all bytes match), all 10 hostile archive names rejected with -4 (traversal, absolute, drive, UNC, ADS, `..`), all 4 malformed inputs rejected, leak-free throughout | No bz2/lzma (S43, P3); no per-entry timestamps preserved (written as fixed DOS epoch 1980-01-01); non-ASCII entry *names* on extracted files are reinterpreted through the ANSI Win32 API (documented MINK limitation, matrix W22 family); no multi-disk, no ZIP64, no data descriptor streaming; the archive byte format is ZIP 2.0 (MS-DOS version) | - | L | N | D | Session 111. Two growth-copy defects were fixed in `_zp_grow` (records overwritten by pool copy due to an incorrect base calculation). Also closed during this session: a multi-module P0 defect where expression types and name resolutions were keyed by byte offset only, so any two-module program could mis-type expressions — fixed in `src/typecheck/mod.rs` (`expr_type`/`expr_type_exact` sorted/looked up by `(file, start)`) and `src/semantics/mod.rs` (`resolve`/`resolutions`/`binding_aliases`/`errors` keyed by `(file, start)`). |
 | S45 | tar archives | MISSING | none | .tar read/write | P2 | M | N | D | Trivial container once fs works |
 
 ### 5.10 Crypto / hashing / security
@@ -459,7 +459,7 @@ distribution of the compiler is complete and does NOT constitute a MINK package 
 | ID | Python concept | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | P01 | Distributing the tool itself | VERIFIED | npm `@p4inz-code/mink` 1.0.1, clean install ×2, standalone exe (`[exec]` Session 97; `[code] npm/mink/package.json`) | None | - | - | N | - | Category (B) is done |
-| P02 | Standard-library source available to installed users | VERIFIED | npm `@p4inz-code/mink` ships `npm/mink/stdlib/*.mink` (all 21 modules) beside `bin/mink.exe`, and `mod name;` resolves it via `<exe>/../stdlib` with no config (`[code] npm/mink/package.json` `files`, `src/driver.rs` resolve_module_path; `[test] tests/release.rs` s107_npm_stdlib_bundle_matches_repo_stdlib — bundle byte-identical to `stdlib/`; `[exec]` Session 99 clean-install stdlib import) | None for V1 | - | - | N | - | **Reclassified in Session 107**: the row still said MISSING although the bundled stdlib landed in Session 99 (see the §2 baseline row). Session 107 also synced the drifted copy (`str_split`/`str_join`, the UTF-8 layer) and added the permanent drift guard |
+| P02 | Standard-library source available to installed users | VERIFIED | npm `@p4inz-code/mink` ships `npm/mink/stdlib/*.mink` (all 22 modules) beside `bin/mink.exe`, and `mod name;` resolves it via `<exe>/../stdlib` with no config (`[code] npm/mink/package.json` `files`, `src/driver.rs` resolve_module_path; `[test] tests/release.rs` s107_npm_stdlib_bundle_matches_repo_stdlib — bundle byte-identical to `stdlib/`; `[exec]` Session 99 clean-install stdlib import) | None for V1 | - | - | N | - | **Reclassified in Session 107**: the row still said MISSING although the bundled stdlib landed in Session 99 (see the §2 baseline row). Session 107 also synced the drifted copy (`str_split`/`str_join`, the UTF-8 layer) and added the permanent drift guard |
 | P03 | Import package (`import pkg`) | VERIFIED | `mod pkg;` imports a directory package (see L68) and `use pkg::item;` names its items; two or more sibling modules now resolve to distinct symbols (`[code] src/hir/lower.rs`, `src/typecheck/checker.rs`, `src/ownership/mod.rs` — declaration maps keyed by `(file, offset)`; `[test] tests/packages.rs` l68_two_sibling_modules_resolve_distinct_symbols; fixture `tests/packages/siblings/`; `[exec]` native PE run) | No namespace isolation between packages (V1 flattens all items); no package versioning | - | M | N | F | Delivered this session, including the multi-module symbol-collision defect fix |
 | P04 | Installed package / site-packages | MISSING | none | project-local dependency installation | P1 | M | Y | F | |
 | P05 | Dependency declaration + install (`pip`) | MISSING | none | dependency install/update | P1 | XL | Y | F | Major subsystem (package manager) |
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 30 | 12 | 29 | 8 | 5 | 3 | 87 |
+| VERIFIED | 30 | 12 | 30 | 8 | 5 | 3 | 88 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -520,7 +520,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | PARTIAL | 9 | 2 | 12 | 0 | 10 | 1 | 34 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 18 | 12 | 33 | 6 | 6 | 7 | 82 |
+| MISSING | 18 | 12 | 32 | 6 | 6 | 7 | 81 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 *(Session 109 recomputation: produced by scanning the 232 capability rows directly
@@ -531,21 +531,21 @@ rather than by adjusting the previous table; every column and row sums to 232.)*
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 1 | 2 | 5 | 0 | 0 | 4 | **12** |
+| P1 (parity-blocking by definition) | 1 | 2 | 4 | 0 | 0 | 4 | **11** |
 | P2 (important, not blocking) | 22 | 10 | 35 | 2 | 17 | 5 | **91** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
-| — (no gap / no MINK work) | 27 | 9 | 24 | 9 | 2 | 4 | **75** |
+| — (no gap / no MINK work) | 27 | 9 | 25 | 9 | 2 | 4 | **76** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **12 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **11 capability gaps block the parity gate.**
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
 `src/driver.rs` mechanism behind the VERIFIED L67), so P1 now equals the `Blocks = Y`
 set exactly.
 
-### 10.3 Difficulty distribution (rows requiring work; the other 75 rows have no gap)
+### 10.3 Difficulty distribution (rows requiring work; the other 76 rows have no gap)
 
 | Difficulty | Rows | Meaning |
 |---|---|---|
@@ -553,10 +553,10 @@ set exactly.
 | S (small) | 36 | one focused change, low risk |
 | M (medium) | 75 | multiple components, contained |
 | L (large) | 28 | major feature area |
-| XL (major subsystem) | 13 | dedicated multi-session subsystem |
-| **Rows requiring work** | **157** | 157 + 75 no-gap rows = 232 |
+| XL (major subsystem) | 12 | dedicated multi-session subsystem |
+| **Rows requiring work** | **156** | 156 + 76 no-gap rows = 232 |
 
-### 10.4 Parity-blocking gaps (12, all P1) by wave
+### 10.4 Parity-blocking gaps (11, all P1) by wave
 
 Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
 primary wave. The rows delivered across Sessions 99–110
@@ -569,11 +569,11 @@ Waves A, C and G are now empty.
 | A (Windows platform/runtime quick wins) | (none) | 0 |
 | B (core language/data) | L34 | 1 |
 | C (filesystem/process/time) | (none) | 0 |
-| D (networking/internet/compression) | S41, S44, S62 | 3 |
+| D (networking/internet/compression) | S41, S62 | 2 |
 | E (concurrency/async) | R19, R20, S71, S73 | 4 |
 | F (packaging/distribution) | P04, P05, P06, P09 | 4 |
 | G (developer tooling) | (none) | 0 |
-| **Total** | | **12** |
+| **Total** | | **11** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -600,8 +600,8 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.6 Headline conclusions
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
-2. **Official-Python-capability parity is PARTIAL**: 91 execution-verified rows (VERIFIED 87 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 82 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
-3. **12 parity-blocking P1 gaps** remain (Wave B 1 · D 3 · E 4 · F 4); in all, 157 rows require work and 75 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
+2. **Official-Python-capability parity is PARTIAL**: 92 execution-verified rows (VERIFIED 88 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 81 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
+3. **11 parity-blocking P1 gaps** remain (Wave B 1 · D 2 · E 4 · F 4); in all, 156 rows require work and 76 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
 6. Parity-blocking work clusters into: language/data (Wave B — collections L10/L11/L12, Vec generics L08, string split/join S01, the UTF-8 layer L05 and regex S02 are now VERIFIED; remaining: L34 exceptions), concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D — S42 zlib/gzip now VERIFIED; remaining SQLite, zip, TLS), filesystem/time completion (Wave C), developer tooling incl. REPL and test runner (Wave G). Wave A is fully closed (S74 in Session 108); the shared A/F include-path mechanism landed across Sessions 99–107.
@@ -610,7 +610,7 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (12 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (11 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
 
 **Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.
@@ -628,7 +628,9 @@ Every count in §10 was recomputed from the rows after both closures.
 
 **Session 107 updates:** L05 (Unicode text) **P1 blocker CLOSED** — the UTF-8 code-point layer (`utf8_validate`/`decode`/`encode`/`char_count`/`char_at`/`byte_index`/`slice`) was added, native-verified and leak-checked, fixing two latent defects on the way (heap-argument leak; acceptance of overlong 2-byte forms and surrogates). S01 (string methods) and L08 (lists) `P1` flags cleared after their Session 106/107 closures. Row flags reconciled against each row's own evidence for R06, W14, P02 and T06, and every count in §10 recomputed **from the rows** (stale aggregate tables and five rows with a missing trailing pipe were corrected). The npm stdlib bundle was re-synced (`str_split`/`str_join` plus the UTF-8 layer) with a permanent drift guard.
 
-**Session 110 updates:** **S42** (zlib/gzip) **P1 blocker CLOSED** — `stdlib/zlib.mink` is a self-contained DEFLATE codec (raw/zlib/gzip over stored, fixed-Huffman and dynamic-Huffman blocks, with CRC-32 and Adler-32), native-PE verified and cross-validated bidirectionally against CPython 3.11 `zlib` across 77 vectors. Parity-blocking set: 13 → 12. Two real defects were found and fixed on the way: `_z_fill` never advanced its scan index after a separator (an infinite loop reachable from every public entry point) and the compression free order stranded a 128 KiB skipped block per call; the codec now folds its static tables into the input-sized arena so every request is input-sized. Every count in §10 was recomputed from the rows after the closure.
+**Session 110 updates:** **S42** (zlib/gzip) **P1 blocker CLOSED** — `stdlib/zlib.mink` is a self-contained DEFLATE codec (raw/zlib/gzip over stored, fixed-Huffman and dynamic-Huffman blocks, with CRC-32 and Adler-32), native-PE verified and cross-validated bidirectionally against CPython 3.11 `zlib` across 77 vectors. Parity-blocking set: 13 → 12. Two real defects were found and fixed on the way: `_z_fill` never advanced its scan index after a separator (an infinite loop reachable from every public entry point) and the compression free order stranded a 128 KiB skipped block per call; the codec now folds its static tables into the input-sized arena so every request is input-sized.
+
+**Session 111 updates:** **S44** (zip archives) **P1 blocker CLOSED** — `stdlib/zip.mink` is a self-contained PKZIP reader/writer over the verified DEFLATE codec, native-PE verified and cross-validated bidirectionally against CPython 3.11 `zipfile` across 87 checks (archive creation, multi-entry with stored/deflate/dir entries, CPython reads MINK archives correctly, MINK reads CPython archives correctly, MINK extracts CPython archives with byte-correct content, 10 hostile archive names rejected, 4 malformed inputs rejected, 30-entry capacity-growth stress, deterministic golden bytes, leak-free). A multi-module P0 defect was also found and fixed: `expr_type` and `resolve` lookups in `src/typecheck/mod.rs` and `src/semantics/mod.rs` were keyed by byte offset only, so two-module programs could mis-type expressions — fixed by keying all span lookups by `(SourceId, offset)`. Parity-blocking set: 12 → 11.
 
 **Session 109 updates:** five P1 blockers **CLOSED** (L68, P03, R01, T04, S02), one latent multi-module defect fixed. **L68/P03** (directory packages + package import) — `mod name;` resolves to `name/mod.mink`, nested packages compose, and the multi-module symbol-collision defect (declaration maps keyed by byte offset alone, so sibling modules at the same offset collapsed onto one symbol) was root-caused and fixed across HIR/typecheck/ownership (`tests/packages.rs`, fixtures under `tests/packages/`). **R01/T04** (interactive REPL) — `mink repl` delivers a compile-eval session on the native backend, with an initial-file preload and `:help`/`:show`/`:clear`/`:quit` commands (`tests/repl.rs` r01-r14, native PE runs through the real CLI). **S02** (regular expressions) — `stdlib/re.mink` delivers a self-contained backtracking engine with search/match/full-match/find/find_all/count/split/replace and a bounded step budget (`tests/re_lib.rs` s02_* 33 tests). Parity-blocking set: 18 → 13; every count in §10 was recomputed from the rows at the end of Session 109.
 
