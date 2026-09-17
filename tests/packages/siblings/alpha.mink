@@ -1,0 +1,3 @@
+pub fn alpha_one() -> Int {
+    return 1;
+}

@@ -1,0 +1,3 @@
+pub fn package_marker() -> Int {
+    return 22;
+}

@@ -1,0 +1,3 @@
+pub fn geometry_double(x: Int) -> Int {
+    return x * 2;
+}

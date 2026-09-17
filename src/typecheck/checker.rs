@@ -205,8 +205,10 @@ struct Checker<'a> {
     types: TypeTable,
     /// The type of every symbol, indexed by `SymbolId::raw()`.
     symbol_types: Vec<TypeId>,
-    /// Declaration name span start → symbol id, for binding lookups.
-    decls: HashMap<u32, SymbolId>,
+    /// Declaration *site* (file, byte offset) → symbol id, for binding
+    /// lookups. Byte offsets repeat across the files of a multi-module
+    /// program, so the file id is part of the key.
+    decls: HashMap<(crate::source::SourceId, u32), SymbolId>,
     /// The registered structs (type namespace): name → registration.
     structs: HashMap<String, StructReg>,
     /// The registered enums (type namespace): name → registration.
@@ -355,7 +357,7 @@ impl<'a> Checker<'a> {
     fn fn_result_of(&self, f: &FnItem) -> Option<TypeId> {
         let fn_ty = self
             .decls
-            .get(&f.name.span.start())
+            .get(&(f.name.span.file(), f.name.span.start()))
             .copied()
             .and_then(|symbol| self.symbol_types.get(symbol.raw() as usize).copied())?;
         match self.types.kind(fn_ty).cloned() {
@@ -1395,7 +1397,7 @@ impl<'a> Checker<'a> {
         // return type annotation).  Cloned from the AST so the borrow
         // on `self.ast` is released before the mutable loop.
         type FnInfo = (usize, Vec<Option<Ty>>, Option<Ty>);
-        let mut fn_info: HashMap<u32, FnInfo> = HashMap::new();
+        let mut fn_info: HashMap<(crate::source::SourceId, u32), FnInfo> = HashMap::new();
         for item in &self.ast.items {
             // Collect fn_info from both bare `fn` and `pub fn` declarations.
             let fn_item = match &item.kind {
@@ -1412,7 +1414,7 @@ impl<'a> Checker<'a> {
             if let Some(f) = fn_item {
                 let param_tys: Vec<Option<Ty>> = f.params.iter().map(|p| p.ty.clone()).collect();
                 fn_info.insert(
-                    f.name.span.start(),
+                    (f.name.span.file(), f.name.span.start()),
                     (f.params.len(), param_tys, f.return_ty.clone()),
                 );
             }
@@ -1432,7 +1434,7 @@ impl<'a> Checker<'a> {
                         self.types.push(TypeKind::Fn { params, result })
                     } else {
                         let (arity, param_tys, return_ty) = fn_info
-                            .get(&symbol.span.start())
+                            .get(&(symbol.span.file(), symbol.span.start()))
                             .cloned()
                             .unwrap_or((0, Vec::new(), None));
                         let params: Vec<TypeId> = (0..arity)
@@ -1456,14 +1458,15 @@ impl<'a> Checker<'a> {
                 _ => self.types.push(TypeKind::Infer(None)),
             };
             self.symbol_types[symbol.id.raw() as usize] = ty;
-            self.decls.insert(symbol.span.start(), symbol.id);
+            self.decls
+                .insert((symbol.span.file(), symbol.span.start()), symbol.id);
         }
         // Or-pattern binding aliases (session 27): every occurrence of an
         // or-pattern binding after its first resolves to the same symbol,
         // so each alternative's binding occurrence is typed and unified
         // with the one logical binding.
         for (span, symbol) in self.semantic.binding_aliases() {
-            self.decls.insert(span.start(), *symbol);
+            self.decls.insert((span.file(), span.start()), *symbol);
         }
     }
 
@@ -1729,7 +1732,7 @@ impl<'a> Checker<'a> {
     fn check_fn(&mut self, f: &FnItem) {
         let Some(fn_ty) = self
             .decls
-            .get(&f.name.span.start())
+            .get(&(f.name.span.file(), f.name.span.start()))
             .copied()
             .and_then(|symbol| self.symbol_types.get(symbol.raw() as usize).copied())
         else {
@@ -1743,7 +1746,10 @@ impl<'a> Checker<'a> {
             _ => (Vec::new(), self.types.push(TypeKind::Error)),
         };
         for (param, param_slot) in f.params.iter().zip(params) {
-            if let Some(&symbol) = self.decls.get(&param.name.span.start()) {
+            if let Some(&symbol) = self
+                .decls
+                .get(&(param.name.span.file(), param.name.span.start()))
+            {
                 let var = self.symbol_types[symbol.raw() as usize];
                 let _ = self.types.unify(var, param_slot);
             }
@@ -2977,7 +2983,11 @@ impl<'a> Checker<'a> {
     /// is determined by the first real constraint; unknown/error iterables
     /// defer silently — their root cause is reported elsewhere.
     fn check_for_var(&mut self, name: &Ident, iter_ty: TypeId, span: Span) {
-        let Some(symbol) = self.decls.get(&name.span.start()).copied() else {
+        let Some(symbol) = self
+            .decls
+            .get(&(name.span.file(), name.span.start()))
+            .copied()
+        else {
             return;
         };
         let var = self.symbol_types[symbol.raw() as usize];
@@ -3014,7 +3024,11 @@ impl<'a> Checker<'a> {
     /// type. The declaration variable is fresh, so this normally cannot
     /// fail; the error path is defensive.
     fn unify_decl(&mut self, name: &Ident, ty: TypeId, span: Span) {
-        let Some(symbol) = self.decls.get(&name.span.start()).copied() else {
+        let Some(symbol) = self
+            .decls
+            .get(&(name.span.file(), name.span.start()))
+            .copied()
+        else {
             return;
         };
         let var = self.symbol_types[symbol.raw() as usize];

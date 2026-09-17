@@ -553,6 +553,7 @@ pub(crate) fn discover_modules(
         sources,
         root_path,
         None,
+        None,
         &mut modules,
         &mut visited,
         &mut errors,
@@ -569,6 +570,7 @@ fn discover_modules_recursive(
     sources: &mut SourceMap,
     path: &Path,
     parent: Option<String>,
+    declared: Option<String>,
     modules: &mut Vec<ModuleSource>,
     visited: &mut HashSet<PathBuf>,
     errors: &mut Vec<CheckError>,
@@ -600,11 +602,15 @@ fn discover_modules_recursive(
     let file = sources
         .get(source_id)
         .expect("loaded file always registered");
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    // Child modules take the name from their `mod` declaration, so a
+    // directory package resolved to `<name>/mod.mink` is still known as
+    // `<name>` (matching `use <name>::item`). The root uses its file stem.
+    let name = declared.unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    });
     let parsed = parser::parse(file);
 
     // Only collect lex/parse errors from child modules; the root file's
@@ -654,6 +660,7 @@ fn discover_modules_recursive(
                 sources,
                 &child_path,
                 Some(module_name.clone()),
+                Some(child_name.clone()),
                 modules,
                 visited,
                 errors,
@@ -666,9 +673,13 @@ fn discover_modules_recursive(
 ///
 /// Search order:
 /// 1. the declaring file's directory (classic sibling-module behavior);
-/// 2. the bundled standard library next to the installed `mink`
+/// 2. the declaring file's directory as a *directory package*: the package
+///    root file is `<dir>/<name>/mod.mink` (MINK's equivalent of Python's
+///    `<name>/__init__.py`); submodules declared by that root resolve
+///    relative to the package directory (`<dir>/<name>/<sub>.mink`);
+/// 3. the bundled standard library next to the installed `mink`
 ///    executable (`<exe>/../stdlib`, the npm package layout);
-/// 3. a `stdlib` directory in the current working directory (dev
+/// 4. a `stdlib` directory in the current working directory (dev
 ///    checkout layout: `target/debug/mink.exe` run from the repo root).
 ///
 /// The first candidate that exists wins; when none exist the returned
@@ -678,6 +689,10 @@ fn resolve_module_path(child_name: &str, parent_dir: &Path) -> PathBuf {
     let sibling = parent_dir.join(format!("{child_name}.mink"));
     if sibling.exists() {
         return sibling;
+    }
+    let sibling_package = parent_dir.join(child_name).join("mod.mink");
+    if sibling_package.exists() {
+        return sibling_package;
     }
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -692,6 +707,10 @@ fn resolve_module_path(child_name: &str, parent_dir: &Path) -> PathBuf {
         let candidate = root.join(format!("{child_name}.mink"));
         if candidate.exists() {
             return candidate;
+        }
+        let package = root.join(child_name).join("mod.mink");
+        if package.exists() {
+            return package;
         }
     }
     sibling

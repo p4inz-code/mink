@@ -1,0 +1,8 @@
+// `dup.mink` and `dup/mod.mink` both exist; the flat `dup.mink` must win.
+mod dup;
+use dup::flat_marker;
+
+fn main() {
+    rt_print_int(flat_marker());
+    return 0;
+}

@@ -93,10 +93,11 @@ struct Lowerer<'a> {
     ast: &'a Ast,
     semantic: &'a SemanticResult,
     types: &'a TypeResult,
-    /// Declaration name span start → symbol id, built from the semantic
-    /// symbol table so declaration names resolve without re-running name
-    /// resolution.
-    decls: HashMap<u32, SymbolId>,
+    /// Declaration *site* → symbol id, built from the semantic symbol table
+    /// so declaration names resolve without re-running name resolution. The
+    /// key is `(file, byte offset)`: byte offsets repeat across the source
+    /// files of a multi-module program, so the file id is required.
+    decls: HashMap<(crate::source::SourceId, u32), SymbolId>,
     /// The type table backing every [`TypeId`] stored in the HIR. Cloned
     /// from the type result so the program is self-contained; lookups are
     /// canonicalized through this clone.
@@ -112,13 +113,13 @@ impl<'a> Lowerer<'a> {
     fn new(ast: &'a Ast, semantic: &'a SemanticResult, types: &'a TypeResult) -> Self {
         let mut decls = HashMap::new();
         for symbol in semantic.symbols().iter() {
-            decls.insert(symbol.span.start(), symbol.id);
+            decls.insert((symbol.span.file(), symbol.span.start()), symbol.id);
         }
         // Or-pattern binding aliases (session 27): every occurrence of an
         // or-pattern binding after its first resolves to the same symbol,
         // so every alternative's binding lowers to the one logical local.
         for (span, symbol) in semantic.binding_aliases() {
-            decls.insert(span.start(), *symbol);
+            decls.insert((span.file(), span.start()), *symbol);
         }
         Self {
             ast,
@@ -800,7 +801,9 @@ impl<'a> Lowerer<'a> {
 
     /// The symbol a declaration name refers to, from the span→symbol index.
     fn decl_symbol(&self, name: &Ident) -> Option<SymbolId> {
-        self.decls.get(&name.span.start()).copied()
+        self.decls
+            .get(&(name.span.file(), name.span.start()))
+            .copied()
     }
 
     /// Lower a declaration name (function name, parameter, binding, loop

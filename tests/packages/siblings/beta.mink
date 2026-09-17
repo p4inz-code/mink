@@ -1,0 +1,3 @@
+pub fn beta_two() -> Int {
+    return 2;
+}

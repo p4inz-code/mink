@@ -329,8 +329,10 @@ struct Analyzer<'a> {
     ast: &'a Ast,
     semantic: &'a SemanticResult,
     types: &'a TypeResult,
-    /// Declaration name span start → symbol id, for binding lookups.
-    decl_spans: HashMap<u32, SymbolId>,
+    /// Declaration *site* (file, byte offset) → symbol id, for binding
+    /// lookups. Byte offsets repeat across the files of a multi-module
+    /// program, so the file id is part of the key.
+    decl_spans: HashMap<(crate::source::SourceId, u32), SymbolId>,
     /// The tracked binding states, keyed by symbol id.
     bindings: HashMap<SymbolId, State>,
     /// The borrow state of every borrowed root binding (session 16).
@@ -378,17 +380,20 @@ impl<'a> Analyzer<'a> {
     /// binding after its first resolves to the one logical binding.
     fn build_decl_spans(&mut self) {
         for symbol in self.semantic.symbols().iter() {
-            self.decl_spans.insert(symbol.span.start(), symbol.id);
+            self.decl_spans
+                .insert((symbol.span.file(), symbol.span.start()), symbol.id);
         }
         for (span, symbol) in self.semantic.binding_aliases() {
-            self.decl_spans.insert(span.start(), *symbol);
+            self.decl_spans.insert((span.file(), span.start()), *symbol);
         }
     }
 
     /// The symbol a declaration name resolves to (declarations are always
     /// registered by the semantic analyzer).
     fn symbol_of(&self, name: &Ident) -> Option<SymbolId> {
-        self.decl_spans.get(&name.span.start()).copied()
+        self.decl_spans
+            .get(&(name.span.file(), name.span.start()))
+            .copied()
     }
 
     // ------------------------------------------------------------------
@@ -541,7 +546,7 @@ impl<'a> Analyzer<'a> {
     /// Binds a newly declared name to the evaluated value of its
     /// initializer.
     fn bind(&mut self, name: Span, value: &EvalValue) {
-        let Some(symbol) = self.decl_spans.get(&name.start()).copied() else {
+        let Some(symbol) = self.decl_spans.get(&(name.file(), name.start())).copied() else {
             return;
         };
         let Some(ty) = self.types.symbol_type(symbol) else {

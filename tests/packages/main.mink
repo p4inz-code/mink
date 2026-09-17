@@ -1,0 +1,14 @@
+// Directory-package fixture root (L68/P03).
+//
+// `mod pkg;` resolves to `pkg/mod.mink` (the package root), whose own
+// `mod geometry;` and `mod nested;` declarations resolve inside the package
+// directory.
+mod pkg;
+use pkg::pkg_add;
+use pkg::pkg_triple;
+
+fn main() {
+    rt_print_int(pkg_add(2, 3));
+    rt_print_int(pkg_triple(5));
+    return 0;
+}

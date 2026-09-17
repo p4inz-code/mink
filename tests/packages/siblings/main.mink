@@ -1,0 +1,9 @@
+// Regression fixture for the span-key collision defect: two sibling modules
+// whose declaration names sit at identical byte offsets in different files.
+mod alpha;
+mod beta;
+
+fn main() {
+    rt_print_int(alpha_one() + beta_two());
+    return 0;
+}

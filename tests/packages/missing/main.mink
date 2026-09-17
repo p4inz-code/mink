@@ -1,0 +1,5 @@
+mod nonexistent;
+
+fn main() {
+    return 0;
+}

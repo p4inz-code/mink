@@ -1,0 +1,14 @@
+// Package root (the directory-package equivalent of `__init__.py`).
+mod geometry;
+mod nested;
+
+use geometry::geometry_double;
+use nested::nested_triple;
+
+pub fn pkg_add(a: Int, b: Int) -> Int {
+    return geometry_double(a) + b;
+}
+
+pub fn pkg_triple(a: Int) -> Int {
+    return nested_triple(a);
+}

@@ -1,0 +1,3 @@
+pub fn nested_triple(x: Int) -> Int {
+    return x * 3;
+}
