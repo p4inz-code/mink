@@ -1,0 +1,68 @@
+// Inventory database — a small end-to-end proof application for stdlib/sqlite.
+//
+// Run it with:  mink run examples/inventory_db/main.mink
+//
+// It creates a table, records stock movements, reports low stock, applies a
+// price correction, restocks inside a transaction, and finally reports the
+// table contents and row count. Every step goes through the public sqlite API,
+// and a clean exit proves the engine left no live allocations behind.
+
+mod sqlite;
+
+fn show(result: Str) {
+    rt_print_str(result);
+    rt_str_free(result);
+}
+
+fn run(db: Str, sql: Str) -> Str {
+    let r = sql_exec(db, sql);
+    show(r.0);
+    return r.1;
+}
+
+fn main() {
+    let mut db = sql_new();
+    db = run(db, "CREATE TABLE items (sku INT, name STR, qty INT, price INT)");
+    db = run(db, "INSERT INTO items VALUES (1001, 'bolt', 240, 3)");
+    db = run(db, "INSERT INTO items VALUES (1002, 'nut', 12, 2)");
+    db = run(db, "INSERT INTO items VALUES (1003, 'washer', 0, 1)");
+    db = run(db, "INSERT INTO items (sku, name, qty) VALUES (1004, 'screw', 80)");
+
+    rt_print_str("--- low stock (< 50) ---");
+    db = run(db, "SELECT * FROM items WHERE qty < 50");
+
+    rt_print_str("--- out of stock ---");
+    db = run(db, "SELECT * FROM items WHERE qty = 0");
+
+    rt_print_str("--- price correction ---");
+    db = run(db, "UPDATE items SET price = 4 WHERE sku = 1001");
+
+    rt_print_str("--- restock 1002 (rolled back) ---");
+    db = run(db, "BEGIN");
+    db = run(db, "UPDATE items SET qty = 100 WHERE sku = 1002");
+    db = run(db, "SELECT COUNT(*) FROM items WHERE qty = 100");
+    db = run(db, "ROLLBACK");
+
+    rt_print_str("--- restock 1002 (committed) ---");
+    db = run(db, "BEGIN");
+    db = run(db, "UPDATE items SET qty = 100 WHERE sku = 1002");
+    db = run(db, "COMMIT");
+
+    rt_print_str("--- discontinuations ---");
+    db = run(db, "DELETE FROM items WHERE qty = 0");
+
+    rt_print_str("--- final table ---");
+    db = run(db, "SELECT * FROM items");
+
+    rt_print_str("tables:");
+    let tabs = sql_tables(db);
+    show(tabs.0);
+    db = tabs.1;
+    let rows = sql_rows(db, "items");
+    db = rows.1;
+    rt_print_str("item rows:");
+    rt_print_int(rows.0);
+
+    sql_free(db);
+    return 0;
+}

@@ -324,7 +324,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 | ID | Python capability | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| S41 | SQLite (`sqlite3`) | MISSING | none | Embedded SQL database | P1 | XL | Y | D | Major subsystem; prompt lists SQLite in the audit scope and proof apps |
+| S41 | SQLite (`sqlite3`) | VERIFIED | `[code] stdlib/sqlite.mink` — self-contained embedded SQL engine over a packed word arena: `CREATE TABLE` (INT/STR), `INSERT` (positional and named-column), `SELECT *`/`SELECT COUNT(*)` with `WHERE col OP value` (`= != <> < > <= >=`) and `col IS [NOT] NULL` joined by `AND`/`OR`, `UPDATE`, `DELETE`, `BEGIN`/`COMMIT`/`ROLLBACK`, `sql_tables`/`sql_rows`/`sql_has_table`/`sql_in_transaction`/`sql_quote`/`sql_field`; `[test] tests/sqlite_lib.rs` (16 native-PE tests); `[exec]` `mink run examples/inventory_db/main.mink` native proof application; `[doc] docs/implementation/SESSION_111_WINDOWS_SQLITE.md` | Embedded SQL database with the core `sqlite3` capability; NULL is a distinct one-byte marker so it never collides with the empty string; malformed/hostile SQL is rejected with a stable error string; the only measured limit is the runtime's fixed 1 MiB heap (about 220 four-column rows for an append-only workload, since each statement returns a fresh blob) — documented in the module header, not a leak (clean exit, no E-R06) | P1 | XL | Y | D | Major subsystem closed in Session 111 |
 
 ### 5.9 Compression / archives
 
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 30 | 12 | 30 | 8 | 5 | 3 | 88 |
+| VERIFIED | 30 | 12 | 31 | 8 | 5 | 3 | 89 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -520,7 +520,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | PARTIAL | 9 | 2 | 12 | 0 | 10 | 1 | 34 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 18 | 12 | 32 | 6 | 6 | 7 | 81 |
+| MISSING | 18 | 12 | 31 | 6 | 6 | 7 | 80 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 *(Session 109 recomputation: produced by scanning the 232 capability rows directly
@@ -531,14 +531,14 @@ rather than by adjusting the previous table; every column and row sums to 232.)*
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 0 | 2 | 4 | 0 | 0 | 4 | **10** |
+| P1 (parity-blocking by definition) | 0 | 2 | 3 | 0 | 0 | 4 | **9** |
 | P2 (important, not blocking) | 23 | 10 | 35 | 2 | 17 | 5 | **92** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
 | — (no gap / no MINK work) | 27 | 9 | 25 | 9 | 2 | 4 | **76** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **10 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **9 capability gaps block the parity gate.**
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
@@ -553,10 +553,10 @@ set exactly.
 | S (small) | 36 | one focused change, low risk |
 | M (medium) | 75 | multiple components, contained |
 | L (large) | 28 | major feature area |
-| XL (major subsystem) | 12 | dedicated multi-session subsystem |
-| **Rows requiring work** | **156** | 156 + 76 no-gap rows = 232 |
+| XL (major subsystem) | 11 | dedicated multi-session subsystem |
+| **Rows requiring work** | **155** | 155 + 77 no-gap rows = 232 |
 
-### 10.4 Parity-blocking gaps (11, all P1) by wave
+### 10.4 Parity-blocking gaps (9, all P1) by wave
 
 Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
 primary wave. The rows delivered across Sessions 99–110
@@ -601,7 +601,7 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
 2. **Official-Python-capability parity is PARTIAL**: 92 execution-verified rows (VERIFIED 88 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 81 MISSING rows, 14 intentionally-different rows, 8 N/A rows, 3 PLANNED rows.
-3. **10 parity-blocking P1 gaps** remain (Wave B 0 · D 2 · E 4 · F 4); in all, 156 rows require work and 76 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
+3. **9 parity-blocking P1 gaps** remain (Wave B 0 · D 1 · E 4 · F 4); in all, 155 rows require work and 77 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
 6. Parity-blocking work clusters into: concurrency + async (Wave E), packaging (Wave F), networking/compression (Wave D — S42 zlib/gzip now VERIFIED; S44 zip now VERIFIED; remaining SQLite, TLS). Wave A is fully closed (S74 in Session 108); Wave B is fully closed (L34 reclassified P2 Session 111 — MINK's value-based error model is the intentional design); the shared A/F include-path mechanism landed across Sessions 99–107.
@@ -610,7 +610,7 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (10 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (9 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
 
 **Session 106 updates:** L10 (dict) MISSING → VERIFIED; L11 (set) MISSING → VERIFIED; L12 (frozen set) MISSING → VERIFIED; S11 (named collections) MISSING → PARTIAL; S16 (custom collections) PARTIAL → VERIFIED. Four root-cause bugs fixed in Map/Set rebuild/lookup/string-free. Permanent regression coverage added.
@@ -627,6 +627,8 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 Every count in §10 was recomputed from the rows after both closures.
 
 **Session 107 updates:** L05 (Unicode text) **P1 blocker CLOSED** — the UTF-8 code-point layer (`utf8_validate`/`decode`/`encode`/`char_count`/`char_at`/`byte_index`/`slice`) was added, native-verified and leak-checked, fixing two latent defects on the way (heap-argument leak; acceptance of overlong 2-byte forms and surrogates). S01 (string methods) and L08 (lists) `P1` flags cleared after their Session 106/107 closures. Row flags reconciled against each row's own evidence for R06, W14, P02 and T06, and every count in §10 recomputed **from the rows** (stale aggregate tables and five rows with a missing trailing pipe were corrected). The npm stdlib bundle was re-synced (`str_split`/`str_join` plus the UTF-8 layer) with a permanent drift guard.
+
+**Session 111 updates:** **S44** (ZIP) and **S41** (SQLite) **P1 blockers CLOSED**. `stdlib/zip.mink` reads and writes real ZIP archives on top of the Session 110 DEFLATE codec, cross-validated bidirectionally against CPython's `zipfile`, with mandatory path-traversal safety; `stdlib/sqlite.mink` is a self-contained embedded SQL engine (see the S41 row). Two compiler defects were found and fixed on the way, both the same class: expression types and semantic resolutions were keyed by source offset alone, so any program that combined two modules could resolve one module's expression to another module's at the same offset (`src/typecheck/mod.rs`, `src/semantics/mod.rs`). Parity-blocking set: 12 → 9 (S44, L34 reclassified to P2 as an intentional difference already represented by `Result`/`Option`, and S41).
 
 **Session 110 updates:** **S42** (zlib/gzip) **P1 blocker CLOSED** — `stdlib/zlib.mink` is a self-contained DEFLATE codec (raw/zlib/gzip over stored, fixed-Huffman and dynamic-Huffman blocks, with CRC-32 and Adler-32), native-PE verified and cross-validated bidirectionally against CPython 3.11 `zlib` across 77 vectors. Parity-blocking set: 13 → 12. Two real defects were found and fixed on the way: `_z_fill` never advanced its scan index after a separator (an infinite loop reachable from every public entry point) and the compression free order stranded a 128 KiB skipped block per call; the codec now folds its static tables into the input-sized arena so every request is input-sized.
 

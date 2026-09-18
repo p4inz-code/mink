@@ -1,0 +1,1750 @@
+// SQLite - self-contained embedded SQL database (S41).
+//
+// A MINK-native relational store. The database and the statement text are
+// copied into one word arena per call; every helper therefore takes only
+// `Ptr<Int>` handles and `Int` offsets, which MINK copies rather than moves, so
+// the engine can scan the same text as many times as it needs. Results and the
+// updated database are built in growable byte builders and converted back to
+// `Str` at the boundary, which keeps the whole module free of both leaks and
+// ownership pass-backs.
+//
+// Arena layout (word indices; text is stored one byte per word):
+//   [0] arena capacity in words
+//   [1] database text length in bytes
+//   [2] word offset of the statement text
+//   [3] statement text length in bytes
+//   [8 .. 8+dblen)                        database text
+//   [sqloff .. sqloff+sqllen)             statement text
+//
+// Database encoding (byte 1 = field separator, byte 10 = record terminator):
+//   T <1> name <1> ncols <1> c1:TYPE,c2:TYPE   table schema
+//   R <1> name <1> v1 <1> v2 ...               row (one field per column)
+// A NULL column is a one-byte field holding byte 0. Real values never contain
+// byte 0, 1 or 10, so NULL stays distinguishable from the empty string.
+//
+// A transaction is an optional prefix `#<n>\n<snapshot>` in front of the
+// records: BEGIN stores the current records as the snapshot, ROLLBACK restores
+// it and COMMIT strips the prefix. The length prefix keeps the snapshot
+// unambiguous even though it contains newlines.
+//
+// Supported SQL subset:
+//   CREATE TABLE t (col TYPE, ...)            TYPE is INT or STR
+//   INSERT INTO t VALUES (v, ...)
+//   INSERT INTO t (col, ...) VALUES (v, ...)
+//   SELECT * FROM t [WHERE cond]
+//   SELECT COUNT(*) FROM t [WHERE cond]
+//   UPDATE t SET col = v [WHERE cond]
+//   DELETE FROM t [WHERE cond]
+//   BEGIN / COMMIT / ROLLBACK
+// cond is `col OP value` or `col IS [NOT] NULL`, joined with AND / OR; OP is
+// = != <> < > <= >=. JOIN, GROUP BY and multi-table queries are out of scope.
+//
+// Memory characteristic (measured, not theoretical). `sql_exec` returns a new
+// database blob, so each statement copies the whole database: appending N rows
+// costs O(N^2) bytes of allocation in total. The runtime heap is a fixed 1 MiB
+// arena with a non-coalescing first-fit allocator (see zlib.mink for the same
+// property), so an append-only workload on the default heap sustains about 220
+// four-column rows and then reports E-R02. Text is packed eight bytes per word
+// in both the arena and the builders to keep that constant as small as it can
+// be; the engine itself leaks nothing and always exits cleanly.
+
+// ============================================================================
+// Arena primitives
+// ============================================================================
+
+fn _g(a: Ptr<Int>, i: Int) -> Int {
+    return rt_mem_load(a + i * 8);
+}
+
+fn _p(a: Ptr<Int>, i: Int, v: Int) {
+    rt_mem_store(a + i * 8, v);
+}
+
+// Text is packed eight bytes to a word (byte b of word w lives in bits
+// b*8 .. b*8+7), so an arena costs about as much as the text it holds rather
+// than eight times as much. The fixed 1 MiB runtime heap makes that difference
+// the difference between a few dozen and a few hundred appended rows.
+
+// Database text byte `i`.
+fn _db(a: Ptr<Int>, i: Int) -> Int {
+    return (_g(a, 8 + (i >> 3)) >> ((i & 7) * 8)) & 255;
+}
+
+// Store byte `i` of the database text.
+fn _dbset(a: Ptr<Int>, i: Int, v: Int) {
+    let j = 8 + (i >> 3);
+    let sh = (i & 7) * 8;
+    let m = 255 << sh;
+    _p(a, j, (_g(a, j) & (0 - 1 - m)) | ((v & 255) << sh));
+}
+
+// Statement text byte `i`.
+fn _sq(a: Ptr<Int>, i: Int) -> Int {
+    return (_g(a, _g(a, 2) + (i >> 3)) >> ((i & 7) * 8)) & 255;
+}
+
+// Store byte `i` of the statement text.
+fn _sqset(a: Ptr<Int>, i: Int, v: Int) {
+    let j = _g(a, 2) + (i >> 3);
+    let sh = (i & 7) * 8;
+    let m = 255 << sh;
+    _p(a, j, (_g(a, j) & (0 - 1 - m)) | ((v & 255) << sh));
+}
+
+fn _dlen(a: Ptr<Int>) -> Int {
+    return _g(a, 1);
+}
+
+// Word offset of the record body inside the database text (past any
+// transaction prefix).
+fn _b0(a: Ptr<Int>) -> Int {
+    return _g(a, 4);
+}
+
+fn _slen(a: Ptr<Int>) -> Int {
+    return _g(a, 3);
+}
+
+// A new growable byte builder: word 0 = length (bytes), word 1 = capacity
+// (bytes) and the bytes themselves packed from word 8.
+fn _bnew() -> Ptr<Int> {
+    let o = rt_alloc((8 + 8) * 8);
+    _p(o, 0, 0);
+    _p(o, 1, 64);
+    let mut z = 8;
+    while z < 16 {
+        _p(o, z, 0);
+        z = z + 1;
+    }
+    return o;
+}
+
+// Byte `i` of a builder.
+fn _bget(o: Ptr<Int>, i: Int) -> Int {
+    return (_g(o, 8 + (i >> 3)) >> ((i & 7) * 8)) & 255;
+}
+
+// Store byte `i` of a builder.
+fn _bset(o: Ptr<Int>, i: Int, v: Int) {
+    let j = 8 + (i >> 3);
+    let sh = (i & 7) * 8;
+    let m = 255 << sh;
+    _p(o, j, (_g(o, j) & (0 - 1 - m)) | ((v & 255) << sh));
+}
+
+fn _bgrow(o: Ptr<Int>) -> Ptr<Int> {
+    let n = _g(o, 0);
+    let c = _g(o, 1);
+    let nc = c * 2;
+    let w = (nc + 7) / 8;
+    let b = rt_alloc((8 + w) * 8);
+    _p(b, 0, n);
+    _p(b, 1, nc);
+    let mut i = 0;
+    while i < w {
+        _p(b, 8 + i, 0);
+        i = i + 1;
+    }
+    let mut k = 0;
+    while k < n {
+        _bset(b, k, _bget(o, k));
+        k = k + 1;
+    }
+    rt_free(o);
+    return b;
+}
+
+fn _bpush(o: Ptr<Int>, v: Int) -> Ptr<Int> {
+    let n = _g(o, 0);
+    let mut b = o;
+    if n >= _g(o, 1) {
+        b = _bgrow(o);
+    }
+    _bset(b, n, v & 255);
+    _p(b, 0, n + 1);
+    return b;
+}
+
+// Append every byte of `s`, consuming `s`.
+fn _bpush_str(o: Ptr<Int>, s: Str) -> Ptr<Int> {
+    let n = rt_str_len(s);
+    let mut b = o;
+    let mut i = 0;
+    while i < n {
+        b = _bpush(b, rt_str_byte(s, i));
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return b;
+}
+
+// Append the decimal form of `v`.
+fn _bpush_int(o: Ptr<Int>, v: Int) -> Ptr<Int> {
+    return _bpush_str(o, rt_str_from_int(v));
+}
+
+// Copy the database text range [from, to) into a builder.
+fn _bpush_db(o: Ptr<Int>, a: Ptr<Int>, from: Int, to: Int) -> Ptr<Int> {
+    let mut b = o;
+    let mut i = from;
+    while i < to {
+        b = _bpush(b, _db(a, i));
+        i = i + 1;
+    }
+    return b;
+}
+
+// Copy the statement text range [from, to) into a builder.
+fn _bpush_sql(o: Ptr<Int>, a: Ptr<Int>, from: Int, to: Int) -> Ptr<Int> {
+    let mut b = o;
+    let mut i = from;
+    while i < to {
+        b = _bpush(b, _sq(a, i));
+        i = i + 1;
+    }
+    return b;
+}
+
+// Convert a builder into a `Str` and free it.
+fn _bstr(o: Ptr<Int>) -> Str {
+    let n = _g(o, 0);
+    let s = rt_str_alloc(n);
+    let mut i = 0;
+    while i < n {
+        rt_str_set_byte(s, i, _bget(o, i));
+        i = i + 1;
+    }
+    rt_free(o);
+    return s;
+}
+
+// ============================================================================
+// Character classes
+// ============================================================================
+
+fn _is_ws(b: Int) -> Bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
+}
+
+fn _is_dig(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn _is_alpha(b: Int) -> Bool {
+    return (b >= 65 && b <= 90) || (b >= 97 && b <= 122);
+}
+
+fn _is_idc(b: Int) -> Bool {
+    return _is_alpha(b) || _is_dig(b) || b == 95;
+}
+
+fn _up(b: Int) -> Int {
+    if b >= 97 && b <= 122 {
+        return b - 32;
+    }
+    return b;
+}
+
+// ============================================================================
+// Statement text scanning
+// ============================================================================
+
+fn _iscan_skip(a: Ptr<Int>, p: Int) -> Int {
+    let n = _slen(a);
+    let mut i = p;
+    while i < n && _is_ws(_sq(a, i)) {
+        i = i + 1;
+    }
+    return i;
+}
+
+// The identifier token at or after `p`; an empty range means none.
+fn _iscan_kw(a: Ptr<Int>, p: Int) -> (Int, Int) {
+    let s = _iscan_skip(a, p);
+    let n = _slen(a);
+    let mut b = s;
+    while b < n && _is_idc(_sq(a, b)) {
+        b = b + 1;
+    }
+    return (s, b);
+}
+
+// Case-insensitive comparison of the statement range with a literal.
+fn _ieq(a: Ptr<Int>, f: Int, t: Int, lit: Str) -> Bool {
+    if t - f != rt_str_len(lit) {
+        return false;
+    }
+    let mut i = 0;
+    while i < t - f {
+        if _up(_sq(a, f + i)) != _up(rt_str_byte(lit, i)) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Byte-exact comparison of a database range with a statement range.
+fn _req_ds(a: Ptr<Int>, d1: Int, e1: Int, s1: Int, s2: Int) -> Bool {
+    if e1 - d1 != s2 - s1 {
+        return false;
+    }
+    let mut i = 0;
+    while i < e1 - d1 {
+        if _db(a, d1 + i) != _sq(a, s1 + i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Byte-exact comparison of two statement ranges.
+fn _req_ss(a: Ptr<Int>, s1: Int, e1: Int, s3: Int, s4: Int) -> Bool {
+    if e1 - s1 != s4 - s3 {
+        return false;
+    }
+    let mut i = 0;
+    while i < e1 - s1 {
+        if _sq(a, s1 + i) != _sq(a, s3 + i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// A value token at `p`. Returns (start, end, kind) with kind -1 = absent,
+// 0 = NULL, 1 = word/integer, 2 = quoted string (range excludes the quotes and
+// the returned end is just past the closing quote).
+fn _vtok(a: Ptr<Int>, p: Int) -> (Int, Int, Int) {
+    let n = _slen(a);
+    let s = _iscan_skip(a, p);
+    if s >= n {
+        return (s, s, 0 - 1);
+    }
+    if _sq(a, s) == 39 {
+        let mut i = s + 1;
+        while i < n {
+            if _sq(a, i) == 39 {
+                if i + 1 < n && _sq(a, i + 1) == 39 {
+                    i = i + 2;
+                } else {
+                    return (s + 1, i, 2);
+                }
+            } else {
+                i = i + 1;
+            }
+        }
+        return (s + 1, n, 2);
+    }
+    let mut i = s;
+    while i < n {
+        let d = _sq(a, i);
+        if _is_ws(d) || d == 44 || d == 41 {
+            break;
+        }
+        i = i + 1;
+    }
+    if i == s {
+        return (s, s, 0 - 1);
+    }
+    if _ieq(a, s, i, "NULL") {
+        return (s, i, 0);
+    }
+    return (s, i, 1);
+}
+
+// Index just past the quoted token whose opening quote is at `open`.
+fn _quoted_end(a: Ptr<Int>, open: Int) -> Int {
+    let n = _slen(a);
+    let mut i = open + 1;
+    while i < n {
+        if _sq(a, i) == 39 {
+            if i + 1 < n && _sq(a, i + 1) == 39 {
+                i = i + 2;
+            } else {
+                return i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
+// True when a quoted literal body holds a control byte.
+fn _bad_literal(a: Ptr<Int>, f: Int, t: Int) -> Bool {
+    let mut i = f;
+    while i < t {
+        let c = _sq(a, i);
+        if c < 32 && c != 9 {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Number of value tokens at or after `start`.
+fn _count_values(a: Ptr<Int>, start: Int) -> Int {
+    let n = _slen(a);
+    let mut q = start;
+    let mut c = 0;
+    while 1 == 1 {
+        let t = _vtok(a, q);
+        if t.2 < 0 {
+            break;
+        }
+        c = c + 1;
+        if t.2 == 2 {
+            q = t.1 + 1;
+        } else {
+            q = _iscan_skip(a, t.1);
+        }
+        if q < n && _sq(a, q) == 44 {
+            q = q + 1;
+        } else {
+            break;
+        }
+    }
+    return c;
+}
+
+// True when the value list at `start` is terminated by ')'.
+fn _values_closed(a: Ptr<Int>, start: Int) -> Bool {
+    let n = _slen(a);
+    let mut q = start;
+    let mut last = start;
+    while 1 == 1 {
+        let t = _vtok(a, q);
+        if t.2 < 0 {
+            break;
+        }
+        if t.2 == 2 {
+            last = t.1 + 1;
+        } else {
+            last = t.1;
+        }
+        q = _iscan_skip(a, last);
+        if q < n && _sq(a, q) == 44 {
+            q = q + 1;
+        } else {
+            break;
+        }
+    }
+    let c = _iscan_skip(a, last);
+    if c >= n {
+        return false;
+    }
+    return _sq(a, c) == 41;
+}
+
+// The `want`-th value token at or after `start`.
+fn _nth_value(a: Ptr<Int>, start: Int, want: Int) -> (Int, Int, Int) {
+    let n = _slen(a);
+    let mut q = start;
+    let mut i = 0;
+    while i <= want {
+        let t = _vtok(a, q);
+        if t.2 < 0 {
+            return (0, 0, 0 - 1);
+        }
+        if i == want {
+            return t;
+        }
+        if t.2 == 2 {
+            q = t.1 + 1;
+        } else {
+            q = _iscan_skip(a, t.1);
+        }
+        if q < n && _sq(a, q) == 44 {
+            q = q + 1;
+        } else {
+            return (0, 0, 0 - 1);
+        }
+        i = i + 1;
+    }
+    return (0, 0, 0 - 1);
+}
+
+// ============================================================================
+// Database text scanning
+// ============================================================================
+
+fn _line_end(a: Ptr<Int>, from: Int) -> Int {
+    let n = _dlen(a);
+    let mut i = from;
+    while i < n && _db(a, i) != 10 {
+        i = i + 1;
+    }
+    return i;
+}
+
+fn _fend(a: Ptr<Int>, from: Int, end: Int) -> Int {
+    let mut i = from;
+    while i < end && _db(a, i) != 1 {
+        i = i + 1;
+    }
+    return i;
+}
+
+// Start/end of field `idx` on the record in [st, en).
+fn _field(a: Ptr<Int>, st: Int, en: Int, idx: Int) -> (Int, Int) {
+    let mut p = st;
+    let mut i = 0;
+    while i < idx && p < en {
+        p = _fend(a, p, en) + 1;
+        i = i + 1;
+    }
+    let mut q = p;
+    while q < en && _db(a, q) != 1 {
+        q = q + 1;
+    }
+    return (p, q);
+}
+
+// Find the schema record whose name equals the statement range [n1, n2).
+fn _find_tbl(a: Ptr<Int>, n1: Int, n2: Int) -> (Int, Int) {
+    let n = _dlen(a);
+    let mut p = _b0(a);
+    while p < n {
+        let e = _line_end(a, p);
+        if e > p + 2 && _db(a, p) == 84 && _db(a, p + 1) == 1 {
+            let f = _fend(a, p + 2, e);
+            if _req_ds(a, p + 2, f, n1, n2) {
+                return (p, e);
+            }
+        }
+        p = e + 1;
+    }
+    return (0 - 1, 0 - 1);
+}
+
+// Number of columns declared by the schema record in [st, en).
+fn _ncols(a: Ptr<Int>, st: Int, en: Int) -> Int {
+    let f = _field(a, st, en, 2);
+    let r = _parse_int_db(a, f.0, f.1);
+    if !r.1 {
+        return 0;
+    }
+    return r.0;
+}
+
+// Declaration range for column `ci` of the schema record in [st, en).
+fn _col(a: Ptr<Int>, st: Int, en: Int, ci: Int) -> (Int, Int) {
+    let cs = _field(a, st, en, 3);
+    let mut p = cs.0;
+    let mut k = 0;
+    while k < ci && p < cs.1 {
+        while p < cs.1 && _db(a, p) != 44 {
+            p = p + 1;
+        }
+        p = p + 1;
+        k = k + 1;
+    }
+    let mut q = p;
+    while q < cs.1 && _db(a, q) != 44 && _db(a, q) != 58 {
+        q = q + 1;
+    }
+    return (p, q);
+}
+
+// Value range for column `ci` of the row record in [st, en).
+fn _val(a: Ptr<Int>, st: Int, en: Int, ci: Int) -> (Int, Int) {
+    return _field(a, st, en, ci + 2);
+}
+
+// A value field is NULL when it is exactly one zero byte.
+fn _is_null(a: Ptr<Int>, f: Int, t: Int) -> Bool {
+    if t - f != 1 {
+        return false;
+    }
+    return _db(a, f) == 0;
+}
+
+// Strict signed-integer parse of a database range.
+fn _parse_int_db(a: Ptr<Int>, f: Int, t: Int) -> (Int, Bool) {
+    let mut i = f;
+    let mut neg = 0;
+    if i < t && _db(a, i) == 45 {
+        neg = 1;
+        i = i + 1;
+    }
+    if i >= t {
+        return (0, false);
+    }
+    let mut v = 0;
+    while i < t {
+        let c = _db(a, i);
+        if !_is_dig(c) {
+            return (0, false);
+        }
+        v = v * 10 + (c - 48);
+        i = i + 1;
+    }
+    if neg == 1 {
+        v = 0 - v;
+    }
+    return (v, true);
+}
+
+// Strict signed-integer parse of a statement range.
+fn _parse_int_sq(a: Ptr<Int>, f: Int, t: Int) -> (Int, Bool) {
+    let mut i = f;
+    let mut neg = 0;
+    if i < t && _sq(a, i) == 45 {
+        neg = 1;
+        i = i + 1;
+    }
+    if i >= t {
+        return (0, false);
+    }
+    let mut v = 0;
+    while i < t {
+        let c = _sq(a, i);
+        if !_is_dig(c) {
+            return (0, false);
+        }
+        v = v * 10 + (c - 48);
+        i = i + 1;
+    }
+    if neg == 1 {
+        v = 0 - v;
+    }
+    return (v, true);
+}
+
+// Compare a database range with a statement range: -1, 0 or 1. Numeric when
+// both sides parse as integers, lexicographic otherwise.
+fn _cmp_ds(a: Ptr<Int>, d1: Int, e1: Int, s1: Int, s2: Int) -> Int {
+    let r1 = _parse_int_db(a, d1, e1);
+    let r2 = _parse_int_sq(a, s1, s2);
+    if r1.1 && r2.1 {
+        if r1.0 == r2.0 {
+            return 0;
+        }
+        if r1.0 < r2.0 {
+            return 0 - 1;
+        }
+        return 1;
+    }
+    let l1 = e1 - d1;
+    let l2 = s2 - s1;
+    let mut i = 0;
+    while i < l1 && i < l2 {
+        let c1 = _db(a, d1 + i);
+        let c2 = _sq(a, s1 + i);
+        if c1 != c2 {
+            if c1 < c2 {
+                return 0 - 1;
+            }
+            return 1;
+        }
+        i = i + 1;
+    }
+    if l1 == l2 {
+        return 0;
+    }
+    if l1 < l2 {
+        return 0 - 1;
+    }
+    return 1;
+}
+
+// Render a value field, appending `NULL` or the text.
+fn _push_render(o: Ptr<Int>, a: Ptr<Int>, f: Int, t: Int) -> Ptr<Int> {
+    if _is_null(a, f, t) {
+        return _bpush_str(o, "NULL");
+    }
+    return _bpush_db(o, a, f, t);
+}
+
+// ============================================================================
+// WHERE evaluation
+// ============================================================================
+
+// Strict signed-integer parse of a builder range.
+fn _parse_int_buf(b: Ptr<Int>, f: Int, t: Int) -> (Int, Bool) {
+    let mut i = f;
+    let mut neg = 0;
+    if i < t && _bget(b, i) == 45 {
+        neg = 1;
+        i = i + 1;
+    }
+    if i >= t {
+        return (0, false);
+    }
+    let mut v = 0;
+    while i < t {
+        let c = _bget(b, i);
+        if !_is_dig(c) {
+            return (0, false);
+        }
+        v = v * 10 + (c - 48);
+        i = i + 1;
+    }
+    if neg == 1 {
+        v = 0 - v;
+    }
+    return (v, true);
+}
+
+// Compare a database range with a builder holding the literal bytes.
+fn _cmp_db_buf(a: Ptr<Int>, d1: Int, e1: Int, b: Ptr<Int>) -> Int {
+    let bn = _g(b, 0);
+    let r1 = _parse_int_db(a, d1, e1);
+    let r2 = _parse_int_buf(b, 0, bn);
+    if r1.1 && r2.1 {
+        if r1.0 == r2.0 {
+            return 0;
+        }
+        if r1.0 < r2.0 {
+            return 0 - 1;
+        }
+        return 1;
+    }
+    let l1 = e1 - d1;
+    let mut i = 0;
+    while i < l1 && i < bn {
+        let c1 = _db(a, d1 + i);
+        let c2 = _bget(b, i);
+        if c1 != c2 {
+            if c1 < c2 {
+                return 0 - 1;
+            }
+            return 1;
+        }
+        i = i + 1;
+    }
+    if l1 == bn {
+        return 0;
+    }
+    if l1 < bn {
+        return 0 - 1;
+    }
+    return 1;
+}
+
+// op: 0 =, 1 >, 2 <, 3 !=, 4 <=, 5 >=
+fn _cmp_term(a: Ptr<Int>, cond_p: Int, op: Int, is_null: Bool, r1: Int, r2: Int) -> (Int, Int) {
+    if is_null {
+        return (1, cond_p);
+    }
+    let t = _vtok(a, cond_p);
+    if t.2 < 0 {
+        return (1, cond_p);
+    }
+    let b = _bnew();
+    let mut lit = b;
+    if t.2 == 2 {
+        lit = _push_quoted(b, a, t.0, t.1);
+    } else {
+        lit = _bpush_sql(b, a, t.0, t.1);
+    }
+    let k = _cmp_db_buf(a, r1, r2, lit);
+    rt_free(lit);
+    let mut verdict = 1;
+    if op == 0 && k == 0 {
+        verdict = 0;
+    }
+    if op == 1 && k > 0 {
+        verdict = 0;
+    }
+    if op == 2 && k < 0 {
+        verdict = 0;
+    }
+    if op == 3 && k != 0 {
+        verdict = 0;
+    }
+    if op == 4 && k <= 0 {
+        verdict = 0;
+    }
+    if op == 5 && k >= 0 {
+        verdict = 0;
+    }
+    return (verdict, cond_p);
+}
+
+// Index of the column named by the statement range [c1, c2), or -1.
+fn _col_index(a: Ptr<Int>, tst: Int, ten: Int, c1: Int, c2: Int) -> Int {
+    let cc = _ncols(a, tst, ten);
+    let mut i = 0;
+    while i < cc {
+        let c = _col(a, tst, ten, i);
+        if _req_ds(a, c.0, c.1, c1, c2) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// One condition term starting at `p`. Returns (verdict, next position).
+// Verdict 2 means an unknown column.
+fn _term(a: Ptr<Int>, p: Int, tst: Int, ten: Int, r1: Int, r2: Int) -> (Int, Int) {
+    let c = _iscan_kw(a, p);
+    if c.1 == c.0 {
+        return (2, p);
+    }
+    let ci = _col_index(a, tst, ten, c.0, c.1);
+    if ci < 0 {
+        return (2, c.1);
+    }
+    let cc = _ncols(a, tst, ten);
+    if ci >= cc {
+        return (2, c.1);
+    }
+    let v = _val(a, r1, r2, ci);
+    let isnull = _is_null(a, v.0, v.1);
+    let q = _iscan_skip(a, c.1);
+    let iw = _iscan_kw(a, q);
+    if _ieq(a, iw.0, iw.1, "IS") {
+        let nw = _iscan_kw(a, iw.1);
+        if _ieq(a, nw.0, nw.1, "NULL") {
+            if isnull {
+                return (0, nw.1);
+            }
+            return (1, nw.1);
+        }
+        if _ieq(a, nw.0, nw.1, "NOT") {
+            let mw = _iscan_kw(a, nw.1);
+            if !_ieq(a, mw.0, mw.1, "NULL") {
+                return (2, mw.1);
+            }
+            if isnull {
+                return (1, mw.1);
+            }
+            return (0, mw.1);
+        }
+        return (2, nw.1);
+    }
+    let n = _slen(a);
+    if q >= n {
+        return (2, q);
+    }
+    let c0 = _sq(a, q);
+    let mut c1 = 0;
+    if q + 1 < n {
+        c1 = _sq(a, q + 1);
+    }
+    if c0 == 60 && c1 == 62 {
+        return _cmp_term(a, q + 2, 3, isnull, v.0, v.1);
+    }
+    if c0 == 60 && c1 == 61 {
+        return _cmp_term(a, q + 2, 4, isnull, v.0, v.1);
+    }
+    if c0 == 60 {
+        return _cmp_term(a, q + 1, 2, isnull, v.0, v.1);
+    }
+    if c0 == 62 && c1 == 61 {
+        return _cmp_term(a, q + 2, 5, isnull, v.0, v.1);
+    }
+    if c0 == 62 {
+        return _cmp_term(a, q + 1, 1, isnull, v.0, v.1);
+    }
+    if c0 == 33 && c1 == 61 {
+        return _cmp_term(a, q + 2, 3, isnull, v.0, v.1);
+    }
+    if c0 == 61 {
+        return _cmp_term(a, q + 1, 0, isnull, v.0, v.1);
+    }
+    return (2, q);
+}
+
+// Evaluate cond[cp..cend) against the row record [r1, r2).
+// Returns 0 = true, 1 = false, 2 = unknown column.
+fn _where(a: Ptr<Int>, cp: Int, cend: Int, tst: Int, ten: Int, r1: Int, r2: Int) -> Int {
+    let mut p = cp;
+    let mut acc = 0 - 1;
+    let mut mode = 0;
+    while 1 == 1 {
+        p = _iscan_skip(a, p);
+        if p >= cend {
+            break;
+        }
+        let t = _term(a, p, tst, ten, r1, r2);
+        if t.0 == 2 {
+            return 2;
+        }
+        if acc < 0 {
+            acc = t.0;
+        } else {
+            if mode == 0 && t.0 == 1 {
+                acc = 1;
+            }
+            if mode == 1 && t.0 == 0 {
+                acc = 0;
+            }
+        }
+        p = t.1;
+        let k = _iscan_kw(a, p);
+        if k.1 == k.0 {
+            break;
+        }
+        if _ieq(a, k.0, k.1, "AND") {
+            mode = 0;
+        } else {
+            if _ieq(a, k.0, k.1, "OR") {
+                mode = 1;
+            } else {
+                break;
+            }
+        }
+        p = k.1;
+    }
+    if acc < 0 {
+        return 0;
+    }
+    return acc;
+}
+
+// Position of the WHERE condition, or -1.
+fn _where_start(a: Ptr<Int>, q: Int) -> Int {
+    let w = _iscan_kw(a, q);
+    if _ieq(a, w.0, w.1, "WHERE") {
+        return w.1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================================
+// CREATE TABLE
+// ============================================================================
+
+fn _do_create(a: Ptr<Int>, p: Int) -> (Ptr<Int>, Ptr<Int>, Int) {
+    let w = _iscan_kw(a, p);
+    if !_ieq(a, w.0, w.1, "TABLE") {
+        return _err(a, "ERROR: expected TABLE");
+    }
+    let nt = _iscan_kw(a, w.1);
+    if nt.1 == nt.0 {
+        return _err(a, "ERROR: missing table name");
+    }
+    let ex = _find_tbl(a, nt.0, nt.1);
+    if ex.0 >= 0 {
+        return _err(a, "ERROR: table already exists");
+    }
+    let n = _slen(a);
+    let mut q = _iscan_skip(a, nt.1);
+    if q >= n || _sq(a, q) != 40 {
+        return _err(a, "ERROR: expected '(' after table name");
+    }
+    q = q + 1;
+    let mut cols = _bnew();
+    let mut cc = 0;
+    let mut bad = 0;
+    while 1 == 1 {
+        let cw = _iscan_kw(a, q);
+        if cw.1 == cw.0 {
+            bad = 1;
+            break;
+        }
+        let tw = _iscan_kw(a, cw.1);
+        if tw.1 == tw.0 {
+            bad = 1;
+            break;
+        }
+        let isint = _ieq(a, tw.0, tw.1, "INT");
+        let isstr = _ieq(a, tw.0, tw.1, "STR");
+        if !isint && !isstr {
+            bad = 2;
+            break;
+        }
+        if cc > 0 {
+            cols = _bpush(cols, 44);
+        }
+        cols = _bpush_sql(cols, a, cw.0, cw.1);
+        cols = _bpush(cols, 58);
+        if isint {
+            cols = _bpush_str(cols, "INT");
+        } else {
+            cols = _bpush_str(cols, "STR");
+        }
+        cc = cc + 1;
+        q = _iscan_skip(a, tw.1);
+        if q < n && _sq(a, q) == 44 {
+            q = q + 1;
+        } else {
+            break;
+        }
+    }
+    if bad != 0 {
+        rt_free(cols);
+        if bad == 2 {
+            return _err(a, "ERROR: unsupported column type");
+        }
+        return _err(a, "ERROR: malformed column list");
+    }
+    if cc == 0 {
+        rt_free(cols);
+        return _err(a, "ERROR: table needs at least one column");
+    }
+    q = _iscan_skip(a, q);
+    if q >= n || _sq(a, q) != 41 {
+        rt_free(cols);
+        return _err(a, "ERROR: expected ')' after column list");
+    }
+    // The new body is the current body with the schema record appended.
+    let mut no = _bpush_db(_bnew(), a, _b0(a), _dlen(a));
+    no = _bpush(no, 84);
+    no = _bpush(no, 1);
+    no = _bpush_sql(no, a, nt.0, nt.1);
+    no = _bpush(no, 1);
+    no = _bpush_int(no, cc);
+    no = _bpush(no, 1);
+    let clen = _g(cols, 0);
+    let mut i = 0;
+    while i < clen {
+        no = _bpush(no, _bget(cols, i));
+        i = i + 1;
+    }
+    rt_free(cols);
+    no = _bpush(no, 10);
+    let mut ro = _bnew();
+    ro = _bpush_str(ro, "OK");
+    return (ro, no, 1);
+}
+
+// A uniform error result: message plus an unchanged database body.
+fn _err(a: Ptr<Int>, msg: Str) -> (Ptr<Int>, Ptr<Int>, Int) {
+    let mut ro = _bnew();
+    ro = _bpush_str(ro, msg);
+    let no = _bpush_db(_bnew(), a, _b0(a), _dlen(a));
+    return (ro, no, 0);
+}
+
+// ============================================================================
+// INSERT
+// ============================================================================
+
+// The `idx`-th name token of the column list in [lf, lt).
+fn _list_tok(a: Ptr<Int>, lf: Int, lt: Int, idx: Int) -> (Int, Int) {
+    let mut p = lf;
+    let mut i = 0;
+    while i < idx {
+        while p < lt && _sq(a, p) != 44 {
+            p = p + 1;
+        }
+        p = p + 1;
+        i = i + 1;
+    }
+    let s = _iscan_skip(a, p);
+    let mut e = s;
+    while e < lt && _sq(a, e) != 44 {
+        e = e + 1;
+    }
+    return (s, e);
+}
+
+// Index of the comma-separated statement column name matching the schema
+// declaration range [c1, c2), or -1.
+fn _list_index(a: Ptr<Int>, lf: Int, lt: Int, c1: Int, c2: Int) -> Int {
+    let mut p = lf;
+    let mut idx = 0;
+    while p <= lt {
+        let s = _iscan_skip(a, p);
+        let mut e = s;
+        while e < lt && _sq(a, e) != 44 {
+            e = e + 1;
+        }
+        if e > s && _req_ds(a, c1, c2, s, e) {
+            return idx;
+        }
+        idx = idx + 1;
+        if e >= lt {
+            break;
+        }
+        p = e + 1;
+    }
+    return 0 - 1;
+}
+
+fn _do_insert(a: Ptr<Int>, p: Int) -> (Ptr<Int>, Ptr<Int>, Int) {
+    let w = _iscan_kw(a, p);
+    if !_ieq(a, w.0, w.1, "INTO") {
+        return _err(a, "ERROR: expected INTO");
+    }
+    let nt = _iscan_kw(a, w.1);
+    if nt.1 == nt.0 {
+        return _err(a, "ERROR: missing table name");
+    }
+    let tbl = _find_tbl(a, nt.0, nt.1);
+    if tbl.0 < 0 {
+        return _err(a, "ERROR: no such table");
+    }
+    let ncols = _ncols(a, tbl.0, tbl.1);
+    let n = _slen(a);
+    let mut q = _iscan_skip(a, nt.1);
+    let mut has_list = 0;
+    let mut lf = 0;
+    let mut lt = 0;
+    let mut lcount = 0;
+    if q < n && _sq(a, q) == 40 {
+        has_list = 1;
+        lf = q + 1;
+        lt = lf;
+        while 1 == 1 {
+            let cw = _iscan_kw(a, lt);
+            if cw.1 == cw.0 {
+                break;
+            }
+            lcount = lcount + 1;
+            let nx = _iscan_skip(a, cw.1);
+            if nx < n && _sq(a, nx) == 44 {
+                lt = nx + 1;
+            } else {
+                lt = cw.1;
+                break;
+            }
+        }
+        let cl = _iscan_skip(a, lt);
+        if cl >= n || _sq(a, cl) != 41 {
+            return _err(a, "ERROR: expected ')' after column list");
+        }
+        q = cl + 1;
+    }
+    let kw = _iscan_kw(a, q);
+    if !_ieq(a, kw.0, kw.1, "VALUES") {
+        return _err(a, "ERROR: expected VALUES");
+    }
+    q = _iscan_skip(a, kw.1);
+    if q >= n || _sq(a, q) != 40 {
+        return _err(a, "ERROR: expected '(' before values");
+    }
+    let vstart = q + 1;
+    let vcount = _count_values(a, vstart);
+    if !_values_closed(a, vstart) {
+        return _err(a, "ERROR: expected ')' after values");
+    }
+    if has_list == 0 && vcount != ncols {
+        return _err(a, "ERROR: wrong number of values");
+    }
+    if has_list == 1 && vcount != lcount {
+        return _err(a, "ERROR: wrong number of values");
+    }
+    // Every listed column must exist; columns that are not listed become NULL.
+    if has_list == 1 {
+        let mut k = 0;
+        while k < lcount {
+            let tk = _list_tok(a, lf, lt, k);
+            if _col_index(a, tbl.0, tbl.1, tk.0, tk.1) < 0 {
+                return _err(a, "ERROR: unknown column in INSERT");
+            }
+            k = k + 1;
+        }
+    }
+    // The new body is the current body with the row appended.
+    let mut no = _bpush_db(_bnew(), a, _b0(a), _dlen(a));
+    no = _bpush(no, 82);
+    no = _bpush(no, 1);
+    no = _bpush_sql(no, a, nt.0, nt.1);
+    let mut ci = 0;
+    while ci < ncols {
+        let c = _col(a, tbl.0, tbl.1, ci);
+        let mut src = ci;
+        if has_list == 1 {
+            src = _list_index(a, lf, lt, c.0, c.1);
+        }
+        no = _bpush(no, 1);
+        if src < 0 {
+            // Column not named by the list: NULL.
+            no = _bpush(no, 0);
+        } else {
+            let t = _nth_value(a, vstart, src);
+            if t.2 == 2 && _bad_literal(a, t.0, t.1) {
+                rt_free(no);
+                return _err(a, "ERROR: control byte in string literal");
+            }
+            if t.2 <= 0 {
+                no = _bpush(no, 0);
+            } else {
+                if t.2 == 2 {
+                    no = _push_quoted(no, a, t.0, t.1);
+                } else {
+                    no = _bpush_sql(no, a, t.0, t.1);
+                }
+            }
+        }
+        ci = ci + 1;
+    }
+    no = _bpush(no, 10);
+    let mut ro = _bnew();
+    ro = _bpush_str(ro, "OK");
+    return (ro, no, 1);
+}
+
+// Append a quoted literal body, collapsing '' into a single quote.
+fn _push_quoted(o: Ptr<Int>, a: Ptr<Int>, f: Int, t: Int) -> Ptr<Int> {
+    let mut b = o;
+    let mut i = f;
+    while i < t {
+        let c = _sq(a, i);
+        if c == 39 && i + 1 < t && _sq(a, i + 1) == 39 {
+            b = _bpush(b, 39);
+            i = i + 2;
+        } else {
+            b = _bpush(b, c);
+            i = i + 1;
+        }
+    }
+    return b;
+}
+
+// ============================================================================
+// SELECT / UPDATE / DELETE
+// ============================================================================
+
+fn _do_select(a: Ptr<Int>, p: Int) -> (Ptr<Int>, Ptr<Int>, Int) {
+    let n = _slen(a);
+    let mut q = _iscan_skip(a, p);
+    let mut count = 0;
+    if q < n && _sq(a, q) == 42 {
+        q = q + 1;
+    } else {
+        let fw = _iscan_kw(a, q);
+        if !_ieq(a, fw.0, fw.1, "COUNT") {
+            return _err(a, "ERROR: only SELECT * / SELECT COUNT(*) is supported");
+        }
+        q = _iscan_skip(a, fw.1);
+        if q >= n || _sq(a, q) != 40 {
+            return _err(a, "ERROR: expected '('");
+        }
+        q = _iscan_skip(a, q + 1);
+        if q >= n || _sq(a, q) != 42 {
+            return _err(a, "ERROR: expected '*'");
+        }
+        q = _iscan_skip(a, q + 1);
+        if q >= n || _sq(a, q) != 41 {
+            return _err(a, "ERROR: expected ')'");
+        }
+        q = q + 1;
+        count = 1;
+    }
+    let fw = _iscan_kw(a, q);
+    if !_ieq(a, fw.0, fw.1, "FROM") {
+        return _err(a, "ERROR: expected FROM");
+    }
+    let nt = _iscan_kw(a, fw.1);
+    if nt.1 == nt.0 {
+        return _err(a, "ERROR: missing table name");
+    }
+    let tbl = _find_tbl(a, nt.0, nt.1);
+    if tbl.0 < 0 {
+        return _err(a, "ERROR: no such table");
+    }
+    let cp = _where_start(a, nt.1);
+    let cend = _slen(a);
+    let ncols = _ncols(a, tbl.0, tbl.1);
+    let dn = _dlen(a);
+    let mut pos = _b0(a);
+    let mut matched = 0;
+    let mut ro = _bnew();
+    while pos < dn {
+        let e = _line_end(a, pos);
+        if e > pos + 2 && _db(a, pos) == 82 && _db(a, pos + 1) == 1 {
+            let f = _fend(a, pos + 2, e);
+            if _req_ds(a, pos + 2, f, nt.0, nt.1) {
+                let mut take = 1;
+                if cp >= 0 {
+                    let v = _where(a, cp, cend, tbl.0, tbl.1, pos, e);
+                    if v == 2 {
+                        rt_free(ro);
+                        return _err(a, "ERROR: unknown column in WHERE");
+                    }
+                    if v == 1 {
+                        take = 0;
+                    }
+                }
+                if take == 1 {
+                    matched = matched + 1;
+                    if count == 0 {
+                        let mut ci = 0;
+                        while ci < ncols {
+                            if ci > 0 {
+                                ro = _bpush(ro, 9);
+                            }
+                            let v = _val(a, pos, e, ci);
+                            ro = _push_render(ro, a, v.0, v.1);
+                            ci = ci + 1;
+                        }
+                        ro = _bpush(ro, 10);
+                    }
+                }
+            }
+        }
+        pos = e + 1;
+    }
+    if count == 1 {
+        rt_free(ro);
+        let mut cr = _bnew();
+        cr = _bpush_int(cr, matched);
+        let no = _bpush_db(_bnew(), a, _b0(a), dn);
+        return (cr, no, 1);
+    }
+    let no = _bpush_db(_bnew(), a, _b0(a), dn);
+    return (ro, no, 1);
+}
+
+fn _do_delete(a: Ptr<Int>, p: Int) -> (Ptr<Int>, Ptr<Int>, Int) {
+    let fw = _iscan_kw(a, p);
+    if !_ieq(a, fw.0, fw.1, "FROM") {
+        return _err(a, "ERROR: expected FROM");
+    }
+    let nt = _iscan_kw(a, fw.1);
+    if nt.1 == nt.0 {
+        return _err(a, "ERROR: missing table name");
+    }
+    let tbl = _find_tbl(a, nt.0, nt.1);
+    if tbl.0 < 0 {
+        return _err(a, "ERROR: no such table");
+    }
+    let cp = _where_start(a, nt.1);
+    let cend = _slen(a);
+    let dn = _dlen(a);
+    let mut pos = _b0(a);
+    let mut removed = 0;
+    let mut no = _bnew();
+    while pos < dn {
+        let e = _line_end(a, pos);
+        let mut drop = 0;
+        if e > pos + 2 && _db(a, pos) == 82 && _db(a, pos + 1) == 1 {
+            let f = _fend(a, pos + 2, e);
+            if _req_ds(a, pos + 2, f, nt.0, nt.1) {
+                drop = 1;
+                if cp >= 0 {
+                    let v = _where(a, cp, cend, tbl.0, tbl.1, pos, e);
+                    if v == 2 {
+                        rt_free(no);
+                        return _err(a, "ERROR: unknown column in WHERE");
+                    }
+                    if v == 1 {
+                        drop = 0;
+                    }
+                }
+                if drop == 1 {
+                    removed = removed + 1;
+                }
+            }
+        }
+        if drop == 0 {
+            no = _bpush_db(no, a, pos, e);
+            no = _bpush(no, 10);
+        }
+        pos = e + 1;
+    }
+    let mut ro = _bnew();
+    ro = _bpush_str(ro, "OK ");
+    ro = _bpush_int(ro, removed);
+    return (ro, no, 1);
+}
+
+fn _do_update(a: Ptr<Int>, p: Int) -> (Ptr<Int>, Ptr<Int>, Int) {
+    let nt = _iscan_kw(a, p);
+    if nt.1 == nt.0 {
+        return _err(a, "ERROR: missing table name");
+    }
+    let tbl = _find_tbl(a, nt.0, nt.1);
+    if tbl.0 < 0 {
+        return _err(a, "ERROR: no such table");
+    }
+    let sw = _iscan_kw(a, nt.1);
+    if !_ieq(a, sw.0, sw.1, "SET") {
+        return _err(a, "ERROR: expected SET");
+    }
+    let cw = _iscan_kw(a, sw.1);
+    let ci = _col_index(a, tbl.0, tbl.1, cw.0, cw.1);
+    if ci < 0 {
+        return _err(a, "ERROR: unknown column in SET");
+    }
+    let n = _slen(a);
+    let eq = _iscan_skip(a, cw.1);
+    if eq >= n || _sq(a, eq) != 61 {
+        return _err(a, "ERROR: expected '=' in SET");
+    }
+    let t = _vtok(a, eq + 1);
+    if t.2 < 0 {
+        return _err(a, "ERROR: missing value in SET");
+    }
+    if t.2 == 2 && _bad_literal(a, t.0, t.1) {
+        return _err(a, "ERROR: control byte in string literal");
+    }
+    let nv1 = t.0;
+    let nv2 = t.1;
+    let nvk = t.2;
+    let cp = _where_start(a, t.1 + 1);
+    let cend = _slen(a);
+    let ncols = _ncols(a, tbl.0, tbl.1);
+    let dn = _dlen(a);
+    let mut pos = _b0(a);
+    let mut changed = 0;
+    let mut no = _bnew();
+    while pos < dn {
+        let e = _line_end(a, pos);
+        let mut hit = 0;
+        if e > pos + 2 && _db(a, pos) == 82 && _db(a, pos + 1) == 1 {
+            let f = _fend(a, pos + 2, e);
+            if _req_ds(a, pos + 2, f, nt.0, nt.1) {
+                hit = 1;
+                if cp >= 0 {
+                    let v = _where(a, cp, cend, tbl.0, tbl.1, pos, e);
+                    if v == 2 {
+                        rt_free(no);
+                        return _err(a, "ERROR: unknown column in WHERE");
+                    }
+                    if v == 1 {
+                        hit = 0;
+                    }
+                }
+            }
+        }
+        if hit == 0 {
+            no = _bpush_db(no, a, pos, e);
+            no = _bpush(no, 10);
+        } else {
+            changed = changed + 1;
+            no = _bpush(no, 82);
+            no = _bpush(no, 1);
+            no = _bpush_sql(no, a, nt.0, nt.1);
+            let mut k = 0;
+            while k < ncols {
+                no = _bpush(no, 1);
+                if k == ci {
+                    if nvk <= 0 {
+                        no = _bpush(no, 0);
+                    } else {
+                        if nvk == 2 {
+                            no = _push_quoted(no, a, nv1, nv2);
+                        } else {
+                            no = _bpush_sql(no, a, nv1, nv2);
+                        }
+                    }
+                } else {
+                    let v = _val(a, pos, e, k);
+                    no = _bpush_db(no, a, v.0, v.1);
+                }
+                k = k + 1;
+            }
+            no = _bpush(no, 10);
+        }
+        pos = e + 1;
+    }
+    let mut ro = _bnew();
+    ro = _bpush_str(ro, "OK ");
+    ro = _bpush_int(ro, changed);
+    return (ro, no, 1);
+}
+
+// ============================================================================
+// Statement dispatch
+// ============================================================================
+
+fn _run(a: Ptr<Int>, p: Int) -> (Ptr<Int>, Ptr<Int>, Int) {
+    let a0 = _iscan_kw(a, 0);
+    if a0.1 == a0.0 {
+        return _err(a, "ERROR: empty statement");
+    }
+    if _ieq(a, a0.0, a0.1, "CREATE") {
+        return _do_create(a, a0.1);
+    }
+    if _ieq(a, a0.0, a0.1, "INSERT") {
+        return _do_insert(a, a0.1);
+    }
+    if _ieq(a, a0.0, a0.1, "SELECT") {
+        return _do_select(a, a0.1);
+    }
+    if _ieq(a, a0.0, a0.1, "UPDATE") {
+        return _do_update(a, a0.1);
+    }
+    if _ieq(a, a0.0, a0.1, "DELETE") {
+        return _do_delete(a, a0.1);
+    }
+    return _err(a, "ERROR: unsupported statement");
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+// sql_new(): an empty database.
+fn sql_new() -> Str {
+    return rt_str_alloc(0);
+}
+
+// sql_free(db): release a database blob.
+fn sql_free(db: Str) {
+    rt_str_free(db);
+}
+
+// Copy `db` and `sql` into a fresh arena. Both inputs are consumed.
+fn _arena(db: Str, sql: Str) -> Ptr<Int> {
+    let dn = rt_str_len(db);
+    let sn = rt_str_len(sql);
+    let dw = (dn + 7) / 8;
+    let sw = (sn + 7) / 8;
+    let total = 8 + dw + sw + 2;
+    let a = rt_alloc(total * 8);
+    _p(a, 0, total);
+    _p(a, 1, dn);
+    _p(a, 2, 8 + dw);
+    _p(a, 3, sn);
+    _p(a, 4, 0);
+    let mut z = 8;
+    while z < total {
+        _p(a, z, 0);
+        z = z + 1;
+    }
+    let mut i = 0;
+    while i < dn {
+        _dbset(a, i, rt_str_byte(db, i));
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < sn {
+        _sqset(a, j, rt_str_byte(sql, j));
+        j = j + 1;
+    }
+    rt_str_free(db);
+    rt_str_free(sql);
+    return a;
+}
+
+// The transaction prefix length in the arena's database text.
+fn _txlen(a: Ptr<Int>) -> Int {
+    let n = _dlen(a);
+    if n < 3 {
+        return 0;
+    }
+    if _db(a, 0) != 35 {
+        return 0;
+    }
+    let mut i = 1;
+    while i < n && _is_dig(_db(a, i)) {
+        i = i + 1;
+    }
+    if i >= n {
+        return 0;
+    }
+    if _db(a, i) != 10 {
+        return 0;
+    }
+    let mut v = 0;
+    let mut k = 1;
+    while k < i {
+        v = v * 10 + (_db(a, k) - 48);
+        k = k + 1;
+    }
+    return i + 1 + v;
+}
+
+// Record the body start (past any transaction prefix) in the arena header.
+fn _bind(a: Ptr<Int>) -> Ptr<Int> {
+    _p(a, 4, _txlen(a));
+    return a;
+}
+
+// sql_in_transaction(db) -> (bool, db). `db` is consumed and handed back.
+fn sql_in_transaction(db: Str) -> (Bool, Str) {
+    let a = _bind(_arena(db, rt_str_alloc(0)));
+    let t = _txlen(a) > 0;
+    let back = _bstr(_bpush_db(_bnew(), a, 0, _dlen(a)));
+    rt_free(a);
+    return (t, back);
+}
+
+// sql_exec(db, sql) -> (result, new database). Both inputs are consumed; both
+// results are owned and must be released with rt_str_free / sql_free.
+fn sql_exec(db: Str, sql: Str) -> (Str, Str) {
+    let a = _bind(_arena(db, sql));
+    let k = _iscan_kw(a, 0);
+    let dn = _dlen(a);
+    if _ieq(a, k.0, k.1, "BEGIN") {
+        let tx = _txlen(a);
+        if tx > 0 {
+            let mut ro = _bnew();
+            ro = _bpush_str(ro, "ERROR: transaction already active");
+            let no = _bpush_db(_bnew(), a, 0, dn);
+            let r = (_bstr(ro), _bstr(no));
+            rt_free(a);
+            return r;
+        }
+        let mut no = _bnew();
+        no = _bpush(no, 35);
+        no = _bpush_int(no, dn);
+        no = _bpush(no, 10);
+        no = _bpush_db(no, a, 0, dn);
+        no = _bpush_db(no, a, 0, dn);
+        let mut ro = _bnew();
+        ro = _bpush_str(ro, "OK");
+        let r = (_bstr(ro), _bstr(no));
+        rt_free(a);
+        return r;
+    }
+    if _ieq(a, k.0, k.1, "COMMIT") {
+        let tx = _txlen(a);
+        if tx == 0 {
+            let mut ro = _bnew();
+            ro = _bpush_str(ro, "ERROR: no active transaction");
+            let no = _bpush_db(_bnew(), a, 0, dn);
+            let r = (_bstr(ro), _bstr(no));
+            rt_free(a);
+            return r;
+        }
+        let mut ro = _bnew();
+        ro = _bpush_str(ro, "OK");
+        let no = _bpush_db(_bnew(), a, tx, dn);
+        let r = (_bstr(ro), _bstr(no));
+        rt_free(a);
+        return r;
+    }
+    if _ieq(a, k.0, k.1, "ROLLBACK") {
+        let tx = _txlen(a);
+        if tx == 0 {
+            let mut ro = _bnew();
+            ro = _bpush_str(ro, "ERROR: no active transaction");
+            let no = _bpush_db(_bnew(), a, 0, dn);
+            let r = (_bstr(ro), _bstr(no));
+            rt_free(a);
+            return r;
+        }
+        let mut i = 1;
+        while i < dn && _is_dig(_db(a, i)) {
+            i = i + 1;
+        }
+        let mut v = 0;
+        let mut k2 = 1;
+        while k2 < i {
+            v = v * 10 + (_db(a, k2) - 48);
+            k2 = k2 + 1;
+        }
+        let mut ro = _bnew();
+        ro = _bpush_str(ro, "OK");
+        let no = _bpush_db(_bnew(), a, i + 1, i + 1 + v);
+        let r = (_bstr(ro), _bstr(no));
+        rt_free(a);
+        return r;
+    }
+    let tx = _txlen(a);
+    let r = _run(a, 0);
+    let ro = r.0;
+    let no = r.1;
+    let ok = r.2;
+    let mut full = _bnew();
+    if ok == 0 {
+        rt_free(no);
+        full = _bpush_db(full, a, 0, dn);
+    } else {
+        full = _bpush_db(full, a, 0, tx);
+        let m = _g(no, 0);
+        let mut i = 0;
+        while i < m {
+            full = _bpush(full, _bget(no, i));
+            i = i + 1;
+        }
+        rt_free(no);
+    }
+    let out = (_bstr(ro), _bstr(full));
+    rt_free(a);
+    return out;
+}// sql_rows(db, table) -> (rows, db). `db` is consumed and handed back; -1
+// means the table does not exist.
+fn sql_rows(db: Str, table: Str) -> (Int, Str) {
+    let a = _bind(_arena(db, table));
+    let nt = (0, _slen(a));
+    let tbl = _find_tbl(a, 0, _slen(a));
+    let dn = _dlen(a);
+    let mut pos = _b0(a);
+    let mut c = 0;
+    while tbl.0 >= 0 && pos < dn {
+        let e = _line_end(a, pos);
+        if e > pos + 2 && _db(a, pos) == 82 && _db(a, pos + 1) == 1 {
+            let f = _fend(a, pos + 2, e);
+            if _req_ds(a, pos + 2, f, nt.0, nt.1) {
+                c = c + 1;
+            }
+        }
+        pos = e + 1;
+    }
+    if tbl.0 < 0 {
+        c = 0 - 1;
+    }
+    let back = _bstr(_bpush_db(_bnew(), a, 0, dn));
+    rt_free(a);
+    return (c, back);
+}
+
+// sql_has_table(db, name) -> (bool, db). `db` is consumed and handed back.
+fn sql_has_table(db: Str, name: Str) -> (Bool, Str) {
+    let a = _bind(_arena(db, name));
+    let t = _find_tbl(a, 0, _slen(a));
+    let back = _bstr(_bpush_db(_bnew(), a, 0, _dlen(a)));
+    rt_free(a);
+    return (t.0 >= 0, back);
+}
+
+// sql_tables(db) -> (names, db): every table name on its own line.
+fn sql_tables(db: Str) -> (Str, Str) {
+    let a = _bind(_arena(db, rt_str_alloc(0)));
+    let n = _dlen(a);
+    let mut pos = _b0(a);
+    let mut o = _bnew();
+    while pos < n {
+        let e = _line_end(a, pos);
+        if e > pos + 2 && _db(a, pos) == 84 && _db(a, pos + 1) == 1 {
+            let f = _fend(a, pos + 2, e);
+            o = _bpush_db(o, a, pos + 2, f);
+            o = _bpush(o, 10);
+        }
+        pos = e + 1;
+    }
+    let s = _bstr(o);
+    let back = _bstr(_bpush_db(_bnew(), a, 0, n));
+    rt_free(a);
+    return (s, back);
+}
+
+// sql_quote(s): the SQL single-quoted literal for `s`. `s` is consumed.
+fn sql_quote(s: Str) -> Str {
+    let n = rt_str_len(s);
+    let mut o = _bnew();
+    o = _bpush(o, 39);
+    let mut i = 0;
+    while i < n {
+        let c = rt_str_byte(s, i);
+        if c == 39 {
+            o = _bpush(o, 39);
+        }
+        o = _bpush(o, c);
+        i = i + 1;
+    }
+    o = _bpush(o, 39);
+    rt_str_free(s);
+    return _bstr(o);
+}
+
+// sql_field(line, index): the `index`-th tab-separated field of a result line.
+// `line` is consumed.
+fn sql_field(line: Str, index: Int) -> Str {
+    let n = rt_str_len(line);
+    let mut p = 0;
+    let mut i = 0;
+    while i < index && p < n {
+        while p < n && rt_str_byte(line, p) != 9 {
+            p = p + 1;
+        }
+        p = p + 1;
+        i = i + 1;
+    }
+    let mut q = p;
+    while q < n && rt_str_byte(line, q) != 9 && rt_str_byte(line, q) != 10 {
+        q = q + 1;
+    }
+    let s = rt_str_alloc(q - p);
+    let mut k = 0;
+    while k < q - p {
+        rt_str_set_byte(s, k, rt_str_byte(line, p + k));
+        k = k + 1;
+    }
+    rt_str_free(line);
+    return s;
+}
