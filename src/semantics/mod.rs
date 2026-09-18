@@ -156,12 +156,14 @@ impl SemanticResult {
     pub fn resolve(&self, span: Span) -> Option<SymbolId> {
         let file = span.file();
         let start = span.start();
-        let lower = self
-            .resolutions
-            .partition_point(|(resolved_span, _)| (resolved_span.file(), resolved_span.start()) < (file, start));
+        let lower = self.resolutions.partition_point(|(resolved_span, _)| {
+            (resolved_span.file(), resolved_span.start()) < (file, start)
+        });
         self.resolutions[lower..]
             .iter()
-            .take_while(|(resolved_span, _)| resolved_span.file() == file && resolved_span.start() == start)
+            .take_while(|(resolved_span, _)| {
+                resolved_span.file() == file && resolved_span.start() == start
+            })
             .next()
             .map(|(_, symbol)| *symbol)
     }

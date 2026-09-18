@@ -232,9 +232,9 @@ impl TypeResult {
     pub fn expr_type_exact(&self, span: Span) -> Option<TypeId> {
         let file = span.file();
         let start = span.start();
-        let lower = self
-            .expr_types
-            .partition_point(|(expr_span, _)| (expr_span.file(), expr_span.start()) < (file, start));
+        let lower = self.expr_types.partition_point(|(expr_span, _)| {
+            (expr_span.file(), expr_span.start()) < (file, start)
+        });
         self.expr_types[lower..]
             .iter()
             .take_while(|(expr_span, _)| expr_span.file() == file && expr_span.start() == start)
