@@ -313,7 +313,11 @@ fn build_error_exit_code(error: &BuildError) -> ExitCode {
 
 /// Parses the arguments of the `build` command: a path plus an optional
 /// `--target <name>` (or `--target=<name>`) in either order.
-fn parse_build(args: &[String]) -> Result<Command, String> {
+///
+/// `command` is the name used in diagnostics. `mink test` shares this
+/// grammar, so the message must name the command the user actually typed
+/// rather than always saying `build`.
+fn parse_build(args: &[String], command: &str) -> Result<Command, String> {
     let mut path: Option<PathBuf> = None;
     let mut target = Target::native();
     let mut index = 0;
@@ -321,25 +325,25 @@ fn parse_build(args: &[String]) -> Result<Command, String> {
         let arg = &args[index];
         if arg == "--target" {
             index += 1;
-            let name = args
-                .get(index)
-                .ok_or("missing target name after '--target' (usage: mink build <path> [--target <target>])")?;
+            let name = args.get(index).ok_or(format!(
+                "missing target name after '--target' (usage: mink {command} <path> [--target <target>])"
+            ))?;
             target = parse_target(name)?;
         } else if let Some(name) = arg.strip_prefix("--target=") {
             target = parse_target(name)?;
         } else if arg.starts_with('-') {
-            return Err(format!("unknown option '{arg}' for 'build'"));
+            return Err(format!("unknown option '{arg}' for '{command}'"));
         } else {
             if path.is_some() {
-                return Err(format!("unexpected argument '{arg}' for 'build'"));
+                return Err(format!("unexpected argument '{arg}' for '{command}'"));
             }
             path = Some(PathBuf::from(arg));
         }
         index += 1;
     }
-    let path = path.ok_or(
-        "missing path argument for 'build' (usage: mink build <path> [--target <target>])",
-    )?;
+    let path = path.ok_or(format!(
+        "missing path argument for '{command}' (usage: mink {command} <path> [--target <target>])"
+    ))?;
     Ok(Command::Build { path, target })
 }
 
@@ -407,7 +411,7 @@ fn parse(args: &[String]) -> Result<Command, String> {
             Ok(Command::Version)
         }
         "-v" | "-V" | "--version" => Ok(Command::Version),
-        "build" => parse_build(&args[1..]),
+        "build" => parse_build(&args[1..], "build"),
         "check" => {
             let mut path: Option<PathBuf> = None;
             let mut json = false;
@@ -435,7 +439,7 @@ fn parse(args: &[String]) -> Result<Command, String> {
         }
         "run" => parse_run(&args[1..]),
         "repl" => parse_repl(&args[1..]),
-        "test" => parse_build(&args[1..]).map(|cmd| match cmd {
+        "test" => parse_build(&args[1..], "test").map(|cmd| match cmd {
             Command::Build { path, target } => Command::Test { path, target },
             _ => unreachable!(),
         }),

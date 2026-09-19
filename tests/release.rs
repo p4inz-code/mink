@@ -189,7 +189,9 @@ fn cli_run_compiles_and_executes() {
 
 #[test]
 fn cli_unknown_commands_rejected() {
-    for command in ["test", "fmt"] {
+    // `test` and `repl` became real subcommands in Sessions 108/109, so the
+    // unknown-command check must use names that are not subcommands at all.
+    for command in ["fmt", "frobnicate"] {
         let output = mink().arg(command).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "for command '{command}'");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -198,6 +200,20 @@ fn cli_unknown_commands_rejected() {
             "for command '{command}': {stderr}"
         );
     }
+}
+
+#[test]
+fn cli_test_command_requires_a_path() {
+    // `mink test` shares the build grammar; its diagnostics must name
+    // `test`, not `build`.
+    let output = mink().arg("test").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("for 'test'"), "unexpected stderr: {stderr}");
+    assert!(
+        !stderr.contains("'build'"),
+        "diagnostic names the wrong command: {stderr}"
+    );
 }
 
 // =========================================================================
