@@ -1,0 +1,96 @@
+// Threaded workload — a small end-to-end proof application for threads and
+// locks (R19/S71).
+//
+// Run it with:  mink run examples/threaded_work/main.mink
+//
+// Four OS threads each sum the squares of a disjoint quarter of 1..=400 and
+// add their subtotal to a shared accumulator under a single lock. The main
+// thread joins all four, checks the accumulated total against the closed form
+// n(n+1)(2n+1)/6, and reports each subtotal. A clean exit also proves the
+// runtime left no live allocation behind: the thread control blocks are freed
+// by `thread_join`, the shared context and lock by `lock_free`/`rt_free`.
+
+mod threads;
+
+// The shared context block: [lock @ 0][total @ 8]. Every worker holds the
+// lock while adding to `total`, so the final sum is exact regardless of how
+// the four threads interleave.
+fn worker(p: Ptr<Int>) -> Int {
+    let ctx = rt_int_to_ptr(rt_mem_load(p));
+    let start = rt_mem_load(p + 8);
+    let end = rt_mem_load(p + 16);
+    let lock = rt_mem_load(ctx);
+
+    let mut i = start;
+    let mut subtotal = 0;
+    while i < end {
+        subtotal = subtotal + i * i;
+        i = i + 1;
+    }
+
+    lock_acquire(lock);
+    rt_mem_store(ctx + 8, rt_mem_load(ctx + 8) + subtotal);
+    lock_release(lock);
+
+    return subtotal;
+}
+
+// A per-thread argument block: [context @ 0][start @ 8][end @ 16].
+fn make_args(ctx: Ptr<Int>, start: Int, end: Int) -> Ptr<Int> {
+    let p = rt_alloc(24);
+    rt_mem_store(p, rt_ptr_to_int(ctx));
+    rt_mem_store(p + 8, start);
+    rt_mem_store(p + 16, end);
+    return p;
+}
+
+fn main() -> Int {
+    let ctx = rt_alloc(16);
+    let lock = lock_new();
+    rt_mem_store(ctx, lock);
+    rt_mem_store(ctx + 8, 0);
+
+    let a1 = make_args(ctx, 1, 101);
+    let a2 = make_args(ctx, 101, 201);
+    let a3 = make_args(ctx, 201, 301);
+    let a4 = make_args(ctx, 301, 401);
+
+    let t1 = thread_spawn(worker, a1);
+    let t2 = thread_spawn(worker, a2);
+    let t3 = thread_spawn(worker, a3);
+    let t4 = thread_spawn(worker, a4);
+
+    rt_print_str("subtotals:\n");
+    rt_print_int(thread_join(t1));
+    rt_print_int(thread_join(t2));
+    rt_print_int(thread_join(t3));
+    rt_print_int(thread_join(t4));
+
+    let total = rt_mem_load(ctx + 8);
+    // Closed form for 1^2 + 2^2 + ... + 400^2.
+    let expected = 400 * 401 * 801 / 6;
+
+    rt_print_str("total:    ");
+    rt_print_int(total);
+    rt_print_str("expected: ");
+    rt_print_int(expected);
+    if total == expected {
+        rt_print_str("MATCH\n");
+    } else {
+        rt_print_str("MISMATCH\n");
+    }
+
+    // Ownership: join freed each thread control block, so only the shared
+    // context, the lock and the four argument blocks remain.
+    rt_free(a1);
+    rt_free(a2);
+    rt_free(a3);
+    rt_free(a4);
+    lock_free(lock);
+    rt_free(ctx);
+
+    if total == expected {
+        return 0;
+    }
+    return 1;
+}

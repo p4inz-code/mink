@@ -2138,6 +2138,16 @@ impl<'a> Lowerer<'a> {
             "rt_argv" => RuntimeService::Argv,
             "rt_str_from_float" => RuntimeService::StrFromFloat,
             "rt_str_format" => RuntimeService::StrFormat,
+            // --- Thread (Session 112) ---
+            "rt_thread_spawn" => RuntimeService::ThreadSpawn,
+            "rt_thread_join" => RuntimeService::ThreadJoin,
+            "rt_thread_id" => RuntimeService::ThreadId,
+            "rt_mutex_new" => RuntimeService::MutexNew,
+            "rt_mutex_lock" => RuntimeService::MutexLock,
+            "rt_mutex_unlock" => RuntimeService::MutexUnlock,
+            "rt_mutex_free" => RuntimeService::MutexFree,
+            "rt_ptr_to_int" => RuntimeService::PtrToInt,
+            "rt_int_to_ptr" => RuntimeService::IntToPtr,
             _ => return None,
         };
         debug_assert!(service.is_callable());

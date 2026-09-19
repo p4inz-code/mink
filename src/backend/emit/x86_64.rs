@@ -865,6 +865,23 @@ impl Code {
         self.u8(0xC4);
     }
 
+    /// `xchg [rip + disp32], r64` — atomic exchange with a `.bss` word
+    /// (implicit LOCK on x86). Used by the runtime spin lock, which must
+    /// not clobber any register besides its own.
+    pub(crate) fn xchg_rip_r(&mut self, src: Reg, kind: PatchKind) {
+        self.rex_w(src, Reg::Rax);
+        self.u8(0x87);
+        self.u8(0x05 | ((src as u8 & 7) << 3));
+        self.patch(kind);
+    }
+
+    /// `xchg r64, [base + disp]` — atomic exchange (implicit LOCK on x86).
+    pub(crate) fn xchg_r_mem(&mut self, reg: Reg, base: Reg, disp: i32) {
+        self.rex_w(reg, base);
+        self.u8(0x87);
+        self.mem_modrm(reg, base, disp);
+    }
+
     /// `jmp rel32` to a runtime label (patched later).
     pub(crate) fn jmp_label(&mut self, label: u32) {
         self.jmp(PatchKind::Label(label));

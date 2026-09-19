@@ -189,6 +189,13 @@ pub struct RuntimeLayout {
     /// user operation — e.g. the exit-time leak scan — clears the cell
     /// first).
     pub fail_loc: u64,
+    /// Runtime-wide spin lock (Session 112) guarding the shared heap
+    /// cursor, free list and liveness table. `0` is unlocked; the value
+    /// is otherwise irrelevant. Only the allocator and the raw memory
+    /// accessors take it, and none of them nests, so it is a plain
+    /// (non-recursive) acquire/test-and-set spin lock. The lock word is
+    /// stored in `.bss`, so it starts zeroed.
+    pub rt_lock: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -360,7 +367,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 65536
         + 8
         + 80,
-    size: 1488
+    rt_lock: 1488
         + HEAP_SIZE
         + LIVE_TABLE_BYTES
         + 4096 * 2
@@ -379,6 +386,25 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 8,
+    size: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 16,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

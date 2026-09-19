@@ -1,0 +1,62 @@
+// Threads and locks — Python parity R19 (threads), S71 (threads + locks) and
+// R21 (synchronization primitives).
+//
+// The Python-facing shapes this mirrors:
+//
+//   threading.Thread(target=fn, args=(ctx,)).start() / .join()
+//   threading.Lock()      # acquire() / release()
+//   threading.current_thread().ident
+//
+// MINK's model is explicit and native: a thread entry function is
+// `fn(Ptr<Int>) -> Int`, the single `Ptr<Int>` argument is a pointer to a
+// shared context block (allocate it with `rt_alloc`, publish it with
+// `rt_mem_store`), and the function's `Int` result is what `thread_join`
+// returns. A lock is an 8-byte word in the MINK heap; `rt_mutex_lock` is a
+// test-and-set spin adapted from the same atomic primitive Python's
+// `threading.Lock` is built on, but it is not reentrant — locking twice from
+// one thread deadlocks, exactly like Python's non-recursive `Lock`.
+//
+// Ownership: `thread_join` frees the thread control block and closes the
+// kernel handle, and `lock_free` returns the lock word to the allocator, so a
+// complete spawn/join or new/free cycle leaves nothing live. The runtime
+// validates every allocation and scans the live table at exit, so a program
+// that forgets either call fails with `E-R04`/`E-R06` rather than leaking
+// silently.
+
+// Starts `f` on a new OS thread, passing `arg` through unchanged.
+// Returns an opaque handle for `thread_join`.
+fn thread_spawn(f, arg: Ptr<Int>) -> Int {
+    return rt_thread_spawn(f, arg);
+}
+
+// Waits for the thread behind `handle` to finish, releases its kernel
+// handle and returns the value the thread function returned.
+fn thread_join(handle: Int) -> Int {
+    return rt_thread_join(handle);
+}
+
+// The calling thread's OS thread id (positive; distinct per live thread).
+fn thread_self() -> Int {
+    return rt_thread_id();
+}
+
+// Creates a new unlocked lock: an 8-byte word in the MINK heap.
+fn lock_new() -> Int {
+    return rt_mutex_new();
+}
+
+// Acquires `lock`, spinning until it is free.
+fn lock_acquire(lock: Int) {
+    rt_mutex_lock(lock);
+}
+
+// Releases `lock`. Releasing a lock the caller does not hold is a no-op that
+// clears the word; there is no owner tracking, matching Python's `Lock`.
+fn lock_release(lock: Int) {
+    rt_mutex_unlock(lock);
+}
+
+// Returns `lock`'s storage to the allocator. The lock must not be held.
+fn lock_free(lock: Int) {
+    rt_mutex_free(lock);
+}

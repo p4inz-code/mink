@@ -107,6 +107,8 @@ pub(crate) struct RuntimeOffsets {
     /// Label of the collection field/variant lists, bound by
     /// [`emit_data`] after the descriptor entries.
     pub(crate) desc_lists_label: u32,
+    /// Label of the thread trampoline function (Session 112).
+    pub(crate) thread_tramp_label: u32,
 }
 
 impl RuntimeOffsets {
@@ -143,6 +145,7 @@ pub(crate) fn emit_services(
         home_path_label: code.label(),
         desc_table_label: code.label(),
         desc_lists_label: code.label(),
+        thread_tramp_label: code.label(),
     };
     let mut emit =
         |code: &mut Code, service: RuntimeService, body: fn(&mut Code, &RuntimeOffsets)| {
@@ -471,6 +474,39 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::FreeCstr, |code, _| {
         emit_free_cstr(code)
     });
+    // --- Thread services (Session 112) ---
+    emit(code, RuntimeService::ThreadSpawn, |code, o| {
+        emit_thread_spawn(code, o)
+    });
+    emit(code, RuntimeService::ThreadJoin, |code, o| {
+        emit_thread_join(code, o)
+    });
+    emit(code, RuntimeService::ThreadId, |code, o| {
+        emit_thread_id(code, o)
+    });
+    emit(code, RuntimeService::MutexNew, |code, o| {
+        emit_mutex_new(code, o)
+    });
+    emit(code, RuntimeService::MutexLock, |code, o| {
+        emit_mutex_lock(code, o)
+    });
+    emit(code, RuntimeService::MutexUnlock, |code, o| {
+        emit_mutex_unlock(code, o)
+    });
+    emit(code, RuntimeService::MutexFree, |code, o| {
+        emit_mutex_free(code, o)
+    });
+    emit(code, RuntimeService::PtrToInt, |code, o| {
+        emit_reinterpret(code, o)
+    });
+    emit(code, RuntimeService::IntToPtr, |code, o| {
+        emit_reinterpret(code, o)
+    });
+
+    // Thread trampoline: bridges Windows x64 ABI -> MINK stack ABI.
+    code.bind_label(offsets.thread_tramp_label);
+    emit_thread_trampoline(code);
+
     offsets
 }
 
@@ -499,6 +535,7 @@ pub(crate) fn emit_data(
         RuntimeErrorKind::StringIndexOutOfRange,
         RuntimeErrorKind::ArrayIndexOutOfRange,
         RuntimeErrorKind::MissingKey,
+        RuntimeErrorKind::ThreadCreateFailed,
     ];
     kinds.sort_by_key(|kind| kind.number());
     let messages = kinds
@@ -595,6 +632,7 @@ fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
 fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
     code.sub_rsp(32);
+    rt_lock_acquire(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // size spill
 
@@ -668,6 +706,7 @@ fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
     code.mov_mem_r(Reg::Rcx, 8, Reg::Rdx);
     code.mov_mem_imm32(Reg::Rcx, 16, 1);
+    rt_lock_release(code);
     code.leave_ret();
 
     code.bind_label(bad_size);
@@ -686,6 +725,7 @@ fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
 fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
     code.sub_rsp(32);
+    rt_lock_acquire(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
 
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
@@ -704,6 +744,7 @@ fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
     code.cmp_rr(Reg::Rax, Reg::Rdx);
     code.jcc_label(0x83, not_image); // jae — at/above the image region
     code.xor_rr32(Reg::Rax, Reg::Rax);
+    rt_lock_release(code);
     code.leave_ret(); // inside the image region: no-op success
     code.bind_label(not_image);
 
@@ -737,6 +778,7 @@ fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rax, 0, Reg::Rdx);
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.free_head as u32));
     code.xor_rr32(Reg::Rax, Reg::Rax);
+    rt_lock_release(code);
     code.leave_ret();
 
     code.bind_label(next);
@@ -755,6 +797,7 @@ fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
 fn emit_mem_load(code: &mut Code) {
     prologue(code);
     code.sub_rsp(16);
+    rt_lock_acquire(code);
 
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.test_r_imm32(Reg::Rax, 7);
@@ -783,6 +826,7 @@ fn emit_mem_load(code: &mut Code) {
     code.cmp_rr(Reg::R10, Reg::R9);
     code.jcc_label(0x87, oob); // ja
     code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    rt_lock_release(code);
     code.leave_ret();
 
     code.bind_label(next);
@@ -799,6 +843,7 @@ fn emit_mem_load(code: &mut Code) {
 fn emit_mem_store(code: &mut Code) {
     prologue(code);
     code.sub_rsp(16);
+    rt_lock_acquire(code);
 
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
@@ -829,6 +874,7 @@ fn emit_mem_store(code: &mut Code) {
     code.jcc_label(0x87, oob); // ja
     code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
     code.xor_rr32(Reg::Rax, Reg::Rax);
+    rt_lock_release(code);
     code.leave_ret();
 
     code.bind_label(next);
@@ -2056,6 +2102,30 @@ const MAP_HEADER: i32 = 40;
 const SET_HEADER: i32 = 32;
 /// Bytes of one bucket's occupancy word (before the key/element).
 const BUCKET_HEADER: i32 = 8;
+
+/// Acquires the runtime-wide spin lock (BSS `rt_lock`).
+///
+/// Clobbers only `rax`: the exchange is RIP-relative (no scratch base
+/// register) and the test is register-only. Callers must invoke this
+/// right after their frame is set up, before `rax` holds a live value.
+/// The lock is non-recursive; the allocator, `rt_free` and the raw
+/// memory accessors never nest, so a plain test-and-set is sufficient.
+/// `xchg` with a memory operand is implicitly locked, so the pair
+/// acquire/release is atomic on x86-64.
+fn rt_lock_acquire(code: &mut Code) {
+    let spin = code.label();
+    code.bind_label(spin);
+    code.movabs(Reg::Rax, 1);
+    code.xchg_rip_r(Reg::Rax, PatchKind::Bss(BSS.rt_lock as u32));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, spin); // jnz — another thread holds it, retry
+}
+
+/// Releases the runtime-wide spin lock. Clobbers nothing: the store is a
+/// RIP-relative immediate, so a caller's live `rax` (its result) survives.
+fn rt_lock_release(code: &mut Code) {
+    code.mov_rip_imm32(PatchKind::Bss(BSS.rt_lock as u32), 0);
+}
 
 /// Pushes `args` rightmost-first with the alignment pad, calls `service`,
 /// and cleans up. The caller must leave `rsp` 16-byte aligned. Clobbers
@@ -8491,6 +8561,9 @@ const IAT_GET_ENVIRONMENT_VARIABLE_A: u32 = 28;
 const IAT_SET_ENVIRONMENT_VARIABLE_A: u32 = 29;
 const IAT_SLEEP: u32 = 35;
 const IAT_GET_COMMAND_LINE_A: u32 = 36;
+const IAT_CREATE_THREAD: u32 = 37;
+const IAT_EXIT_THREAD: u32 = 38;
+const IAT_GET_CURRENT_THREAD_ID: u32 = 39;
 const IAT_STD_INPUT_HANDLE: i32 = -10;
 
 /// `rt_fs_exists(path: Str) -> Bool`.
@@ -9219,5 +9292,196 @@ fn emit_fs_set_cwd(code: &mut Code) {
     free_cstr(code, Reg::Rcx);
     // Restore return value
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+// ---------------------------------------------------------------------------
+// Thread services (Session 112, R19/S71)
+// ---------------------------------------------------------------------------
+
+/// Thread trampoline: bridges the Windows x64 ABI that `CreateThread`
+/// uses into the MINK stack ABI.
+///
+/// `CreateThread` calls this with `rcx = lpParameter`, a pointer to a
+/// 32-byte heap block `[os_handle][fn][arg][result]`. The trampoline
+/// calls the MINK function as `fn(arg)` (argument 1 on the stack top at
+/// `[rbp + 16]`, exactly like a user-function call) and stores its word
+/// result into `block[3]` before exiting the thread.
+///
+/// Entry state: `rsp ≡ 8 (mod 16)` (a `call` pushed the return address).
+/// `push rbp` makes it 16-aligned; `sub rsp, 32` keeps it aligned, and
+/// the odd-arity pad word plus the pushed argument total 16 bytes, so
+/// `rsp` is 16-aligned at the MINK `call`.
+fn emit_thread_trampoline(code: &mut Code) {
+    code.u8(0x55); // push rbp
+    code.bytes(&[0x48, 0x89, 0xE5]); // mov rbp, rsp
+    code.sub_rsp(32); // [rbp-8] block ptr; 16-aligned
+
+    // [rbp-8] = block pointer (rcx survives until the call below).
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rcx);
+
+    // Load fn and arg from the block.
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 8); // rax = fn
+    code.mov_r_mem(Reg::Rcx, Reg::Rcx, 16); // rcx = arg
+
+    // Call fn(arg) with the MINK stack convention: an odd argument count
+    // needs one 8-byte pad word before the argument.
+    code.sub_rsp(8); // alignment pad
+    code.u8(0x51); // push rcx (arg)
+    code.u8(0xFF);
+    code.u8(0xD0); // call rax
+    code.add_rsp(16); // pop arg + pad
+
+    // Store result into block[3].
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // rcx = block ptr
+    code.mov_mem_r(Reg::Rcx, 24, Reg::Rax); // block[3] = result
+
+    // ExitThread(0) — never returns.
+    code.sub_rsp(32); // shadow space
+    code.xor_rr32(Reg::Rcx, Reg::Rcx);
+    code.call_rip(PatchKind::Iat(IAT_EXIT_THREAD));
+    code.u8(0xCC); // unreachable
+}
+
+/// `rt_thread_spawn(fn_ptr: Int, arg: Int) -> Int`.
+fn emit_thread_spawn(code: &mut Code, offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = block ptr; 16-aligned at calls
+    // Arguments: [rbp+16] = fn, [rbp+24] = arg.
+
+    // Allocate the 32-byte control block [os_handle][fn][arg][result].
+    code.movabs(Reg::Rax, 32);
+    call_service(code, RuntimeService::Alloc, &[Reg::Rax]);
+    // Spill the block pointer: rax is clobbered by both the stores' index
+    // loads and (crucially) by CreateThread itself.
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    // block[1] = fn, block[2] = arg, block[3] = 0.
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rax, 8, Reg::R11);
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rax, 16, Reg::R11);
+    code.xor_rr32(Reg::R11, Reg::R11);
+    code.mov_mem_r(Reg::Rax, 24, Reg::R11);
+
+    // CreateThread(NULL, 0, trampoline, block, 0, NULL).
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // lpThreadAttributes = NULL
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // dwStackSize = 0
+    code.lea_r_rip(Reg::R8, PatchKind::Label(offsets.thread_tramp_label));
+    code.mov_rr(Reg::R9, Reg::Rax); // lpParameter = block
+    // 6 arguments: 32 bytes of shadow space + 2 stack words (48 total is
+    // already 16-aligned at the call).
+    code.sub_rsp(48);
+    code.mov_mem_imm32(Reg::Rsp, 32, 0); // dwCreationFlags = 0
+    code.mov_mem_imm32(Reg::Rsp, 40, 0); // lpThreadId = NULL
+    code.call_rip(PatchKind::Iat(IAT_CREATE_THREAD));
+    code.add_rsp(48);
+
+    // A NULL handle means the thread was never created (E-R12).
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let created = code.label();
+    code.jcc_label(0x85, created); // jnz
+    fail(code, 12); // E-R12
+    code.bind_label(created);
+
+    // block[0] = os handle; return the block as the MINK thread handle.
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -8);
+    code.mov_mem_r(Reg::R11, 0, Reg::Rax);
+    code.mov_rr(Reg::Rax, Reg::R11);
+    code.leave_ret();
+}
+
+/// `rt_thread_join(handle: Int) -> Int`.
+fn emit_thread_join(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = block, [rbp-16] = result; 16-aligned
+
+    // Spill the block; the block's first word is the OS handle.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    // WaitForSingleObject(os_handle, INFINITE) — needs 32 bytes of
+    // shadow space; the frame above is 16-byte aligned at the call.
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.movabs(Reg::Rdx, 0xFFFF_FFFF_u64); // INFINITE
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_WAIT_FOR_SINGLE_OBJECT));
+    // Close the handle now that the thread has exited, so a spawn/join
+    // cycle does not leak a kernel handle (verified by repeated joins).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rcx, 0);
+    code.call_rip(PatchKind::Iat(3)); // CloseHandle
+    code.add_rsp(32);
+
+    // The thread has exited, so its result write is visible.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 24);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // spill result across free
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_thread_id() -> Int`.
+fn emit_thread_id(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(32); // shadow space
+    code.call_rip(PatchKind::Iat(IAT_GET_CURRENT_THREAD_ID));
+    code.add_rsp(32);
+    code.leave_ret();
+}
+
+/// `rt_mutex_new() -> Int` — allocate 8-byte zeroed lock word.
+fn emit_mutex_new(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.movabs(Reg::Rax, 8);
+    call_service(code, RuntimeService::Alloc, &[Reg::Rax]);
+    // rt_alloc returns 16-aligned memory, which is already zeroed? No —
+    // the free-list reuse path returns a recycled block, so clear the
+    // lock word explicitly to guarantee the unlocked state.
+    code.mov_mem_imm32(Reg::Rax, 0, 0);
+    code.leave_ret();
+}
+
+/// `rt_mutex_lock(ptr: Int)` — acquire spinlock via atomic xchg.
+fn emit_mutex_lock(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // rcx = lock ptr
+
+    let spin = code.label();
+    code.bind_label(spin);
+    code.movabs(Reg::Rax, 1);
+    code.xchg_r_mem(Reg::Rax, Reg::Rcx, 0); // atomic: rax=old, [rcx]=1
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, spin); // jnz spin
+
+    code.leave_ret();
+}
+
+/// `rt_mutex_unlock(ptr: Int)` — release spinlock.
+fn emit_mutex_unlock(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax); // [rcx] = 0
+    code.leave_ret();
+}
+
+/// `rt_mutex_free(ptr: Int)` — free the mutex block.
+fn emit_mutex_free(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.leave_ret();
+}
+
+/// `rt_ptr_to_int(p) -> Int` and `rt_int_to_ptr(i) -> Ptr<Int>` — a word
+/// reinterpretation. A pointer and an integer are the same size on this
+/// target, so both services are the identity move of argument 1 into the
+/// result register.
+fn emit_reinterpret(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.leave_ret();
 }

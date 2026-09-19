@@ -1610,6 +1610,11 @@ impl<'a> Checker<'a> {
                 let elem = self.types.push(TypeKind::Infer(None));
                 self.types.push(TypeKind::Vec(elem))
             }
+            // Session 112: Fn — accepts any function/closure value.
+            // At the machine level, a function pointer is a word-sized
+            // code address (BType::FnPtr), so the emitter passes it as
+            // an Int through the runtime service.
+            crate::runtime::intrinsics::IntrinsicType::Fn => self.types.push(TypeKind::Infer(None)),
         }
     }
 

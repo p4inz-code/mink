@@ -51,6 +51,9 @@ pub enum RuntimeErrorKind {
     /// Removal of a missing key is a documented no-op, not an error; only
     /// `rt_map_get` raises this.
     MissingKey,
+    /// `CreateThread` failed (Session 112, R19/S71): the process could not
+    /// create a thread (typically resource exhaustion).
+    ThreadCreateFailed,
 }
 
 impl RuntimeErrorKind {
@@ -69,6 +72,7 @@ impl RuntimeErrorKind {
             Self::StringIndexOutOfRange => 9,
             Self::ArrayIndexOutOfRange => 10,
             Self::MissingKey => 11,
+            Self::ThreadCreateFailed => 12,
         }
     }
 
@@ -86,6 +90,7 @@ impl RuntimeErrorKind {
             Self::StringIndexOutOfRange => "E-R09",
             Self::ArrayIndexOutOfRange => "E-R10",
             Self::MissingKey => "E-R11",
+            Self::ThreadCreateFailed => "E-R12",
         }
     }
 
@@ -108,6 +113,7 @@ impl RuntimeErrorKind {
                 "array index out of range: the index must be below the array's length"
             }
             Self::MissingKey => "map key not found: the key is not present in the map",
+            Self::ThreadCreateFailed => "thread creation failed: CreateThread returned no handle",
         }
     }
 

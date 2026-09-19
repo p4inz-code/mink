@@ -84,6 +84,9 @@ pub enum IntrinsicType {
     Map,
     /// A Set<T> value: a hash set of elements.
     Set,
+    /// A function pointer value (at the machine level, an Int-sized
+    /// code address). Used by thread spawn intrinsics.
+    Fn,
     /// The element type of the signature's `Vec`/`Set` parameter (a fresh
     /// inference variable; never used at pre-registration — collection
     /// intrinsics are instantiated per call site).
@@ -710,6 +713,62 @@ pub const ALL: &[Intrinsic] = &[
             IntrinsicType::Str,
         ],
         result: IntrinsicType::Str,
+    },
+    // --- Thread + lock (Session 112, R19/S71) ---
+    // The thread entry function takes one `Ptr<Int>` argument and returns
+    // `Int`; `rt_thread_spawn` hands the argument through unchanged, so a
+    // thread can be given a pointer to any shared context. The returned
+    // handle is a word-valued opaque token (so it can be stored in memory
+    // and passed around exactly like the lock words `rt_mutex_new`
+    // returns); `rt_thread_join` consumes it.
+    Intrinsic {
+        name: "rt_thread_spawn",
+        params: &[IntrinsicType::Fn, IntrinsicType::Ptr],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_thread_join",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_thread_id",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_mutex_new",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_mutex_lock",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_mutex_unlock",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Unit,
+    },
+    Intrinsic {
+        name: "rt_mutex_free",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Unit,
+    },
+    // A `Ptr<Int>` and an `Int` are both one machine word. These casts
+    // exist because `rt_mem_store` takes an `Int` value: a shared context
+    // pointer must be widened to a word to be published for a thread, and
+    // narrowed back to a pointer in the worker.
+    Intrinsic {
+        name: "rt_ptr_to_int",
+        params: &[IntrinsicType::Ptr],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_int_to_ptr",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Ptr,
     },
 ];
 

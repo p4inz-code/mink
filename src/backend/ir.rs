@@ -971,6 +971,35 @@ pub enum RuntimeService {
     /// `rt_dir_close(handle: Int) -> Int`: close a directory handle.
     /// Returns 0 on success, -1 for a null handle.
     FsDirClose,
+    // --- Thread (Session 112, R19/S71) ---
+    /// `rt_thread_spawn(fn_ptr: Int, arg: Int) -> Int`: create a new
+    /// thread that calls `fn_ptr(arg)` via the trampoline and returns a
+    /// Windows HANDLE (Int).
+    ThreadSpawn,
+    /// `rt_thread_join(handle: Int) -> Int`: wait for thread completion
+    /// and return the thread function's result.
+    ThreadJoin,
+    /// `rt_thread_id() -> Int`: get current thread ID.
+    ThreadId,
+    /// `rt_mutex_new() -> Ptr<Int>`: create a new recursive spinlock
+    /// (1 = locked, 0 = free) initialized to 0.
+    MutexNew,
+    /// `rt_mutex_lock(ptr: Ptr<Int>)`: acquire the spinlock.
+    MutexLock,
+    /// `rt_mutex_unlock(ptr: Ptr<Int>)`: release the spinlock.
+    MutexUnlock,
+    /// `rt_mutex_free(ptr: Ptr<Int>)`: free the mutex block.
+    MutexFree,
+    /// `rt_ptr_to_int(p: Ptr<Int>) -> Int`: reinterpret a pointer as a word.
+    /// A `Ptr<Int>` and an `Int` are both one machine word; the cast exists
+    /// because MINK's `rt_mem_store` takes an `Int` value, so a shared
+    /// context pointer must be converted before it can be published for a
+    /// thread. No validation — the value round-trips unchanged.
+    PtrToInt,
+    /// `rt_int_to_ptr(i: Int) -> Ptr<Int>`: reinterpret a word as a pointer.
+    /// The inverse of `rt_ptr_to_int`; used to recover a pointer stored in
+    /// a `Ptr<Int>` block.
+    IntToPtr,
 }
 
 impl RuntimeService {
@@ -1075,6 +1104,11 @@ impl RuntimeService {
             Self::Sleep | Self::StderrWrite | Self::Argv | Self::StrFromFloat => 1,
             Self::StdinRead | Self::Argc | Self::ArgvParse => 0,
             Self::StrFormat => 4,
+            // --- Thread (Session 112) ---
+            Self::ThreadSpawn => 2,
+            Self::ThreadJoin | Self::MutexLock | Self::MutexUnlock | Self::MutexFree => 1,
+            Self::MutexNew | Self::ThreadId => 0,
+            Self::PtrToInt | Self::IntToPtr => 1,
         }
     }
 
@@ -1191,6 +1225,15 @@ impl RuntimeService {
                 | Self::Argv
                 | Self::StrFromFloat
                 | Self::StrFormat
+                | Self::ThreadSpawn
+                | Self::ThreadJoin
+                | Self::ThreadId
+                | Self::MutexNew
+                | Self::MutexLock
+                | Self::MutexUnlock
+                | Self::MutexFree
+                | Self::PtrToInt
+                | Self::IntToPtr
         )
     }
 }

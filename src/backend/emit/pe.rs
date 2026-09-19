@@ -64,6 +64,10 @@ const KERNEL32_IMPORTS: &[&str] = &[
     // --- Session 99: Windows Wave A tranche 1 ---
     "Sleep",
     "GetCommandLineA",
+    // --- Thread (Session 112) ---
+    "CreateThread",
+    "ExitThread",
+    "GetCurrentThreadId",
 ];
 
 const K32_COUNT: u32 = KERNEL32_IMPORTS.len() as u32;
@@ -125,6 +129,13 @@ pub(crate) mod iat {
     pub const LOAD_LIBRARY_A: u32 = 32;
     pub const GET_PROC_ADDRESS: u32 = 33;
     pub const PEEK_NAMED_PIPE: u32 = 34;
+    // --- Session 99 extended ---
+    pub const SLEEP: u32 = 35;
+    pub const GET_COMMAND_LINE_A: u32 = 36;
+    // --- Thread (Session 112) ---
+    pub const CREATE_THREAD: u32 = 37;
+    pub const EXIT_THREAD: u32 = 38;
+    pub const GET_CURRENT_THREAD_ID: u32 = 39;
 }
 
 /// The layout of the sections, computed from their contents.
