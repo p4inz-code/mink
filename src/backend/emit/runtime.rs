@@ -57,6 +57,9 @@ const NET_INIT_FLAG: u32 = BSS.wsa_initialized as u32;
 const NET_DLL_HANDLE: u32 = BSS.ws2_dll_handle as u32;
 const NET_FUNC_TABLE: u32 = BSS.net_func_table as u32;
 const NET_RECV_BUF: u32 = BSS.recv_buf as u32;
+const NET_POLL_FN: u32 = BSS.net_poll_fn as u32;
+const NET_IOCTL_FN: u32 = BSS.net_ioctl_fn as u32;
+const NET_NAME_BUF: u32 = BSS.net_name_buf as u32;
 // --- Crypto BSS (Session 71) ---
 const CRYPTO_DLL: u32 = BSS.bcrypt_dll_handle as u32;
 const CRYPTO_TABLE: u32 = BSS.crypto_func_table as u32;
@@ -348,6 +351,11 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::NetHtons, |code, _| {
         emit_net_htons(code)
     });
+    // --- Non-blocking I/O (Session 113, S63) ---
+    emit(code, RuntimeService::NetSetNonblocking, |code, _| {
+        emit_net_set_nonblocking(code)
+    });
+    emit(code, RuntimeService::NetPoll, |code, _| emit_net_poll(code));
     // --- Crypto (Session 71) ---
     emit(code, RuntimeService::CryptoInit, |code, _| {
         emit_crypto_init(code)
@@ -9483,5 +9491,123 @@ fn emit_mutex_free(code: &mut Code, _offsets: &RuntimeOffsets) {
 fn emit_reinterpret(code: &mut Code, _offsets: &RuntimeOffsets) {
     prologue(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.leave_ret();
+}
+
+// ---------------------------------------------------------------------------
+// Non-blocking I/O (Session 113, S63)
+// ---------------------------------------------------------------------------
+//
+// `WSAPoll` and `ioctlsocket` are not part of the 17 entry points the
+// networking startup resolves eagerly, so each is resolved lazily on first
+// use and cached in its own `.bss` slot. The import name is staged in the
+// `net_name_buf` scratch area (64 bytes: 32 for a name, 32 for the
+// `ioctlsocket` mode word), never in `recv_buf`, which may hold a pending
+// receive when a poll call arrives.
+
+/// `rt_net_set_nonblocking(sock: Int, on: Int) -> Int`.
+///
+/// Puts `sock` into (or out of) non-blocking mode with
+/// `ioctlsocket(sock, FIONBIO, &mode)`. Returns 0 on success and -1 when the
+/// socket cannot be switched or the runtime was never initialised.
+fn emit_net_set_nonblocking(code: &mut Code) {
+    prologue(code);
+    // Not initialised: the DLL handle is null, so there is nothing to call.
+    let init_fail = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, init_fail); // jz
+
+    // mode = (on != 0) ? 1 : 0, stored as a 4-byte long in the scratch area.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    let zero = code.label();
+    code.jcc_label(0x84, zero); // jz — on == 0
+    code.movabs(Reg::Rax, 1);
+    code.bind_label(zero);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_NAME_BUF + 32));
+
+    // Lazy resolution of ioctlsocket.
+    let have = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_IOCTL_FN));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, have); // jnz — already resolved
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"ioctlsoc"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_NAME_BUF));
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"ket\0\0\0\0\0"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_NAME_BUF + 8));
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(NET_DLL_HANDLE));
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(NET_NAME_BUF));
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(33)); // GetProcAddress
+    code.add_rsp(32);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_IOCTL_FN));
+    code.bind_label(have);
+
+    // ioctlsocket(sock, FIONBIO, &mode)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16);
+    code.movabs(Reg::Rdx, 0x8004_667E_u64); // FIONBIO
+    code.lea_r_rip(Reg::R8, PatchKind::Bss(NET_NAME_BUF + 32));
+    code.sub_rsp(32);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_IOCTL_FN));
+    code.call_rax();
+    code.add_rsp(32);
+    code.leave_ret();
+
+    code.bind_label(init_fail);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
+    code.leave_ret();
+}
+
+/// `rt_net_poll(fds: Ptr<Int>, count: Int, timeout_ms: Int) -> Int`.
+///
+/// `fds` points at `count` 16-byte `WSAPOLLFD` entries laid out exactly as
+/// Windows expects them:
+///
+/// ```text
+/// +0  SOCKET    the socket to watch
+/// +8  SHORT     events  (input)
+/// +10 SHORT     revents (output)
+/// +12 padding
+/// ```
+///
+/// which is byte-for-byte the low 4 bytes of the word at `+8`. MINK writes
+/// `events` there, `WSAPoll` writes `revents` back, and the caller reads the
+/// word and splits it — so no array is copied inside the runtime. Returns
+/// the number of ready sockets, 0 on timeout, -1 on error or when the
+/// runtime was never initialised.
+fn emit_net_poll(code: &mut Code) {
+    prologue(code);
+    let init_fail = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, init_fail); // jz
+
+    // Lazy resolution of WSAPoll.
+    let have = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_POLL_FN));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, have); // jnz
+    code.movabs(Reg::Rax, u64::from_le_bytes(*b"WSAPoll\0"));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_NAME_BUF));
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(NET_DLL_HANDLE));
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(NET_NAME_BUF));
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(33)); // GetProcAddress
+    code.add_rsp(32);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_POLL_FN));
+    code.bind_label(have);
+
+    // WSAPoll(fds, count, timeout_ms)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::R8, Reg::Rbp, 32);
+    code.sub_rsp(32);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_POLL_FN));
+    code.call_rax();
+    code.add_rsp(32);
+    code.leave_ret();
+
+    code.bind_label(init_fail);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
     code.leave_ret();
 }

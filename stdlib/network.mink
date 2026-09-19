@@ -241,3 +241,90 @@ fn net_listen_on(addr: Str, port: Int, backlog: Int) -> Int {
     }
     return sock;
 }
+
+// --- Non-blocking I/O / readiness (S63) -------------------------------------
+//
+// The poll layer mirrors Python's `select.poll` / `select.select`: a socket
+// is switched to non-blocking mode and a poll call reports which sockets are
+// readable or writable. Entries are 16-byte `WSAPOLLFD` records:
+//
+//   +0  socket
+//   +8  events (in) / revents (out), as one word: low 16 bits are the event
+//       mask, the next 16 bits are the result mask written back by the poll.
+//
+// A poll result of 0 means the timeout elapsed with nothing ready, -1 means
+// the call failed (see `net_last_error`).
+
+// Winsock POLL event masks.
+fn net_pollin() -> Int { return 0x0300; }
+fn net_pollout() -> Int { return 0x0030; }
+
+// Error code Windows returns when a non-blocking socket would block.
+fn net_would_block_code() -> Int { return 10035; }
+
+// True when the most recent socket call failed because it would block.
+fn net_would_block() -> Bool { return net_last_error() == net_would_block_code(); }
+
+// Put `sock` into (on != 0) or out of (on == 0) non-blocking mode.
+// Returns 0 on success, -1 on failure.
+fn net_set_nonblocking(sock: Int, on: Int) -> Int {
+    return rt_net_set_nonblocking(sock, on);
+}
+
+// Wait for readiness on `count` poll entries at `fds` (allocated with
+// `net_poll_alloc`). Returns the number of ready sockets, 0 on timeout,
+// -1 on error. `timeout_ms` of -1 waits forever, 0 returns immediately.
+fn net_poll(fds: Ptr<Int>, count: Int, timeout_ms: Int) -> Int {
+    return rt_net_poll(fds, count, timeout_ms);
+}
+
+// Allocate `count` poll entries.
+fn net_poll_alloc(count: Int) -> Ptr<Int> {
+    return rt_alloc(count * 16);
+}
+
+// Describe entry `i`: watch `sock` for `events`.
+fn net_poll_set(fds: Ptr<Int>, i: Int, sock: Int, events: Int) {
+    rt_mem_store(fds + i * 16, sock);
+    rt_mem_store(fds + i * 16 + 8, events);
+}
+
+// The event mask entry `i` was polled with.
+fn net_poll_events(fds: Ptr<Int>, i: Int) -> Int {
+    return rt_mem_load(fds + i * 16 + 8) & 0xFFFF;
+}
+
+// The result mask entry `i` completed with (0 when nothing was ready).
+fn net_poll_revents(fds: Ptr<Int>, i: Int) -> Int {
+    return (rt_mem_load(fds + i * 16 + 8) >> 16) & 0xFFFF;
+}
+
+// Block until `sock` is readable (or the timeout elapses). Returns the poll
+// count (1 when readable), 0 on timeout, -1 on error.
+fn net_wait_readable(sock: Int, timeout_ms: Int) -> Int {
+    let fds = net_poll_alloc(1);
+    net_poll_set(fds, 0, sock, net_pollin());
+    let r = rt_net_poll(fds, 1, timeout_ms);
+    rt_free(fds);
+    return r;
+}
+
+// Block until `sock` is writable (or the timeout elapses). Returns the poll
+// count (1 when writable), 0 on timeout, -1 on error.
+fn net_wait_writable(sock: Int, timeout_ms: Int) -> Int {
+    let fds = net_poll_alloc(1);
+    net_poll_set(fds, 0, sock, net_pollout());
+    let r = rt_net_poll(fds, 1, timeout_ms);
+    rt_free(fds);
+    return r;
+}
+
+// True when `sock` has data (or a pending connection) waiting right now.
+fn net_can_read(sock: Int) -> Bool {
+    return net_wait_readable(sock, 0) > 0;
+}
+
+// True when `sock` can be written without blocking right now.
+fn net_can_write(sock: Int) -> Bool {
+    return net_wait_writable(sock, 0) > 0;
+}

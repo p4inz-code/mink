@@ -1000,6 +1000,15 @@ pub enum RuntimeService {
     /// The inverse of `rt_ptr_to_int`; used to recover a pointer stored in
     /// a `Ptr<Int>` block.
     IntToPtr,
+    // --- Non-blocking I/O (Session 113, S63) ---
+    /// `rt_net_set_nonblocking(sock: Int, on: Int) -> Int`: toggle
+    /// non-blocking mode with `ioctlsocket(FIONBIO)`. 0 on success, -1 on
+    /// failure.
+    NetSetNonblocking,
+    /// `rt_net_poll(fds: Ptr<Int>, count: Int, timeout_ms: Int) -> Int`:
+    /// wait for readiness on `count` 16-byte `WSAPOLLFD` entries at `fds`.
+    /// Returns the ready count, 0 on timeout, -1 on error.
+    NetPoll,
 }
 
 impl RuntimeService {
@@ -1109,6 +1118,8 @@ impl RuntimeService {
             Self::ThreadJoin | Self::MutexLock | Self::MutexUnlock | Self::MutexFree => 1,
             Self::MutexNew | Self::ThreadId => 0,
             Self::PtrToInt | Self::IntToPtr => 1,
+            Self::NetSetNonblocking => 2,
+            Self::NetPoll => 3,
         }
     }
 
@@ -1234,6 +1245,8 @@ impl RuntimeService {
                 | Self::MutexFree
                 | Self::PtrToInt
                 | Self::IntToPtr
+                | Self::NetSetNonblocking
+                | Self::NetPoll
         )
     }
 }

@@ -366,7 +366,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | S60 | HTTP server | PARTIAL | socket-level server verified (accept/echo repeated connections); no HTTP parsing server-side lib | `http.server`-style convenience | P2 | M | N | D | |
 | S61 | URL parsing (`urllib.parse`) | PARTIAL | url encode/decode in encoding.mink; host/port/path split in http.mink | Full URL grammar handling | P2 | M | N | D | |
 | S62 | TLS/SSL | MISSING | none | Encrypted connections; HTTPS end-to-end | P1 | XL | Y | D | Major subsystem (self-contained TLS impl or schannel via FFI) |
-| S63 | Non-blocking I/O / select | MISSING | blocking sockets only | multiplexing primitives | P2 | M | N | E | Required before async (R20) |
+| S63 | Non-blocking I/O / select | VERIFIED | `net_set_nonblocking`, `net_poll` (over `WSAPoll`), `net_wait_readable`, `net_wait_writable`, `net_can_read`, `net_can_write`; poll entries are 16-byte `WSAPOLLFD` records mapped to a `Ptr<Int>` array (`[code] stdlib/network.mink`, `src/backend/emit/runtime.rs`; `[test] tests/network_lib.rs`; `[exec]` native PE probes: poll timeout, readiness after connect/accept, non-blocking accept/recv with `net_would_block`) | Synchronous fallback only (no `select`/`poll` in the Python stdlib sense) | - | M | N | E | Delivered in Session 113 — prerequisite for R20 |
 | S64 | Email / FTP / SMTP / IMAP | MISSING | none | Protocol clients | P3 | L | N | D | Not parity-critical for the declared gate |
 | S65 | Hostname / byte order | VERIFIED | `net_hostname`, `net_htons/ntohs` | None | - | - | N | - | |
 
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 30 | 14 | 32 | 8 | 5 | 3 | 92 |
+| VERIFIED | 30 | 14 | 33 | 8 | 5 | 3 | 93 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -520,7 +520,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | PARTIAL | 9 | 2 | 12 | 0 | 10 | 1 | 34 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 18 | 10 | 30 | 6 | 6 | 7 | 77 |
+| MISSING | 18 | 10 | 29 | 6 | 6 | 7 | 76 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 *(Session 112 recomputation: produced by scanning the 232 capability rows directly
@@ -532,9 +532,9 @@ rather than by adjusting the previous table; every column and row sums to 232.)*
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 | P1 (parity-blocking by definition) | 0 | 1 | 2 | 0 | 0 | 4 | **7** |
-| P2 (important, not blocking) | 23 | 9 | 35 | 2 | 17 | 5 | **91** |
+| P2 (important, not blocking) | 23 | 9 | 34 | 2 | 17 | 5 | **90** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
-| — (no gap / no MINK work) | 27 | 11 | 27 | 9 | 2 | 4 | **80** |
+| — (no gap / no MINK work) | 27 | 11 | 28 | 9 | 2 | 4 | **81** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers

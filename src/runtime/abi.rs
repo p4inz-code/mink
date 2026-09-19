@@ -196,6 +196,14 @@ pub struct RuntimeLayout {
     /// (non-recursive) acquire/test-and-set spin lock. The lock word is
     /// stored in `.bss`, so it starts zeroed.
     pub rt_lock: u64,
+    // --- Non-blocking I/O (Session 113, S63) ---
+    /// Lazily resolved `WSAPoll` entry point (0 until first use).
+    pub net_poll_fn: u64,
+    /// Lazily resolved `ioctlsocket` entry point (0 until first use).
+    pub net_ioctl_fn: u64,
+    /// Scratch area for the NUL-terminated import names the two lazy
+    /// resolvers above pass to `GetProcAddress` (2 * 32 bytes).
+    pub net_name_buf: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -386,7 +394,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 8,
-    size: 1488
+    net_poll_fn: 1488
         + HEAP_SIZE
         + LIVE_TABLE_BYTES
         + 4096 * 2
@@ -405,6 +413,63 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 16,
+    net_ioctl_fn: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 24,
+    net_name_buf: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 32,
+    size: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 96,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

@@ -2148,6 +2148,8 @@ impl<'a> Lowerer<'a> {
             "rt_mutex_free" => RuntimeService::MutexFree,
             "rt_ptr_to_int" => RuntimeService::PtrToInt,
             "rt_int_to_ptr" => RuntimeService::IntToPtr,
+            "rt_net_set_nonblocking" => RuntimeService::NetSetNonblocking,
+            "rt_net_poll" => RuntimeService::NetPoll,
             _ => return None,
         };
         debug_assert!(service.is_callable());

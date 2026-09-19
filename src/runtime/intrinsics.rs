@@ -770,6 +770,17 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Int],
         result: IntrinsicType::Ptr,
     },
+    // --- Non-blocking I/O (Session 113, S63) ---
+    Intrinsic {
+        name: "rt_net_set_nonblocking",
+        params: &[IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_poll",
+        params: &[IntrinsicType::Ptr, IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
 ];
 
 /// Looks up an intrinsic by its reserved name.
