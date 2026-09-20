@@ -2150,6 +2150,12 @@ impl<'a> Lowerer<'a> {
             "rt_int_to_ptr" => RuntimeService::IntToPtr,
             "rt_net_set_nonblocking" => RuntimeService::NetSetNonblocking,
             "rt_net_poll" => RuntimeService::NetPoll,
+            "rt_task_spawn" => RuntimeService::TaskSpawn,
+            "rt_task_spawn0" => RuntimeService::TaskSpawn0,
+            "rt_task_await" => RuntimeService::TaskAwait,
+            "rt_task_run" => RuntimeService::TaskRun,
+            "rt_task_pending" => RuntimeService::TaskPending,
+            "rt_task_stop" => RuntimeService::TaskStop,
             _ => return None,
         };
         debug_assert!(service.is_callable());

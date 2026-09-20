@@ -781,6 +781,41 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Ptr, IntrinsicType::Int, IntrinsicType::Int],
         result: IntrinsicType::Int,
     },
+    // --- Async / task loop (Session 114, R20/S73) ---
+    // A task is `fn(arg: Int) -> Int` running on its own OS thread.  The
+    // returned handle is a word-valued opaque token consumed by
+    // `rt_task_await`; a spawn without an await/running the loop is a leak
+    // (E-R06), exactly like a thread spawn without a join.
+    Intrinsic {
+        name: "rt_task_spawn",
+        params: &[IntrinsicType::Fn, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_task_spawn0",
+        params: &[IntrinsicType::Fn],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_task_await",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_task_run",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_task_pending",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_task_stop",
+        params: &[],
+        result: IntrinsicType::Unit,
+    },
 ];
 
 /// Looks up an intrinsic by its reserved name.

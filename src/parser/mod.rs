@@ -322,14 +322,21 @@ impl<'a> Parser<'a> {
                     // Empty statement at module scope: consume silently.
                     let _ = self.bump();
                 }
+                TokenKind::Async => match self.parse_async_fn() {
+                    Ok(mut generated) => items.append(&mut generated),
+                    Err(()) => self.recover_item(),
+                },
+                TokenKind::Pub => match self.parse_pub_items() {
+                    Ok(mut generated) => items.append(&mut generated),
+                    Err(()) => self.recover_item(),
+                },
                 TokenKind::Fn
                 | TokenKind::Struct
                 | TokenKind::Enum
                 | TokenKind::Let
                 | TokenKind::Const
                 | TokenKind::Mod
-                | TokenKind::Use
-                | TokenKind::Pub => match self.parse_item() {
+                | TokenKind::Use => match self.parse_item() {
                     Ok(item) => items.push(item),
                     Err(()) => self.recover_item(),
                 },
@@ -946,6 +953,169 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses an `async fn` declaration (Session 114, R20/S73).
+    ///
+    /// `async fn name(args) -> T { body }` declares a task body and a handle
+    /// producer, in that order:
+    ///
+    /// 1. `fn __mink_task_body_name(args) -> T { body }` — the task body, run
+    ///    on its own OS thread when the task is spawned.
+    /// 2. `fn name(args) -> Int { return rt_task_spawn(__mink_task_body_name,
+    ///    arg); }` — an ordinary function that starts the task and returns its
+    ///    handle. `await name(args)` waits for that task and yields its result
+    ///    word, exactly as `await` does for any task handle.
+    ///
+    /// This is a front-end desugaring over the verified task runtime: an
+    /// `async fn` body really executes concurrently, and there is no
+    /// synchronous stand-in. Because the task ABI carries one word in and one
+    /// word out (the same model as the thread runtime), an `async fn` takes
+    /// zero or one parameter and its result is a word.
+    fn parse_async_fn(&mut self) -> Result<Vec<Item>, ()> {
+        let async_start = self.bump().span(); // 'async'
+        if self.current_kind() != TokenKind::Fn {
+            let span = self.current().span();
+            self.record_error(ParseErrorKind::ExpectedAsyncFn, span);
+            return Err(());
+        }
+        let (func, span) = self.parse_fn()?;
+
+        if !func.generic_params.is_empty() {
+            self.record_error(ParseErrorKind::AsyncGenericNotSupported, async_start);
+            return Err(());
+        }
+        if func.params.len() > 1 {
+            self.record_error(ParseErrorKind::AsyncTooManyParams, async_start);
+            return Err(());
+        }
+
+        // Generated ("synthetic") identifiers must not reuse a span that the
+        // program already uses for a different meaning: the compiler's
+        // resolution maps are keyed by source location, so two names sharing a
+        // span can resolve to each other's declaration. Each generated
+        // identifier therefore gets its own one-byte sub-span of the declared
+        // function name. The task body keeps the original spans (it is the
+        // user's own code), while the generated handle producer uses the
+        // synthetic ones; the wrapper's parameter and its use share one
+        // synthetic span, which is what makes the use resolve to it.
+        let base = async_start;
+        let synth = |index: u32| -> Span {
+            let start = base.start() + index;
+            if start < base.end() {
+                Span::new(base.file(), start..start + 1)
+            } else {
+                base
+            }
+        };
+
+        let name = func.name.clone();
+        let body_name = Ident {
+            name: format!("__mink_task_body_{}", name.name),
+            span: synth(0),
+        };
+        let int_ty = Ty {
+            kind: TyKind::Named(Ident {
+                name: "Int".to_string(),
+                span: synth(3),
+            }),
+            span: synth(3),
+        };
+
+        // The task body: the declared parameters, return type and block,
+        // under the generated name.
+        let body_fn = FnItem {
+            name: body_name.clone(),
+            generic_params: Vec::new(),
+            params: func.params.clone(),
+            return_ty: func.return_ty.clone(),
+            body: func.body.clone(),
+        };
+
+        // The handle producer: `fn name(args) -> Int { return
+        // rt_task_spawn<Arg>(__mink_task_body_name, arg); }`. A one-parameter
+        // task uses `rt_task_spawn` and forwards the word; a zero-parameter
+        // task uses `rt_task_spawn0`, which contributes the unused word 0
+        // itself, so no synthetic integer literal is ever fabricated (a
+        // literal's value is decoded from its source text).
+        let spawn_args = match func.params.first() {
+            Some(param) => vec![
+                Expr {
+                    kind: ExprKind::Ident(body_name.clone()),
+                    span: synth(1),
+                },
+                Expr {
+                    kind: ExprKind::Ident(Ident {
+                        name: param.name.name.clone(),
+                        span: synth(2),
+                    }),
+                    span: synth(2),
+                },
+            ],
+            None => vec![Expr {
+                kind: ExprKind::Ident(body_name.clone()),
+                span: synth(1),
+            }],
+        };
+        let callee = Expr {
+            kind: ExprKind::Ident(Ident {
+                name: if func.params.is_empty() {
+                    "rt_task_spawn0".to_string()
+                } else {
+                    "rt_task_spawn".to_string()
+                },
+                span: synth(4),
+            }),
+            span: synth(4),
+        };
+        let spawn_call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(callee),
+                args: spawn_args,
+                type_args: None,
+            },
+            span: synth(4),
+        };
+        let ret_stmt = Stmt {
+            kind: StmtKind::Return(Some(spawn_call)),
+            span: name.span,
+        };
+        let wrapper_block = Block {
+            stmts: vec![ret_stmt],
+            result: None,
+            span: name.span,
+        };
+        // The wrapper's parameter must resolve to the forwarded word, so the
+        // parameter identifier and its use share `synth(2)`.
+        let wrapper_params = match func.params.first() {
+            Some(param) => vec![crate::ast::Param {
+                name: Ident {
+                    name: param.name.name.clone(),
+                    span: synth(2),
+                },
+                ty: param.ty.clone(),
+                span: synth(2),
+            }],
+            None => Vec::new(),
+        };
+        let wrapper_fn = FnItem {
+            name: name.clone(),
+            generic_params: Vec::new(),
+            params: wrapper_params,
+            return_ty: Some(int_ty),
+            body: wrapper_block,
+        };
+
+        Ok(vec![
+            Item {
+                kind: ItemKind::Fn(body_fn),
+                span,
+            },
+            Item {
+                kind: ItemKind::Fn(wrapper_fn),
+                span,
+            },
+        ])
+    }
+
     fn parse_fn(&mut self) -> Result<(FnItem, Span), ()> {
         let start = self.bump().span(); // 'fn'
         let name = self.expect_ident()?;
@@ -1138,6 +1308,33 @@ impl<'a> Parser<'a> {
             },
             span,
         ))
+    }
+
+    /// Parses a `pub`-qualified declaration after consuming `pub`, returning
+    /// one or more items. An `async fn` desugars into two declarations (the
+    /// task body and the handle producer), so it is the one item form that can
+    /// expand into several; each generated item carries the `pub` qualification
+    /// so the visibility matches the declaration the user wrote.
+    fn parse_pub_items(&mut self) -> Result<Vec<Item>, ()> {
+        let start = self.bump().span(); // 'pub'
+        let generated = if self.current_kind() == TokenKind::Async {
+            self.parse_async_fn()?
+        } else {
+            vec![self.parse_item()?]
+        };
+        Ok(generated
+            .into_iter()
+            .map(|item| {
+                let span = self.join(start, item.span);
+                Item {
+                    kind: ItemKind::Pub(crate::ast::PubItem {
+                        item: Box::new(item),
+                        span,
+                    }),
+                    span,
+                }
+            })
+            .collect())
     }
 
     /// Creates an [`Ident`] from a consumed token.
@@ -2702,6 +2899,31 @@ impl<'a> Parser<'a> {
 
     fn parse_unary(&mut self) -> Result<Expr, ()> {
         match self.current_kind() {
+            TokenKind::Await => {
+                // `await expr` (Session 114, R20/S73): an await expression is
+                // a call to the verified task-await runtime service, so the
+                // operand's type checking, ownership and code generation are
+                // the ordinary call path. Awaiting a task handle yields the
+                // task's result word.
+                let start = self.bump().span(); // 'await'
+                let operand = self.parse_unary()?;
+                let span = self.join(start, operand.span);
+                let callee = Expr {
+                    kind: ExprKind::Ident(Ident {
+                        name: "rt_task_await".to_string(),
+                        span: start,
+                    }),
+                    span: start,
+                };
+                Ok(Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(callee),
+                        args: vec![operand],
+                        type_args: None,
+                    },
+                    span,
+                })
+            }
             TokenKind::Minus => {
                 let start = self.bump().span();
                 let operand = self.parse_unary()?;

@@ -54,6 +54,10 @@ pub enum RuntimeErrorKind {
     /// `CreateThread` failed (Session 112, R19/S71): the process could not
     /// create a thread (typically resource exhaustion).
     ThreadCreateFailed,
+    /// An invalid task handle (Session 114, R20/S73): `rt_task_await` was
+    /// given a handle that is not a live, uncollected task of the task loop
+    /// (a second await of the same task, or an arbitrary word).
+    InvalidTaskHandle,
 }
 
 impl RuntimeErrorKind {
@@ -73,6 +77,7 @@ impl RuntimeErrorKind {
             Self::ArrayIndexOutOfRange => 10,
             Self::MissingKey => 11,
             Self::ThreadCreateFailed => 12,
+            Self::InvalidTaskHandle => 13,
         }
     }
 
@@ -91,6 +96,7 @@ impl RuntimeErrorKind {
             Self::ArrayIndexOutOfRange => "E-R10",
             Self::MissingKey => "E-R11",
             Self::ThreadCreateFailed => "E-R12",
+            Self::InvalidTaskHandle => "E-R13",
         }
     }
 
@@ -114,6 +120,9 @@ impl RuntimeErrorKind {
             }
             Self::MissingKey => "map key not found: the key is not present in the map",
             Self::ThreadCreateFailed => "thread creation failed: CreateThread returned no handle",
+            Self::InvalidTaskHandle => {
+                "invalid task handle: the task was already collected or is not a live task"
+            }
         }
     }
 

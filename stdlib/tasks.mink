@@ -1,0 +1,60 @@
+// Async / tasks and the event loop — Python parity R20 (async / event loop)
+// and S73 (async/await + event loop).
+//
+// The Python-facing shapes this mirrors:
+//
+//   asyncio.get_event_loop() / loop.create_task(coro) / loop.run_until_complete(t)
+//   async def f(x): ... ; await f(x)
+//
+// MINK's model is explicit and native. A task is an ordinary function
+// `fn(arg: Int) -> Int` running on its own OS thread; the process-global task
+// loop tracks uncollected tasks so a program can wait for them. The language
+// surface spells this as `async fn` + `await`:
+//
+//   async fn double(x: Int) -> Int { return x * 2; }
+//
+//   fn main() -> Int {
+//       let handle = double(21);      // starts the task, returns its handle
+//       let value = await handle;     // waits for it, yields its result word
+//       return 0;
+//   }
+//
+// `async fn` declares two things: the task body (which really runs on its own
+// thread, concurrently with the code that spawned it) and an ordinary function
+// that starts the task and returns its handle. Awaiting a handle blocks only
+// the awaiting thread; every other task keeps making progress. A program can
+// also start a task directly with the runtime primitive
+// `rt_task_spawn(fn, arg) -> Int` (one word in, one word out) and collect the
+// handle with `task_await`.
+//
+// Ownership: a task's control block is owned by whoever collects it. `await`
+// frees the block it collects, `task_run` frees every block it drains, and a
+// program that spawns a task and never collects it fails the exit-time leak
+// check with `E-R06` rather than leaking silently. Collecting the same task
+// twice is `E-R13`.
+
+// The number of spawned tasks that have not been collected yet (by `await` or
+// `task_run`). `0` means the loop is idle.
+fn task_pending() -> Int {
+    return rt_task_pending();
+}
+
+// Collects tasks until none remain, returning how many were collected. Each
+// task is waited on through its real OS thread handle, so this is a genuine
+// completion wait, not a polling loop.
+fn task_run() -> Int {
+    return rt_task_run();
+}
+
+// Asks `task_run` to return at its next check. Tasks that were already spawned
+// are still uncollected; collect them with `await` or the exit-time leak check
+// reports them.
+fn task_stop() {
+    rt_task_stop();
+}
+
+// Waits for `handle`, releases its control block and returns the task's result
+// word. This is what `await` lowers to.
+fn task_await(handle: Int) -> Int {
+    return rt_task_await(handle);
+}

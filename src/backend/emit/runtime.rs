@@ -75,6 +75,8 @@ const WRITE_REDIRECT: u32 = BSS.write_redirect as u32;
 const FLOAT_SINK: u32 = BSS.float_sink as u32;
 // --- Session 100: R06 source-location metadata ---
 const FAIL_LOC: u32 = BSS.fail_loc as u32;
+// --- Async / task loop (Session 114, R20/S73) ---
+const TASK_LOOP: u32 = BSS.task_loop as u32;
 
 /// The offsets of the machine services within `.text`, plus the labels
 /// the services reference (bound by [`emit_data`] and the emitter's string
@@ -511,6 +513,26 @@ pub(crate) fn emit_services(
         emit_reinterpret(code, o)
     });
 
+    // --- Async / task loop (Session 114, R20/S73) ---
+    emit(code, RuntimeService::TaskSpawn, |code, o| {
+        emit_task_spawn(code, o, true)
+    });
+    emit(code, RuntimeService::TaskSpawn0, |code, o| {
+        emit_task_spawn(code, o, false)
+    });
+    emit(code, RuntimeService::TaskAwait, |code, o| {
+        emit_task_await(code, o)
+    });
+    emit(code, RuntimeService::TaskRun, |code, o| {
+        emit_task_run(code, o)
+    });
+    emit(code, RuntimeService::TaskPending, |code, o| {
+        emit_task_pending(code, o)
+    });
+    emit(code, RuntimeService::TaskStop, |code, o| {
+        emit_task_stop(code, o)
+    });
+
     // Thread trampoline: bridges Windows x64 ABI -> MINK stack ABI.
     code.bind_label(offsets.thread_tramp_label);
     emit_thread_trampoline(code);
@@ -544,6 +566,7 @@ pub(crate) fn emit_data(
         RuntimeErrorKind::ArrayIndexOutOfRange,
         RuntimeErrorKind::MissingKey,
         RuntimeErrorKind::ThreadCreateFailed,
+        RuntimeErrorKind::InvalidTaskHandle,
     ];
     kinds.sort_by_key(|kind| kind.number());
     let messages = kinds
@@ -8572,6 +8595,7 @@ const IAT_GET_COMMAND_LINE_A: u32 = 36;
 const IAT_CREATE_THREAD: u32 = 37;
 const IAT_EXIT_THREAD: u32 = 38;
 const IAT_GET_CURRENT_THREAD_ID: u32 = 39;
+
 const IAT_STD_INPUT_HANDLE: i32 = -10;
 
 /// `rt_fs_exists(path: Str) -> Bool`.
@@ -9609,5 +9633,319 @@ fn emit_net_poll(code: &mut Code) {
 
     code.bind_label(init_fail);
     code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
+
+    code.leave_ret();
+}
+
+// ---------------------------------------------------------------------------
+// Async / task loop (Session 114, R20/S73)
+// ---------------------------------------------------------------------------
+//
+// The task loop is MINK's asyncio-equivalent event loop, expressed in MINK's
+// own architecture: a task is an ordinary MINK function `fn(arg: Int) -> Int`
+// running on its own OS thread, and the loop is the process-global bookkeeping
+// that tracks uncollected tasks so a program can wait for them (`rt_task_run`
+// and the language-level `await`).
+//
+// A task genuinely runs concurrently with the code that spawned it: there is
+// no synchronous stand-in. `rt_task_spawn` returns as soon as the OS thread is
+// created; every task body executes on its own thread.
+//
+// Global loop (32 bytes in .bss at TASK_LOOP):
+//   +0   lock  (Int) -- spin lock guarding `count` and `head`
+//   +8   count (Int) -- spawned-but-not-yet-collected tasks
+//   +16  stop  (Int) -- 1 asks `rt_task_run` to return at its next check
+//   +24  head  (Int) -- LIFO list of uncollected task control blocks (0 = none)
+//
+// Task control block (48 bytes, MINK heap; owned by whoever collects it --
+// `rt_task_await` or `rt_task_run`):
+//   +0   os_handle (HANDLE from CreateThread, closed at collection)
+//   +8   fn_ptr
+//   +16  arg
+//   +24  result
+//   +32  next (list link)
+//   +40  state (0 = live, 1 = collected)
+//
+// Collection is single-owner by design: one thread collects tasks (the thread
+// that spawned them). Collecting the same task twice is rejected with E-R13
+// rather than racing, and every control block is freed exactly once.
+
+const TASK_COUNT: u32 = TASK_LOOP + 8;
+const TASK_STOP: u32 = TASK_LOOP + 16;
+const TASK_HEAD: u32 = TASK_LOOP + 24;
+
+/// Spin-lock acquire on the task loop's first word.  Clobbers rax.
+fn task_lock(code: &mut Code) {
+    let spin = code.label();
+    code.bind_label(spin);
+    code.movabs(Reg::Rax, 1);
+    code.xchg_rip_r(Reg::Rax, PatchKind::Bss(TASK_LOOP));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, spin); // jnz spin
+}
+
+/// Spin-lock release on the task loop's first word.  Clobbers rax.
+fn task_unlock(code: &mut Code) {
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(TASK_LOOP));
+}
+
+/// Unlinks the task control block in r11 from the uncollected list, decrements
+/// the loop count and marks the block collected.  Called with the loop lock
+/// held.  Clobbers rax, rcx, rdx, r10 (r11 is preserved).
+fn task_unlink(code: &mut Code) {
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // prev = 0
+    code.mov_r_rip(Reg::Rdx, PatchKind::Bss(TASK_HEAD)); // cur = head
+
+    let walk = code.label();
+    let unlink = code.label();
+    let not_found = code.label();
+    let set_head = code.label();
+    let after = code.label();
+
+    code.bind_label(walk);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, not_found); // jz not_found
+    code.cmp_rr(Reg::Rdx, Reg::R11);
+    code.jcc_label(0x84, unlink); // je unlink
+    code.mov_rr(Reg::Rcx, Reg::Rdx); // prev = cur
+    code.mov_r_mem(Reg::Rdx, Reg::Rdx, 32); // cur = cur.next
+    code.jmp_label(walk);
+
+    code.bind_label(unlink);
+    code.mov_r_mem(Reg::Rax, Reg::Rdx, 32); // rax = cur.next
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, set_head); // jz set_head
+    code.mov_mem_r(Reg::Rcx, 32, Reg::Rax); // prev.next = cur.next
+    code.jmp_label(after);
+
+    code.bind_label(set_head);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(TASK_HEAD)); // head = cur.next
+
+    code.bind_label(after);
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(TASK_COUNT));
+    code.sub_r_imm8(Reg::R10, 1);
+    code.mov_rip_r(Reg::R10, PatchKind::Bss(TASK_COUNT));
+    code.movabs(Reg::R10, 1);
+    code.mov_mem_r(Reg::R11, 40, Reg::R10); // state = collected
+    let done = code.label();
+    code.jmp_label(done);
+
+    code.bind_label(not_found);
+    fail(code, 13); // E-R13: not a live, uncollected task
+
+    code.bind_label(done);
+}
+
+/// `rt_task_pending() -> Int`: the number of spawned tasks not collected yet
+/// (by `rt_task_await` or `rt_task_run`).  `0` means the loop is idle.
+fn emit_task_pending(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(TASK_COUNT));
+    code.leave_ret();
+}
+
+/// `rt_task_stop()`: ask `rt_task_run` to return at its next check without
+/// collecting the remaining tasks (they must still be awaited, or the leak
+/// check reports them).
+fn emit_task_stop(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.movabs(Reg::R10, 1);
+    code.mov_rip_r(Reg::R10, PatchKind::Bss(TASK_STOP));
+    code.leave_ret();
+}
+
+/// `rt_task_spawn(fn_ptr: Int, arg: Int) -> Int` and
+/// `rt_task_spawn0(fn_ptr: Int) -> Int`.
+///
+/// Allocates a task control block, registers it as uncollected (under the loop
+/// lock) and starts the OS thread.  Returns the block as the task handle.  A
+/// task that is never collected is a leak (E-R06) reported at exit, exactly
+/// like a thread spawn without a join.
+fn emit_task_spawn(code: &mut Code, offsets: &RuntimeOffsets, has_arg: bool) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = task block; 16-aligned at calls
+
+    // --- Allocate the 48-byte task control block. ---
+    code.movabs(Reg::Rax, 48);
+    call_service(code, RuntimeService::Alloc, &[Reg::Rax]);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    // block[1] = fn, block[2] = arg (0 when the task takes no argument),
+    // block[3..5] = 0.
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rax, 8, Reg::R11);
+    if has_arg {
+        code.mov_r_mem(Reg::R11, Reg::Rbp, 24);
+    } else {
+        code.xor_rr32(Reg::R11, Reg::R11);
+    }
+    code.mov_mem_r(Reg::Rax, 16, Reg::R11);
+    code.xor_rr32(Reg::R11, Reg::R11);
+    code.mov_mem_r(Reg::Rax, 24, Reg::R11);
+    code.mov_mem_r(Reg::Rax, 32, Reg::R11);
+    code.mov_mem_r(Reg::Rax, 40, Reg::R11);
+
+    // Register the task before the thread exists, so a task that finishes
+    // immediately can never be missed by `rt_task_run`.
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -8);
+    task_lock(code);
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(TASK_HEAD));
+    code.mov_mem_r(Reg::R11, 32, Reg::R10); // block.next = head
+    code.mov_rip_r(Reg::R11, PatchKind::Bss(TASK_HEAD)); // head = block
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(TASK_COUNT));
+    code.add_r_imm8(Reg::R10, 1);
+    code.mov_rip_r(Reg::R10, PatchKind::Bss(TASK_COUNT));
+    task_unlock(code);
+
+    // CreateThread(NULL, 0, thread_trampoline, block, 0, NULL).
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // lpThreadAttributes = NULL
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // dwStackSize = 0
+    code.lea_r_rip(Reg::R8, PatchKind::Label(offsets.thread_tramp_label));
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // lpParameter = block
+    code.sub_rsp(48);
+    code.mov_mem_imm32(Reg::Rsp, 32, 0); // dwCreationFlags = 0
+    code.mov_mem_imm32(Reg::Rsp, 40, 0); // lpThreadId = NULL
+    code.call_rip(PatchKind::Iat(IAT_CREATE_THREAD));
+    code.add_rsp(48);
+
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let created = code.label();
+    code.jcc_label(0x85, created); // jnz created
+    fail(code, 12); // E-R12
+    code.bind_label(created);
+
+    // block[0] = OS handle; the block is the task handle.
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -8);
+    code.mov_mem_r(Reg::R11, 0, Reg::Rax);
+    code.mov_rr(Reg::Rax, Reg::R11);
+    code.leave_ret();
+}
+
+/// `rt_task_await(task: Int) -> Int`.
+///
+/// Waits for the task to finish, unlinks its control block from the loop,
+/// frees it and returns the task's result.  Awaiting a task twice (or a word
+/// that is not a live task) is E-R13.
+fn emit_task_await(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(32); // [rbp-8] = block, [rbp-16] = result; 16-aligned
+
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // block
+
+    // Every read of a caller-supplied handle goes through the runtime's
+    // validated word load, so a handle that is not (any longer) a live
+    // allocation is a stable runtime error (`E-R05`) instead of a fault: this
+    // is the same validation every raw pointer dereference gets.
+
+    // block[5] = state (1 = already collected).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rax, 40);
+    call_service(code, RuntimeService::MemLoad, &[Reg::Rax]);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let live = code.label();
+    code.jcc_label(0x84, live); // jz live
+    fail(code, 13); // E-R13
+    code.bind_label(live);
+
+    // handle = block[0] (validated); WaitForSingleObject(handle, INFINITE).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    call_service(code, RuntimeService::MemLoad, &[Reg::Rax]);
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.movabs(Reg::Rdx, 0xFFFF_FFFF_u64); // INFINITE
+    code.sub_rsp(32); // shadow space for both calls below
+    code.call_rip(PatchKind::Iat(IAT_WAIT_FOR_SINGLE_OBJECT));
+    // CloseHandle(block[0]).
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    call_service(code, RuntimeService::MemLoad, &[Reg::Rax]);
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+
+    // result = block[3] (validated), spilled across the unlink/free below.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rax, 24);
+    call_service(code, RuntimeService::MemLoad, &[Reg::Rax]);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+
+    // Unlink (membership in the loop's outstanding list is what makes this a
+    // real task handle: a live allocation that is not an outstanding task is
+    // `E-R13`), then free the control block.
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -8);
+    task_lock(code);
+    task_unlink(code);
+    task_unlock(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_task_run() -> Int`.
+///
+/// Collects tasks until none remain, returning the number collected.  Each
+/// task is waited on through its real OS thread handle (no polling, no sleeps)
+/// and its control block is freed, so a program that drains the loop leaves
+/// nothing behind.
+fn emit_task_run(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(32); // [rbp-8] = collected count, [rbp-16] = block; 16-aligned
+
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    let loop_top = code.label();
+    let loop_end = code.label();
+    let empty = code.label();
+    code.bind_label(loop_top);
+
+    // stop flag?
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(TASK_STOP));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, loop_end); // jnz loop_end
+
+    // Pop the newest uncollected task (0 = loop idle).
+    task_lock(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(TASK_HEAD));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, empty); // jz empty
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 32); // next
+    code.mov_rip_r(Reg::Rcx, PatchKind::Bss(TASK_HEAD));
+    code.movabs(Reg::R10, 1);
+    code.mov_mem_r(Reg::Rax, 40, Reg::R10); // state = collected
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(TASK_COUNT));
+    code.sub_r_imm8(Reg::R10, 1);
+    code.mov_rip_r(Reg::R10, PatchKind::Bss(TASK_COUNT));
+    code.bind_label(empty);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // spill before unlock clobbers rax
+    task_unlock(code);
+
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, loop_end); // jz loop_end (nothing left)
+
+    // WaitForSingleObject(block[0], INFINITE); CloseHandle(block[0]).
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0);
+    code.movabs(Reg::Rdx, 0xFFFF_FFFF_u64); // INFINITE
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_WAIT_FOR_SINGLE_OBJECT));
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rcx, Reg::Rcx, 0);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+
+    // Free the block and count it as collected.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    call_service(code, RuntimeService::Free, &[Reg::Rax]);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    code.jmp_label(loop_top);
+
+    code.bind_label(loop_end);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.leave_ret();
 }

@@ -1009,6 +1009,26 @@ pub enum RuntimeService {
     /// wait for readiness on `count` 16-byte `WSAPOLLFD` entries at `fds`.
     /// Returns the ready count, 0 on timeout, -1 on error.
     NetPoll,
+    // --- Async / task loop (Session 114, R20/S73) ---
+    /// `rt_task_spawn(fn_ptr: Int, arg: Int) -> Int`: run `fn(arg)` on a
+    /// new OS thread as a task of the process-global task loop. Returns a
+    /// task handle (an owned heap block) for `rt_task_await`.
+    TaskSpawn,
+    /// `rt_task_spawn0(fn_ptr: Int) -> Int`: like `TaskSpawn` for a task
+    /// whose parameter is unused (the language surface's zero-parameter
+    /// `async fn`, which must not fabricate an integer literal).
+    TaskSpawn0,
+    /// `rt_task_await(task: Int) -> Int`: wait for the task to finish,
+    /// release its control block and return its result.
+    TaskAwait,
+    /// `rt_task_run() -> Int`: wait until every outstanding task has
+    /// finished. Returns 0.
+    TaskRun,
+    /// `rt_task_pending() -> Int`: number of spawned-but-not-yet-awaited
+    /// tasks (the event loop's outstanding count).
+    TaskPending,
+    /// `rt_task_stop()`: ask `rt_task_run` to return at the next token.
+    TaskStop,
 }
 
 impl RuntimeService {
@@ -1120,6 +1140,10 @@ impl RuntimeService {
             Self::PtrToInt | Self::IntToPtr => 1,
             Self::NetSetNonblocking => 2,
             Self::NetPoll => 3,
+            Self::TaskSpawn => 2,
+            Self::TaskSpawn0 => 1,
+            Self::TaskAwait => 1,
+            Self::TaskRun | Self::TaskPending | Self::TaskStop => 0,
         }
     }
 
@@ -1247,6 +1271,12 @@ impl RuntimeService {
                 | Self::IntToPtr
                 | Self::NetSetNonblocking
                 | Self::NetPoll
+                | Self::TaskSpawn
+                | Self::TaskSpawn0
+                | Self::TaskAwait
+                | Self::TaskRun
+                | Self::TaskPending
+                | Self::TaskStop
         )
     }
 }

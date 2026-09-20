@@ -204,6 +204,13 @@ pub struct RuntimeLayout {
     /// Scratch area for the NUL-terminated import names the two lazy
     /// resolvers above pass to `GetProcAddress` (2 * 32 bytes).
     pub net_name_buf: u64,
+    // --- Async / event loop (Session 114, R20/S73) ---
+    /// The process-global task loop, a 32-byte struct:
+    /// `+0` lock (spin lock guarding `count`), `+8` outstanding-task count,
+    /// `+16` stop flag, `+24` completion semaphore handle (0 = not created).
+    /// A task runs on a real OS thread; its completion releases one
+    /// semaphore token. `rt_task_await`/`rt_task_run` consume tokens.
+    pub task_loop: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -451,7 +458,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 32,
-    size: 1488
+    task_loop: 1488
         + HEAP_SIZE
         + LIVE_TABLE_BYTES
         + 4096 * 2
@@ -470,6 +477,25 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 96,
+    size: 1488
+        + HEAP_SIZE
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 128,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

@@ -27,6 +27,15 @@ use crate::source::Span;
 pub enum ParseErrorKind {
     /// A token that cannot begin any top-level declaration.
     ExpectedItem,
+    /// `async` was not followed by `fn`.
+    ExpectedAsyncFn,
+    /// An `async fn` declared more than one parameter. The task ABI carries
+    /// one word in and one word out (the same model as the thread runtime),
+    /// so a task takes zero or one parameter.
+    AsyncTooManyParams,
+    /// An `async fn` declared generic type parameters, which the task ABI
+    /// cannot carry.
+    AsyncGenericNotSupported,
     /// A name was required but another token was found.
     ExpectedIdentifier,
     /// An expression was required but another token (or end of input) was
@@ -99,6 +108,9 @@ impl ParseErrorKind {
     pub fn code(self) -> &'static str {
         match self {
             Self::ExpectedItem => "E-P01",
+            Self::ExpectedAsyncFn => "E-P30",
+            Self::AsyncTooManyParams => "E-P31",
+            Self::AsyncGenericNotSupported => "E-P32",
             Self::ExpectedIdentifier => "E-P02",
             Self::ExpectedExpression => "E-P03",
             Self::ExpectedAssignmentTarget => "E-P04",
@@ -135,6 +147,11 @@ impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
             Self::ExpectedItem => "expected a top-level declaration (`fn`, `let`, or `const`)",
+            Self::ExpectedAsyncFn => "expected 'fn' after 'async'",
+            Self::AsyncTooManyParams => {
+                "an async fn takes zero or one parameter: the task ABI carries one word in and one word out"
+            }
+            Self::AsyncGenericNotSupported => "an async fn cannot declare generic parameters",
             Self::ExpectedIdentifier => "expected an identifier",
             Self::ExpectedExpression => "expected an expression",
             Self::ExpectedAssignmentTarget => {

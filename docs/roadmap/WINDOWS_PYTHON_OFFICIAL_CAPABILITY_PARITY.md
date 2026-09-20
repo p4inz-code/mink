@@ -232,7 +232,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | R17 | Memory management / leak detection | VERIFIED (INTENT. DIFF.) | arena allocator + liveness table + leak check at exit; deterministic errors E-R02..E-R08 (`[code] src/runtime/*`, `src/backend/emit/runtime.rs`) | Python: refcount + GC. MINK: compile-time ownership + explicit free + runtime validation | - | - | N | - | Equivalent safety story, different mechanism (X-register) |
 | R18 | GC / automatic reclamation | N/A (INTENT.) | ownership model; no GC by design | — | - | - | N | - | Not a parity requirement |
 | R19 | Threads | VERIFIED | `rt_thread_spawn(fn, arg: Ptr<Int>) -> Int`, `rt_thread_join(handle) -> Int`, `rt_thread_id() -> Int`, plus `rt_ptr_to_int`/`rt_int_to_ptr` so a shared-context pointer can be published in a `Ptr<Int>` block; real OS threads via `CreateThread` and a trampoline that bridges the Windows x64 ABI to the MINK stack ABI (`[code] src/backend/emit/runtime.rs`, `src/backend/emit/pe.rs` KERNEL32 imports, `[code] stdlib/threads.mink`; `[test] tests/threads_lib.rs` r19_*: spawn/join result, live per-thread ids, 200 sequential spawn/joins, 8 concurrent threads, parallel allocation integrity, string interaction, pointer-cast round trip, the shipped `threads` stdlib module, and the `examples/threaded_work` proof app run twice; `[exec]` native PE runs) | No thread-local storage, no thread cancellation, no per-thread heaps — every thread shares the runtime arena, which is guarded by a global spin lock | - | XL | N | E | Delivered in Session 112. The thread control block is a MINK-heap allocation owned by `rt_thread_join`, so a spawn without a join is a leak (E-R06) |
-| R20 | Async / event loop | MISSING | none | No non-blocking I/O model | P1 | XL | Y | E | Major subsystem (select/poll first — see D rows) |
+| R20 | Async / event loop | VERIFIED | A task is `fn(arg: Int) -> Int` running on its own OS thread, tracked by the process-global task loop: `rt_task_spawn(fn, arg) -> Int` (handle), `rt_task_await(handle) -> Int` (wait, collect, return the result word), `rt_task_run() -> Int` (collect every outstanding task, returning how many), `rt_task_pending() -> Int` and `rt_task_stop()`; `rt_task_spawn0(fn)` is the zero-argument form the language surface uses (`[code] src/backend/emit/runtime.rs` (`emit_task_spawn`/`emit_task_await`/`emit_task_run`, loop struct in `.bss`), `src/backend/ir.rs`, `src/runtime/abi.rs`, `src/runtime/error.rs` (`E-R13`), `[code] stdlib/tasks.mink` + `npm/mink/stdlib/tasks.mink`; `[test] tests/async_lib.rs` r20_* 14 native-PE tests: handle accounting, `task_run` drain, zero tasks, 200 spawn/await cycles, 64 concurrent tasks, `task_stop`, uncollected-task leak (E-R06), double collect (E-R05), await of a non-task allocation (E-R13), concurrency proof (spawner prints before the awaiting task finishes), 4×1000 locked shared increments = exactly 4000, tasks allocating/freeing strings, and 5 identical stress runs; `[exec]` native PE runs) | Tasks carry one word in and one word out (the thread ABI), so string/aggregate results travel as a context pointer; collection must not use two collectors for the same task (the second collect is a stable error, E-R05/E-R13, not a crash); no I/O-readiness integration yet (S63's non-blocking sockets are usable from a task, but there is no readiness-driven wakeup) | - | XL | N | E | Delivered in Session 114. The task control block is a MINK-heap allocation owned by whoever collects it, so a spawn that is never awaited and never drained is a leak (E-R06) rather than a silent leak. The loop list and count are guarded by a test-and-set spin lock, so a task may collect its own children (verified) |
 | R21 | Locks / synchronization primitives | VERIFIED | `rt_mutex_new() -> Int` (an 8-byte lock word in the MINK heap), `rt_mutex_lock(word)`, `rt_mutex_unlock(word)`, `rt_mutex_free(word)`, plus the runtime's own global test-and-set spin lock that guards the allocator and the raw memory accessors (`[code] src/backend/emit/runtime.rs`, `src/backend/emit/x86_64.rs` `xchg_r_mem`/`xchg_rip_r`; `[test] tests/threads_lib.rs` s71_*: an occupancy-counter mutual-exclusion probe, 4x5000 locked increments giving exactly 20000 twice, an unlocked control, 200 new/lock/free cycles, and re-acquisition after join; `[exec]` native PE runs) | Non-reentrant (a second lock from the same thread deadlocks, like Python's `Lock`); no condition variables, no owner tracking, no timed acquire | - | L | N | E | Delivered in Session 112 |
 | R22 | Subprocess run + capture | PARTIAL | `process_run/process_stdout/stderr/id`; exit codes; large-output drain fixed in Session 97 (`[exec]` S97 1 MB drain) | stdout/stderr capped at 4088 bytes/stream; no stdin, no env override, no explicit argv | P2 | M | N | C | Core capability VERIFIED; parity extras P2 |
 | R23 | Sleep / timers | VERIFIED | `rt_sleep(ms)` via kernel32 Sleep; bounded non-spinning wait (`[test] tests/session99.rs` sleep_zero_and_short_returns_cleanly) | No timer/callback API | P3 | S | N | - | |
@@ -386,7 +386,7 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 |---|---|---|---|---|---|---|---|---|---|
 | S71 | Threads + locks | VERIFIED | see R19 (threads) and R21 (locks): `stdlib/threads.mink` ships `thread_spawn`/`thread_join`/`thread_self` and `lock_new`/`lock_acquire`/`lock_release`/`lock_free` over the verified runtime services (`[code] stdlib/threads.mink`, `npm/mink/stdlib/threads.mink`; `[test] tests/threads_lib.rs` r19_stdlib_threads_and_locks_module + s71_*; `[exec]` `examples/threaded_work/main.mink`: 4 threads, lock-guarded accumulation, closed-form check, deterministic across runs) | See the R19/R21 gaps (no thread-local storage, no cancellation, non-reentrant lock, no condition variables) | - | XL | N | E | Delivered in Session 112 |
 | S72 | Futures / thread pools | MISSING | none | see R24 | P2 | L | N | E | |
-| S73 | async/await + event loop | MISSING | none | see R20 | P1 | XL | Y | E | |
+| S73 | async/await + event loop | VERIFIED | The language surface over the verified R20 runtime: `async fn name(args) -> T { body }` declares the task body and an ordinary handle producer (`name(args) -> Int`), and `await expr` collects a handle (lowering to `rt_task_await`). The desugar is a front-end transformation (`src/parser/mod.rs`: `parse_async_fn`, `await` prefix in `parse_unary`, `pub`-qualified async fns via `parse_pub_items`) over the same call/ownership/codegen path, so awaits compose with loops, branches and module boundaries (`[code] src/parser/mod.rs`, `src/parser/error.rs` (`E-P30`/`E-P31`/`E-P32`), `[code] stdlib/tasks.mink`; `[test] tests/async_lib.rs` s73_* 8 native-PE tests: direct-call and handle awaits, zero-parameter async fn, three distinct async fns awaited out of spawn order, nested async (a task awaiting its own child), awaits inside loops and branches, cross-module async (pub and non-pub), and the two rejected forms (two parameters E-P31, `async` without `fn` E-P30); `[exec]` `examples/async_tasks/main.mink` — four async workers over 0..1000, lock-guarded accumulation, closed-form check, identical output across runs) | An async fn takes zero or one parameter and yields one word (the task ABI); results wider than a word travel through a context pointer. `async` is a declaration modifier (no async closures/lambdas). Awaits must be collected by one owning thread per task | - | XL | N | E | Delivered in Session 114 with R20. The task body really runs on its own OS thread — there is no synchronous stand-in; `await` blocks only the awaiting thread, so the spawner's own work and every other task keep making progress (asserted by `r20_tasks_run_concurrently_with_the_spawner`) |
 
 ### 5.15 Development support (logging/testing/assert/debug) — stdlib half
 
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 30 | 14 | 33 | 8 | 5 | 3 | 93 |
+| VERIFIED | 30 | 15 | 34 | 8 | 5 | 3 | 95 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -520,7 +520,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | PARTIAL | 9 | 2 | 12 | 0 | 10 | 1 | 34 |
 | PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 18 | 10 | 29 | 6 | 6 | 7 | 76 |
+| MISSING | 18 | 9 | 28 | 6 | 6 | 7 | 74 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 *(Session 112 recomputation: produced by scanning the 232 capability rows directly
@@ -531,23 +531,24 @@ rather than by adjusting the previous table; every column and row sums to 232.)*
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 0 | 1 | 2 | 0 | 0 | 4 | **7** |
+| P1 (parity-blocking by definition) | 0 | 0 | 1 | 0 | 0 | 4 | **5** |
 | P2 (important, not blocking) | 23 | 9 | 34 | 2 | 17 | 5 | **90** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
-| — (no gap / no MINK work) | 27 | 11 | 28 | 9 | 2 | 4 | **81** |
+| — (no gap / no MINK work) | 27 | 12 | 29 | 9 | 2 | 4 | **83** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **7 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **5 capability gaps block the parity gate.**
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
 `src/driver.rs` mechanism behind the VERIFIED L67), so P1 equals the `Blocks = Y` set
 exactly. Session 112 removed the last four stale `Blocks = Y` flags on rows that were
 already VERIFIED (S41, S75, S78, T07 — S41 also carried a stale `P1`), so the invariant
-holds again after the R19/R21/S71 closures.
+holds again after the R19/R21/S71 closures. Session 114 closed R20 and S73 (their flags
+were cleared as the rows became VERIFIED), leaving the parity-blocking set at 5.
 
-### 10.3 Difficulty distribution (rows requiring work; the other 80 rows have no gap)
+### 10.3 Difficulty distribution (rows requiring work; the other 82 rows have no gap)
 
 | Difficulty | Rows | Meaning |
 |---|---|---|
@@ -555,16 +556,16 @@ holds again after the R19/R21/S71 closures.
 | S (small) | 36 | one focused change, low risk |
 | M (medium) | 75 | multiple components, contained |
 | L (large) | 26 | major feature area |
-| XL (major subsystem) | 10 | dedicated multi-session subsystem |
-| **Rows requiring work** | **152** | 152 + 80 no-gap rows = 232 |
+| XL (major subsystem) | 8 | dedicated multi-session subsystem |
+| **Rows requiring work** | **150** | 150 + 82 no-gap rows = 232 |
 
-### 10.4 Parity-blocking gaps (7, all P1) by wave
+### 10.4 Parity-blocking gaps (5, all P1) by wave
 
 Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
-primary wave. The rows delivered across Sessions 99–112
+primary wave. The rows delivered across Sessions 99–114
 (R06, R10, R12, R13, R23, S50, S70, W06, W08, W14, L16, L67, P02, T06, L05, L08, S01,
 S06, S28, S36, S42, S44, S41, S74, S69, S75, S78, T07, R01, T04, S02, L68, P03, S71,
-R19, R21) no longer appear. Waves A, C and G are now empty.
+R19, R21, R20, S73) no longer appear. Waves A, B, C, E and G are now empty.
 
 | Wave | Blocking gaps | Count |
 |---|---|---|
@@ -572,10 +573,10 @@ R19, R21) no longer appear. Waves A, C and G are now empty.
 | B (core language/data) | (none) | 0 |
 | C (filesystem/process/time) | (none) | 0 |
 | D (networking/internet/compression) | S62 | 1 |
-| E (concurrency/async) | R20, S73 | 2 |
+| E (concurrency/async) | (none) | 0 |
 | F (packaging/distribution) | P04, P05, P06, P09 | 4 |
 | G (developer tooling) | (none) | 0 |
-| **Total** | | **7** |
+| **Total** | | **5** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -598,23 +599,25 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 - Tooling: CLI build/run/check/explain/`--json`, exit codes, `--target` selection, error-code docs (T01-T03, T11, T13, T14)
 - Windows: process creation, Winsock sockets, BCrypt crypto provider, stdout console writes, standalone PE output (W07, W10 + base rows)
 - Compiler distribution via npm (P01)
-- Concurrency: native threads (R19), locks/spin primitives (R21) and the `threads` stdlib module (S71), with a lock-guarded allocation path
+- Concurrency: native threads (R19), locks/spin primitives (R21) and the `threads` stdlib module (S71), with a lock-guarded allocation path; async tasks and their event loop (R20) with the `async fn`/`await` language surface (S73) and the `tasks` stdlib module
 
 ### 10.6 Headline conclusions
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
-2. **Official-Python-capability parity is PARTIAL**: 96 execution-verified rows (VERIFIED 92 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 77 MISSING rows, 14 intentionally-different rows (13 INTENT. DIFF. + 1 INTENT. DIFF. + PARTIAL), 8 N/A rows (6 N/A + 2 N/A (INTENT.)), 3 PLANNED rows.
-3. **7 parity-blocking P1 gaps** remain (Wave B 0 · D 1 · E 2 · F 4); in all, 152 rows require work and 80 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
+2. **Official-Python-capability parity is PARTIAL**: 98 execution-verified rows (VERIFIED 94 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 75 MISSING rows, 14 intentionally-different rows (13 INTENT. DIFF. + 1 INTENT. DIFF. + PARTIAL), 8 N/A rows (6 N/A + 2 N/A (INTENT.)), 3 PLANNED rows.
+3. **5 parity-blocking P1 gaps** remain (Wave B 0 · D 1 · E 0 · F 4); in all, 150 rows require work and 82 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
-6. Parity-blocking work clusters into: async (Wave E — R19/S71 threads + locks VERIFIED in Session 112; R20/S73 async remain), packaging (Wave F), and TLS (Wave D — S42 zlib/gzip, S41 SQLite and S44 zip now VERIFIED). Waves A and B are fully closed (S74 in Session 108; L34 reclassified P2 in Session 111 — MINK's value-based error model is the intentional design); Wave C is empty; the shared A/F include-path mechanism landed across Sessions 99–107.
+6. Parity-blocking work clusters into packaging (Wave F) and TLS (Wave D — S42 zlib/gzip, S41 SQLite and S44 zip now VERIFIED). Wave E closed in Session 114 (R19/S71 threads + locks in Session 112, R20/S73 async + await now VERIFIED). Waves A, B and C are fully closed (S74 in Session 108; L34 reclassified P2 in Session 111 — MINK's value-based error model is the intentional design); the shared A/F include-path mechanism landed across Sessions 99–107.
 7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) was stubbed at audit time but is implemented since Session 99; `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); crypto is execution-verified on Windows.
 
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (7 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (5 parity-blocking gaps; see the implementation plan)
 - LINUX = **FROZEN** (untouched this session)
+
+**Session 114 updates:** **R20** (async / event loop) and **S73** (async/await + event loop) **P1 blockers CLOSED**, emptying Wave E. The task loop is the asyncio-equivalent in MINK's own architecture: a task is `fn(arg: Int) -> Int` on its own OS thread, and the process-global loop tracks uncollected tasks (`rt_task_spawn`/`rt_task_spawn0`, `rt_task_await`, `rt_task_run`, `rt_task_pending`, `rt_task_stop`). The language surface is real syntax — `async fn name(args) -> T { body }` plus `await expr` — implemented as a front-end desugaring over the verified runtime (`src/parser/mod.rs`), so awaits compose with loops, branches and module boundaries and there is no synchronous stand-in. New permanent evidence: `tests/async_lib.rs` (23 native-PE tests: handle accounting, drain, zero tasks, 200 spawn/await cycles, 64 concurrent tasks, `task_stop`, the E-R06 uncollected-task leak, the E-R05 double-collect and E-R13 non-task-handle errors, a concurrency-ordering proof, 4×1000 locked increments giving exactly 4000, tasks allocating/freeing strings, 5 identical stress runs, the language-surface cases incl. nested async and cross-module async, the two rejected forms, the `tasks` stdlib module and the shipped example twice), `examples/async_tasks/main.mink` and `stdlib/tasks.mink` (+ npm mirror). Two defects were found and fixed while verifying: an awaited handle is now read through the runtime's validated word load (so a stale or bogus handle is E-R05/E-R13 instead of a fault), and `pub async fn` in a module is parsed as two `pub` items instead of being silently dropped. Parity-blocking set: 7 → 5 (S62, P04, P05, P06, P09).
 
 **Session 112 updates:** **R19** (threads), **R21** (locks/synchronization primitives) and **S71** (threads + locks) **P1 blockers CLOSED**. Real OS threads via `CreateThread` and a hand-written trampoline that bridges the Windows x64 ABI into the MINK stack ABI (`rt_thread_spawn`/`rt_thread_join`/`rt_thread_id`), plus `rt_ptr_to_int`/`rt_int_to_ptr` so a shared-context pointer can be published in a `Ptr<Int>` block; `stdlib/threads.mink` ships `thread_spawn`/`thread_join`/`thread_self` and `lock_new`/`lock_acquire`/`lock_release`/`lock_free`. Because every thread shares the runtime arena, the allocator and the raw memory accessors are now guarded by a self-contained test-and-set spin lock; `rt_fail` reports a failed `CreateThread` as `E-R12`. New permanent evidence: `tests/threads_lib.rs` (17 native-PE tests: spawn/join results, live thread ids, 200 sequential spawn/joins, 8 concurrent threads, parallel allocation integrity, string interaction, pointer-cast round trip, an occupancy-counter mutual-exclusion probe, 4x5000 locked increments giving exactly 20000 twice, an unlocked control that must not be exact, 200 lock new/free cycles, and re-acquisition after join), plus `examples/threaded_work/main.mink` (4 threads, lock-guarded accumulation, closed-form check, deterministic across runs) and the `threads` stdlib module test. Four stale `Blocks = Y` flags on already-VERIFIED rows (S41, S75, S78, T07 — S41 also a stale `P1`) were cleared, and the whole §10 aggregate block was recomputed from the rows. Parity-blocking set: 9 → 7 (R20, S62, S73, P04, P05, P06, P09).
 
@@ -648,8 +651,8 @@ Every count in §10 was recomputed from the rows after both closures.
 Compiler pipeline and targets: `[code] src/{lexer,parser,ast,semantics,typecheck,ownership,hir,mir,monomorphize,backend}`, `src/backend/target.rs`.
 Entry/CLI: `[code] src/cli.rs`, `src/driver.rs`, `src/backend/mod.rs`. Modules: `src/module/mod.rs`.
 Runtime services/intrinsics: `[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`, `src/backend/emit/pe.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/{allocator,error,abi}.rs`.
-Standard library: `[code] stdlib/*.mink` (24 modules: assert, collections, crypto, csv, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, re, result, sqlite, strings, threads, time, zip, zlib — each mirrored into the npm bundle, with `tests/release.rs` guarding the mirror byte-for-byte).
-Test suite (execution-verified native runs): `[test] tests/*.rs` (66 targets, 2686 tests) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, sqlite_lib, zip_lib, zlib_lib, re_lib, threads_lib, windows_hardening, release, cli, smoke.
+Standard library: `[code] stdlib/*.mink` (25 modules: assert, collections, crypto, csv, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, re, result, sqlite, strings, tasks, threads, time, zip, zlib — each mirrored into the npm bundle, with `tests/release.rs` guarding the mirror byte-for-byte).
+Test suite (execution-verified native runs): `[test] tests/*.rs` (69 targets, 2739 tests) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, sqlite_lib, zip_lib, zlib_lib, re_lib, threads_lib, async_lib, windows_hardening, release, cli, smoke.
 Recorded real execution: `[exec]` SESSION_92..97 docs (crypto vectors, HTTP POST byte-exact echo, process 1 MB drain, npm clean installs ×2, standalone exe) and this session's native probes (short-circuit, div-by-zero fault status 148).
 Specs/plans: `[doc] docs/core/*`, `docs/language/*`, `docs/ecosystem/*` (C_ABI_SPEC, PACKAGE_ARCHITECTURE, SECURITY_ARCHITECTURE, STDLIB_ARCHITECTURE), `docs/roadmap/*`, `docs/implementation/SESSION_*`.
 

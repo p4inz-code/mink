@@ -1,0 +1,69 @@
+// Async / task proof application (Windows Python parity R20/S73).
+//
+// Four async tasks each sum a disjoint slice of 0..1000 and add their subtotal
+// to a shared accumulator under a task lock. The main task awaits every handle,
+// prints each subtotal and the total, and checks the total against the closed
+// form. Everything the program allocated is freed before it returns, so the
+// exit-time leak check (`E-R06`) passes only if the task handles and the
+// context block really were released.
+//
+//   python: tasks = [asyncio.create_task(worker(i)) for i in range(4)]
+//           asyncio.gather(*tasks)
+//
+// Run: mink run examples/async_tasks/main.mink
+
+mod tasks;
+
+async fn worker(ctx_arg: Int) -> Int {
+    // A task's argument is one word: the address of the shared context.
+    let ctx = rt_int_to_ptr(ctx_arg);
+    let lock = rt_mem_load(ctx);
+    let start = rt_mem_load(ctx + 16);
+    let end = rt_mem_load(ctx + 24);
+
+    let mut i = start;
+    let mut sub = 0;
+    while i < end {
+        sub = sub + i;
+        i = i + 1;
+    }
+
+    rt_mutex_lock(lock);
+    rt_mem_store(ctx + 8, rt_mem_load(ctx + 8) + sub);
+    rt_mutex_unlock(lock);
+    return sub;
+}
+
+fn main() -> Int {
+    // Context block: [lock][accumulator][start][end].
+    let ctx = rt_alloc(32);
+    rt_mem_store(ctx, rt_mutex_new());
+    rt_mem_store(ctx + 8, 0);
+    rt_mem_store(ctx + 16, 0);
+    rt_mem_store(ctx + 24, 0);
+
+    let mut slice = 0;
+    while slice < 4 {
+        rt_mem_store(ctx + 16, slice * 250);
+        rt_mem_store(ctx + 24, (slice + 1) * 250);
+        let handle = worker(rt_ptr_to_int(ctx));
+        rt_print_int(await handle);
+        slice = slice + 1;
+    }
+
+    let total = rt_mem_load(ctx + 8);
+    rt_print_int(total);
+
+    // Closed form: 0 + 1 + ... + 999 = 499500.
+    let ok = total == 499500;
+
+    let lock = rt_mem_load(ctx);
+    rt_mutex_free(lock);
+    rt_free(ctx);
+
+    if !ok {
+        return 1;
+    }
+    rt_print_int(task_pending());
+    return 0;
+}
