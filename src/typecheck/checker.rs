@@ -539,7 +539,23 @@ impl<'a> Checker<'a> {
     /// returns the expression's (canonical) type plus whether this
     /// expression or any descendant was re-typed (a deferred member/index
     /// whose base resolved after the forward pass).
+    ///
+    /// Every re-typed expression writes its new type back over the forward
+    /// pass's entry ([`Checker::update_recorded`]), because [`Checker::recorded_ty`]
+    /// matches the *first* entry for a span: without the write-back an
+    /// expression whose forward-pass type was a deferred inference variable
+    /// would keep reading as `unknown` even after the variable resolved.
     fn resolve_deferred_expr(&mut self, expr: &Expr) -> (TypeId, bool) {
+        let (ty, recomputed) = self.resolve_deferred_expr_inner(expr);
+        if recomputed {
+            self.update_recorded(expr.span, ty);
+        }
+        (ty, recomputed)
+    }
+
+    /// The body of [`Checker::resolve_deferred_expr`], without the
+    /// record-updating wrapper.
+    fn resolve_deferred_expr_inner(&mut self, expr: &Expr) -> (TypeId, bool) {
         let (computed, recomputed) = match &expr.kind {
             ExprKind::Member { base, member } => {
                 let (base_ty, _) = self.resolve_deferred_expr(base);
@@ -4166,29 +4182,40 @@ impl<'a> Checker<'a> {
                 self.check_value_for_target(op, target_ty, value_ty, value_span, span, target.span)
             }
             ExprKind::Deref { operand } => {
-                let operand_ty = self.expr_type(operand);
+                // Type the `*r` place through the ordinary expression path,
+                // mirroring the Ident/Member/Index arms: it records the
+                // referent type for HIR lowering, and when the operand is an
+                // unresolved inference variable (a parameter no call site has
+                // pinned yet) `check_expr` registers the place as deferred, so
+                // the re-type pass writes the referent type back in place
+                // instead of leaving a stale `unknown` behind.
+                let target_ty = self.expr_type(target);
+                // The operand is the reference itself (its type was just
+                // recorded while typing the place); the mutability that
+                // decides this write is the *reference's*, not the
+                // referent's.
+                let operand_ty = self.recorded_ty(operand.span).unwrap_or(target_ty);
                 let canon = self.types.canonical(operand_ty);
-                // Snapshot the mutability before mutating `self` (the
-                // match on `self.types` borrows it).
-                let through_mut = matches!(
-                    self.types.kind(canon),
-                    Some(TypeKind::Ref { mutable: true, .. })
-                );
+                // Snapshot the mutability before mutating `self` (the match
+                // on `self.types` borrows it).
                 let through_shared = matches!(
                     self.types.kind(canon),
                     Some(TypeKind::Ref { mutable: false, .. })
                 );
-                if through_mut {
-                    // `*r = v` through `&mut T`: value must match T (the
-                    // referent type). Record the target's referent type
-                    // (mirroring the Ident/Member/Index arms, which record
-                    // via `expr_type`) so HIR lowering finds a type for
-                    // the `*r` place.
-                    let target_ty = match self.types.kind(canon) {
-                        Some(TypeKind::Ref { elem, .. }) => *elem,
-                        _ => self.types.push(TypeKind::Error),
-                    };
-                    self.expr_types.push((target.span, target_ty));
+                if through_shared {
+                    // Writes through an immutable reference are always wrong,
+                    // even when the value type happens to match.
+                    self.push_error(TypeError::assign_through_immutable_ref(target.span));
+                    self.types.push(TypeKind::Error)
+                } else if matches!(
+                    self.types.kind(canon),
+                    Some(TypeKind::Infer(_)) | Some(TypeKind::Error) | None
+                ) {
+                    // Deferred (or already poisoned): the referent type is
+                    // not known yet, so there is nothing to check against. A
+                    // deferred place is re-checked by the re-type pass.
+                    target_ty
+                } else {
                     self.check_value_for_target(
                         op,
                         target_ty,
@@ -4197,17 +4224,6 @@ impl<'a> Checker<'a> {
                         span,
                         target.span,
                     )
-                } else if through_shared {
-                    // Writes through an immutable reference are always
-                    // wrong, even when the value type happens to match.
-                    self.push_error(TypeError::assign_through_immutable_ref(target.span));
-                    self.expr_types
-                        .push((target.span, self.types.push(TypeKind::Error)));
-                    self.types.push(TypeKind::Error)
-                } else {
-                    self.expr_types
-                        .push((target.span, self.types.push(TypeKind::Error)));
-                    self.types.push(TypeKind::Error)
                 }
             }
             _ => {

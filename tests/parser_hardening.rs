@@ -1447,12 +1447,12 @@ fn assert_span_ok(span: Span, text_len: u32, src: &str) {
 #[test]
 fn excluded_declarations_at_top_level_are_rejected() {
     // `enum` declarations are implemented (session 17) and therefore not
-    // in this list.
+    // in this list; `async fn` is implemented (session 114) and is not in
+    // it either — see `async_fn_and_await_are_accepted` below.
     let excluded = [
         "type X = int;",
         "trait T {}",
         "impl T for U {}",
-        "async fn f() {}",
         "unsafe fn f() {}",
         "match x {}",
     ];
@@ -1472,8 +1472,9 @@ fn excluded_constructs_inside_functions_are_rejected() {
         // pattern without `=>` is a dedicated E-P24.
         // unsafe block.
         ("unsafe { }", ParseErrorKind::ExpectedExpression),
-        // await expression.
-        ("await x;", ParseErrorKind::ExpectedExpression),
+        // `await` arrived with session 114 (S73) and is accepted; only a
+        // bare `await` with no operand is rejected (E-P32).
+        ("await;", ParseErrorKind::ExpectedExpression),
     ];
     for (src, expected) in excluded {
         assert_eq!(
@@ -1482,6 +1483,18 @@ fn excluded_constructs_inside_functions_are_rejected() {
             "for {src:?}"
         );
     }
+}
+
+#[test]
+fn async_fn_and_await_are_accepted() {
+    // Session 114 (R20/S73): `async fn` and `await` are real syntax, so they
+    // must parse (the runtime semantics are covered by tests/async_lib.rs).
+    assert!(parse_ok("async fn f() { }"));
+    assert!(parse_ok("async fn f() -> Int { return 1; }"));
+    assert!(parse_ok("async fn f(x: Int) -> Int { return x; }"));
+    assert!(parse_ok("pub async fn f() { }"));
+    assert!(parse_ok("fn g() { let h = f(); let v = await h; }"));
+    assert!(parse_ok("fn g() { let v = await f(1) + 1; }"));
 }
 
 #[test]
@@ -1534,9 +1547,10 @@ fn excluded_tokens_and_operators_are_rejected() {
 #[test]
 fn excluded_keywords_are_never_silently_accepted() {
     // Keywords that remain rejected at both statement and item positions.
-    let excluded_both = [
-        "enum", "type", "trait", "impl", "match", "async", "await", "unsafe",
-    ];
+    // `async` and `await` left this list in session 114: they are real
+    // keywords now, so the positive grammar is covered by
+    // `async_fn_and_await_are_accepted`.
+    let excluded_both = ["enum", "type", "trait", "impl", "match", "unsafe"];
     for kw in excluded_both {
         let at_statement = format!("fn f() {{ {kw} x; }}");
         assert!(
