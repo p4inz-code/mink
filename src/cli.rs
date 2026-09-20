@@ -34,12 +34,30 @@ Commands:
   version         Print the compiler version
   help            Print this help
 
+Package commands (run in a project that has a mink.toml):
+  init [path]             Write a starter mink.toml
+  add <name> [--version <req> | --path <dir>]
+                          Declare a dependency and install it
+  remove <name>           Remove a declared dependency and uninstall what is
+                          no longer required ('uninstall' is an alias)
+  install [path] [--check]
+                          Resolve dependencies, install them into the
+                          project's packages directory, and write mink.lock
+  update [path]           Re-resolve from the manifest, ignoring mink.lock
+  env new <name>          Create (and activate) an isolated environment
+  env use <name>          Activate an existing environment
+  env list                List the project's environments
+  env remove <name>       Remove an environment and its packages
+
 Options:
   -h, --help      Print help
   -v, -V, --version
                   Print the compiler version
   --json          Output machine-readable JSON (for check)
   --target <name> Target to compile for (default: the host's native target)
+  --version <req> Version requirement (for add), e.g. '^1.0.0'
+  --path <dir>    Local package directory (for add)
+  --check         Verify the installed packages without changing anything
 
 Examples:
   mink run hello.mink        Compile and run a program
@@ -48,6 +66,9 @@ Examples:
   mink test hello.mink       Run test functions in hello.mink
   mink repl                  Start an interactive session
   mink explain E-T01         Explain error E-T01
+  mink init                  Start a project in the current directory
+  mink add util --version ^1.0.0
+  mink install               Install the declared dependencies
 
 Exit codes:
   0   success
@@ -81,6 +102,49 @@ enum Command {
     Explain {
         code: Option<String>,
     },
+    /// `mink init [path]`: write a starter manifest.
+    Init {
+        path: PathBuf,
+        name: String,
+        version: String,
+    },
+    /// `mink install [path] [--check]` and `mink update [path]`.
+    PackageInstall {
+        path: PathBuf,
+        update: bool,
+        check: bool,
+    },
+    /// `mink add <name> [--version <req>] [--path <dir>]`.
+    PackageAdd {
+        path: PathBuf,
+        name: String,
+        version: Option<String>,
+        dependency_path: Option<PathBuf>,
+    },
+    /// `mink remove <name>`.
+    PackageRemove {
+        path: PathBuf,
+        name: String,
+    },
+    /// `mink env <action> [name]`.
+    PackageEnv {
+        path: PathBuf,
+        action: EnvCommand,
+        name: Option<String>,
+    },
+}
+
+/// The `mink env` subcommands, as typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvCommand {
+    /// `mink env new <name>`.
+    New,
+    /// `mink env use <name>`.
+    Use,
+    /// `mink env list`.
+    List,
+    /// `mink env remove <name>`.
+    Remove,
 }
 
 /// Entry point for the compiler process. Returns the process exit code.
@@ -239,6 +303,26 @@ pub fn main(args: &[String]) -> ExitCode {
         }
         Ok(Command::Test { path, target }) => run_test_command(&path, target),
         Ok(Command::Repl { path, target }) => run_repl(path.as_deref(), target),
+        Ok(Command::Init {
+            path,
+            name,
+            version,
+        }) => run_init_command(&path, &name, &version),
+        Ok(Command::PackageInstall {
+            path,
+            update,
+            check,
+        }) => run_install_command(&path, update, check),
+        Ok(Command::PackageAdd {
+            path,
+            name,
+            version,
+            dependency_path,
+        }) => run_add_command(&path, &name, version.as_deref(), dependency_path.as_deref()),
+        Ok(Command::PackageRemove { path, name }) => run_remove_command(&path, &name),
+        Ok(Command::PackageEnv { path, action, name }) => {
+            run_env_command(&path, action, name.as_deref())
+        }
         Err(message) => {
             eprintln!("mink: error: {message}");
             eprintln!("Run 'mink help' for usage.");
@@ -308,6 +392,163 @@ fn build_error_exit_code(error: &BuildError) -> ExitCode {
         | BuildError::FrontEnd(_)
         | BuildError::Backend(_)
         | BuildError::Output { .. } => ExitCode::from(1),
+    }
+}
+
+// ======================================================================
+// Package commands
+// ======================================================================
+
+/// Reports a package-manager failure and returns the failure exit code.
+fn package_failure(error: &crate::package::PackageError) -> ExitCode {
+    eprintln!("mink: error[{}]: {error}", error.code());
+    ExitCode::from(1)
+}
+
+/// Prints an install report's package list with a prefix.
+fn print_installed(verb: &str, report: &crate::package::InstallReport) {
+    for entry in &report.installed {
+        println!(
+            "  {verb} {} {} ({})",
+            entry.name, entry.version, entry.origin
+        );
+    }
+    for name in &report.removed {
+        println!("  removed {name}");
+    }
+    if let Some(lock) = &report.lock {
+        if !report.check_only {
+            println!("  wrote {}", lock.display());
+        }
+    }
+}
+
+/// `mink init [path]`.
+fn run_init_command(path: &PathBuf, name: &str, version: &str) -> ExitCode {
+    match crate::package::initialise_project(path, name, version) {
+        Ok(written) => {
+            println!("mink: init: wrote {}", written.display());
+            println!("  package '{name}' {version}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => package_failure(&error),
+    }
+}
+
+/// `mink install [path] [--check]` and `mink update [path]`.
+fn run_install_command(path: &PathBuf, update: bool, check: bool) -> ExitCode {
+    let options = crate::package::InstallOptions {
+        update,
+        check_only: check,
+    };
+    let verb = if update { "update" } else { "install" };
+    match crate::package::install_project(path, options) {
+        Ok(report) => {
+            println!(
+                "mink: {verb}: {} into {}",
+                report.summary(),
+                report.packages.display()
+            );
+            print_installed(if check { "verified" } else { "installed" }, &report);
+            ExitCode::SUCCESS
+        }
+        Err(error) => package_failure(&error),
+    }
+}
+
+/// `mink add <name> [--version <req> | --path <dir>]`.
+fn run_add_command(
+    path: &PathBuf,
+    name: &str,
+    version: Option<&str>,
+    dependency_path: Option<&std::path::Path>,
+) -> ExitCode {
+    // `add` edits the manifest at the project root, so accept either the
+    // project directory or any file inside it.
+    let project = crate::package::find_project_root(path).unwrap_or_else(|| path.clone());
+    match crate::package::add_dependency(&project, name, version, dependency_path) {
+        Ok(report) => {
+            println!("mink: add: declared '{name}'");
+            println!(
+                "mink: install: {} into {}",
+                report.summary(),
+                report.packages.display()
+            );
+            print_installed("installed", &report);
+            ExitCode::SUCCESS
+        }
+        Err(error) => package_failure(&error),
+    }
+}
+
+/// `mink remove <name>`.
+fn run_remove_command(path: &PathBuf, name: &str) -> ExitCode {
+    let project = crate::package::find_project_root(path).unwrap_or_else(|| path.clone());
+    match crate::package::remove_dependency(&project, name) {
+        Ok(report) => {
+            println!("mink: remove: undeclared '{name}'");
+            print_installed("installed", &report);
+            ExitCode::SUCCESS
+        }
+        Err(error) => package_failure(&error),
+    }
+}
+
+/// `mink env <new|use|list|remove> [name]`.
+fn run_env_command(path: &PathBuf, action: EnvCommand, name: Option<&str>) -> ExitCode {
+    use crate::package::env;
+    let project = crate::package::find_project_root(path).unwrap_or_else(|| path.clone());
+    let result = match action {
+        EnvCommand::New => {
+            let name = name.expect("checked while parsing");
+            env::create(&project, name).map(Some)
+        }
+        EnvCommand::Use => {
+            let name = name.expect("checked while parsing");
+            env::activate(&project, name)
+                .and_then(|()| env::environment(&project, name))
+                .map(Some)
+        }
+        EnvCommand::Remove => {
+            let name = name.expect("checked while parsing");
+            env::remove(&project, name).map(Some)
+        }
+        EnvCommand::List => env::list(&project).map(|list| {
+            if list.is_empty() {
+                println!("mink: env: no environments in {}", project.display());
+            } else {
+                for environment in &list {
+                    let marker = if environment.active { "*" } else { " " };
+                    println!(
+                        "mink: env: {marker} {} ({})",
+                        environment.name,
+                        environment.packages_directory().display()
+                    );
+                }
+            }
+            None
+        }),
+    };
+    match result {
+        Ok(Some(environment)) => {
+            let verb = match action {
+                EnvCommand::New => "created",
+                EnvCommand::Use => "activated",
+                EnvCommand::Remove => "removed",
+                EnvCommand::List => "listed",
+            };
+            println!(
+                "mink: env: {verb} '{}' ({})",
+                environment.name,
+                environment.packages_directory().display()
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(None) => ExitCode::SUCCESS,
+        Err(error) => {
+            let error = crate::package::PackageError::from(error);
+            package_failure(&error)
+        }
     }
 }
 
@@ -443,8 +684,223 @@ fn parse(args: &[String]) -> Result<Command, String> {
             Command::Build { path, target } => Command::Test { path, target },
             _ => unreachable!(),
         }),
+        "init" => parse_init(&args[1..]),
+        "install" => parse_package_install(&args[1..], false),
+        "update" => parse_package_install(&args[1..], true),
+        "add" => parse_package_add(&args[1..]),
+        "remove" | "uninstall" => {
+            let (path, name) = parse_package_remove(&args[1..])?;
+            Ok(Command::PackageRemove { path, name })
+        }
+        "env" => parse_package_env(&args[1..]),
         other => Err(format!("unknown command '{other}'")),
     }
+}
+
+/// Parses `mink init [path] [--name <name>]`.
+fn parse_init(args: &[String]) -> Result<Command, String> {
+    let mut path: Option<PathBuf> = None;
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--name" || arg == "--version" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| format!("missing value after '{arg}' (usage: mink init [path])"))?
+                .clone();
+            if arg == "--name" {
+                name = Some(value);
+            } else {
+                version = Some(value);
+            }
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown option '{arg}' for 'init'"));
+        } else if path.is_none() {
+            path = Some(PathBuf::from(arg));
+        } else {
+            return Err(format!("unexpected argument '{arg}' for 'init'"));
+        }
+        index += 1;
+    }
+    let path = path.unwrap_or_else(|| PathBuf::from("."));
+    // The default name is the directory's name, lowercased and sanitised.
+    let default_name = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.clone())
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_else(|| "project".to_string());
+    let name = name.unwrap_or(default_name);
+    Ok(Command::Init {
+        path,
+        name,
+        version: version.unwrap_or_else(|| "0.1.0".to_string()),
+    })
+}
+
+/// Parses `mink install [path] [--check]` and `mink update [path]`.
+fn parse_package_install(args: &[String], update: bool) -> Result<Command, String> {
+    let command = if update { "update" } else { "install" };
+    let mut path: Option<PathBuf> = None;
+    let mut check = false;
+    for arg in args {
+        if arg == "--check" {
+            if update {
+                return Err("unknown option '--check' for 'update'".to_string());
+            }
+            check = true;
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown option '{arg}' for '{command}'"));
+        } else if path.is_none() {
+            path = Some(PathBuf::from(arg));
+        } else {
+            return Err(format!("unexpected argument '{arg}' for '{command}'"));
+        }
+    }
+    Ok(Command::PackageInstall {
+        path: path.unwrap_or_else(|| PathBuf::from(".")),
+        update,
+        check,
+    })
+}
+
+/// Parses `mink add <name> [--version <req>] [--path <dir>]`.
+fn parse_package_add(args: &[String]) -> Result<Command, String> {
+    let mut path = PathBuf::from(".");
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut dependency_path: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--version" || arg == "--path" {
+            index += 1;
+            let value = args.get(index).ok_or_else(|| {
+                format!("missing value after '{arg}' (usage: mink add <name> [--version <req> | --path <dir>])")
+            })?;
+            if arg == "--version" {
+                version = Some(value.clone());
+            } else {
+                dependency_path = Some(PathBuf::from(value));
+            }
+        } else if arg == "--project" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or("missing value after '--project'")?
+                .clone();
+            path = PathBuf::from(value);
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown option '{arg}' for 'add'"));
+        } else if name.is_none() {
+            name = Some(arg.clone());
+        } else {
+            return Err(format!("unexpected argument '{arg}' for 'add'"));
+        }
+        index += 1;
+    }
+    let name = name.ok_or(
+        "missing dependency name (usage: mink add <name> [--version <req> | --path <dir>])",
+    )?;
+    Ok(Command::PackageAdd {
+        path,
+        name,
+        version,
+        dependency_path,
+    })
+}
+
+/// Parses `mink remove <name>`.
+fn parse_package_remove(args: &[String]) -> Result<(PathBuf, String), String> {
+    let mut path = PathBuf::from(".");
+    let mut name: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--project" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or("missing value after '--project'")?
+                .clone();
+            path = PathBuf::from(value);
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown option '{arg}' for 'remove'"));
+        } else if name.is_none() {
+            name = Some(arg.clone());
+        } else {
+            return Err(format!("unexpected argument '{arg}' for 'remove'"));
+        }
+        index += 1;
+    }
+    let name = name.ok_or("missing dependency name (usage: mink remove <name>)")?;
+    Ok((path, name))
+}
+
+/// Parses `mink env <new|use|list|remove> [name]`.
+fn parse_package_env(args: &[String]) -> Result<Command, String> {
+    let mut path = PathBuf::from(".");
+    let mut action: Option<EnvCommand> = None;
+    let mut name: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--project" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or("missing value after '--project'")?
+                .clone();
+            path = PathBuf::from(value);
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown option '{arg}' for 'env'"));
+        } else if action.is_none() {
+            action = Some(match arg.as_str() {
+                "new" | "create" => EnvCommand::New,
+                "use" | "activate" => EnvCommand::Use,
+                "list" | "ls" => EnvCommand::List,
+                "remove" | "rm" => EnvCommand::Remove,
+                other => {
+                    return Err(format!(
+                        "unknown 'env' action '{other}' (expected new, use, list, remove)"
+                    ));
+                }
+            });
+        } else if name.is_none() {
+            name = Some(arg.clone());
+        } else {
+            return Err(format!("unexpected argument '{arg}' for 'env'"));
+        }
+        index += 1;
+    }
+    let Some(action) = action else {
+        return Err(
+            "missing 'env' action (usage: mink env <new|use|list|remove> [name])".to_string(),
+        );
+    };
+    match action {
+        EnvCommand::New | EnvCommand::Use | EnvCommand::Remove => {
+            if name.is_none() {
+                return Err(format!(
+                    "missing environment name (usage: mink env {} <name>)",
+                    match action {
+                        EnvCommand::New => "new",
+                        EnvCommand::Use => "use",
+                        _ => "remove",
+                    }
+                ));
+            }
+        }
+        EnvCommand::List => {
+            if name.is_some() {
+                return Err("unexpected argument for 'env list'".to_string());
+            }
+        }
+    }
+    Ok(Command::PackageEnv { path, action, name })
 }
 
 /// Parses the arguments of the `repl` command: an optional initial source

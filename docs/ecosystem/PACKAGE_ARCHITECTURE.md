@@ -681,5 +681,89 @@ warning: advisory for mink-crypto 0.1.0
 
 ---
 
+---
+
+## 26. V1 Implementation Status (Session 116)
+
+This section records exactly what the shipped package manager implements, so
+this specification and `src/package/` cannot drift apart silently. Everything
+not listed here is still design.
+
+### Commands
+
+| Command | What it does |
+|---------|--------------|
+| `mink init [path] [--name <n>] [--version <v>]` | Writes a starter `mink.toml` |
+| `mink add <name> --version <req>` | Declares a versioned dependency and installs it |
+| `mink add <name> --path <dir>` | Declares a path dependency and installs it |
+| `mink remove <name>` (`uninstall`) | Undeclares a dependency and uninstalls what is no longer required |
+| `mink install [path] [--check]` | Resolves, installs, writes `mink.lock`; `--check` verifies without writing |
+| `mink update [path]` | Re-resolves from the manifest, ignoring the lock |
+| `mink env new/use/list/remove` | Creates, activates, lists and removes isolated environments |
+
+### Manifests and sources
+
+- `mink.toml` is read as the documented subset: `[package]` (`name`,
+  `version`), `[dependencies]` (string requirement or `{ version, path }`
+  inline table) and `[sources]` (`name = "directory"`). Every other section
+  (`[features]`, `[target.*]`, `[dev-dependencies]`, …) is preserved and
+  ignored.
+- A **source** is a local directory of `<name>/<version>/` package
+directories — the V1 replacement for the registry in §18. A network registry,
+  publishing, signing and the download cache (§15–§20, §24) remain design.
+- A package directory holds `mink.toml` and its `.mink` sources.
+
+### Requirements
+
+The §4 table is implemented with the §4 "Default behavior" rule: a bare
+version means **compatible** (`^`), so `"1.2.3"` accepts `>=1.2.3, <2.0.0`; a
+spelled `=` (`"=1.2.3"`) is exact. `~`, `>=`, `>`, `<=`, `<`, `*` and
+comma-separated conjunctions all work. Two-component bounds mean a zero patch
+(`>=1.0` ≡ `>=1.0.0`).
+
+### Installed packages (site-packages)
+
+- The **packages directory** is `<project>/.mink/packages`, or
+  `<project>/.mink/envs/<name>/packages` when an environment is active.
+- `mink install` copies each resolved package to
+  `<packages>/<name>/` and records `name`, `version`, `source` and the
+  `sha256:` content hash of the copied tree in `<packages>/.installed`.
+- The compiler resolves `mod name;` against the active packages directory
+  (site-packages), each path dependency's directory, the declaring file's
+  own directory and the bundled stdlib, in that order after the local
+directory. An installed package's entry module is the file named after the
+  package (`<packages>/<name>/<name>.mink`).
+- `mink install` is idempotent and self-healing: a modified, truncated or
+  partially deleted package tree is detected by content hash and re-copied,
+  and packages outside the resolution are removed.
+
+### Lockfile
+
+`mink.lock` uses the §5 format (`[[package]]` entries with `name`, `version`,
+`source`, `checksum`, `dependencies`). `install` prefers the locked versions
+when they still satisfy the manifest and reports a stale lock
+(`E-PKG14`) otherwise; `update` re-resolves and rewrites it. Rendering is
+byte-stable for a given resolution.
+
+### Virtual environments
+
+An environment is `<project>/.mink/envs/<name>/packages` plus a
+`<project>/.mink/active-env` pointer. Creating an environment activates it;
+removing the active one clears the pointer. Environments never share installed
+packages, and module resolution follows the active environment.
+
+### Diagnostics
+
+The package manager reports `E-PKG01`–`E-PKG15` (see `mink explain <code>`).
+
+### Deferred (still design)
+
+Workspaces (§10), features and optional dependencies (§9), target-specific
+dependencies (§8), build scripts (§7), binary packages (§6), git dependencies
+(§4), registry interaction, publishing, signing and the download cache
+(§15–§20), and the offline/cache story (§14).
+
+---
+
 *This specification is part of the MINK Ecosystem Architecture Design Pack (Session 50).*
-*Do NOT implement until the design is frozen and reviewed.*
+*§26 records the V1 implementation (Session 116); the rest is design.*

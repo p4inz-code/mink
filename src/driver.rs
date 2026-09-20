@@ -549,11 +549,16 @@ pub(crate) fn discover_modules(
     let mut modules = Vec::new();
     let mut visited = HashSet::new();
     let mut errors = Vec::new();
+    // Installed packages and path dependencies are additional module roots
+    // (the site-packages search path). A file outside any project simply has
+    // none, so single-file builds are unaffected.
+    let external = crate::package::module_roots(root_path);
     discover_modules_recursive(
         sources,
         root_path,
         None,
         None,
+        &external,
         &mut modules,
         &mut visited,
         &mut errors,
@@ -566,11 +571,13 @@ pub(crate) fn discover_modules(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn discover_modules_recursive(
     sources: &mut SourceMap,
     path: &Path,
     parent: Option<String>,
     declared: Option<String>,
+    external_roots: &[PathBuf],
     modules: &mut Vec<ModuleSource>,
     visited: &mut HashSet<PathBuf>,
     errors: &mut Vec<CheckError>,
@@ -655,12 +662,13 @@ fn discover_modules_recursive(
     if !mod_names.is_empty() {
         let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
         for child_name in mod_names {
-            let child_path = resolve_module_path(&child_name, parent_dir);
+            let child_path = resolve_module_path(&child_name, parent_dir, external_roots);
             discover_modules_recursive(
                 sources,
                 &child_path,
                 Some(module_name.clone()),
                 Some(child_name.clone()),
+                external_roots,
                 modules,
                 visited,
                 errors,
@@ -680,12 +688,15 @@ fn discover_modules_recursive(
 /// 3. the bundled standard library next to the installed `mink`
 ///    executable (`<exe>/../stdlib`, the npm package layout);
 /// 4. a `stdlib` directory in the current working directory (dev
-///    checkout layout: `target/debug/mink.exe` run from the repo root).
+///    checkout layout: `target/debug/mink.exe` run from the repo root);
+/// 5. every project package root: the active environment's packages
+///    directory (or the project's own `.mink/packages`) and each path
+///    dependency's directory.
 ///
 /// The first candidate that exists wins; when none exist the returned
 /// path is the sibling path so the existing "module file not found"
 /// error still names the most intuitive location.
-fn resolve_module_path(child_name: &str, parent_dir: &Path) -> PathBuf {
+fn resolve_module_path(child_name: &str, parent_dir: &Path, external_roots: &[PathBuf]) -> PathBuf {
     let sibling = parent_dir.join(format!("{child_name}.mink"));
     if sibling.exists() {
         return sibling;
@@ -703,14 +714,24 @@ fn resolve_module_path(child_name: &str, parent_dir: &Path) -> PathBuf {
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd.join("stdlib"));
     }
-    for root in roots {
+    for root in roots.into_iter().chain(external_roots.iter().cloned()) {
         let candidate = root.join(format!("{child_name}.mink"));
         if candidate.exists() {
             return candidate;
         }
+        // A directory package: `<dir>/<name>/mod.mink` (the MINK equivalent
+        // of Python's `<name>/__init__.py`).
         let package = root.join(child_name).join("mod.mink");
         if package.exists() {
             return package;
+        }
+        // An installed package: `<packages>/<name>/<name>.mink`. `mink
+        // install` copies a package into `<packages>/<name>/`, keeping the
+        // package's own entry file beside its manifest, so the entry module
+        // is the file named after the package.
+        let installed = root.join(child_name).join(format!("{child_name}.mink"));
+        if installed.exists() {
+            return installed;
         }
     }
     sibling

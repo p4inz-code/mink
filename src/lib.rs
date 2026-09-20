@@ -37,6 +37,7 @@ pub mod module;
 /// Monomorphization: creates concrete copies of generic functions.
 pub mod monomorphize;
 pub mod ownership;
+pub mod package;
 pub mod parser;
 pub mod runtime;
 pub mod semantics;

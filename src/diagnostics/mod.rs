@@ -671,6 +671,226 @@ const ALL_DOCS: &[ErrorDoc] = &[
             "Use x86_64-windows-pe (the only implemented target)",
         ],
     },
+    // =================================================================
+    // Package-manager errors (E-PKG)
+    // =================================================================
+    ErrorDoc {
+        code: "E-PKG01",
+        title: "Not a Project (or Unreadable Path)",
+        description: "A package command needs a mink.toml, or a file it was told to read is missing or unreadable.",
+        category: "package",
+        common_causes: &[
+            "Running a package command outside a project directory",
+            "A path dependency whose directory has no mink.toml",
+        ],
+        suggested_fixes: &[
+            "Run `mink init` to create a project",
+            "Run the command in (or point it at) the project directory",
+            "Check the `path` of each path dependency",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG02",
+        title: "Malformed Manifest",
+        description: "mink.toml (or mink.lock) does not parse: the supported TOML subset is tables, quoted strings, inline tables and arrays of strings.",
+        category: "package",
+        common_causes: &[
+            "A key without a value",
+            "An unterminated string, array or inline table",
+            "The same table header written twice",
+            "A bare (unquoted) value where a string is expected",
+        ],
+        suggested_fixes: &[
+            "Quote every string value",
+            "Delete the duplicate table header and merge its keys",
+            "Check the reported line number",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG03",
+        title: "Invalid Manifest Field",
+        description: "A manifest field is missing or has the wrong shape: [package] needs a valid name and version, and each dependency needs a version or a path.",
+        category: "package",
+        common_causes: &[
+            "Missing [package] or its name/version",
+            "A package name with uppercase letters, spaces or slashes",
+            "A version that is not MAJOR.MINOR.PATCH",
+            "A dependency declared twice, or with both a version and a path",
+        ],
+        suggested_fixes: &[
+            "Use lowercase letters, digits, '-' and '_' in package names",
+            "Spell versions as MAJOR.MINOR.PATCH (optionally -prerelease)",
+            "Give a dependency either `\"^1.0.0\"` or `{ path = \"../x\" }`, not both",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG04",
+        title: "Path Dependency Version Mismatch",
+        description: "A path dependency declares a version requirement that the package at that path does not satisfy.",
+        category: "package",
+        common_causes: &[
+            "The local package was bumped past the declared requirement",
+            "The path points at a different package than intended",
+        ],
+        suggested_fixes: &[
+            "Update the requirement in mink.toml",
+            "Point `path` at the right directory",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG05",
+        title: "No Matching Package Version",
+        description: "A declared dependency is not available in any configured source at a version the requirement accepts.",
+        category: "package",
+        common_causes: &[
+            "A typo in the dependency name",
+            "No [sources] table, or a source directory that does not contain the package",
+            "A requirement that no published version satisfies",
+        ],
+        suggested_fixes: &[
+            "Check the name and its spelling in the source directory",
+            "Add a [sources] table pointing at the directory holding `<name>/<version>/`",
+            "Loosen the version requirement",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG06",
+        title: "Conflicting Dependency Requirements",
+        description: "Two packages require different, incompatible versions of the same dependency.",
+        category: "package",
+        common_causes: &[
+            "A diamond dependency where the two sides disagree",
+            "An over-tight pin in one dependency",
+        ],
+        suggested_fixes: &[
+            "Read the reported requirement chain and align the versions",
+            "Publish a version of one side that widens its requirement",
+            "Override the dependency explicitly in the project manifest",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG07",
+        title: "Resolution Did Not Settle",
+        description: "Dependency resolution kept changing the same package's version and never reached a fixed point.",
+        category: "package",
+        common_causes: &[
+            "Sources that provide conflicting duplicate versions of one package",
+            "A dependency graph that pins a package differently at each pass",
+        ],
+        suggested_fixes: &[
+            "Remove duplicate copies of a package from the configured sources",
+            "Pin the package explicitly in the project manifest",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG08",
+        title: "Dependency Cycle",
+        description: "A package depends on itself, directly or through other packages.",
+        category: "package",
+        common_causes: &[
+            "Two packages that each depend on the other",
+            "A package whose manifest declares itself as a dependency",
+        ],
+        suggested_fixes: &[
+            "Break the cycle by moving the shared code into a third package",
+            "Remove the self-dependency from the manifest",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG09",
+        title: "Install Failed",
+        description: "A resolved package could not be copied into the packages directory, or its sources are missing.",
+        category: "package",
+        common_causes: &[
+            "The package directory was moved or deleted after resolution",
+            "The packages directory is not writable",
+        ],
+        suggested_fixes: &[
+            "Re-run `mink install`",
+            "Check the permissions of the project's .mink directory",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG10",
+        title: "Lockfile Unreadable",
+        description: "mink.lock exists but could not be read or written.",
+        category: "package",
+        common_causes: &[
+            "The file is locked by another process",
+            "The project directory is not writable",
+        ],
+        suggested_fixes: &[
+            "Close anything holding the file and retry",
+            "Delete mink.lock and run `mink update`",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG11",
+        title: "Malformed Lockfile",
+        description: "mink.lock does not parse: every [[package]] entry needs a name and a version.",
+        category: "package",
+        common_causes: &[
+            "A hand-edited lockfile",
+            "A truncated file from an interrupted write",
+        ],
+        suggested_fixes: &[
+            "Delete mink.lock and run `mink update`",
+            "Do not edit mink.lock by hand",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG12",
+        title: "Environment I/O Failed",
+        description: "An environment directory could not be created, read or removed.",
+        category: "package",
+        common_causes: &[
+            "The project's .mink directory is not writable",
+            "A file is open inside the environment being removed",
+        ],
+        suggested_fixes: &[
+            "Close open files inside the environment",
+            "Check the permissions of the .mink directory",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG13",
+        title: "Unknown or Invalid Environment",
+        description: "The environment name is not legal, or no environment by that name exists.",
+        category: "package",
+        common_causes: &[
+            "A typo in the environment name",
+            "Using an environment before `mink env new` created it",
+            "A name with uppercase letters, spaces or slashes",
+        ],
+        suggested_fixes: &[
+            "Run `mink env list` to see the available environments",
+            "Create it with `mink env new <name>`",
+            "Use lowercase letters, digits, '-' and '_' only",
+        ],
+    },
+    ErrorDoc {
+        code: "E-PKG14",
+        title: "Stale Lockfile",
+        description: "mink.lock records versions that no longer match what the manifest resolves to.",
+        category: "package",
+        common_causes: &[
+            "A dependency was added or removed by hand",
+            "A requirement in mink.toml was edited",
+        ],
+        suggested_fixes: &["Run `mink update` to re-resolve and rewrite the lockfile"],
+    },
+    ErrorDoc {
+        code: "E-PKG15",
+        title: "Installed Packages Out of Date",
+        description: "`mink install --check` found the packages directory different from what the resolution requires.",
+        category: "package",
+        common_causes: &[
+            "The installed tree was edited, deleted or truncated",
+            "An install was interrupted",
+            "The lock or manifest changed since the last install",
+        ],
+        suggested_fixes: &["Run `mink install` to repair the packages directory"],
+    },
 ];
 
 // =========================================================================
