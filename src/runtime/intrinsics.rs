@@ -652,6 +652,32 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Int],
         result: IntrinsicType::Int,
     },
+    // --- Dynamic library call (Session 117, S62) ---
+    Intrinsic {
+        name: "rt_sys_load_lib",
+        params: &[IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_sys_get_proc",
+        params: &[IntrinsicType::Int, IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_sys_call",
+        params: &[IntrinsicType::Int, IntrinsicType::Ptr, IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_sys_load64",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_sys_load32",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
     // --- Crypto (Session 71) ---
     Intrinsic {
         name: "rt_crypto_init",

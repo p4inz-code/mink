@@ -130,7 +130,7 @@ impl RuntimeOffsets {
         *self
             .services
             .get(&service)
-            .expect("runtime service not emitted")
+            .unwrap_or_else(|| panic!("runtime service not emitted: {service:?}"))
     }
 }
 
@@ -2923,6 +2923,25 @@ fn emit_net_free_addr_info(code: &mut Code) {
     code.leave_ret();
 }
 
+/// `rt_net_set_nonblocking()`: the non-blocking socket layer is Windows-only
+/// for now, so the frozen Linux backend has no implementation. Reports -1 —
+/// the same "unsupported" answer the other Linux stubs give — so that the
+/// shared stdlib (which carries the wrapper) still builds for the ELF target.
+/// No Linux capability is added here.
+fn emit_net_set_nonblocking(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_net_poll()`: Windows-only for now (same reasoning as
+/// `emit_net_set_nonblocking`). Reports -1.
+fn emit_net_poll(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+}
+
 /// `rt_net_gethostname() -> Str`: Get local hostname via uname(2).
 fn emit_net_get_host_name(code: &mut Code) {
     prologue(code);
@@ -3298,6 +3317,8 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::NetShutdown, emit_net_shutdown);
     emit!(RuntimeService::NetGetAddrInfo, emit_net_get_addr_info);
     emit!(RuntimeService::NetFreeAddrInfo, emit_net_free_addr_info);
+    emit!(RuntimeService::NetSetNonblocking, emit_net_set_nonblocking);
+    emit!(RuntimeService::NetPoll, emit_net_poll);
     emit!(RuntimeService::NetGetHostName, emit_net_get_host_name);
     emit!(RuntimeService::NetHtons, emit_net_htons);
 

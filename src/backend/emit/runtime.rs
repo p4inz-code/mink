@@ -358,6 +358,20 @@ pub(crate) fn emit_services(
         emit_net_set_nonblocking(code)
     });
     emit(code, RuntimeService::NetPoll, |code, _| emit_net_poll(code));
+    // --- Dynamic library call (Session 117, S62) ---
+    emit(code, RuntimeService::SysLoadLib, |code, _| {
+        emit_sys_load_lib(code)
+    });
+    emit(code, RuntimeService::SysGetProc, |code, _| {
+        emit_sys_get_proc(code)
+    });
+    emit(code, RuntimeService::SysCall, emit_sys_call);
+    emit(code, RuntimeService::SysLoad64, |code, _| {
+        emit_sys_load(code, true)
+    });
+    emit(code, RuntimeService::SysLoad32, |code, _| {
+        emit_sys_load(code, false)
+    });
     // --- Crypto (Session 71) ---
     emit(code, RuntimeService::CryptoInit, |code, _| {
         emit_crypto_init(code)
@@ -1834,9 +1848,18 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
 
 /// `rt_exit(code)` (code at `[rbp + 16]`): the leak-checked process exit.
 /// Scans the liveness table; a live allocation is a leak (`E-R06`). Then
-/// restores the process-entry stack pointer and returns, so the loader
-/// turns the result into the exit code. Also invoked by the entry stub
-/// with `main`'s result.
+/// terminates the process with `code` through the kernel.
+///
+/// The exit is `TerminateProcess(GetCurrentProcess(), code)` rather than a
+/// return from the entry point. Returning would let the loader run every
+/// foreign DLL's `DLL_PROCESS_DETACH` handler, and Windows' certificate-chain
+/// engine (crypt32) deadlocks in its detach handler once any chain has been
+/// built — measured, and triggered by `CertGetCertificateChain` alone, so no
+/// caller can avoid it (see the Session 117 report and 4a). MINK's own cleanup
+/// is already complete by this point: the leak scan above is the last thing it
+/// owes the process. The current-process pseudo handle is -1, so no
+/// `GetCurrentProcess` call is needed. Also invoked by the entry stub with
+/// `main`'s result.
 fn emit_exit(code: &mut Code) {
     prologue(code);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // requested code
@@ -1863,7 +1886,14 @@ fn emit_exit(code: &mut Code) {
     fail(code, 6); // E-R06
 
     code.bind_label(done);
-    code.mov_rr(Reg::Rax, Reg::Rcx);
+    code.mov_rr(Reg::Rdx, Reg::Rcx); // exit code
+    code.movabs(Reg::Rcx, 0xFFFF_FFFF_FFFF_FFFFu64); // (HANDLE) -1 = current process
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_TERMINATE_PROCESS));
+    code.add_rsp(32);
+    // TerminateProcess does not return for the current process; this is the
+    // belt-and-braces path if it ever does.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_r_rip(Reg::Rsp, PatchKind::Bss(BSS.entry_rsp as u32));
     code.u8(0xC3); // ret
 }
@@ -2005,7 +2035,16 @@ fn emit_fail(code: &mut Code, offsets: &RuntimeOffsets) {
     code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStderr));
 
     code.bind_label(no_loc);
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // error number
+    // Terminate through the kernel with 100 + the error number, for the same
+    // reason `emit_exit` does: a return from the entry point would run foreign
+    // DLL detach handlers, and crypt32's deadlocks once a chain has been built.
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8); // error number
+    code.add_r_imm8(Reg::Rdx, 100);
+    code.movabs(Reg::Rcx, 0xFFFF_FFFF_FFFF_FFFFu64); // current process
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_TERMINATE_PROCESS));
+    code.add_rsp(32);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
     code.add_r_imm8(Reg::Rax, 100);
     code.mov_r_rip(Reg::Rsp, PatchKind::Bss(BSS.entry_rsp as u32));
     code.u8(0xC3); // ret
@@ -6597,12 +6636,181 @@ fn emit_net_shutdown(code: &mut Code) {
     code.leave_ret();
 }
 
-/// `rt_net_getaddrinfo(host, port) -> Str`: V1 returns host as-is.
+/// `rt_net_getaddrinfo(host, port) -> Str`: resolve `host` to IPv4 text with
+/// Winsock's `getaddrinfo`.
+///
+/// `rt_net_connect` accepts an IPv4 literal, so the resolved dotted quad is what
+/// a connection uses while the original host name stays available for
+/// certificate name checking (see `stdlib/tls.mink`). The result is an OWNED
+/// Str: on any failure an empty Str is returned, never the borrowed host
+/// pointer, which the caller also releases.
 fn emit_net_get_addr_info(code: &mut Code) {
+    // Decimal-digit count of the byte in R10, accumulated in R11.
+    fn digits_of(code: &mut Code) {
+        code.add_r_imm8(Reg::R11, 1);
+        let one = code.label();
+        code.cmp_r_imm32(Reg::R10, 10);
+        code.jcc_label(0x82, one); // jb
+        code.add_r_imm8(Reg::R11, 1);
+        code.cmp_r_imm32(Reg::R10, 100);
+        code.jcc_label(0x82, one);
+        code.add_r_imm8(Reg::R11, 1);
+        code.bind_label(one);
+    }
+
+    // Write the decimal form of the byte in R10 (no leading zeros) at R8 and
+    // advance R8 over the digits written.
+    fn write_digits(code: &mut Code) {
+        code.xor_rr32(Reg::Rcx, Reg::Rcx); // hundreds
+        let h_loop = code.label();
+        let h_done = code.label();
+        code.bind_label(h_loop);
+        code.cmp_r_imm32(Reg::R10, 100);
+        code.jcc_label(0x82, h_done); // jb
+        code.sub_r_imm32(Reg::R10, 100);
+        code.add_r_imm8(Reg::Rcx, 1);
+        code.jmp_label(h_loop);
+        code.bind_label(h_done);
+        code.xor_rr32(Reg::Rdx, Reg::Rdx); // tens
+        let t_loop = code.label();
+        let t_done = code.label();
+        code.bind_label(t_loop);
+        code.cmp_r_imm32(Reg::R10, 10);
+        code.jcc_label(0x82, t_done); // jb
+        code.sub_r_imm32(Reg::R10, 10);
+        code.add_r_imm8(Reg::Rdx, 1);
+        code.jmp_label(t_loop);
+        code.bind_label(t_done);
+        // A leading digit forces the next one out, so 105 keeps its zero.
+        let no_hundreds = code.label();
+        let units = code.label();
+        code.test_rr(Reg::Rcx, Reg::Rcx);
+        code.jcc_label(0x84, no_hundreds); // jz
+        code.add_r_imm8(Reg::Rcx, b'0');
+        code.mov_mem_r8(Reg::R8, 0, Reg::Rcx);
+        code.add_r_imm8(Reg::R8, 1);
+        code.add_r_imm8(Reg::Rdx, b'0');
+        code.mov_mem_r8(Reg::R8, 0, Reg::Rdx);
+        code.add_r_imm8(Reg::R8, 1);
+        code.jmp_label(units);
+        code.bind_label(no_hundreds);
+        let no_tens = code.label();
+        code.test_rr(Reg::Rdx, Reg::Rdx);
+        code.jcc_label(0x84, no_tens); // jz
+        code.add_r_imm8(Reg::Rdx, b'0');
+        code.mov_mem_r8(Reg::R8, 0, Reg::Rdx);
+        code.add_r_imm8(Reg::R8, 1);
+        code.bind_label(no_tens);
+        code.bind_label(units);
+        code.add_r_imm8(Reg::R10, b'0');
+        code.mov_mem_r8(Reg::R8, 0, Reg::R10);
+        code.add_r_imm8(Reg::R8, 1);
+    }
+
     prologue(code);
-    // V1: just return the host string as-is (no allocation needed)
-    // Parameters: [rbp+16]=host ptr, [rbp+24]=port
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // host ptr
+    // [rbp-8] c-string, [rbp-16] result list, [rbp-24] ai_addr, [rbp-32] the
+    // returned Str; the 48-byte ADDRINFOA hints live at [rbp-96].
+    code.sub_rsp(96);
+    let empty = code.label();
+    let failed = code.label();
+    // An uninitialised process gets an empty Str rather than a fault.
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, empty); // jz
+
+    // cstr = rt_to_cstr(host)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ToCstr));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    // Hints: ai_flags 0, ai_family AF_INET, ai_socktype SOCK_STREAM,
+    // ai_protocol IPPROTO_TCP, ai_addrlen 0. Clear the block first, then write
+    // the four fields as two packed words (MINK memory ops are word-sized).
+    code.xor_rr32(Reg::R10, Reg::R10);
+    for off in 0..6 {
+        code.mov_mem_r(Reg::Rbp, -96 + off * 8, Reg::R10);
+    }
+    code.movabs(Reg::R10, (1u64 << 32) | 2); // ai_socktype | ai_family
+    code.mov_mem_r(Reg::Rbp, -92, Reg::R10); // offsets 4..11
+    code.movabs(Reg::R10, 6); // ai_protocol | a zero ai_addrlen
+    code.mov_mem_r(Reg::Rbp, -84, Reg::R10); // offsets 12..19
+
+    // getaddrinfo(cstr, NULL, &hints, &result)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -96);
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -16);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 96)); // getaddrinfo
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -16);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, failed); // jz: no result
+    code.mov_r_mem(Reg::R9, Reg::R9, 32); // -> ai_addr
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, failed);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::R9);
+
+    // Length: the four octets' decimal forms plus three dots. The address
+    // bytes start after sin_family and sin_port.
+    code.xor_rr32(Reg::R11, Reg::R11);
+    for i in 0..4 {
+        code.movzx_byte(Reg::R10, Reg::R9, 4 + i);
+        digits_of(code);
+    }
+    code.mov_rr(Reg::R8, Reg::R11);
+    code.add_r_imm8(Reg::R8, 3);
+    code.sub_rsp(8);
+    code.u8(0x41); // push r8 (length)
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    code.add_r_imm8(Reg::Rax, 8); // data area
+    code.mov_rr(Reg::R8, Reg::Rax);
+
+    for i in 0..4 {
+        if i > 0 {
+            code.mov_r32_imm32(Reg::R10, b'.' as u32);
+            code.mov_mem_r8(Reg::R8, 0, Reg::R10);
+            code.add_r_imm8(Reg::R8, 1);
+        }
+        code.mov_r_mem(Reg::R9, Reg::Rbp, -24);
+        code.movzx_byte(Reg::R10, Reg::R9, 4 + i);
+        write_digits(code);
+    }
+
+    // freeaddrinfo(result); rt_free_cstr(cstr); return the Str.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 104)); // freeaddrinfo
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x51); // push rcx
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
+    code.leave_ret();
+
+    // Resolution failed: release the c-string, then hand back an empty Str.
+    code.bind_label(failed);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x51); // push rcx
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+    code.bind_label(empty);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50); // push rax (length 0)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
     code.leave_ret();
 }
 
@@ -8591,6 +8799,8 @@ const IAT_PEEK_NAMED_PIPE: u32 = 34;
 const IAT_GET_ENVIRONMENT_VARIABLE_A: u32 = 28;
 const IAT_SET_ENVIRONMENT_VARIABLE_A: u32 = 29;
 const IAT_SLEEP: u32 = 35;
+/// `kernel32!TerminateProcess`, already imported for the process module.
+const IAT_TERMINATE_PROCESS: u32 = super::pe::iat::TERMINATE_PROCESS;
 const IAT_GET_COMMAND_LINE_A: u32 = 36;
 const IAT_CREATE_THREAD: u32 = 37;
 const IAT_EXIT_THREAD: u32 = 38;
@@ -9889,6 +10099,153 @@ fn emit_task_await(code: &mut Code, _offsets: &RuntimeOffsets) {
 /// task is waited on through its real OS thread handle (no polling, no sleeps)
 /// and its control block is freed, so a program that drains the loop leaves
 /// nothing behind.
+// ---------------------------------------------------------------------------
+// Dynamic library call (Session 117, S62)
+// ---------------------------------------------------------------------------
+//
+// The TLS subsystem drives Schannel from MINK source, so the runtime only has
+// to supply the bootstrap and invocation mechanics:
+//
+//   rt_sys_load_lib(s: Str) -> Int            LoadLibraryA(s)
+//   rt_sys_get_proc(lib: Int, s: Str) -> Int  GetProcAddress(lib, s)
+//   rt_sys_call(fn: Int, argv: Ptr<Int>, n: Int) -> Int
+//
+// `rt_sys_call` reads `n` 64-bit arguments from the word array `argv` and
+// applies the Win64 calling convention: the first four go in RCX/RDX/R8/R9,
+// the rest into the shadow-space stack area, and RSP is forced to a 16-byte
+// boundary before the `call` so any Win32 entry point (including one that uses
+// aligned SSE) may be reached safely.  `argv` must hold at least four words.
+
+/// `rt_sys_load_lib(name: Str) -> Int`: the `LoadLibraryA` bootstrap.
+const IAT_LOAD_LIBRARY_A: u32 = super::pe::iat::LOAD_LIBRARY_A;
+const IAT_GET_PROC_ADDRESS: u32 = super::pe::iat::GET_PROC_ADDRESS;
+
+fn emit_sys_load_lib(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = cstr, [rbp-16] = handle
+    // cstr = rt_to_cstr(name)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax (name)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ToCstr));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // handle = LoadLibraryA(cstr)
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_LOAD_LIBRARY_A));
+    code.add_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // rt_free_cstr(cstr) — LoadLibraryA copies the name, so it may go now.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x51); // push rcx (cstr)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_sys_get_proc(lib: Int, name: Str) -> Int`.
+fn emit_sys_get_proc(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = cstr, [rbp-16] = lib
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // lib
+    // cstr = rt_to_cstr(name)
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax (name)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ToCstr));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // fn = GetProcAddress(lib, cstr)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_rr(Reg::Rdx, Reg::Rax);
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_GET_PROC_ADDRESS));
+    code.add_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    // rt_free_cstr(cstr)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x51); // push rcx (cstr)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+}
+
+/// `rt_sys_call(fn: Int, argv: Ptr<Int>, nargs: Int) -> Int`.
+/// `rt_sys_load64(addr: Int) -> Int` and `rt_sys_load32(addr: Int) -> Int`:
+/// the unvalidated foreign-memory reads that complete the FFI layer. They are
+/// the ordinary mov from the address; the checked `rt_mem_load` validates the
+/// address against the allocator table, which no foreign structure satisfies.
+fn emit_sys_load(code: &mut Code, wide: bool) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // addr
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0);
+    if !wide {
+        // `mov eax, eax` (0x89 0xC0): a 32-bit move zero-extends RAX, so the
+        // 32-bit form returns the low four bytes with no sign extension.
+        code.u8(0x89);
+        code.u8(0xC0);
+    }
+    code.leave_ret();
+}
+
+fn emit_sys_call(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.sub_rsp(16); // [rbp-8] = fn, [rbp-16] = argv
+    code.mov_r_mem(Reg::R10, Reg::Rbp, 16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::R10); // fn
+    code.mov_r_mem(Reg::R11, Reg::Rbp, 24);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::R11); // argv
+
+    // Zero arguments is a no-op: report "no call" rather than jumping through
+    // a function pointer with stale registers.  More than twelve arguments is
+    // rejected (no caller needs a wider signature) and also reported as 0.
+    code.mov_r_mem(Reg::R12, Reg::Rbp, 32); // nargs
+    code.cmp_r_imm32(Reg::R12, 12);
+    let arity_ok = code.label();
+    code.jcc_label(0x86, arity_ok); // jbe -> 0..=12
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+    code.bind_label(arity_ok);
+    code.test_rr(Reg::R12, Reg::R12);
+    let do_call = code.label();
+    code.jcc_label(0x85, do_call); // jnz -> at least one argument
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+    code.bind_label(do_call);
+
+    // Force a 16-byte stack boundary so the callee sees the alignment the
+    // Win64 ABI promises.  `leave` restores RSP from RBP, so the pre-`and`
+    // value never has to be saved.
+    code.and_r_imm8(Reg::Rsp, 0xF0);
+    // 32 bytes of shadow space + room for eight stack arguments (nargs 12).
+    code.sub_rsp(96);
+
+    // Stack arguments, highest first: argv[k] -> [rsp + 32 + (k-4)*8].
+    for k in (4..12).rev() {
+        let skip = code.label();
+        code.cmp_r_imm32(Reg::R12, k as u32);
+        code.jcc_label(0x86, skip); // jbe: fewer than k+1 arguments
+        code.mov_r_mem(Reg::Rax, Reg::R11, (k * 8) as i32);
+        code.mov_mem_r(Reg::Rsp, 32 + ((k - 4) * 8) as i32, Reg::Rax);
+        code.bind_label(skip);
+    }
+
+    // Register arguments.  `argv` is documented to hold at least four words.
+    code.mov_r_mem(Reg::Rcx, Reg::R11, 0);
+    code.mov_r_mem(Reg::Rdx, Reg::R11, 8);
+    code.mov_r_mem(Reg::R8, Reg::R11, 16);
+    code.mov_r_mem(Reg::R9, Reg::R11, 24);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.call_rax();
+    code.leave_ret();
+}
+
 fn emit_task_run(code: &mut Code, _offsets: &RuntimeOffsets) {
     prologue(code);
     code.sub_rsp(32); // [rbp-8] = collected count, [rbp-16] = block; 16-aligned

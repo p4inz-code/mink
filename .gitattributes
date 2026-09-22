@@ -10,3 +10,6 @@
 *.png binary
 *.jpg binary
 *.ico binary
+
+# TLS test fixtures: the stored bytes are the parsed bytes (no EOL conversion).
+*.pem binary

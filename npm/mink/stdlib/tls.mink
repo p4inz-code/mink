@@ -1,0 +1,1624 @@
+// ==========================================================================
+// MINK TLS/HTTPS Library — Session 117 (Windows Python parity S62)
+//
+// A TLS 1.2/1.3 client and an HTTPS client on top of the Windows Schannel
+// stack. MINK has no foreign-function interface, so Session 117 added three
+// runtime primitives (`rt_sys_load_lib`, `rt_sys_get_proc`, `rt_sys_call`) and
+// this module drives Schannel through them. The handshake state machine, the
+// record layer, the certificate trust anchor and the HTTP request are ordinary
+// MINK source built on the verified `rt_net_*`, `rt_str_*` and `rt_mem_*`
+// primitives — there is no synchronous stand-in anywhere in the path.
+//
+// API:
+//   tls_connect(host, port, ca_path, out_err) -> Ptr<Int>
+//       Connect and run the handshake. Returns an opaque connection handle
+//       (null on failure; `out_err[0]` receives the error code).
+//       Consumes `host` and `ca_path`.
+//   tls_status(h) -> Int        Last raw Schannel status value.
+//   tls_err(h) -> Int           Last MINK error code.
+//   tls_cipher(h) -> Int        Negotiated cipher suite id (0 = unknown).
+//   tls_send(h, data) -> Int    Encrypt and send; bytes sent or -1.
+//                               Consumes `data` (freed on every path).
+//   tls_recv(h, maxlen) -> Str  OWNED Str of up to maxlen decrypted bytes
+//                               (length 0 = peer closed or error).
+//   tls_close(h) -> Int         0 on success, -1 on an invalid handle.
+//                               `tls_close` releases the connection, so the
+//                               handle is dead afterwards (like `rt_free`);
+//                               the status/error/cipher accessors and
+//                               `tls_recv`/`tls_send` accept the empty handle
+//                               and answer with their failure value.
+//   https_client_get_with(host, port, path, ca_path) -> Str
+//       GET over TLS; the complete response, or the static "" on failure
+//       (the http.mink convention). Consumes all four arguments.
+//   https_client_get(url, ca_path) -> Str
+//       The same for "https://host[:port]/path" URLs.
+//
+// Error codes (out_err / tls_err):
+//   0     success
+//   1001  E-TLS-LIB       secur32.dll or crypt32.dll could not be loaded
+//   1002  E-TLS-CRED      AcquireCredentialsHandle failed (tls_status)
+//   1003  E-TLS-CA        the CA file could not be read or parsed
+//   1004  E-TLS-SOCKET    the TCP connection could not be established
+//   1005  E-TLS-HANDSHAKE the handshake failed (tls_status: wrong principal,
+//                         untrusted root, expired certificate, protocol error)
+//   1006  E-TLS-IO        a record could not be sent or received
+//   1007  E-TLS-CLOSED    the handle is closed or invalid
+//   1008  E-TLS-PROTO     protocol violation or out of staging capacity
+//
+// Trust:
+//   An empty `ca_path` validates against the Windows system trust store; a
+//   non-empty `ca_path` pins trust to exactly that PEM certificate.
+//
+//   Schannel runs with manual credential validation (the mode WinHTTP and
+//   curl's Schannel backend use, and the only one that can express a pinned
+//   anchor: `SCHANNEL_CRED.hRootStore` alone does *not* make a private CA
+//   trusted — measured, not assumed), so MINK makes the trust decision itself
+//   with crypt32. Verification is never skipped; it has three parts and all
+//   three must pass:
+//
+//     1. chain building (`CertGetCertificateChain`) verifies every signature
+//        up to a root, enforces certificate time validity, and — because the
+//        `CERT_CHAIN_PARA` asks for `serverAuth` — rejects a leaf that is not
+//        valid for TLS server authentication;
+//     2. the anchor: with a pinned `ca_path` the chain must report nothing
+//        except `CERT_TRUST_IS_UNTRUSTED_ROOT` (the expected state of a
+//        private root) *and* its root certificate must be the pinned
+//        certificate, compared by certificate hash, so an unrelated untrusted
+//        root still fails; without `ca_path` the chain must be completely
+//        clean;
+//     3. the host name must match one of the leaf's `subjectAltName`
+//        extensions: `dNSName` entries (RFC 6125: a `*` label matches exactly
+//        one label, at most one wildcard) or an `iPAddress` entry when the
+//        host is an IPv4 literal. Only when the certificate carries no SAN
+//        extension at all is the subject common name accepted instead.
+//
+//   `tls_status` carries the failing stage's raw status: a chain status
+//   (`CERT_TRUST_*`) or a translated `CERT_E_*` code (CERT_E_UNTRUSTEDROOT
+//   2148204809, CERT_E_CN_NO_MATCH 2148204815, CERT_E_EXPIRED 2148204801,
+//   CERT_E_WRONG_USAGE 2148204816) and `tls_err` reports 1005.
+//
+// Ownership:
+//   tls_connect allocates one 1536-byte context block plus the staging buffers
+//   (64 KiB ciphertext, 32 KiB record, 32 KiB plaintext, the name/SAN scratch
+//   and the two OID strings). tls_close releases all of them together with the
+//   Schannel context/credential handles, the trust store and the pinned
+//   certificate context, so a program that closes every handle passes the
+//   exit-time leak check. tls_recv returns an OWNED Str; the caller frees it
+//   with rt_str_free. https_client_get* returns an owned Str, or the static
+//   "".
+//
+// Platform: Windows x86_64 (Schannel + crypt32). The runtime primitives it
+// needs — the `rt_sys_*` FFI layer — are Windows-only; Linux stays frozen with
+// this module unused.
+// ==========================================================================
+
+// --- Context block layout (word index / byte offset) ---
+//
+//   word  0  0    socket (SOCKET)
+//   word  1  8    state: 1 = open, 0 = closed
+//   word  2  16   credential handle (SecHandle: dwLower, dwUpper)
+//   word  3  24
+//   word  4  32   context handle (CtxtHandle: dwLower, dwUpper)
+//   word  5  40
+//   word  6  48   cbHeader
+//   word  7  56   cbTrailer
+//   word  8  64   cbMaximumMessage
+//   word  9  72   staged ciphertext length (`in_len`)
+//   word 10  80   ciphertext staging block
+//   word 11  88   staging capacity
+//   word 12  96   record scratch block (header + data + trailer)
+//   word 13 104   record capacity
+//   word 14 112   plaintext staging block
+//   word 15 120   staged plaintext length
+//   word 16 128   staged plaintext offset (consumed by tls_recv)
+//   word 17 136   secur32 function table
+//   word 18 144   crypt32 function table
+//   word 19 152   pinned root store (0 = system trust)
+//   word 20 160   last MINK error code
+//   word 21 168   last raw status
+//   word 22 176   argument staging block (16 words)
+//   word 23 184   cipher suite id (ALG_ID)
+//   word 24 192   peer certificate DER length
+//   word 25 200   SecBufferDesc + SecBuffer scratch
+//   word 35 280   SCHANNEL_CRED scratch
+//   word 45 360   SecPkgContext_StreamSizes / attribute scratch
+//   word 49 392   CryptStringToBinaryA capacity, then misc scratch
+//   word 50 400   CERT_CHAIN_PARA (10 words)
+//   word 70 560   remote-certificate query result
+//      154 1232   last certificate-query status
+//      155 1240   pinned anchor certificate context
+//      156 1248   last chain-build result / chain status
+//      157 1256   last chain handle
+//      164 1312   CERT_CHAIN_PARA usage identifier array (1 word)
+//      165 1320   ANSI SAN/CN scratch block pointer
+//      166 1328   decoded CERT_ALT_NAME_INFO block pointer
+//      167 1336   SAN entry count scratch
+//      168 1344   serverAuth OID c-string pointer
+//      169 1352   certificate-property / decode size scratch
+//      170 1360   chain root certificate hash (3 words)
+//      173 1384   pinned anchor certificate hash (3 words)
+//      176 1408   subjectAltName OID c-string pointer
+//      177 1416 .. 191 1527   spare
+//
+// Every staging block carries 64 bytes of slack beyond its logical capacity so
+// that the word-granular byte accessors below never touch a word outside the
+// allocation (the runtime validates each word access against the allocator
+// table and reports E-R05 otherwise).
+
+fn _bg(p: Ptr<Int>, i: Int) -> Int {
+    return (rt_mem_load(p + (i >> 3) * 8) >> ((i & 7) * 8)) & 255;
+}
+
+fn _bs(p: Ptr<Int>, i: Int, v: Int) {
+    let w = (i >> 3) * 8;
+    let sh = (i & 7) * 8;
+    let m = 255 << sh;
+    rt_mem_store(p + w, (rt_mem_load(p + w) & (0 - 1 - m)) | ((v & 255) << sh));
+}
+
+fn _zw(p: Ptr<Int>, words: Int) {
+    let mut i = 0;
+    while i < words {
+        rt_mem_store(p + i * 8, 0);
+        i = i + 1;
+    }
+}
+
+fn _pi(v: Int) -> Ptr<Int> {
+    return rt_int_to_ptr(v);
+}
+
+fn _ip(p: Ptr<Int>) -> Int {
+    return rt_ptr_to_int(p);
+}
+
+fn _low32(v: Int) -> Int {
+    return v & 4294967295;
+}
+
+// --- FFI plumbing ---
+
+fn _res(tab: Ptr<Int>, slot: Int, lib: Int, name: Str) -> Int {
+    let p = rt_sys_get_proc(lib, name);
+    rt_mem_store(tab + slot * 8, p);
+    return p;
+}
+
+fn _fn(tab: Ptr<Int>, slot: Int) -> Int {
+    return rt_mem_load(tab + slot * 8);
+}
+
+// --- Load secur32/crypt32 and resolve every entry point once per handle ---
+
+fn _load(ct: Ptr<Int>) -> Int {
+    let sec = rt_sys_load_lib("secur32.dll");
+    let cry = rt_sys_load_lib("crypt32.dll");
+    let kern = rt_sys_load_lib("kernel32.dll");
+    let mut err = 0;
+    if sec == 0 || cry == 0 || kern == 0 {
+        err = 1001;
+    }
+    let stab = rt_alloc(128);
+    let ctab = rt_alloc(128);
+    _zw(stab, 16);
+    _zw(ctab, 16);
+    if err == 0 {
+        let mut missing = 0;
+        if _res(stab, 0, sec, "AcquireCredentialsHandleA") == 0 { missing = 1; }
+        if _res(stab, 1, sec, "FreeCredentialsHandle") == 0 { missing = 1; }
+        if _res(stab, 2, sec, "InitializeSecurityContextA") == 0 { missing = 1; }
+        if _res(stab, 3, sec, "DeleteSecurityContext") == 0 { missing = 1; }
+        if _res(stab, 4, sec, "QueryContextAttributesA") == 0 { missing = 1; }
+        if _res(stab, 5, sec, "EncryptMessage") == 0 { missing = 1; }
+        if _res(stab, 6, sec, "DecryptMessage") == 0 { missing = 1; }
+        if _res(ctab, 0, cry, "CryptStringToBinaryA") == 0 { missing = 1; }
+        if _res(ctab, 1, cry, "CertCreateCertificateContext") == 0 { missing = 1; }
+        if _res(ctab, 2, cry, "CertOpenStore") == 0 { missing = 1; }
+        if _res(ctab, 3, cry, "CertAddCertificateContextToStore") == 0 { missing = 1; }
+        if _res(ctab, 4, cry, "CertFreeCertificateContext") == 0 { missing = 1; }
+        if _res(ctab, 5, cry, "CertCloseStore") == 0 { missing = 1; }
+        if _res(ctab, 6, cry, "CertGetCertificateChain") == 0 { missing = 1; }
+        if _res(ctab, 7, cry, "CertFreeCertificateChain") == 0 { missing = 1; }
+        if _res(ctab, 8, cry, "CertGetCertificateContextProperty") == 0 { missing = 1; }
+        if _res(ctab, 9, cry, "CertGetNameStringA") == 0 { missing = 1; }
+        if _res(ctab, 10, cry, "CryptDecodeObjectEx") == 0 { missing = 1; }
+        if _res(ctab, 11, kern, "WideCharToMultiByte") == 0 { missing = 1; }
+        if missing == 1 {
+            err = 1001;
+        }
+    }
+    rt_mem_store(ct + 136, _ip(stab));
+    rt_mem_store(ct + 144, _ip(ctab));
+    return err;
+}
+
+// --- Pin the trust anchor from a PEM file (empty path = system store) ---
+//
+// Consumes `ca_path`. The DER scratch is always allocated so that the free set
+// is the same on every path, which keeps the exit-time leak check meaningful.
+fn _ca(ct: Ptr<Int>, ca_path: Str) -> Int {
+    let der = rt_alloc(16448);
+    _zw(der, 2056);
+    let ctab = _pi(rt_mem_load(ct + 144));
+    let argv = _pi(rt_mem_load(ct + 176));
+    let mut err = 0;
+    let mut store = 0;
+    if rt_str_len(ca_path) != 0 {
+        if !rt_fs_exists(ca_path) {
+            err = 1003;
+        } else {
+            let pem = rt_fs_read(ca_path);
+            let plen = rt_str_len(pem);
+            let cstr = rt_to_cstr(pem);
+            if plen == 0 || plen > 16000 {
+                err = 1003;
+            } else {
+                // CryptStringToBinaryA(pem, len, BASE64_ANY, der, &cap, NULL, NULL).
+                // One pass with the scratch as the output buffer and its
+                // capacity in *pcbBinary, which the call replaces with the
+                // decoded length. (A NULL output buffer for a size query is
+                // not accepted here, so the capacity is always supplied.)
+                // CRYPT_STRING_BASE64_ANY (6) accepts both a bare base64 body
+                // and one wrapped in "-----BEGIN CERTIFICATE-----" headers.
+                rt_mem_store(argv + 0, _ip(cstr));
+                rt_mem_store(argv + 8, plen);
+                rt_mem_store(argv + 16, 6); // CRYPT_STRING_BASE64_ANY
+                rt_mem_store(argv + 24, _ip(der));
+                rt_mem_store(argv + 32, _ip(ct + 392));
+                rt_mem_store(argv + 40, 0);
+                rt_mem_store(argv + 48, 0);
+                rt_mem_store(ct + 392, 16384);
+                let ok1 = rt_sys_call(_fn(ctab, 0), argv, 7);
+                let der_len = _low32(rt_mem_load(ct + 392));
+                if ok1 == 0 || der_len == 0 || der_len > 16384 {
+                    err = 1003;
+                } else {
+                    // CertCreateCertificateContext(X509|PKCS7 encoding, der, len)
+                    rt_mem_store(argv + 0, 65537);
+                    rt_mem_store(argv + 8, _ip(der));
+                    rt_mem_store(argv + 16, der_len);
+                    let mut cert = rt_sys_call(_fn(ctab, 1), argv, 3);
+                    if cert == 0 {
+                        err = 1003;
+                    } else {
+                        // CertOpenStore(CERT_STORE_PROV_MEMORY(2), 0, 0, 0, NULL)
+                        rt_mem_store(argv + 0, 2);
+                        rt_mem_store(argv + 8, 0);
+                        rt_mem_store(argv + 16, 0);
+                        rt_mem_store(argv + 24, 0);
+                        rt_mem_store(argv + 32, 0);
+                        store = rt_sys_call(_fn(ctab, 2), argv, 5);
+                        if store == 0 {
+                            err = 1003;
+                        } else {
+                            // CertAddCertificateContextToStore(store, cert, ADD_ALWAYS(4), NULL)
+                            rt_mem_store(argv + 0, store);
+                            rt_mem_store(argv + 8, cert);
+                            rt_mem_store(argv + 16, 4);
+                            rt_mem_store(argv + 24, 0);
+                            if rt_sys_call(_fn(ctab, 3), argv, 4) == 0 {
+                                err = 1003;
+                            } else {
+                                // The certificate context stays alive: every
+                                // connection compares the chain's root against
+                                // it by certificate hash, and `tls_close` (or
+                                // the failure path below) releases it. The store
+                                // owns a copy of the certificate, not of this
+                                // context, so both are released separately.
+                                rt_mem_store(ct + 1240, cert);
+                                cert = 0;
+                            }
+                        }
+                        if cert != 0 {
+                            rt_mem_store(argv + 0, cert);
+                            rt_sys_call(_fn(ctab, 4), argv, 1); // CertFreeCertificateContext
+                        }
+                    }
+                }
+            }
+            rt_free_cstr(cstr);
+            rt_str_free(pem);
+        }
+    }
+    if err != 0 {
+        if rt_mem_load(ct + 1240) != 0 {
+            rt_mem_store(argv + 0, rt_mem_load(ct + 1240));
+            rt_sys_call(_fn(ctab, 4), argv, 1); // CertFreeCertificateContext
+            rt_mem_store(ct + 1240, 0);
+        }
+        if store != 0 {
+            rt_mem_store(argv + 0, store);
+            rt_mem_store(argv + 8, 0);
+            rt_sys_call(_fn(ctab, 5), argv, 2); // CertCloseStore
+            store = 0;
+        }
+    }
+    rt_free(der);
+    rt_str_free(ca_path);
+    rt_mem_store(ct + 152, store);
+    return err;
+}
+
+// --- Acquire the client credential, pinned to the trust anchor ---
+
+fn _cred(ct: Ptr<Int>) -> Int {
+    let stab = _pi(rt_mem_load(ct + 136));
+    let argv = _pi(rt_mem_load(ct + 176));
+    let c = rt_alloc(96);
+    _zw(c, 12);
+    rt_mem_store(c, 4); // dwVersion = SCHANNEL_CRED_VERSION
+    // hRootStore stays NULL: measured behaviour is that it only *adds* a store
+    // to chain building (a private CA is still reported as an untrusted root),
+    // so a pinned anchor cannot be expressed through SCHANNEL_CRED. The pinned
+    // store is used by `_validate` instead — the split WinHTTP and curl's
+    // Schannel backend use.
+    // SCH_CRED_MANUAL_CRED_VALIDATION (8) | SCH_CRED_NO_DEFAULT_CREDS (16) |
+    // SCH_USE_STRONG_CRYPTO (4194304) = 4194328. Manual validation arms the
+    // manual path on both the credential and the security context, so Schannel
+    // performs the handshake without a trust decision and `_validate` then
+    // makes that decision with crypt32 (`InitializeSecurityContext` carries the
+    // matching ISC_REQ_MANUAL_CRED_VALIDATION flag). Verification is never
+    // skipped.
+    rt_mem_store(c + 72, 4194328);
+    let pkg = rt_to_cstr("Microsoft Unified Security Protocol Provider");
+    rt_mem_store(argv + 0, 0);
+    rt_mem_store(argv + 8, _ip(pkg));
+    rt_mem_store(argv + 16, 2); // SECPKG_CRED_OUTBOUND
+    rt_mem_store(argv + 24, 0);
+    rt_mem_store(argv + 32, _ip(c));
+    rt_mem_store(argv + 40, 0);
+    rt_mem_store(argv + 48, 0);
+    rt_mem_store(argv + 56, _ip(ct + 16));
+    rt_mem_store(argv + 64, 0);
+    let st = rt_sys_call(_fn(stab, 0), argv, 9);
+    rt_free_cstr(pkg);
+    rt_free(c);
+    rt_mem_store(ct + 168, st);
+    if st != 0 {
+        return 1002;
+    }
+    return 0;
+}
+
+// --- The handshake ---
+//
+// `host_c` is a NUL-terminated host name that stays live for the whole
+// handshake: Schannel matches it against the certificate subject/SAN and fails
+// with SEC_E_WRONG_PRINCIPAL on a mismatch.
+//
+// Loop shape (the documented Schannel client state machine):
+//   1. call InitializeSecurityContextA with phContext = NULL on the first
+//      round and the accumulated input token afterwards;
+//   2. SEC_I_CONTINUE_NEEDED -> send the produced token; the input was
+//      consumed, so start a fresh token and read more;
+//   3. SEC_E_INCOMPLETE_MESSAGE -> read more and re-submit the same token;
+//   4. SEC_E_OK -> query the stream sizes and stop;
+//   5. anything else is a handshake failure; the raw status is kept.
+fn _handshake(ct: Ptr<Int>, host_c: Ptr<Int>, host_len: Int, sock: Int) -> Int {
+    let stab = _pi(rt_mem_load(ct + 136));
+    let argv = _pi(rt_mem_load(ct + 176));
+    let in_buf = _pi(rt_mem_load(ct + 80));
+    let in_cap = rt_mem_load(ct + 88);
+    let rec_buf = _pi(rt_mem_load(ct + 96));
+    let rec_cap = rt_mem_load(ct + 104);
+    let desc_in = ct + 200;
+    let buf_in = ct + 216;
+    let desc_out = ct + 232;
+    let buf_out = ct + 248;
+    let cred = ct + 16;
+    let ctxh = ct + 32;
+
+    // A SecBuffer word is (BufferType << 32) | cbBuffer: cbBuffer is the low
+    // dword (offset 0) and BufferType the high dword (offset 4).
+    rt_mem_store(desc_out, 4294967296); // SecBufferDesc: ulVersion 0, cBuffers 1
+    rt_mem_store(desc_out + 8, _ip(buf_out));
+    rt_mem_store(buf_out + 8, _ip(rec_buf));
+    rt_mem_store(desc_in, 4294967296);
+    rt_mem_store(desc_in + 8, _ip(buf_in));
+
+    let mut in_len = 0;
+    let mut status = 0;
+    let mut done = 0;
+    let mut err = 0;
+    let mut first = 1;
+    let mut guard = 0;
+    while done == 0 && err == 0 && guard < 64 {
+        guard = guard + 1;
+        let mut in_arg = 0;
+        if first == 0 {
+            in_arg = _ip(desc_in);
+        }
+        let mut ctx_arg = 0;
+        if first == 0 {
+            ctx_arg = _ip(ctxh);
+        }
+        // Both descriptors are rebuilt every round: Schannel writes the
+        // produced token length back into cbBuffer, so the output buffer's
+        // capacity has to be restored before each call (a shrunken capacity
+        // makes the next call fail with SEC_E_INVALID_PARAMETER).
+        rt_mem_store(buf_out, (2 << 32) | (rec_cap - 1024)); // SECBUFFER_TOKEN
+        rt_mem_store(buf_in, (2 << 32) | (in_len & 4294967295)); // SECBUFFER_TOKEN
+        rt_mem_store(buf_in + 8, _ip(in_buf));
+        rt_mem_store(argv + 0, _ip(cred));
+        rt_mem_store(argv + 8, ctx_arg);
+        rt_mem_store(argv + 16, _ip(host_c));
+        // ISC_REQ_REPLAY_DETECT(4) | SEQUENCE_DETECT(8) | CONFIDENTIALITY(0x10) |
+        // EXTENDED_ERROR(0x4000) | STREAM(0x8000) | MANUAL_CRED_VALIDATION(0x80000)
+        // = 573468. The manual-validation bit must match the credential flag.
+        rt_mem_store(argv + 24, 573468);
+        rt_mem_store(argv + 32, 0);
+        rt_mem_store(argv + 40, 16); // SECURITY_NATIVE_DREP
+        rt_mem_store(argv + 48, in_arg);
+        rt_mem_store(argv + 56, 0);
+        rt_mem_store(argv + 64, _ip(ctxh));
+        rt_mem_store(argv + 72, _ip(desc_out));
+        rt_mem_store(argv + 80, _ip(ct + 360));
+        rt_mem_store(argv + 88, 0);
+        status = rt_sys_call(_fn(stab, 2), argv, 12);
+        first = 0;
+        rt_mem_store(ct + 168, status);
+
+        if status == 0 {
+            done = 1;
+        } else {
+            let tok_len = _low32(rt_mem_load(buf_out));
+            if status == 590610 && tok_len > 0 {
+                // SEC_I_CONTINUE_NEEDED: the input token was consumed.
+                let sent = _send_all(sock, rec_buf, 0, tok_len);
+                if sent != tok_len {
+                    err = 1006;
+                } else {
+                    in_len = 0;
+                }
+            } else if status != 2148074264 {
+                // Anything but SEC_E_INCOMPLETE_MESSAGE is fatal.
+                err = 1005;
+            }
+            if err == 0 && done == 0 {
+                if in_cap - in_len < 4096 {
+                    err = 1008;
+                } else {
+                    let chunk = rt_net_recv(sock, 8192);
+                    let n = rt_str_len(chunk);
+                    if n == 0 {
+                        err = 1006;
+                    } else {
+                        let mut ci = 0;
+                        while ci < n {
+                            _bs(in_buf, in_len + ci, rt_str_byte(chunk, ci));
+                            ci = ci + 1;
+                        }
+                        in_len = in_len + n;
+                    }
+                    rt_str_free(chunk);
+                }
+            }
+        }
+    }
+    if done == 0 && err == 0 {
+        err = 1008;
+    }
+
+    // Stream sizes: QueryContextAttributesA(ctx, SECPKG_ATTR_STREAM_SIZES, out)
+    if err == 0 {
+        rt_mem_store(argv + 0, _ip(ctxh));
+        rt_mem_store(argv + 8, 4);
+        rt_mem_store(argv + 16, _ip(ct + 360));
+        let qs = rt_sys_call(_fn(stab, 4), argv, 3);
+        if qs != 0 {
+            err = 1005;
+        } else {
+            // SecPkgContext_StreamSizes is five DWORDs: cbHeader, cbTrailer,
+            // cbMaximumMessage, cBuffers, cbBlockSize. Read as words they are
+            // (header | trailer << 32), (maximum | buffers << 32), block — a
+            // word-granular layout the module never indexes as DWORDs direct.
+            // Schannel with TLS 1.3 reports header 13 (5-byte record header +
+            // 8-byte nonce), trailer 16 (AEAD tag), maximum 16384.
+            rt_mem_store(ct + 48, _low32(rt_mem_load(ct + 360)));
+            rt_mem_store(ct + 56, _low32(rt_mem_load(ct + 360) >> 32));
+            rt_mem_store(ct + 64, _low32(rt_mem_load(ct + 368)));
+            if rt_mem_load(ct + 64) == 0 {
+                err = 1008;
+            }
+        }
+    }
+
+    // Negotiated cipher suite (informational; SECPKG_ATTR_CIPHER_INFO = 0x64).
+    if err == 0 {
+        rt_mem_store(argv + 0, _ip(ctxh));
+        rt_mem_store(argv + 8, 100);
+        rt_mem_store(argv + 16, _ip(ct + 360));
+        if rt_sys_call(_fn(stab, 4), argv, 3) == 0 {
+            // SecPkgContext_CipherInfo: dwCipherSuite is the high dword of
+            // the first word (offset 4), so it is extracted without a
+            // misaligned 4-byte load.
+            rt_mem_store(ct + 184, _low32(rt_mem_load(ct + 360) >> 32));
+        }
+    }
+
+    // Chain + hostname validation (the trust decision, see `_validate`).
+    // `host_c` is the NUL-terminated host name (borrowed for the whole
+    // handshake) and `host_len` its length.
+    if err == 0 {
+        err = _validate(ct, _ip(host_c), host_len);
+    }
+    return err;
+}
+
+// --- Trust-decision helpers ---
+//
+// Everything below compares plain byte ranges, so one implementation serves a
+// SAN entry copied into a scratch buffer, a common name read out of crypt32 and
+// a string embedded in this module.
+
+// Unvalidated foreign reads (the FFI halves of `rt_sys_call`). Foreign
+// structures live outside the MINK arena, so the checked `rt_mem_load` cannot
+// reach them.
+fn _rb(addr: Int, i: Int) -> Int {
+    // Byte `i` of a foreign buffer: 4-byte reads are the narrowest the FFI
+    // layer offers, so the byte is extracted from its containing word.
+    return (rt_sys_load32(addr + (i >> 2) * 4) >> ((i & 3) * 8)) & 255;
+}
+
+// Case-folded compare of `n` bytes at `a + ao` and `b + bo`.
+fn _eq_ci(a: Int, ao: Int, b: Int, bo: Int, n: Int) -> Int {
+    let mut i = 0;
+    let mut ok = 1;
+    while ok == 1 && i < n {
+        let mut ca = _rb(a, ao + i);
+        let mut cb = _rb(b, bo + i);
+        if ca >= 65 && ca <= 90 { ca = ca + 32; }
+        if cb >= 65 && cb <= 90 { cb = cb + 32; }
+        if ca != cb { ok = 0; }
+        i = i + 1;
+    }
+    return ok;
+}
+
+// RFC 6125 host-name match: the pattern and the host must have the same number
+// of dot-separated labels, a pattern label that is exactly "*" matches any
+// non-empty host label, and at most one wildcard is allowed (Python's
+// `_dnsname_match` rule, including its rejection of `*` inside a larger label).
+fn _name_match(pattern: Int, plen: Int, host: Int, hlen: Int) -> Int {
+    if plen == 0 || hlen == 0 {
+        return 0;
+    }
+    let mut pi = 0;
+    let mut hi = 0;
+    let mut ok = 1;
+    let mut stars = 0;
+    while ok == 1 && pi < plen {
+        let mut pe = pi;
+        while pe < plen && _rb(pattern, pe) != 46 { pe = pe + 1; }
+        let mut he = hi;
+        while he < hlen && _rb(host, he) != 46 { he = he + 1; }
+        let pl = pe - pi;
+        let hl = he - hi;
+        if hl == 0 {
+            ok = 0;
+        } else if pl == 1 && _rb(pattern, pi) == 42 {
+            stars = stars + 1;
+        } else if pl != hl || _eq_ci(pattern, pi, host, hi, pl) == 0 {
+            ok = 0;
+        }
+        if ok == 1 {
+            let p_dot = pe < plen;
+            let h_dot = he < hlen;
+            if p_dot != h_dot {
+                ok = 0;
+            }
+        }
+        pi = pe + 1;
+        hi = he + 1;
+    }
+    if stars > 1 {
+        ok = 0;
+    }
+    return ok;
+}
+
+// The `hlen` bytes at `host` as an IPv4 literal (0..4294967295) or -1 when they
+// are not one; used to match `iPAddress` SAN entries of an IPv4-literal host.
+fn _ipv4_value(host: Int, hlen: Int) -> Int {
+    if hlen < 7 || hlen > 15 {
+        return -1;
+    }
+    let mut parts = 0;
+    let mut value = 0;
+    let mut cur = 0 - 1;
+    let mut digits = 0;
+    let mut ok = 1;
+    let mut i = 0;
+    while ok == 1 && i < hlen {
+        let c = _rb(host, i);
+        if c >= 48 && c <= 57 {
+            if cur < 0 { cur = 0; }
+            cur = cur * 10 + (c - 48);
+            digits = digits + 1;
+            if cur > 255 || digits > 3 { ok = 0; }
+        } else if c == 46 {
+            if cur < 0 {
+                ok = 0;
+            } else {
+                value = value * 256 + cur;
+                parts = parts + 1;
+                cur = 0 - 1;
+                digits = 0;
+            }
+        } else {
+            ok = 0;
+        }
+        i = i + 1;
+    }
+    if ok == 0 || cur < 0 || parts != 3 {
+        return -1;
+    }
+    return value * 256 + cur;
+}
+
+// Subject-alt-name scan: 1 when the `host_len` bytes at `host` match one of the
+// leaf's `dNSName` entries or an `iPAddress` entry for an IPv4-literal host.
+// `seen` receives the number of SAN entries inspected, which is what suppresses
+// the common-name fallback (a certificate that carries a SAN extension is
+// matched on it alone).
+fn _san_match(ct: Ptr<Int>, leaf: Int, host: Int, host_len: Int, seen: Ptr<Int>) -> Int {
+    let ctab = _pi(rt_mem_load(ct + 144));
+    let argv = _pi(rt_mem_load(ct + 176));
+    let info = rt_sys_load64(leaf + 24); // CERT_CONTEXT.pCertInfo
+    let c_ext = _low32(rt_sys_load32(info + 192)); // CERT_INFO.cExtension (DWORD)
+    let rg_ext = rt_sys_load64(info + 200); // CERT_INFO.rgExtension (array of structs)
+    let names = _pi(rt_mem_load(ct + 1320)); // ANSI scratch (512 bytes)
+    let san_buf = _pi(rt_mem_load(ct + 1328)); // decoded CERT_ALT_NAME_INFO
+    let oid = rt_mem_load(ct + 1408); // cstr "2.5.29.17"
+    let host_ip = _ipv4_value(host, host_len);
+    let mut matched = 0;
+    rt_mem_store(seen, 0);
+    let mut i = 0;
+    while i < c_ext && matched == 0 {
+        let ext = rg_ext + i * 32; // CERT_EXTENSION stride 32
+        if _cstr_eq(rt_sys_load64(ext), "2.5.29.17") == 1 {
+            let cb = _low32(rt_sys_load32(ext + 16)); // Value.cbData
+            let pb = rt_sys_load64(ext + 24); // Value.pbData
+            if cb > 0 && cb < 4096 {
+                // Two-phase CryptDecodeObjectEx: the first call reports the
+                // size of the decoded CERT_ALT_NAME_INFO.
+                rt_mem_store(argv + 0, 65537); // X509_ASN_ENCODING | PKCS_7
+                rt_mem_store(argv + 8, oid);
+                rt_mem_store(argv + 16, pb);
+                rt_mem_store(argv + 24, cb);
+                rt_mem_store(argv + 32, 0);
+                rt_mem_store(argv + 40, 0);
+                rt_mem_store(argv + 48, 0);
+                rt_mem_store(argv + 56, _ip(ct + 1352));
+                rt_mem_store(ct + 1352, 0);
+                let q1 = rt_sys_call(_fn(ctab, 10), argv, 8);
+                let need = _low32(rt_mem_load(ct + 1352));
+                if q1 != 0 && need > 8 && need <= 2048 {
+                    rt_mem_store(argv + 48, _ip(san_buf));
+                    let q2 = rt_sys_call(_fn(ctab, 10), argv, 8);
+                    if q2 != 0 {
+                        let n = _low32(rt_mem_load(san_buf));
+                        let rg = rt_mem_load(san_buf + 8);
+                        rt_mem_store(seen, n);
+                        let mut j = 0;
+                        while j < n && matched == 0 {
+                            let entry = _pi(rg + j * 24); // CERT_ALT_NAME_ENTRY stride 24
+                            let choice = _low32(rt_mem_load(entry));
+                            if choice == 3 {
+                                // dNSName: LPWSTR at entry+8. The conversion
+                                // also measures it (-1 = NUL-terminated), and
+                                // the returned length includes the NUL, so the
+                                // name is `alen - 1` bytes of ANSI/UTF-8 in the
+                                // scratch buffer; it is copied into a Str so the
+                                // matcher works on MINK strings only.
+                                let wp = rt_mem_load(entry + 8);
+                                rt_mem_store(argv + 0, 65001); // CP_UTF8
+                                rt_mem_store(argv + 8, 0);
+                                rt_mem_store(argv + 16, wp);
+                                rt_mem_store(argv + 24, 0 - 1);
+                                rt_mem_store(argv + 32, _ip(names));
+                                rt_mem_store(argv + 40, 512);
+                                rt_mem_store(argv + 48, 0);
+                                rt_mem_store(argv + 56, 0);
+                                let alen = rt_sys_call(_fn(ctab, 11), argv, 8);
+                                if alen > 1 && alen < 512 {
+                                    if _name_match(_ip(names), alen - 1, host, host_len) == 1 {
+                                        matched = 1;
+                                    }
+                                }
+                            } else if choice == 8 && host_ip >= 0 {
+                                // iPAddress: CRYPT_DATA_BLOB (cbData at entry+8,
+                                // pbData at entry+16). Only the 4-byte IPv4 form
+                                // is matched, against an IPv4-literal host.
+                                let blen = _low32(rt_mem_load(entry + 8));
+                                let bp = rt_mem_load(entry + 16);
+                                if blen == 4 {
+                                    let v = rt_sys_load32(bp);
+                                    let v0 = v & 255;
+                                    let v1 = (v >> 8) & 255;
+                                    let v2 = (v >> 16) & 255;
+                                    let v3 = (v >> 24) & 255;
+                                    if v0 == ((host_ip >> 24) & 255) && v1 == ((host_ip >> 16) & 255) && v2 == ((host_ip >> 8) & 255) && v3 == (host_ip & 255) {
+                                        matched = 1;
+                                    }
+                                }
+                            }
+                            j = j + 1;
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return matched;
+}
+
+// ASCII C-string equality with a module literal (`p` is NUL-terminated).
+fn _cstr_eq(p: Int, lit: Str) -> Int {
+    let n = rt_str_len(lit);
+    let mut i = 0;
+    let mut ok = 1;
+    while ok == 1 && i < n {
+        if _rb(p, i) != rt_str_byte(lit, i) { ok = 0; }
+        i = i + 1;
+    }
+    if ok == 1 && _rb(p, n) != 0 { ok = 0; }
+    return ok;
+}
+
+// Common-name fallback (`CertGetNameStringA` with CERT_NAME_SIMPLE_DISPLAY_TYPE
+// writes the subject CN into MINK memory and reports its length including the
+// terminator), used only when the certificate has no SAN extension at all.
+fn _cn_match(ct: Ptr<Int>, leaf: Int, host: Int, host_len: Int) -> Int {
+    let ctab = _pi(rt_mem_load(ct + 144));
+    let argv = _pi(rt_mem_load(ct + 176));
+    let names = _pi(rt_mem_load(ct + 1320));
+    rt_mem_store(argv + 0, leaf);
+    rt_mem_store(argv + 8, 4); // CERT_NAME_SIMPLE_DISPLAY_TYPE
+    rt_mem_store(argv + 16, 0);
+    rt_mem_store(argv + 24, 0);
+    rt_mem_store(argv + 32, _ip(names));
+    rt_mem_store(argv + 40, 512);
+    let n = rt_sys_call(_fn(ctab, 9), argv, 6);
+    if n <= 1 || n > 512 {
+        return 0;
+    }
+    return _name_match(_ip(names), n - 1, host, host_len);
+}
+
+// First (and only) simple chain of a chain context: trust status and root.
+// Layout (x64): CERT_CHAIN_CONTEXT.rgpChain at +16; CERT_SIMPLE_CHAIN with
+// TrustStatus.dwError at +4, cElement at +12, rgpElement at +16;
+// CERT_CHAIN_ELEMENT.pCertContext at +8.
+fn _chain_error(chain: Int) -> Int {
+    let rgp = rt_sys_load64(chain + 16);
+    let simple = rt_sys_load64(rgp);
+    return _low32(rt_sys_load32(simple + 4));
+}
+
+fn _chain_root(chain: Int) -> Int {
+    let rgp = rt_sys_load64(chain + 16);
+    let simple = rt_sys_load64(rgp);
+    let count = _low32(rt_sys_load32(simple + 12));
+    if count <= 0 {
+        return 0;
+    }
+    let els = rt_sys_load64(simple + 16);
+    let last = rt_sys_load64(els + (count - 1) * 8);
+    return rt_sys_load64(last + 8); // CERT_CHAIN_ELEMENT.pCertContext
+}
+
+// The 20-byte SHA-1 certificate hash of `cert` into `out` (3 words).
+fn _cert_sha1(ct: Ptr<Int>, cert: Int, out: Ptr<Int>) -> Int {
+    let ctab = _pi(rt_mem_load(ct + 144));
+    let argv = _pi(rt_mem_load(ct + 176));
+    rt_mem_store(ct + 1352, 20);
+    rt_mem_store(argv + 0, cert);
+    rt_mem_store(argv + 8, 3); // CERT_SHA1_HASH_PROP_ID
+    rt_mem_store(argv + 16, _ip(out));
+    rt_mem_store(argv + 24, _ip(ct + 1352));
+    if rt_sys_call(_fn(ctab, 8), argv, 4) == 0 {
+        return 0;
+    }
+    if _low32(rt_mem_load(ct + 1352)) != 20 {
+        return 0;
+    }
+    return 1;
+}
+
+// 1 when the two 20-byte hashes at `a` and `b` are identical.
+fn _same_hash(a: Ptr<Int>, b: Ptr<Int>) -> Int {
+    let mut i = 0;
+    let mut ok = 1;
+    while ok == 1 && i < 3 {
+        if rt_mem_load(a + i * 8) != rt_mem_load(b + i * 8) { ok = 0; }
+        i = i + 1;
+    }
+    return ok;
+}
+
+// A chain status (`CERT_TRUST_*` bits) as the `CERT_E_*` code a caller expects.
+fn _chain_e(status: Int) -> Int {
+    if (status & 3) != 0 {
+        return 2148204801; // CERT_E_EXPIRED (0x800B0101)
+    }
+    if (status & 16) != 0 {
+        return 2148204816; // CERT_E_WRONG_USAGE (0x800B0110)
+    }
+    if (status & 4) != 0 {
+        return 2148204812; // CERT_E_REVOKED (0x800B010C)
+    }
+    if (status & 200) != 0 {
+        return 2148204810; // CERT_E_CHAINING (0x800B010A)
+    }
+    return 2148204809; // CERT_E_UNTRUSTEDROOT (0x800B0109)
+}
+
+// --- Certificate-chain and hostname validation ---
+//
+// Schannel runs with manual credential validation, so this is where trust is
+// decided (see the module header for the full rule). The stages are:
+//
+//   1. SECPKG_ATTR_REMOTE_CERT_CONTEXT hands us the peer certificate;
+//   2. CertGetCertificateChain builds a chain with the pinned store (when a CA
+//      file was given) as an additional store, or the system stores otherwise,
+//      with a CERT_CHAIN_PARA that asks for the serverAuth usage — so a leaf
+//      that is not valid for TLS server authentication, an expired
+//      certificate or a broken signature shows up in the chain's status;
+//   3. with a pinned anchor the status must be *only*
+//      CERT_TRUST_IS_UNTRUSTED_ROOT and the chain's root certificate must hash
+//      to the pinned certificate; without one the status must be zero;
+//   4. the host name is matched against the SAN entries (or, with no SAN
+//      extension at all, the common name).
+//
+// The failing stage's status lands in ctx+168 (a CERT_TRUST_* bit set or a
+// CERT_E_* code) with the details in ctx+1232/1248/1256, so a caller can tell
+// an untrusted root (2148204809) from a hostname mismatch (2148204815).
+fn _validate(ct: Ptr<Int>, host_c: Int, host_len: Int) -> Int {
+    let stab = _pi(rt_mem_load(ct + 136));
+    let ctab = _pi(rt_mem_load(ct + 144));
+    let argv = _pi(rt_mem_load(ct + 176));
+    let ctxh = ct + 32;
+    let chain_para = ct + 400;
+    let chain_out = ct + 1256;
+    let store = rt_mem_load(ct + 152);
+    let anchor = rt_mem_load(ct + 1240);
+
+    rt_mem_store(chain_out, 0);
+    rt_mem_store(argv + 0, _ip(ctxh));
+    rt_mem_store(argv + 8, 83); // SECPKG_ATTR_REMOTE_CERT_CONTEXT
+    rt_mem_store(argv + 16, _ip(ct + 560));
+    rt_mem_store(ct + 560, 0);
+    let qc = rt_sys_call(_fn(stab, 4), argv, 3);
+    let cert = rt_mem_load(ct + 560);
+    rt_mem_store(ct + 168, qc);
+    rt_mem_store(ct + 1232, qc); // diagnostics: remote-certificate query status
+    let mut err = 0;
+    if qc != 0 || cert == 0 {
+        err = 1005;
+    } else {
+        // CERT_CHAIN_PARA { cbSize = 80, RequestedUsage = serverAuth }.
+        // CERT_USAGE_MATCH.CERT_ENHKEY_USAGE: cUsageIdentifier 1 at +16 and the
+        // LPSTR array at +24 (one entry, the OID pointer array at ctx+1312).
+        _zw(chain_para, 10);
+        rt_mem_store(chain_para, 80);
+        rt_mem_store(chain_para + 8, 1); // CERT_USAGE_MATCH_CERT_EKU
+        rt_mem_store(chain_para + 16, 1);
+        rt_mem_store(ct + 1312, rt_mem_load(ct + 1344)); // "1.3.6.1.5.5.7.3.1"
+        rt_mem_store(chain_para + 24, _ip(ct + 1312));
+        // CertGetCertificateChain(NULL, leaf, NULL, additionalStore, para, 0,
+        //                         NULL, &chain)
+        rt_mem_store(argv + 0, 0); // the default engine (system stores)
+        rt_mem_store(argv + 8, cert);
+        rt_mem_store(argv + 16, 0); // now
+        rt_mem_store(argv + 24, store); // 0 = no pinned anchor
+        rt_mem_store(argv + 32, _ip(chain_para));
+        rt_mem_store(argv + 40, 0);
+        rt_mem_store(argv + 48, 0);
+        rt_mem_store(argv + 56, _ip(chain_out));
+        let gc = rt_sys_call(_fn(ctab, 6), argv, 8);
+        let chain = rt_mem_load(chain_out);
+        rt_mem_store(ct + 1248, gc); // diagnostics: chain-build result
+        if gc == 0 || chain == 0 {
+            err = 1005;
+            rt_mem_store(ct + 168, 2148204809); // CERT_E_UNTRUSTEDROOT
+        } else {
+            let cstatus = _chain_error(chain);
+            rt_mem_store(ct + 1248, cstatus); // diagnostics: chain status
+            if store != 0 {
+                // A pinned anchor: the only acceptable error is that the root is
+                // not in a machine trust store — and then the chain must really
+                // end at the pinned certificate.
+                if (cstatus & (0 - 1 - 32)) != 0 {
+                    err = 1005;
+                    rt_mem_store(ct + 168, _chain_e(cstatus));
+                } else {
+                    let root = _chain_root(chain);
+                    if root == 0 || anchor == 0 || _cert_sha1(ct, root, ct + 1360) == 0 || _cert_sha1(ct, anchor, ct + 1384) == 0 {
+                        err = 1005;
+                        rt_mem_store(ct + 168, 2148204809);
+                    } else if _same_hash(ct + 1360, ct + 1384) == 0 {
+                        err = 1005;
+                        rt_mem_store(ct + 168, 2148204809);
+                    }
+                }
+            } else if cstatus != 0 {
+                err = 1005;
+                rt_mem_store(ct + 168, _chain_e(cstatus));
+            }
+            rt_mem_store(argv + 0, chain);
+            rt_sys_call(_fn(ctab, 7), argv, 1); // CertFreeCertificateChain
+        }
+        // Host name: SAN entries first, common name only when the certificate
+        // has no SAN extension at all.
+        if err == 0 {
+            let seen = ct + 1336;
+            if _san_match(ct, cert, host_c, host_len, seen) == 0 {
+                if rt_mem_load(seen) != 0 || _cn_match(ct, cert, host_c, host_len) == 0 {
+                    err = 1005;
+                    rt_mem_store(ct + 168, 2148204815); // CERT_E_CN_NO_MATCH
+                }
+            }
+        }
+        rt_mem_store(argv + 0, cert);
+        rt_sys_call(_fn(ctab, 4), argv, 1); // CertFreeCertificateContext
+    }
+    return err;
+}
+
+// --- Send the complete record, looping over short socket writes ---
+
+fn _send_all(sock: Int, p: Ptr<Int>, off: Int, n: Int) -> Int {
+    let mut done = 0;
+    let mut ok = 1;
+    while ok == 1 && done < n {
+        let s = rt_str_alloc(n - done);
+        let mut i = 0;
+        while i < n - done {
+            rt_str_set_byte(s, i, _bg(p, off + done + i));
+            i = i + 1;
+        }
+        let sent = rt_net_send(sock, s);
+        rt_str_free(s);
+        if sent <= 0 {
+            ok = 0;
+        } else {
+            done = done + sent;
+        }
+    }
+    if ok == 0 {
+        return -1;
+    }
+    return done;
+}
+
+// --- Public: connect and handshake (consumes host and ca_path) ---
+
+fn tls_connect(host: Str, port: Int, ca_path: Str, out_err: Ptr<Int>) -> Ptr<Int> {
+    let ct = rt_alloc(1536);
+    let argv = rt_alloc(128);
+    let in_buf = rt_alloc(65600);
+    let rec_buf = rt_alloc(32832);
+    let plain_buf = rt_alloc(32832);
+    let names = rt_alloc(512); // ANSI SAN/CN scratch
+    let san_buf = rt_alloc(2048); // decoded CERT_ALT_NAME_INFO
+    _zw(ct, 192);
+    _zw(argv, 16);
+    _zw(names, 64);
+    _zw(san_buf, 256);
+    rt_mem_store(ct + 80, _ip(in_buf));
+    rt_mem_store(ct + 88, 65536);
+    rt_mem_store(ct + 96, _ip(rec_buf));
+    rt_mem_store(ct + 104, 32768);
+    rt_mem_store(ct + 112, _ip(plain_buf));
+    rt_mem_store(ct + 176, _ip(argv));
+    rt_mem_store(ct + 1320, _ip(names));
+    rt_mem_store(ct + 1328, _ip(san_buf));
+    // The two OIDs the trust decision needs: the serverAuth usage for chain
+    // building and the subjectAltName extension for the host-name check.
+    let oid_usage = rt_to_cstr("1.3.6.1.5.5.7.3.1");
+    let oid_san = rt_to_cstr("2.5.29.17");
+    rt_mem_store(ct + 1344, _ip(oid_usage));
+    rt_mem_store(ct + 1408, _ip(oid_san));
+
+    let mut err = _load(ct);
+    // The trust anchor is set up unconditionally: it consumes `ca_path`
+    // exactly once textually, and the cleanup below closes any store it
+    // opened even when an earlier step already failed.
+    let ca_err = _ca(ct, ca_path);
+    if ca_err != 0 && err == 0 {
+        err = ca_err;
+    }
+    let mut sock = -1;
+    if err == 0 {
+        if rt_net_wsa_startup() != 0 {
+            err = 1004;
+        }
+    }
+    if err == 0 {
+        sock = rt_net_socket(2, 1, 6); // AF_INET, SOCK_STREAM, IPPROTO_TCP
+        if sock == -1 {
+            err = 1004;
+        } else {
+            rt_mem_store(ct + 0, sock);
+        }
+    }
+    if err == 0 {
+        // The socket layer connects to IPv4 literals, so the host name is
+        // resolved first (the resolved text is what `connect` sees); `host`
+        // itself stays live, because the certificate name check matches it, not
+        // the address the socket happens to use.
+        let addr = rt_net_getaddrinfo(host, port);
+        if rt_str_len(addr) == 0 {
+            err = 1004;
+        } else {
+            if rt_net_connect(sock, addr, port) != 0 {
+                err = 1004;
+            }
+        }
+        rt_str_free(addr);
+    }
+    if err == 0 {
+        err = _cred(ct);
+    }
+    if err == 0 {
+        let host_c = rt_to_cstr(host);
+        err = _handshake(ct, host_c, rt_str_len(host), sock);
+        rt_free_cstr(host_c);
+    }
+
+    let mut handle = ct;
+    if err == 0 {
+        rt_mem_store(ct + 8, 1);
+        rt_mem_store(ct + 160, 0);
+    } else {
+        // Release everything the failed attempt owns, in one place.
+        let stab = _pi(rt_mem_load(ct + 136));
+        let ctab = _pi(rt_mem_load(ct + 144));
+        let store = rt_mem_load(ct + 152);
+        if rt_mem_load(ct + 16) != 0 || rt_mem_load(ct + 24) != 0 {
+            rt_mem_store(argv + 0, _ip(ct + 16));
+            rt_sys_call(_fn(stab, 1), argv, 1); // FreeCredentialsHandle
+        }
+        if rt_mem_load(ct + 32) != 0 || rt_mem_load(ct + 40) != 0 {
+            rt_mem_store(argv + 0, _ip(ct + 32));
+            rt_sys_call(_fn(stab, 3), argv, 1); // DeleteSecurityContext
+        }
+        if rt_mem_load(ct + 1240) != 0 {
+            rt_mem_store(argv + 0, rt_mem_load(ct + 1240));
+            rt_sys_call(_fn(ctab, 4), argv, 1); // CertFreeCertificateContext
+        }
+        if store != 0 {
+            rt_mem_store(argv + 0, store);
+            rt_mem_store(argv + 8, 0);
+            rt_sys_call(_fn(ctab, 5), argv, 2); // CertCloseStore
+        }
+        if sock != -1 {
+            rt_net_close(sock);
+        }
+        rt_free_cstr(_pi(rt_mem_load(ct + 1344)));
+        rt_free_cstr(_pi(rt_mem_load(ct + 1408)));
+        rt_free(san_buf);
+        rt_free(names);
+        rt_free(in_buf);
+        rt_free(rec_buf);
+        rt_free(plain_buf);
+        rt_free(argv);
+        rt_free(stab);
+        rt_free(ctab);
+        // out_err is a diagnostic block: MINK error code, failing-stage status,
+        // certificate-query status, chain-build result/status and the chain
+        // handle (see the module header).
+        rt_mem_store(out_err + 8, rt_mem_load(ct + 168));
+        rt_mem_store(out_err + 16, rt_mem_load(ct + 1232));
+        rt_mem_store(out_err + 24, rt_mem_load(ct + 1248));
+        rt_mem_store(out_err + 32, store);
+        rt_mem_store(out_err + 40, rt_mem_load(ct + 1256));
+        rt_free(ct);
+        handle = _pi(0);
+    }
+    rt_mem_store(out_err, err);
+    rt_str_free(host);
+    return handle;
+}
+
+fn tls_status(h: Ptr<Int>) -> Int {
+    if _ip(h) == 0 {
+        return 0;
+    }
+    return rt_mem_load(h + 168);
+}
+
+fn tls_err(h: Ptr<Int>) -> Int {
+    if _ip(h) == 0 {
+        return 1007;
+    }
+    return rt_mem_load(h + 160);
+}
+
+fn tls_cipher(h: Ptr<Int>) -> Int {
+    if _ip(h) == 0 {
+        return 0;
+    }
+    return rt_mem_load(h + 184);
+}
+
+// --- Public: encrypt and send (borrows data) ---
+
+fn tls_send(h: Ptr<Int>, data: Str) -> Int {
+    // Borrows `data` throughout, then consumes it exactly once at the single
+    // exit — so a huge body cannot leak it on an error path.
+    let n = rt_str_len(data);
+    let mut rc = -1;
+    if _ip(h) != 0 {
+        if rt_mem_load(h + 8) == 1 {
+            let stab = _pi(rt_mem_load(h + 136));
+            let argv = _pi(rt_mem_load(h + 176));
+            let rec_buf = _pi(rt_mem_load(h + 96));
+            let rec_cap = rt_mem_load(h + 104);
+            let sock = rt_mem_load(h + 0);
+            let desc = h + 200;
+            let b0 = h + 216;
+            let b1 = h + 232;
+            let b2 = h + 248;
+            let cb_header = rt_mem_load(h + 48);
+            let cb_trailer = rt_mem_load(h + 56);
+            let cb_max = rt_mem_load(h + 64);
+            let mut off = 0;
+            let mut total_sent = 0;
+            let mut ok = 1;
+            while ok == 1 && off < n {
+                let mut chunk = cb_max;
+                if n - off < chunk {
+                    chunk = n - off;
+                }
+                if cb_header + chunk + cb_trailer > rec_cap {
+                    ok = 0;
+                    rt_mem_store(h + 160, 1008);
+                } else {
+                    let mut ci = 0;
+                    while ci < chunk {
+                        _bs(rec_buf, cb_header + ci, rt_str_byte(data, off + ci));
+                        ci = ci + 1;
+                    }
+            rt_mem_store(desc, (3 << 32) | 0);
+            rt_mem_store(desc + 8, _ip(b0));
+            rt_mem_store(b0, (7 << 32) | cb_header); // SECBUFFER_STREAM_HEADER
+            rt_mem_store(b0 + 8, _ip(rec_buf));
+            rt_mem_store(b1, (1 << 32) | chunk); // SECBUFFER_DATA
+            rt_mem_store(b1 + 8, _ip(rec_buf + cb_header));
+            rt_mem_store(b2, (6 << 32) | cb_trailer); // SECBUFFER_STREAM_TRAILER
+            rt_mem_store(b2 + 8, _ip(rec_buf + cb_header + chunk));
+                    rt_mem_store(argv + 0, _ip(h + 32));
+                    rt_mem_store(argv + 8, 0);
+                    rt_mem_store(argv + 16, _ip(desc));
+                    rt_mem_store(argv + 24, 0);
+                    let st = rt_sys_call(_fn(stab, 5), argv, 4); // EncryptMessage
+                    rt_mem_store(h + 168, st);
+                    if st != 0 {
+                        ok = 0;
+                        rt_mem_store(h + 160, 1005);
+                    } else {
+                        let rec_len = cb_header + chunk + cb_trailer;
+                        let sent = _send_all(sock, rec_buf, 0, rec_len);
+                        if sent != rec_len {
+                            ok = 0;
+                            rt_mem_store(h + 160, 1006);
+                        } else {
+                            off = off + chunk;
+                            total_sent = total_sent + chunk;
+                        }
+                    }
+                }
+            }
+            if ok == 1 {
+                rc = total_sent;
+            }
+        }
+    }
+    rt_str_free(data);
+    return rc;
+}
+
+// --- Public: decrypt and receive (returns an owned Str) ---
+
+fn tls_recv(h: Ptr<Int>, maxlen: Int) -> Str {
+    if _ip(h) == 0 {
+        return rt_str_alloc(0);
+    }
+    if rt_mem_load(h + 8) != 1 {
+        return rt_str_alloc(0);
+    }
+    let in_buf = _pi(rt_mem_load(h + 80));
+    let in_cap = rt_mem_load(h + 88);
+    let plain_buf = _pi(rt_mem_load(h + 112));
+    let sock = rt_mem_load(h + 0);
+    let mut in_len = rt_mem_load(h + 72);
+    let mut plain_len = rt_mem_load(h + 120);
+    let mut plain_off = rt_mem_load(h + 128);
+
+    // A record may be larger than maxlen: hand out the staged remainder first.
+    if plain_off >= plain_len {
+        let stab = _pi(rt_mem_load(h + 136));
+        let argv = _pi(rt_mem_load(h + 176));
+        let desc = h + 200;
+        let b0 = h + 216;
+        let b1 = h + 232;
+        let b2 = h + 248;
+        let b3 = h + 264;
+        plain_off = 0;
+        plain_len = 0;
+        let mut ok = 0;
+        let mut eof = 0;
+        let mut guard = 0;
+        while ok == 0 && eof == 0 && guard < 64 {
+            guard = guard + 1;
+            if in_len > 0 {
+                // DecryptMessage splits the record across the descriptor: the
+                // input goes in as one SECBUFFER_DATA record and Schannel
+                // rewrites the array to [stream header, plaintext DATA,
+                // stream trailer, SECBUFFER_EXTRA]. That rewrite needs the
+                // four output slots — a two-buffer descriptor (the shape
+                // EncryptMessage accepts) fails with SEC_E_INVALID_TOKEN.
+                rt_mem_store(desc, (4 << 32) | 0);
+                rt_mem_store(desc + 8, _ip(b0));
+                rt_mem_store(b0, (1 << 32) | in_len); // SECBUFFER_DATA
+                rt_mem_store(b0 + 8, _ip(in_buf));
+                rt_mem_store(b1, 0); // SECBUFFER_EMPTY scratch
+                rt_mem_store(b1 + 8, 0);
+                rt_mem_store(b2, 0);
+                rt_mem_store(b2 + 8, 0);
+                rt_mem_store(b3, 0);
+                rt_mem_store(b3 + 8, 0);
+                // DecryptMessage(phContext, pMessage, MessageSeqNo, pfQOP):
+                // the descriptor is the *second* argument here (unlike
+                // EncryptMessage, whose fQOP takes slot two).
+                rt_mem_store(argv + 0, _ip(h + 32));
+                rt_mem_store(argv + 8, _ip(desc));
+                rt_mem_store(argv + 16, 0);
+                rt_mem_store(argv + 24, 0);
+                let st = rt_sys_call(_fn(stab, 6), argv, 4); // DecryptMessage
+                rt_mem_store(h + 168, st);
+                if st == 0 {
+                    let pptr = rt_mem_load(b1 + 8);
+                    let plen = _low32(rt_mem_load(b1));
+                    let extra = _low32(rt_mem_load(b3));
+                    let poff = pptr - _ip(in_buf);
+                    if plen > 32768 || poff < 0 || poff + plen > in_cap {
+                        rt_mem_store(h + 160, 1008);
+                        eof = 1;
+                    } else {
+                        let mut i = 0;
+                        while i < plen {
+                            _bs(plain_buf, i, _bg(in_buf, poff + i));
+                            i = i + 1;
+                        }
+                        plain_len = plen;
+                        let mut tail = in_len - extra;
+                        if tail < 0 {
+                            tail = 0;
+                        }
+                        if extra > 0 {
+                            let mut j = 0;
+                            while j < extra {
+                                _bs(in_buf, j, _bg(in_buf, tail + j));
+                                j = j + 1;
+                            }
+                        }
+                        in_len = extra;
+                        ok = 1;
+                    }
+                } else if st == 2148074264 {
+                    // SEC_E_INCOMPLETE_MESSAGE: read more of the same record.
+                } else if st == 590615 {
+                    // SEC_I_CONTEXT_EXPIRED: the peer sent close_notify.
+                    eof = 1;
+                } else {
+                    rt_mem_store(h + 160, 1005);
+                    eof = 1;
+                }
+            }
+            if ok == 0 && eof == 0 {
+                if in_cap - in_len < 4096 {
+                    rt_mem_store(h + 160, 1008);
+                    eof = 1;
+                } else {
+                    let chunk = rt_net_recv(sock, 8192);
+                    let cn = rt_str_len(chunk);
+                    if cn == 0 {
+                        eof = 1;
+                    } else {
+                        let mut ci = 0;
+                        while ci < cn {
+                            _bs(in_buf, in_len + ci, rt_str_byte(chunk, ci));
+                            ci = ci + 1;
+                        }
+                        in_len = in_len + cn;
+                    }
+                    rt_str_free(chunk);
+                }
+            }
+        }
+        rt_mem_store(h + 72, in_len);
+        if ok == 0 {
+            rt_mem_store(h + 160, 1007);
+        }
+    }
+
+    let mut take = 0;
+    if plain_off < plain_len {
+        take = maxlen;
+        if plain_len - plain_off < take {
+            take = plain_len - plain_off;
+        }
+        if take < 0 {
+            take = 0;
+        }
+    }
+    let out = rt_str_alloc(take);
+    if take > 0 {
+        let mut i = 0;
+        while i < take {
+            rt_str_set_byte(out, i, _bg(plain_buf, plain_off + i));
+            i = i + 1;
+        }
+        plain_off = plain_off + take;
+    }
+    rt_mem_store(h + 120, plain_len);
+    rt_mem_store(h + 128, plain_off);
+    return out;
+}
+
+// --- Public: close ---
+
+fn tls_close(h: Ptr<Int>) -> Int {
+    if _ip(h) == 0 {
+        return -1;
+    }
+    if rt_mem_load(h + 8) != 1 {
+        return -1;
+    }
+    rt_mem_store(h + 8, 0);
+    let stab = _pi(rt_mem_load(h + 136));
+    let ctab = _pi(rt_mem_load(h + 144));
+    let argv = _pi(rt_mem_load(h + 176));
+    let in_buf = _pi(rt_mem_load(h + 80));
+    let rec_buf = _pi(rt_mem_load(h + 96));
+    let plain_buf = _pi(rt_mem_load(h + 112));
+    let names = _pi(rt_mem_load(h + 1320));
+    let san_buf = _pi(rt_mem_load(h + 1328));
+    let store = rt_mem_load(h + 152);
+    let anchor = rt_mem_load(h + 1240);
+    let sock = rt_mem_load(h + 0);
+    if rt_mem_load(h + 32) != 0 || rt_mem_load(h + 40) != 0 {
+        rt_mem_store(argv + 0, _ip(h + 32));
+        rt_sys_call(_fn(stab, 3), argv, 1); // DeleteSecurityContext
+    }
+    if rt_mem_load(h + 16) != 0 || rt_mem_load(h + 24) != 0 {
+        rt_mem_store(argv + 0, _ip(h + 16));
+        rt_sys_call(_fn(stab, 1), argv, 1); // FreeCredentialsHandle
+    }
+    if anchor != 0 {
+        rt_mem_store(argv + 0, anchor);
+        rt_sys_call(_fn(ctab, 4), argv, 1); // CertFreeCertificateContext
+    }
+    if store != 0 {
+        rt_mem_store(argv + 0, store);
+        rt_mem_store(argv + 8, 0);
+        rt_sys_call(_fn(ctab, 5), argv, 2); // CertCloseStore
+    }
+    if sock != -1 {
+        rt_net_close(sock);
+    }
+    rt_free_cstr(_pi(rt_mem_load(h + 1344)));
+    rt_free_cstr(_pi(rt_mem_load(h + 1408)));
+    rt_free(san_buf);
+    rt_free(names);
+    rt_free(in_buf);
+    rt_free(rec_buf);
+    rt_free(plain_buf);
+    rt_free(argv);
+    rt_free(stab);
+    rt_free(ctab);
+    rt_free(h);
+    return 0;
+}
+
+// --- HTTPS ---
+
+// Receive the whole TLS stream (owned Str; empty on EOF/error).
+fn _recv_all(h: Ptr<Int>, max_size: Int) -> Str {
+    // Start with a small staging buffer. The runtime arena is a fixed 4 MiB
+    // bump heap, so reserving `max_size` (1 MiB) for every request exhausts it
+    // after a handful of calls; most responses fit in the small buffer and
+    // never touch the big one, which is allocated only when a body actually
+    // outgrows the small buffer.
+    let mut cap = 32768;
+    if cap > max_size {
+        cap = max_size;
+    }
+    let mut buf = rt_str_alloc(cap);
+    let mut total = 0;
+    let mut open = 1;
+    let mut guard = 0;
+    while open == 1 && total < max_size && guard < 8192 {
+        guard = guard + 1;
+        let chunk = tls_recv(h, 8192);
+        let n = rt_str_len(chunk);
+        if n == 0 {
+            open = 0;
+        } else {
+            if total + n > max_size {
+                open = 0;
+            } else {
+                if total + n > cap {
+                    let grown = rt_str_alloc(max_size);
+                    let mut c = 0;
+                    while c < total {
+                        rt_str_set_byte(grown, c, rt_str_byte(buf, c));
+                        c = c + 1;
+                    }
+                    rt_str_free(buf);
+                    buf = grown;
+                    cap = max_size;
+                }
+                let mut ci = 0;
+                while ci < n {
+                    rt_str_set_byte(buf, total + ci, rt_str_byte(chunk, ci));
+                    ci = ci + 1;
+                }
+                total = total + n;
+            }
+        }
+        rt_str_free(chunk);
+    }
+    let out = rt_str_alloc(total);
+    let mut j = 0;
+    while j < total {
+        rt_str_set_byte(out, j, rt_str_byte(buf, j));
+        j = j + 1;
+    }
+    rt_str_free(buf);
+    return out;
+}
+
+// GET over TLS. Consumes host, path and ca_path; returns an owned response
+// Str, or the static "" when the connection or handshake fails.
+fn https_client_get_with(host: Str, port: Int, path: Str, ca_path: Str) -> Str {
+    // "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
+    let head = "GET ";
+    let mid = " HTTP/1.1\r\nHost: ";
+    let tail = "\r\nConnection: close\r\n\r\n";
+    let sp = rt_str_len(head);
+    let sm = rt_str_len(mid);
+    let st = rt_str_len(tail);
+    let p_len = rt_str_len(path);
+    let h_len = rt_str_len(host);
+    let total = sp + p_len + sm + h_len + st;
+    let request = rt_str_alloc(total);
+    let mut i = 0;
+    while i < sp {
+        rt_str_set_byte(request, i, rt_str_byte(head, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < p_len {
+        rt_str_set_byte(request, sp + i, rt_str_byte(path, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < sm {
+        rt_str_set_byte(request, sp + p_len + i, rt_str_byte(mid, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < h_len {
+        rt_str_set_byte(request, sp + p_len + sm + i, rt_str_byte(host, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < st {
+        rt_str_set_byte(request, sp + p_len + sm + h_len + i, rt_str_byte(tail, i));
+        i = i + 1;
+    }
+
+    // The diagnostic block `tls_connect` fills on failure is six words wide
+    // (error code, failing-stage status, certificate-query status, chain
+    // result/status and the chain handle); it must be sized for all of them.
+    let errw = rt_alloc(64);
+    _zw(errw, 8);
+    // tls_connect consumes host and ca_path; tls_send consumes request and is
+    // null-safe, so every owned value is consumed exactly once on every path.
+    let h = tls_connect(host, port, ca_path, errw);
+    let sent = tls_send(h, request);
+    let mut response = "";
+    if _ip(h) != 0 && sent == total {
+        response = _recv_all(h, 1064960);
+    }
+    if _ip(h) != 0 {
+        tls_close(h);
+    }
+    rt_str_free(path);
+    rt_free(errw);
+    return response;
+}
+
+// https://host[:port]/path with an explicit trust anchor ("" = system store).
+// URL parsing borrows `url` through intrinsics only, exactly like
+// http_client_get; `url` is consumed at the end.
+fn https_client_get(url: Str, ca_path: Str) -> Str {
+    let len = rt_str_len(url);
+    let mut scheme = 0;
+    if len >= 8 {
+        if rt_str_byte(url, 0) == 104 && rt_str_byte(url, 1) == 116 && rt_str_byte(url, 2) == 116 && rt_str_byte(url, 3) == 112 && rt_str_byte(url, 4) == 115 && rt_str_byte(url, 5) == 58 && rt_str_byte(url, 6) == 47 && rt_str_byte(url, 7) == 47 {
+            scheme = 1;
+        }
+    }
+    let skip = 8;
+    let mut host_end = len;
+    let mut colon = len;
+    let mut path_start = len;
+    let mut i = skip;
+    while scheme == 1 && i < len {
+        let b = rt_str_byte(url, i);
+        if b == 58 && colon == len {
+            colon = i;
+        }
+        if b == 47 {
+            if path_start == len {
+                path_start = i;
+            }
+        }
+        i = i + 1;
+    }
+    if colon < len {
+        host_end = colon;
+    } else {
+        host_end = path_start;
+    }
+    // A malformed URL keeps the empty host, so the connect fails with 1004
+    // and every owned argument is still consumed exactly once below.
+    let mut host = "";
+    if scheme == 1 && host_end > skip {
+        host = rt_str_alloc(host_end - skip);
+        i = skip;
+        while i < host_end {
+            rt_str_set_byte(host, i - skip, rt_str_byte(url, i));
+            i = i + 1;
+        }
+    }
+    let mut port = 443;
+    if scheme == 1 && colon < len {
+        let mut port_end = len;
+        i = colon + 1;
+        while i < len {
+            if rt_str_byte(url, i) == 47 {
+                port_end = i;
+                break;
+            }
+            i = i + 1;
+        }
+        let mut pv = 0;
+        i = colon + 1;
+        while i < port_end {
+            pv = pv * 10 + (rt_str_byte(url, i) - 48);
+            i = i + 1;
+        }
+        if pv > 0 {
+            port = pv;
+        }
+    }
+    let mut use_path = "/";
+    if scheme == 1 && path_start < len {
+        use_path = rt_str_alloc(len - path_start);
+        i = path_start;
+        while i < len {
+            rt_str_set_byte(use_path, i - path_start, rt_str_byte(url, i));
+            i = i + 1;
+        }
+    }
+    let response = https_client_get_with(host, port, use_path, ca_path);
+    rt_str_free(url);
+    return response;
+}

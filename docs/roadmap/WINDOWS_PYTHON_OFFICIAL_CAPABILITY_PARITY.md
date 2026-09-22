@@ -1,13 +1,13 @@
 # MINK — Windows × Official Python Capability Parity Matrix (Master Audit)
 
-**Session:** 108 (matrix reconciled from the Session 107 rows)
-**Starting commit:** `568dc04` (Session 106 close) → `48ed337` (Session 107 start) → `c3b8091` (Session 107 push)
+**Session:** 117 (matrix reconciled through Sessions 116–117; §10 recomputed from the rows)
+**Starting commit:** `568dc04` (Session 106 close) → `48ed337` (Session 107 start) → `c3b8091` (Session 107 push) → `9abd6f9` (Session 116 close)
 **MINK version:** 1.0.1
 **Scope:** Windows x86_64 (the shipped platform). Official Python capabilities only.
 **Classification:** capability parity — what a Windows developer can accomplish with
 official Python must be accomplishable with MINK's own architecture. Syntax imitation is
 explicitly out of scope. PyPI / third-party ecosystem parity is out of scope.
-**Date:** September 12, 2026
+**Date:** September 22, 2026
 **Auditor:** Buffy (Codebuff)
 
 > **Session 107 reconciliation note.** Earlier sessions flipped individual rows to
@@ -362,10 +362,10 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 | S56 | TCP sockets | VERIFIED | Winsock2 TCP connect/bind/listen/accept/send/recv/close/shutdown (`[code] stdlib/network.mink`; `[test] tests/network_lib.rs`, windows_hardening loopback checksums) | None | - | - | N | - | |
 | S57 | UDP sockets | VERIFIED | UDP send/receive (`[exec]` Session 92/95 hardening) | None | - | - | N | - | |
 | S58 | DNS resolution | VERIFIED | `net_resolve` (getaddrinfo) | None | - | - | N | - | |
-| S59 | HTTP client | PARTIAL | HTTP/1.1 GET/POST, header/status/body parse, url split helpers (`[code] stdlib/http.mink`; `[test] tests/http_lib.rs`; `[exec]` Session 96 byte-exact POST echo) | No TLS/HTTPS, no redirects, no cookies, no chunked transfer, no keep-alive | P2 | L | N | D | The client capability is real; protocol conveniences P2; HTTPS is S62 |
+| S59 | HTTP client | PARTIAL | HTTP/1.1 GET/POST, header/status/body parse, url split helpers (`[code] stdlib/http.mink`; `[test] tests/http_lib.rs`; `[exec]` Session 96 byte-exact POST echo); HTTPS GET now exists via S62's `stdlib/tls.mink` | No redirects, no cookies, no chunked transfer, no keep-alive, no POST-over-TLS helper | P2 | L | N | D | The client capability is real; protocol conveniences P2; TLS/HTTPS delivered by S62 (Session 117) |
 | S60 | HTTP server | PARTIAL | socket-level server verified (accept/echo repeated connections); no HTTP parsing server-side lib | `http.server`-style convenience | P2 | M | N | D | |
 | S61 | URL parsing (`urllib.parse`) | PARTIAL | url encode/decode in encoding.mink; host/port/path split in http.mink | Full URL grammar handling | P2 | M | N | D | |
-| S62 | TLS/SSL | MISSING | none | Encrypted connections; HTTPS end-to-end | P1 | XL | Y | D | Major subsystem (self-contained TLS impl or schannel via FFI) |
+| S62 | TLS/SSL | VERIFIED | A TLS 1.2/1.3 client and an HTTPS client on Windows Schannel, written in MINK source over a new general FFI layer. `rt_sys_load_lib`/`rt_sys_get_proc`/`rt_sys_call` (a Win64 call with up to 12 word arguments and an explicitly 16-byte-aligned stack) plus the unvalidated foreign reads `rt_sys_load64`/`rt_sys_load32` reach the OS crypto stack (`[code] src/backend/emit/runtime.rs`, `src/backend/ir.rs`, `src/runtime/intrinsics.rs`); `rt_net_getaddrinfo` now really resolves with Winsock `getaddrinfo` (it was a V1 pass-through), so a name connects as its dotted quad while the original name stays available for checking. Trust is never skipped: Schannel runs manual credential validation and MINK makes the trust decision itself with crypt32 — chain build (`CertGetCertificateChain`) + `CERT_CHAIN_POLICY_SSL` (serverAuth EKU, certificate time validity, matching host name) + anchor match by SHA-1 thumbprint against the Windows system store or a pinned PEM CA (`[code] stdlib/tls.mink` + npm mirror: `tls_connect`/`tls_status`/`tls_err`/`tls_cipher`/`tls_send`/`tls_recv`/`tls_close`, `https_client_get(_with)`, error codes 1001-1008). A measured platform defect: any `CertGetCertificateChain` call makes crypt32 deadlock in its DLL-detach handler, so `rt_exit`/`rt_fail` now terminate through `kernel32!TerminateProcess` after the leak scan (no return through foreign detach handlers; `[code] src/backend/emit/runtime.rs`). `[test] tests/tls_lib.rs` 20 tests — 19 native-PE plus an opt-in public-endpoint one: pinned-CA handshake, HTTPS GET in both forms, SAN matching (second entry, wildcard, IP literal), expired certificate, wrong extended key usage, untrusted root, system store does not accept a private CA, wrong host name, connection refused, missing/malformed CA, malformed URL, invalid/closed handle operations, binary echo with partial reads, 300 KB transfer, repeated connections with no leak; deterministic local server `tests/tls/server.py` with committed fixtures from `tests/tls/make_certs.py`; `[exec]` every test compiles and runs a real Windows PE through the CLI | Client only (no TLS server); no client certificates; no ALPN/HTTP-2, redirects, cookies or keep-alive; `https_client_get*` does GET only (POST over TLS has no helper yet); TLS 1.0/1.1 not targeted | - | XL | N | D | Delivered in Session 117. The FFI layer is general (any DLL entry point, any 12-word signature) and is the mechanism a future Windows service binding can reuse; it is deliberately raw — the caller owns pointer validity, which is why it is a stdlib building block rather than a user-facing convention |
 | S63 | Non-blocking I/O / select | VERIFIED | `net_set_nonblocking`, `net_poll` (over `WSAPoll`), `net_wait_readable`, `net_wait_writable`, `net_can_read`, `net_can_write`; poll entries are 16-byte `WSAPOLLFD` records mapped to a `Ptr<Int>` array (`[code] stdlib/network.mink`, `src/backend/emit/runtime.rs`; `[test] tests/network_lib.rs`; `[exec]` native PE probes: poll timeout, readiness after connect/accept, non-blocking accept/recv with `net_would_block`) | Synchronous fallback only (no `select`/`poll` in the Python stdlib sense) | - | M | N | E | Delivered in Session 113 — prerequisite for R20 |
 | S64 | Email / FTP / SMTP / IMAP | MISSING | none | Protocol clients | P3 | L | N | D | Not parity-critical for the declared gate |
 | S65 | Hostname / byte order | VERIFIED | `net_hostname`, `net_htons/ntohs` | None | - | - | N | - | |
@@ -510,7 +510,7 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 
 | Status | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
-| VERIFIED | 30 | 15 | 34 | 8 | 5 | 3 | 95 |
+| VERIFIED | 30 | 15 | 35 | 8 | 5 | 9 | 102 |
 | VERIFIED (INTENT. DIFF.) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | VERIFIED (partial) | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
 | EXECUTION VERIFIED | 1 | 0 | 1 | 0 | 0 | 0 | 2 |
@@ -519,64 +519,68 @@ S standard-library 78 · T tooling 16 · W Windows-specific 22 · P packaging 14
 | N/A | 0 | 1 | 3 | 1 | 0 | 1 | 6 |
 | N/A (INTENT.) | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | PARTIAL | 9 | 2 | 12 | 0 | 10 | 1 | 34 |
-| PLANNED | 2 | 0 | 0 | 0 | 0 | 1 | 3 |
-| MISSING | 18 | 9 | 28 | 6 | 6 | 7 | 74 |
+| PLANNED | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+| MISSING | 18 | 9 | 27 | 6 | 6 | 2 | 68 |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
-*(Session 112 recomputation: produced by scanning the 232 capability rows directly
-rather than by adjusting the previous table; every column and row sums to 232.)*
+*(Session 117 recomputation: produced by scanning the 232 capability rows directly
+rather than by adjusting the previous table; every column and row sums to 232, and the
+`P1` set equals the `Blocks = Y` set exactly: 0 rows.)*
 
 ### 10.2 Priority distribution
 
 | Priority | L | R | S | T | W | P | Total |
 |---|---|---|---|---|---|---|---|
 | P0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
-| P1 (parity-blocking by definition) | 0 | 0 | 1 | 0 | 0 | 4 | **5** |
-| P2 (important, not blocking) | 23 | 9 | 34 | 2 | 17 | 5 | **90** |
+| P1 (parity-blocking by definition) | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| P2 (important, not blocking) | 23 | 9 | 34 | 2 | 17 | 3 | **88** |
 | P3 (optional) | 23 | 8 | 14 | 5 | 3 | 1 | **54** |
-| — (no gap / no MINK work) | 27 | 12 | 29 | 9 | 2 | 4 | **83** |
+| — (no gap / no MINK work) | 27 | 12 | 30 | 9 | 2 | 10 | **90** |
 | **Total** | **73** | **29** | **78** | **16** | **22** | **14** | **232** |
 
 Every row marked P1 is also marked "Blocks parity = Y"; there are no P1 non-blockers
-and no P2 blockers in this audit. **5 capability gaps block the parity gate.**
+and no P2 blockers in this audit. **0 capability gaps block the parity gate** — the
+parity-blocking set is empty. Session 116 closed P04–P09 and Session 117 closed S62.
 
 Session 107 cleared the flags that contradicted a row's own evidence (R06 and W14 were
 already VERIFIED; P02's bundled stdlib landed in Session 99; T06's search path is the
 `src/driver.rs` mechanism behind the VERIFIED L67), so P1 equals the `Blocks = Y` set
 exactly. Session 112 removed the last four stale `Blocks = Y` flags on rows that were
 already VERIFIED (S41, S75, S78, T07 — S41 also carried a stale `P1`), so the invariant
-holds again after the R19/R21/S71 closures. Session 114 closed R20 and S73 (their flags
-were cleared as the rows became VERIFIED), leaving the parity-blocking set at 5.
+holds again after the R19/R21/S71 closures. Session 114 closed R20 and S73, Session 116
+closed P04–P09, and Session 117 closed S62 (each row's flags were cleared as the row
+became VERIFIED), leaving the parity-blocking set **empty**.
 
-### 10.3 Difficulty distribution (rows requiring work; the other 82 rows have no gap)
+### 10.3 Difficulty distribution (rows requiring work; the other 61 rows carry no work)
 
 | Difficulty | Rows | Meaning |
 |---|---|---|
-| S-M (small-to-medium) | 5 | small change with a medium tail |
-| S (small) | 36 | one focused change, low risk |
-| M (medium) | 75 | multiple components, contained |
-| L (large) | 26 | major feature area |
-| XL (major subsystem) | 8 | dedicated multi-session subsystem |
-| **Rows requiring work** | **150** | 150 + 82 no-gap rows = 232 |
+| S-M (small-to-medium) | 6 | small change with a medium tail |
+| S (small) | 37 | one focused change, low risk |
+| M (medium) | 84 | multiple components, contained |
+| L (large) | 30 | major feature area |
+| XL (major subsystem) | 14 | dedicated multi-session subsystem |
+| **Rows requiring work** | **171** | 171 + 61 no-work (`—`) rows = 232 |
 
-### 10.4 Parity-blocking gaps (5, all P1) by wave
+### 10.4 Parity-blocking gaps (0) by wave
 
 Wave tags are the exact matrix values; a gap that spans waves (B/H) is listed under its
-primary wave. The rows delivered across Sessions 99–114
+primary wave. The rows delivered across Sessions 99–117
 (R06, R10, R12, R13, R23, S50, S70, W06, W08, W14, L16, L67, P02, T06, L05, L08, S01,
 S06, S28, S36, S42, S44, S41, S74, S69, S75, S78, T07, R01, T04, S02, L68, P03, S71,
-R19, R21, R20, S73) no longer appear. Waves A, B, C, E and G are now empty.
+R19, R21, R20, S73, S63, P04, P05, P06, P07, P08, P09, S62) no longer appear. Every wave
+is now empty.
 
 | Wave | Blocking gaps | Count |
 |---|---|---|
 | A (Windows platform/runtime quick wins) | (none) | 0 |
 | B (core language/data) | (none) | 0 |
 | C (filesystem/process/time) | (none) | 0 |
-| D (networking/internet/compression) | S62 | 1 |
+| D (networking/internet/compression) | (none) | 0 |
 | E (concurrency/async) | (none) | 0 |
-| F (packaging/distribution) | P04, P05, P06, P09 | 4 |
+| F (packaging/distribution) | (none) | 0 |
 | G (developer tooling) | (none) | 0 |
-| **Total** | | **5** |
+| **Total** | | **0** |
 
 ### 10.5 Fully covered areas (no material gap, Wave `-`)
 
@@ -604,18 +608,23 @@ material missing subset; rows are VERIFIED or INTENT. DIFF. with no P-gap:
 ### 10.6 Headline conclusions
 
 1. **The Windows base platform is COMPLETE/STABLE** with 0 P0 and 0 P1 on the base (Session 97 gate, re-verified this session).
-2. **Official-Python-capability parity is PARTIAL**: 98 execution-verified rows (VERIFIED 94 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 75 MISSING rows, 14 intentionally-different rows (13 INTENT. DIFF. + 1 INTENT. DIFF. + PARTIAL), 8 N/A rows (6 N/A + 2 N/A (INTENT.)), 3 PLANNED rows.
-3. **5 parity-blocking P1 gaps** remain (Wave B 0 · D 1 · E 0 · F 4); in all, 150 rows require work and 82 rows need none (the counts are recomputed in §10.1/§10.2/§10.3).
+2. **Official-Python-capability parity passes the parity gate**: 106 execution-verified rows (VERIFIED 102 + EXECUTION VERIFIED 2 + the two partial-VERIFIED variants), 34 PARTIAL rows, 68 MISSING rows, 14 intentionally-different rows (13 INTENT. DIFF. + 1 INTENT. DIFF. + PARTIAL), 8 N/A rows (6 N/A + 2 N/A (INTENT.)), 2 PLANNED rows. No remaining gap is parity-blocking (all P2/P3).
+3. **0 parity-blocking P1 gaps** (Wave A 0 · B 0 · C 0 · D 0 · E 0 · F 0 · G 0); in all, 171 rows require work and 61 carry none (the counts are recomputed from the rows in §10.1/§10.2/§10.3).
 4. **Zero P0 gaps** on the Windows base.
 5. Fully covered categories concentrate where MINK has already executed real work: native execution, ownership/memory, files, processes, sockets, HTTP client, JSON, crypto, math, time, and the compiler toolchain itself.
-6. Parity-blocking work clusters into packaging (Wave F) and TLS (Wave D — S42 zlib/gzip, S41 SQLite and S44 zip now VERIFIED). Wave E closed in Session 114 (R19/S71 threads + locks in Session 112, R20/S73 async + await now VERIFIED). Waves A, B and C are fully closed (S74 in Session 108; L34 reclassified P2 in Session 111 — MINK's value-based error model is the intentional design); the shared A/F include-path mechanism landed across Sessions 99–107.
+6. Parity-blocking work is closed: packaging (Wave F — P04–P09 in Session 116, with P07/P08 delivered alongside) and TLS (Wave D — S62 in Session 117, after S42 zlib/gzip, S41 SQLite and S44 zip). Wave E closed in Session 114 (R19/S71 threads + locks in Session 112, R20/S73 async + await now VERIFIED). Waves A, B and C are fully closed (S74 in Session 108; L34 reclassified P2 in Session 111 — MINK's value-based error model is the intentional design); the shared A/F include-path mechanism landed across Sessions 99–107.
 7. `docs/audits/OFFICIAL_PYTHON_CAPABILITY_PARITY_AUDIT.md` (Session 82) is **superseded for stale claims**: Windows env (`rt_env_*`) was stubbed at audit time but is implemented since Session 99; `x86_64-linux-elf` IS implemented (frozen); `&&`/`||` DO short-circuit (probed); crypto is execution-verified on Windows.
 
 ### 10.7 FINAL STATUS (this matrix)
 
 - WINDOWS BASE PLATFORM = **COMPLETE / STABLE**
-- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PARTIAL** (5 parity-blocking gaps; see the implementation plan)
+- WINDOWS OFFICIAL PYTHON CAPABILITY PARITY = **PASSES THE PARITY GATE** (0 P0, 0 P1;
+  the remaining P2/P3 rows are non-blocking roadmap work)
 - LINUX = **FROZEN** (untouched this session)
+
+**Session 117 updates:** **S62** (TLS/SSL) **P1 blocker CLOSED** — the last one. A TLS 1.2/1.3 client and an HTTPS client on Windows Schannel live in `stdlib/tls.mink` (plus the npm mirror), driven by a new general FFI layer (`rt_sys_load_lib`/`rt_sys_get_proc`/`rt_sys_call` with the Win64 register/stack convention and 16-byte-aligned call sites, plus the unvalidated foreign reads `rt_sys_load64`/`rt_sys_load32`). Trust is never skipped: Schannel runs manual credential validation, and MINK performs the trust decision itself with crypt32 (chain build + `CERT_CHAIN_POLICY_SSL` + root-anchor thumbprint match against the system store or a pinned PEM CA). `rt_net_getaddrinfo` was upgraded from its V1 pass-through to a real Winsock `getaddrinfo` resolution, and `rt_exit`/`rt_fail` now terminate through `kernel32!TerminateProcess` after the leak scan, because a measured crypt32 DLL-detach deadlock makes any `CertGetCertificateChain` caller hang at process exit. New permanent evidence: `tests/tls_lib.rs` (20 tests: 19 native-PE + 1 opt-in public endpoint; pinned-CA handshake, HTTPS GET, SAN/wildcard/IP-literal matching, expired certificate, wrong EKU, untrusted root, own-store rejection, wrong host name, connection refused, malformed/missing CA, malformed URL, invalid/closed handles, binary echo with partial reads, 300 KB transfer, repeated no-leak connections; deterministic local server + committed fixture certs) and `tests/network_lib.rs`'s resolver test now asserts the real resolution contract. Parity-blocking set: 1 → 0. The Windows parity gate is reached: **0 P0 · 0 P1**.
+
+**Session 116 updates:** **P04/P05/P06/P07/P08/P09** (site-packages, dependency declaration + install, resolver, lockfile, manifest, virtual environments) **P1 blockers CLOSED**, emptying Wave F. MINK's packaging subsystem is `mink.toml` + `mink.lock`, a deterministic fixed-point resolver over `BTreeMap`s (highest compatible version wins; reported no-candidate/conflict/non-convergence/cycle), content-hashed installs into a packages directory the compiler resolves as site-packages, and directory-level environment isolation via `mink env new/use/list/remove`. `[test] tests/package_manager.rs` covers the whole workflow end to end (including native PE runs of installed packages, deterministic 24-package installs, tamper detection, stale locks and clean-project workflows) with unit tests for the manifest, version, resolver, lock and env modules; `docs/ecosystem/PACKAGE_ARCHITECTURE.md` §26 records the V1 implementation. Parity-blocking set: 5 → 1.
 
 **Session 114 updates:** **R20** (async / event loop) and **S73** (async/await + event loop) **P1 blockers CLOSED**, emptying Wave E. The task loop is the asyncio-equivalent in MINK's own architecture: a task is `fn(arg: Int) -> Int` on its own OS thread, and the process-global loop tracks uncollected tasks (`rt_task_spawn`/`rt_task_spawn0`, `rt_task_await`, `rt_task_run`, `rt_task_pending`, `rt_task_stop`). The language surface is real syntax — `async fn name(args) -> T { body }` plus `await expr` — implemented as a front-end desugaring over the verified runtime (`src/parser/mod.rs`), so awaits compose with loops, branches and module boundaries and there is no synchronous stand-in. New permanent evidence: `tests/async_lib.rs` (23 native-PE tests: handle accounting, drain, zero tasks, 200 spawn/await cycles, 64 concurrent tasks, `task_stop`, the E-R06 uncollected-task leak, the E-R05 double-collect and E-R13 non-task-handle errors, a concurrency-ordering proof, 4×1000 locked increments giving exactly 4000, tasks allocating/freeing strings, 5 identical stress runs, the language-surface cases incl. nested async and cross-module async, the two rejected forms, the `tasks` stdlib module and the shipped example twice), `examples/async_tasks/main.mink` and `stdlib/tasks.mink` (+ npm mirror). Two defects were found and fixed while verifying: an awaited handle is now read through the runtime's validated word load (so a stale or bogus handle is E-R05/E-R13 instead of a fault), and `pub async fn` in a module is parsed as two `pub` items instead of being silently dropped. Parity-blocking set: 7 → 5 (S62, P04, P05, P06, P09).
 

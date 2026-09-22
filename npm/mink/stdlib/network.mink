@@ -17,7 +17,7 @@
 //   net_recv(sock, maxlen) -> Str          Receive data (owned Str).
 //   net_close(sock) -> Int                 Close socket (0=ok, -1=error).
 //   net_shutdown(sock, how) -> Int         Shutdown (0=ok, -1=error).
-//   net_resolve(host, port) -> Str         Resolve host (V1: returns host as-is).
+//   net_resolve(host, port) -> Str         Resolve host to IPv4 text (owned).
 //   net_hostname() -> Str                  Get local hostname.
 //   net_htons(value) -> Int                Host-to-network byte order.
 //
@@ -150,15 +150,19 @@ fn net_shutdown(sock: Int, how: Int) -> Int {
 
 // --- Address resolution ---
 
-// Resolve a hostname to an IP address string.
-// V1: Returns the host string as-is (full DNS via getaddrinfo is V2).
+// Resolve a hostname to an IP address string with Winsock's `getaddrinfo`:
+// a literal comes back unchanged, a host name as IPv4 text, and an
+// unresolvable name as the empty string. The result is an OWNED Str (the
+// runtime releases the `addrinfo` list inside the call, so
+// `net_free_resolve` has nothing left to do).
 fn net_resolve(host: Str, port: Int) -> Str {
     let r = rt_net_getaddrinfo(host, port);
     rt_str_free(host);
     return r;
 }
 
-// Free a resolved address (no-op in V1).
+// Free the `addrinfo` list of the last resolution (the runtime releases it
+// inside `net_resolve`, so this is the documented no-op hook).
 fn net_free_resolve() {
     rt_net_freeaddrinfo();
 }

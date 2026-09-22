@@ -506,16 +506,32 @@ fn main() -> Int {
 }
 
 #[test]
-fn n92_resolve_returns_input() {
-    // V1: net_resolve just returns the host string (no allocation)
+fn n92_resolve_returns_ipv4_text() {
+    // `net_resolve` runs Winsock's `getaddrinfo`, so a literal comes back
+    // unchanged and a host name comes back as IPv4 text. That is what makes a
+    // host name reachable: `net_connect` connects to literals only.
     let src = r#"
 fn main() -> Int {
     net_init();
-    let resolved = net_resolve("192.168.1.1", 80);
-    let len = rt_str_len(resolved);
+    let a = net_resolve("192.168.1.1", 80);
+    let alen = rt_str_len(a);
+    rt_str_free(a);
+    let b = net_resolve("localhost", 80);
+    let blen = rt_str_len(b);
+    let mut dots = 0;
+    let mut numeric = 1;
+    let mut i = 0;
+    while i < blen {
+        let c = rt_str_byte(b, i);
+        if c == 46 { dots = dots + 1; }
+        else if c < 48 || c > 57 { numeric = 0; }
+        i = i + 1;
+    }
+    rt_str_free(b);
     net_cleanup();
-    // V1 resolve returns a copy with same length as input (11 chars)
-    if len == 11 { return 1; }
+    // The literal must survive resolution byte for byte, and the name must
+    // resolve to a dotted quad (four numeric labels, 7..15 bytes).
+    if alen == 11 && numeric == 1 && dots == 3 && blen >= 7 && blen <= 15 { return 1; }
     return 0;
 }"#;
     assert_eq!(native_exit_code(src), 1);

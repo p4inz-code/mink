@@ -1029,6 +1029,31 @@ pub enum RuntimeService {
     TaskPending,
     /// `rt_task_stop()`: ask `rt_task_run` to return at the next token.
     TaskStop,
+    // --- Dynamic library call (Session 117, S62) ---
+    /// `rt_sys_load_lib(name: Str) -> Int`: `LoadLibraryA(name)`. The one
+    /// bootstrap FFI primitive: every other foreign function is reached
+    /// through [`RuntimeService::SysGetProc`] + [`RuntimeService::SysCall`].
+    SysLoadLib,
+    /// `rt_sys_get_proc(lib: Int, name: Str) -> Int`: `GetProcAddress`.
+    SysGetProc,
+    /// `rt_sys_call(fn: Int, argv: Ptr<Int>, nargs: Int) -> Int`: call a
+    /// foreign function with up to 12 word arguments taken from `argv`
+    /// (the Win64 register/stack convention) and return `RAX`. The stack is
+    /// explicitly 16-byte aligned at the call, so any Win32 entry point may
+    /// be invoked. `argv` must hold at least 4 words.
+    SysCall,
+    /// `rt_sys_load64(addr: Int) -> Int`: an *unvalidated* 8-byte read from a
+    /// raw address. Foreign structures (a `CERT_CHAIN_CONTEXT`, a
+    /// `CERT_INFO`'s extension array, ...) live outside the MINK arena, so the
+    /// checked `rt_mem_load` cannot reach them; this is the read half of the
+    /// FFI contract whose write half is the output buffer a foreign call fills
+    /// through `rt_sys_call`. The caller is responsible for the address, just
+    /// as it is for the function pointer passed to [`RuntimeService::SysCall`].
+    SysLoad64,
+    /// `rt_sys_load32(addr: Int) -> Int`: the 32-bit form of
+    /// [`RuntimeService::SysLoad64`], for the 4-byte fields (`cbData`,
+    /// `dwError`, an `iPAddress` blob) packed inside those structures.
+    SysLoad32,
 }
 
 impl RuntimeService {
@@ -1144,6 +1169,11 @@ impl RuntimeService {
             Self::TaskSpawn0 => 1,
             Self::TaskAwait => 1,
             Self::TaskRun | Self::TaskPending | Self::TaskStop => 0,
+            // --- Dynamic library call (Session 117, S62) ---
+            Self::SysLoadLib => 1,
+            Self::SysGetProc => 2,
+            Self::SysCall => 3,
+            Self::SysLoad64 | Self::SysLoad32 => 1,
         }
     }
 
@@ -1277,6 +1307,11 @@ impl RuntimeService {
                 | Self::TaskRun
                 | Self::TaskPending
                 | Self::TaskStop
+                | Self::SysLoadLib
+                | Self::SysGetProc
+                | Self::SysCall
+                | Self::SysLoad64
+                | Self::SysLoad32
         )
     }
 }
