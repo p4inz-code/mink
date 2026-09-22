@@ -1,7 +1,7 @@
 # MINK — Windows × Official Python Capability Parity Matrix (Master Audit)
 
-**Session:** 117 (matrix reconciled through Sessions 116–117; §10 recomputed from the rows)
-**Starting commit:** `568dc04` (Session 106 close) → `48ed337` (Session 107 start) → `c3b8091` (Session 107 push) → `9abd6f9` (Session 116 close)
+**Session:** 118 (final Windows completion audit; matrix reconciled through Sessions 116–117, and §2/§3.10/§10/§11 recomputed **from the 232 rows** rather than from prose totals)
+**Starting commit:** `568dc04` (Session 106 close) → `48ed337` (Session 107 start) → `c3b8091` (Session 107 push) → `9abd6f9` (Session 116 close) → `86642b4` (Session 117 close; final-audit start)
 **MINK version:** 1.0.1
 **Scope:** Windows x86_64 (the shipped platform). Official Python capabilities only.
 **Classification:** capability parity — what a Windows developer can accomplish with
@@ -64,15 +64,16 @@ probes). Every "every major claim must be traceable" row carries anchors in Note
 
 | Fact | Value | Evidence |
 |---|---|---|
-| Starting commit | `a716df4`, clean tree | `git rev-parse HEAD`, `git status` |
+| Starting commit | `86642b4` (Session 117 close), clean tree | `git rev-parse HEAD`, `git status` |
 | Version | `mink 1.0.1` | `target/release/mink.exe --version` |
 | Release build | clean | `cargo build --release` |
-| Test suite | 56 test targets + lib/main; Session 107 regression: 2 461 passed, 2 ignored, 0 product failures, 1 parallel-load loopback flake (WSL Linux HTTP client, 3/3 in isolation) | `cargo test` (two invocations under the command cap) + grouped/isolated reruns of `windows_hardening`; see the Session 107 report |
-| Smoke/CLI/release suites | smoke 13/13 · release 66/66 · cli 74/74 | `cargo test --test {smoke,release,cli}` |
+| Test suite | 72 test units (71 integration targets + lib); final-audit regression: **2 948 passed, 3 ignored, 0 failures** across every unit | `cargo test` per target group + repeated stress runs; see the Session 118 report |
+| Smoke/CLI/release suites | smoke 13/13 · release 68/68 · cli 74/74 (+1 ignored) | `cargo test --test {smoke,release,cli}` |
+| `windows_hardening` | 18/18 in **both** parallel and `--test-threads=1` modes, deterministically (Session 118 harness fix; was parallel-hanging before it) | `cargo test --test windows_hardening` × 6 parallel runs |
 | Windows target | `x86_64-windows-pe` implemented | `[code] src/backend/target.rs` |
 | Linux target | `x86_64-linux-elf` implemented but FROZEN by policy; not part of this audit | `[code] src/backend/target.rs`; session policy |
 | Architecture | AOT compiler, no external toolchain, zero Rust crate deps, standalone PE | `[code] Cargo.toml`, `src/backend/emit/*.rs` |
-| Distribution | npm `@p4inz-code/mink` 1.0.1 ships compiler `bin/mink.exe` + bundled `stdlib/` (all 22 `.mink` modules); `mod` resolves via `<exe>/../stdlib` with no config | `[code] npm/mink/package.json`, `src/driver.rs` resolve_module_path; `[exec]` Session 99 clean-install stdlib import |
+| Distribution | npm `@p4inz-code/mink` 1.0.1 ships compiler `bin/mink.exe` + bundled `stdlib/` (all **26** `.mink` modules, `tls` included); `mod` resolves via `<exe>/../stdlib` with no config | `[code] npm/mink/package.json`, `src/driver.rs` resolve_module_path; `[exec]` Session 118 packaged-CLI audit (tarball packed and installed in a clean external directory whose path contains spaces and Unicode; bundled `mod` import, project init, dependency install and environment workflow all run from there) |
 | P0 / P1 on the Windows base | 0 / 0 | Session 97 gate |
 
 Short-circuit semantics of `&&` / `||` were probed natively this session: both **do**
@@ -205,7 +206,9 @@ rows below; the Session 82 audit's "no short-circuit" claim is therefore stale.
 
 ### 3.10 Language section totals
 
-73 rows: EXECUTION VERIFIED 1 · VERIFIED 29 · INTENT. DIFF. 11 · INTENT. DIFF. + PARTIAL 1 · PARTIAL 9 · PLANNED 2 · N/A (INTENT.) 1 · MISSING 19. Priorities: P1 2 · P2 22 · P3 23 · no-gap 26. **Parity blockers (Blocks = Y): 2 — L34 (exceptions), L68 (packages).** L08 closed in Session 106/107 and **L05 closed in Session 107**. The prior totals on this line were stale: they still listed L10/L16/L67 (VERIFIED, `Blocks = N`) and missed the L08 status change.
+73 rows: EXECUTION VERIFIED 1 · VERIFIED 30 · INTENT. DIFF. 11 · INTENT. DIFF. + PARTIAL 1 · PARTIAL 9 · PLANNED 2 · N/A (INTENT.) 1 · MISSING 18. Priorities: P1 0 · P2 23 · P3 23 · no-gap 27. **Parity blockers (Blocks = Y): 0.**
+
+*Session 118 correction:* this line still carried the Session 107-era totals and named **L34 (exceptions) and L68 (packages) as live `Blocks = Y` blockers**, contradicting both the rows and §10: L34 is INTENT. DIFF./P2/N (reclassified in Session 111) and L68 is VERIFIED with `Blocks = N` (Session 109). The figures above are recomputed directly from the 73 language rows by the Session 118 scan (see §10). L05 closed in Session 107, L08 in Session 106/107, and the remaining L-row items are P2/P3.
 
 ---
 
@@ -660,10 +663,10 @@ Every count in §10 was recomputed from the rows after both closures.
 Compiler pipeline and targets: `[code] src/{lexer,parser,ast,semantics,typecheck,ownership,hir,mir,monomorphize,backend}`, `src/backend/target.rs`.
 Entry/CLI: `[code] src/cli.rs`, `src/driver.rs`, `src/backend/mod.rs`. Modules: `src/module/mod.rs`.
 Runtime services/intrinsics: `[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`, `src/backend/emit/pe.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/{allocator,error,abi}.rs`.
-Standard library: `[code] stdlib/*.mink` (25 modules: assert, collections, crypto, csv, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, re, result, sqlite, strings, tasks, threads, time, zip, zlib — each mirrored into the npm bundle, with `tests/release.rs` guarding the mirror byte-for-byte).
-Test suite (execution-verified native runs): `[test] tests/*.rs` (69 targets, 2739 tests) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, sqlite_lib, zip_lib, zlib_lib, re_lib, threads_lib, async_lib, windows_hardening, release, cli, smoke.
+Standard library: `[code] stdlib/*.mink` (26 modules: assert, collections, crypto, csv, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, re, result, sqlite, strings, tasks, threads, time, tls, zip, zlib — each mirrored into the npm bundle, with `tests/release.rs` guarding the mirror byte-for-byte).
+Test suite (execution-verified native runs): `[test] tests/*.rs` (71 integration targets + the library unit tests; 2 948 passed · 3 ignored · 0 failed in the Session 118 final audit) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, sqlite_lib, zip_lib, zlib_lib, re_lib, threads_lib, async_lib, tls_lib, packages, package_manager, repl, test_runner, windows_hardening, release, cli, smoke.
 Recorded real execution: `[exec]` SESSION_92..97 docs (crypto vectors, HTTP POST byte-exact echo, process 1 MB drain, npm clean installs ×2, standalone exe) and this session's native probes (short-circuit, div-by-zero fault status 148).
 Specs/plans: `[doc] docs/core/*`, `docs/language/*`, `docs/ecosystem/*` (C_ABI_SPEC, PACKAGE_ARCHITECTURE, SECURITY_ARCHITECTURE, STDLIB_ARCHITECTURE), `docs/roadmap/*`, `docs/implementation/SESSION_*`.
 
-*End of master parity matrix — Session 98, commit a716df4.*
+*End of master parity matrix — Session 98 baseline, commit `a716df4`; reconciliation headers, §2/§3.10/§10 and §11 recomputed by the Session 118 final Windows completion audit at commit `86642b4`.*
 

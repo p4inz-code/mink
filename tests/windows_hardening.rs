@@ -7,10 +7,12 @@
 //! the generated Windows executable. Nothing here depends on the network
 //! beyond 127.0.0.1 loopback.
 
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -70,10 +72,69 @@ fn build_and_run(files: &[&str], body: &str, tag: &str) -> (i32, String, String)
     (code, out, err)
 }
 
-/// A free ephemeral TCP port on loopback.
+/// A free ephemeral TCP port on loopback, handed out exactly once per process.
+///
+/// Binding `127.0.0.1:0` and dropping the listener frees the number again, so
+/// under a parallel run two tests can be handed the same port. One test's
+/// server then answers the other test's client, and a blocking receive waits
+/// forever — the hang that this reservation removes. Numbers already handed
+/// out are never returned twice, and a bounded scan is the fallback so the
+/// helper itself can never spin.
 fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
-    listener.local_addr().unwrap().port()
+    static CLAIMED: Mutex<BTreeSet<u16>> = Mutex::new(BTreeSet::new());
+    for _ in 0..64 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        if CLAIMED.lock().unwrap().insert(port) {
+            return port;
+        }
+    }
+    for port in 30_000u16..60_000 {
+        let mut claimed = CLAIMED.lock().unwrap();
+        if claimed.contains(&port) {
+            continue;
+        }
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            claimed.insert(port);
+            return port;
+        }
+    }
+    panic!("no free loopback port could be reserved");
+}
+
+/// Connects to a loopback port, retrying until the peer is listening.
+///
+/// When the server side is the MINK process itself, "not listening yet" is a
+/// startup state rather than a failure; a bounded retry removes the race
+/// without asserting anything about timing.
+fn connect_when_listening(port: u16, what: &str) -> TcpStream {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => return stream,
+            Err(err) => {
+                if std::time::Instant::now() >= deadline {
+                    panic!("{what}: no listener on 127.0.0.1:{port} after 20s: {err}");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+/// Joins a harness helper thread with a bound, so a socket mispairing fails
+/// the test in bounded time instead of hanging the whole target.
+fn join_bounded<T: Send + 'static>(handle: std::thread::JoinHandle<T>, what: &str) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(handle.join());
+    });
+    match rx.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(value)) => value,
+        Ok(Err(_)) => panic!("{what}: harness helper thread panicked"),
+        Err(_) => panic!("{what}: harness helper thread still blocked after 30s"),
+    }
 }
 
 // =========================================================================
@@ -338,8 +399,10 @@ fn tcp_mink_client_checksum_multirecv() {
     let payload: Vec<u8> = (0..20000u32).map(|i| (i % 251) as u8).collect();
     let expect_sum: u64 = payload.iter().map(|&b| b as u64).sum();
     let send_data = payload.clone();
+    // Bind in the test thread: the listener is already accepting before the
+    // MINK client starts, so nothing depends on winning a bind/connect race.
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind checksum server");
     let server = std::thread::spawn(move || {
-        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
         let (mut stream, _) = listener.accept().unwrap();
         let step = send_data.len() / 64;
         for chunk in send_data.chunks(step) {
@@ -387,7 +450,7 @@ fn main() {{
 "#
     );
     let (code, _out, err) = build_and_run(&["network.mink"], &body, "tcp_checksum");
-    let _ = server.join();
+    join_bounded(server, "tcp checksum server");
     assert_eq!(code, 0, "multi-recv checksum mismatch: {err}");
 }
 
@@ -436,13 +499,19 @@ fn main() {{
     // Rust client thread: three sequential connections.
     let client = std::thread::spawn(move || {
         for round in 0..3u32 {
-            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let mut stream = connect_when_listening(port, "tcp echo client");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(20)))
+                .unwrap();
             let msg: Vec<u8> = (0..(512 + round * 100)).map(|i| (i % 256) as u8).collect();
             stream.write_all(&msg).unwrap();
             let mut got = Vec::new();
             let mut buf = [0u8; 1024];
             loop {
-                let n = stream.read(&mut buf).unwrap();
+                let n = match stream.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(err) => panic!("tcp echo client: read failed on round {round}: {err}"),
+                };
                 if n == 0 {
                     break;
                 }
@@ -453,7 +522,7 @@ fn main() {{
     });
     let (code, _out, err) = run_exe(&exe);
     let _ = std::fs::remove_file(&exe);
-    client.join().unwrap();
+    join_bounded(client, "tcp echo client");
     assert_eq!(code, 0, "mink tcp echo server failed: {err}");
 }
 
@@ -464,9 +533,9 @@ fn tcp_repeated_connect_close_cycles() {
     let port = free_port();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop2 = stop.clone();
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind cycles server");
+    listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
-        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
-        listener.set_nonblocking(true).unwrap();
         while !stop2.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
@@ -501,7 +570,7 @@ fn main() {{
     );
     let (code, _out, err) = build_and_run(&["network.mink"], &body, "tcp_cycles");
     stop.store(true, Ordering::Relaxed);
-    server.join().unwrap();
+    join_bounded(server, "tcp connect/close server");
     assert_eq!(code, 0, "50 connect/close cycles must succeed: {err}");
 }
 
@@ -518,8 +587,8 @@ fn udp_loopback_roundtrip_mink_to_rust() {
     let peer_addr = format!("127.0.0.1:{peer_port}");
     let peer_addr2 = peer_addr.clone();
 
+    let sock = UdpSocket::bind(("127.0.0.1", peer_port)).expect("bind udp peer");
     let peer = std::thread::spawn(move || {
-        let sock = UdpSocket::bind(("127.0.0.1", peer_port)).unwrap();
         let mut buf = [0u8; 2048];
         let (n, from) = sock.recv_from(&mut buf).unwrap();
         assert_eq!(&buf[..n], b"udp-hello-from-mink");
@@ -559,7 +628,7 @@ fn main() {{
 "#
     );
     let (code, _out, err) = build_and_run(&["network.mink"], &body, "udp_roundtrip");
-    peer.join().unwrap();
+    join_bounded(peer, "udp peer");
     assert_eq!(code, 0, "udp round trip failed: {err}");
 }
 
@@ -841,10 +910,13 @@ fn main() {
 #[test]
 fn http_windows_split_server_multi_recv_and_errors() {
     let port = free_port();
+    // A second reserved (therefore unbound) port for the connection-refused
+    // case: deriving `port + 1` would race a parallel test's allocation.
+    let refused_port = free_port();
     let routes: Vec<&str> = vec!["/split", "/empty", "/err404", "/close_early"];
     let routes2 = routes.clone();
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind http split server");
     let server = std::thread::spawn(move || {
-        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
         for route in routes2 {
             serve_http_once(&listener, route);
         }
@@ -852,7 +924,7 @@ fn http_windows_split_server_multi_recv_and_errors() {
 
     let source = HTTP_CLIENT_SRC
         .replace("{PORT}", &port.to_string())
-        .replace("{PORT2}", &(port + 1).to_string());
+        .replace("{PORT2}", &refused_port.to_string());
     let mut full = stdlib_file("network.mink");
     full.push('\n');
     full.push_str(&stdlib_file("http.mink"));
@@ -861,7 +933,7 @@ fn http_windows_split_server_multi_recv_and_errors() {
     let exe = build_win(&full, "http_client");
     let (code, _out, err) = run_exe(&exe);
     let _ = std::fs::remove_file(&exe);
-    server.join().unwrap();
+    join_bounded(server, "http split server");
     assert_eq!(
         code, 0,
         "Windows HTTP client (split multi-recv, 404, refused, premature close) failed: {err}"
@@ -873,8 +945,8 @@ fn http_windows_split_server_multi_recv_and_errors() {
 #[test]
 fn http_windows_large_body_exact_length() {
     let port = free_port();
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind http large-body server");
     let server = std::thread::spawn(move || {
-        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
         // Two sequential requests to the same server.
         serve_http_once(&listener, "/big");
         serve_http_once(&listener, "/big");
@@ -944,7 +1016,7 @@ fn main() {{
     let exe = build_win(&full, "http_big");
     let (code, _out, err) = run_exe(&exe);
     let _ = std::fs::remove_file(&exe);
-    server.join().unwrap();
+    join_bounded(server, "http large-body server");
     assert_eq!(code, 0, "large-body HTTP exact length failed: {err}");
 }
 
@@ -955,8 +1027,8 @@ fn main() {{
 #[test]
 fn http_windows_post_exact_body_roundtrip() {
     let port = free_port();
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind http post server");
     let server = std::thread::spawn(move || {
-        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
         serve_http_once(&listener, "/echo");
         serve_http_once(&listener, "/echo");
         serve_http_once(&listener, "/echo");
@@ -1061,7 +1133,7 @@ fn main() {{
     let exe = build_win(&full, "http_post");
     let (code, _out, err) = run_exe(&exe);
     let _ = std::fs::remove_file(&exe);
-    server.join().unwrap();
+    join_bounded(server, "http post server");
     assert_eq!(
         code, 0,
         "Windows HTTP POST exact-body round trip failed: {err}"

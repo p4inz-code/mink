@@ -45,6 +45,16 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 > (P1 = 0 equals the `Blocks = Y` set exactly). Windows stays the only active platform;
 > Linux remains frozen. The remaining P2/P3 rows are non-blocking roadmap work.
 
+> **Session 118 note (final audit).** The gate was re-verified independently and holds:
+> the 232 rows reconcile mechanically, P0 = 0 and P1 = 0, and the full regression is green
+> (2 948 passed / 3 ignored / 0 failed). The §6 risk-list item "test-infra flakiness" was
+> root-caused and fixed in the harness: `windows_hardening`'s `free_port()` released the
+> port before the test used it, so parallel tests could be paired with each other's sockets
+> and block forever. Ports are now reserved per process, harness listeners are bound before
+> the MINK program starts, and helper threads are joined with a bound — the target passes
+> 18/18 deterministically in parallel and serial modes with no `--test-threads=1`
+> workaround. See `docs/implementation/SESSION_118_WINDOWS_FINAL_AUDIT.md`.
+
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
 completion gate; nothing in a later wave may silently redefine an earlier wave's gate.
