@@ -47,7 +47,7 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 
 > **Session 118 note (final audit).** The gate was re-verified independently and holds:
 > the 232 rows reconcile mechanically, P0 = 0 and P1 = 0, and the full regression is green
-> (2 948 passed / 3 ignored / 0 failed). The §6 risk-list item "test-infra flakiness" was
+> (2 941 passed / 3 ignored / 0 failed). The §6 risk-list item "test-infra flakiness" was
 > root-caused and fixed in the harness: `windows_hardening`'s `free_port()` released the
 > port before the test used it, so parallel tests could be paired with each other's sockets
 > and block forever. Ports are now reserved per process, harness listeners are bound before

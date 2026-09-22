@@ -52,7 +52,7 @@ The plan's header already carries the "0 parity-blocking P1 gaps" current figure
 
 Also refreshed to measured values (§2, §11): the npm bundle ships **26** stdlib modules
 (not 22/25 — `tls` was missing from the list), the suite is **72 test units** (71
-integration targets + lib) running **2 948 passed / 3 ignored / 0 failed**, and the smoke/
+integration targets + lib) running **2 941 passed / 3 ignored / 0 failed**, and the smoke/
 CLI/release counts are 13/13 · 74/74 (+1 ignored) · 68/68.
 
 ## 4. Re-verification of every previously-P1 Windows capability
@@ -80,7 +80,7 @@ are asserted individually.
 
 ## 5. Full native regression
 
-All 72 test units were re-run green: **2 948 passed · 3 ignored · 0 failed**. Grouped
+All 72 test units were re-run green: **2 941 passed · 3 ignored · 0 failed**. Grouped
 invocations (compiler core, language, stdlib, systems, tooling) plus repeated stress runs
 of the concurrency, TLS and network suites. Cross-subsystem pairs exercised include async
 + locks, threads + allocator, threads + strings, locks + runtime state, packages + modules,
