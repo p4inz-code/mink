@@ -1855,7 +1855,7 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
 /// foreign DLL's `DLL_PROCESS_DETACH` handler, and Windows' certificate-chain
 /// engine (crypt32) deadlocks in its detach handler once any chain has been
 /// built — measured, and triggered by `CertGetCertificateChain` alone, so no
-/// caller can avoid it (see the Session 117 report and 4a). MINK's own cleanup
+/// caller can avoid it (see SESSION_117_WINDOWS_TLS.md, defect 10). MINK's own cleanup
 /// is already complete by this point: the leak scan above is the last thing it
 /// owes the process. The current-process pseudo handle is -1, so no
 /// `GetCurrentProcess` call is needed. Also invoked by the entry stub with

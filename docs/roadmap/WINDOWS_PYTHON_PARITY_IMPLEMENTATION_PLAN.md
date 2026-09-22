@@ -3,7 +3,7 @@
 **Session:** 98 (with a Session 107 reconciliation note) · **Starting commit:** `a716df4` · **MINK version:** 1.0.1
 **Input:** `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md` (the master matrix,
 232 audited capability rows). Session 98 planning baseline: 175 rows requiring work, 44
-parity-blocking P1 gaps.**Current, evidence-derived figures (Session 110): 157 rows requiring work, 12 parity-blocking P1 gaps.**
+parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 rows requiring work, 0 parity-blocking P1 gaps — the parity gate is passed.**
 **Date:** September 4, 2026
 
 > **Session 108 note.** This plan is the Session 98 sequencing document. The wave map in
@@ -36,6 +36,15 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 110): 157 r
 > closed; L34 (exceptions) reclassified P1→P2 (INTENT. DIFF. — MINK's value-based
 > error model is the intentional design).
 
+> **Session 116–117 note (final).** The last blockers are closed and this plan's gate is
+> passed. Session 116 closed **P04–P09** (site-packages, dependency declaration + install,
+> resolver, lockfile, manifest, virtual environments) — the packaging wave. Session 117
+> closed **S62** (TLS/SSL): a Schannel-backed TLS client and HTTPS client in
+> `stdlib/tls.mink` over a new general FFI layer. The parity-blocking set is now **0**
+> (every wave empty); matrix §10 has been recomputed by a direct scan of the 232 rows
+> (P1 = 0 equals the `Blocks = Y` set exactly). Windows stays the only active platform;
+> Linux remains frozen. The remaining P2/P3 rows are non-blocking roadmap work.
+
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
 completion gate; nothing in a later wave may silently redefine an earlier wave's gate.
@@ -48,9 +57,10 @@ completion gate; nothing in a later wave may silently redefine an earlier wave's
 - Parity = **capability coverage**, not syntax identity. The anti-clone register (matrix
   §9, X01–X21) is part of this plan's contract.
 - Parity is declared complete only when the matrix shows **zero P1 gaps** (44 at the
-  Session 98 baseline, **26** as of Session 107, **12** as of Session 110) and
-  every status is VERIFIED/IMPLEMENTED/INTENT. DIFF./N/A with an execution-verified or
-  test-backed trace, per the proof strategy in §6.
+  Session 98 baseline, **26** as of Session 107, **12** as of Session 110, **0** as of
+  Session 117) and every status is VERIFIED/IMPLEMENTED/INTENT. DIFF./N/A with an
+  execution-verified or test-backed trace, per the proof strategy in §6. The zero-P1
+  condition is met as of Session 117.
 - Community/pip ecosystem parity is out of scope forever for this gate.
 - Linux stays FROZEN through this entire program.
 
@@ -167,7 +177,7 @@ earlier wave.
 | H | 0 | ~10 | 3-4-5 (calendar-parallel) |
 | I | 0 | ~8 apps | 4-5-7 |
 | J | 0 | re-audit | 1-2-2 |
-| **Total** | **44 at the Session 98 baseline · 12 as of Session 110** (matrix §10.4; all unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** (Session 98 estimate) |
+| **Total** | **44 at the Session 98 baseline · 12 as of Session 110 · 0 as of Session 117** (matrix §10.4; all unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** (Session 98 estimate) |
 
 Interpretation:
 
@@ -208,6 +218,9 @@ Largest risks (ranked):
    network tests (P3).
 
 ## 7. Final parity gate (Wave J exit criteria)
+
+*Met as of Session 117 for the Windows gate: matrix §10.7, with the P2/P3 rows documented
+as non-blocking. The criteria remain the contract for the later Linux phase.*
 
 1. Matrix scan: **zero rows marked P1**; every row VERIFIED/IMPLEMENTED/INTENT. DIFF./N/A
    (PARTIAL and MISSING only where explicitly justified as non-blocking and documented).
