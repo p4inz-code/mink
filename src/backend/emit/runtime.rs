@@ -10093,12 +10093,6 @@ fn emit_task_await(code: &mut Code, _offsets: &RuntimeOffsets) {
     code.leave_ret();
 }
 
-/// `rt_task_run() -> Int`.
-///
-/// Collects tasks until none remain, returning the number collected.  Each
-/// task is waited on through its real OS thread handle (no polling, no sleeps)
-/// and its control block is freed, so a program that drains the loop leaves
-/// nothing behind.
 // ---------------------------------------------------------------------------
 // Dynamic library call (Session 117, S62)
 // ---------------------------------------------------------------------------
@@ -10246,6 +10240,12 @@ fn emit_sys_call(code: &mut Code, _offsets: &RuntimeOffsets) {
     code.leave_ret();
 }
 
+/// `rt_task_run() -> Int`.
+///
+/// Collects tasks until none remain, returning the number collected.  Each
+/// task is waited on through its real OS thread handle (no polling, no sleeps)
+/// and its control block is freed, so a program that drains the loop leaves
+/// nothing behind.
 fn emit_task_run(code: &mut Code, _offsets: &RuntimeOffsets) {
     prologue(code);
     code.sub_rsp(32); // [rbp-8] = collected count, [rbp-16] = block; 16-aligned

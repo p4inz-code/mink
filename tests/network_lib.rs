@@ -54,11 +54,6 @@ fn native_exit_code(source: &str) -> i32 {
     code
 }
 
-fn native_stdout(source: &str) -> String {
-    let (_, stdout, _) = build_and_run(source);
-    String::from_utf8_lossy(&stdout).to_string()
-}
-
 fn build_and_run_with_libs(test_body: &str, libs: &[&str]) -> (i32, Vec<u8>, Vec<u8>) {
     let mut source = String::new();
     for lib in libs {
