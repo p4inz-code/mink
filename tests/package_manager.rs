@@ -663,11 +663,14 @@ fn p04_spaces_and_unicode_in_the_project_path() {
     project.publish("util", "1.0.0", "pub fn v() -> Int { return 5; }\n", "");
     let app = project.path("my app ünicode");
     fs::create_dir_all(&app).expect("app directory");
-    assert_ok(
-        &project.mink_in(&app, &["init", "--name", "spaced"]),
-        "init in a spacey path",
-    );
+    // No `--name`: the default must be derived from the directory name and
+    // sanitised into a legal package name (`my app ünicode` -> `my-app-nicode`).
+    assert_ok(&project.mink_in(&app, &["init"]), "init in a spacey path");
     let manifest = fs::read_to_string(app.join("mink.toml")).expect("manifest");
+    assert!(
+        manifest.contains("name = \"my-app-nicode\""),
+        "the default name is derived from the directory: {manifest}"
+    );
     fs::write(
         app.join("mink.toml"),
         format!("{manifest}\n[sources]\nvendor = \"../vendor\"\n"),
@@ -683,6 +686,39 @@ fn p04_spaces_and_unicode_in_the_project_path() {
     );
     let run = project.mink_in(&app, &["run", "main.mink"]);
     assert_eq!(assert_ok(&run, "run in a spacey path").trim(), "5");
+}
+
+#[test]
+fn p04_init_derives_a_legal_name_in_any_directory() {
+    let project = Project::new("initname");
+    // Directories whose names are not legal package names must still
+    // initialise without the user inventing a `--name`.
+    for directory in ["My Project", "proj-测试", "π", "2024 data"] {
+        let app = project.path(directory);
+        fs::create_dir_all(&app).expect("app directory");
+        assert_ok(
+            &project.mink_in(&app, &["init"]),
+            "init in a directory needing a derived name",
+        );
+        let manifest = fs::read_to_string(app.join("mink.toml")).expect("manifest");
+        let name = manifest
+            .lines()
+            .find_map(|line| line.strip_prefix("name = \""))
+            .and_then(|rest| rest.strip_suffix('"'))
+            .unwrap_or_else(|| panic!("no package name in {manifest}"));
+        assert!(
+            mink::package::manifest::is_valid_package_name(name),
+            "'{directory}' derived an illegal name '{name}'"
+        );
+    }
+    // An explicitly invalid `--name` is still rejected, as typed.
+    let explicit = project.path("explicit");
+    fs::create_dir_all(&explicit).expect("app directory");
+    assert_code(
+        &project.mink_in(&explicit, &["init", "--name", "Bad Name"]),
+        "E-PKG03",
+        "an explicit invalid name",
+    );
 }
 
 #[test]

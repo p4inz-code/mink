@@ -114,10 +114,28 @@ The generated `.exe` is a standalone Windows executable. Copy it to any Windows 
 | `mink run <file>` | Compile and execute a MINK source file |
 | `mink build <file>` | Compile to a native Windows executable |
 | `mink check <file>` | Analyze source for errors without producing output |
+| `mink test <file>` | Discover and run `fn test_*` functions in a source file |
+| `mink repl [file]` | Start an interactive compile-eval session (`Ctrl-D` or `:quit` exits) |
 | `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
 | `mink version` | Print the compiler version |
 | `mink help` | Show usage information |
 | `mink explain` | With no code, list all documented error codes |
+
+### Project and package commands
+
+Run these in a project directory (one containing a `mink.toml`):
+
+| Command | Description |
+| --- | --- |
+| `mink init [path]` | Write a starter `mink.toml` |
+| `mink add <name> [--version <req> \| --path <dir>]` | Declare a dependency and install it |
+| `mink remove <name>` | Remove a declared dependency and uninstall what is no longer required |
+| `mink install [path] [--check]` | Resolve dependencies, install them into the project, and write `mink.lock` |
+| `mink update [path]` | Re-resolve from the manifest, ignoring `mink.lock` |
+| `mink env new <name>` | Create and activate an isolated environment |
+| `mink env use <name>` | Activate an existing environment |
+| `mink env list` | List the project's environments |
+| `mink env remove <name>` | Remove an environment and its packages |
 
 Version and help are also available as global flags anywhere the command
 name would go: `mink --version`, `mink -V`, and `mink -v` all print the
@@ -153,7 +171,7 @@ mink explain E-T01             # explain a type mismatch error
 - **Math** — abs, min, max, clamp, pow, sqrt, div/mod, sign
 - **Encoding** — Base64, hex, URL encoding/decoding
 - **Time** — current time, formatting, epoch *(high-res timing partial)*
-- **Environment** — get/set environment variables (V1 stubs — API exists but not yet wired to Windows API)
+- **Environment** — get/set/has/remove environment variables, wired to the Windows API
 
 ## What's Next
 
@@ -163,10 +181,10 @@ MINK currently targets **Windows x64**. The next major platform expansion is **L
 | --- | --- |
 | Windows x64 | Available |
 | npm distribution | Available |
+| Package manager | Available (manifest, resolver, lockfile, environments) |
+| Concurrency / threading | Available (threads, locks, async/await) |
 | Linux | Next major platform target |
 | macOS | Future / TBD |
-| Package manager | Future |
-| Concurrency / threading | Future |
 
 The project will continue expanding platform support, ecosystem libraries, and production capabilities. See the [Implementation Roadmap](docs/roadmap/IMPLEMENTATION_ROADMAP.md) for the full plan.
 
@@ -189,9 +207,23 @@ MINK ships with a growing standard library covering common development needs:
 | `encoding` | Base64, hex, URL encoding/decoding |
 | `time` | Current time, formatting, epoch *(high-res timing partial)* |
 | `random` | Random integers, bytes, boolean |
-| `environment` | Get/set environment variables *(V1 stubs)* |
+| `environment` | Get/set/has/remove environment variables |
+| `tls` | TLS 1.2/1.3 client and HTTPS GET (Windows Schannel) |
+| `zip` | PKZIP (`.zip`) reader and writer |
+| `zlib` | DEFLATE, zlib and gzip compression/decompression |
+| `sqlite` | Embedded relational database: statements, results, transactions |
+| `threads` | Threads and locks |
+| `tasks` | Async tasks and the event loop |
+| `re` | Regular expressions |
+| `csv` | RFC 4180 CSV reading and writing |
+| `logging` | Leveled logging to stderr |
+| `option` | `Option<T>` — a value that may be absent |
+| `result` | `Result<T, E>` — a value or an error |
+| `assert` | Test assertions: `assert_true`, `assert_false`, and typed `assert_eq_*` / `assert_ne_*` helpers (`_int`, `_str`, `_float`) |
 
 Standard library files live in the `stdlib/` directory and are imported with `use`.
+They are also bundled next to the compiler in the npm package, so `mod`/`use` of
+a standard-library module works in any project without configuration.
 
 ## Language Features
 
@@ -309,10 +341,14 @@ Quality gates:
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets
 cargo test
 cargo build
 ```
+
+`cargo fmt --check` is clean. `cargo clippy --all-targets` reports a non-zero warning
+baseline (dead code and missing documentation in the native backend), so it does not yet
+pass `-D warnings`; the gate is that no change adds a new warning.
 
 ## Repository Layout
 
@@ -320,6 +356,7 @@ cargo build
 ├── docs/       Language & architecture specifications + implementation records
 ├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
 ├── stdlib/     Standard library (MINK source)
+├── examples/   Complete example programs (one directory each)
 ├── tests/      Compiler tests
 ├── npm/        npm distribution package
 ├── Cargo.toml  Package manifest

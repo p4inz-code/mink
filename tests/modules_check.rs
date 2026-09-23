@@ -54,6 +54,36 @@ fn missing_module_file_is_reported() {
     assert!(result.is_err(), "should fail for missing module file");
 }
 
+#[test]
+fn missing_module_file_message_names_the_file() {
+    let mut sources = mink::source::SourceMap::new();
+    let path = Path::new("tests/modules/bad_import.mink");
+    let error = mink::driver::check(&mut sources, path).expect_err("should fail");
+    let mink::driver::BuildError::FrontEnd(report) = error else {
+        panic!("expected a front-end error, got {error}");
+    };
+    let rendered = report
+        .errors
+        .iter()
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    // The message names the missing file rather than wrapping that sentence in
+    // the unresolved-*identifier* template (which read
+    // "cannot find name `module file '...' not found` in this scope").
+    assert!(
+        rendered.contains("module file '") && rendered.contains("nonexistent.mink' not found"),
+        "the message must name the missing module file: {rendered}"
+    );
+    assert!(
+        !rendered.contains("cannot find name"),
+        "a missing `mod` file is not an unresolved identifier: {rendered}"
+    );
+    // It stays in the unresolved-name category, whose documented causes
+    // include a failed module import.
+    assert_eq!(report.errors[0].code(), "E-S01", "{rendered}");
+}
+
 // ======================================================================
 // Single file backward compatibility
 // ======================================================================

@@ -36,7 +36,9 @@ use std::path::{Path, PathBuf};
 pub use env::EnvError;
 pub use install::{InstallError, InstallOutcome, Installed, VerifyOutcome};
 pub use lock::{LOCK_NAME, Lock, LockError, LockPackage};
-pub use manifest::{Dependency, MANIFEST_NAME, Manifest, ManifestError, Source};
+pub use manifest::{
+    Dependency, MANIFEST_NAME, Manifest, ManifestError, Source, package_name_from_directory,
+};
 pub use resolver::{Resolution, ResolveError, ResolvedPackage};
 pub use version::{Requirement, Version, VersionError};
 

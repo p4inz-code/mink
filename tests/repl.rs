@@ -184,6 +184,40 @@ fn r13_repl_loads_initial_file() {
     assert!(stdout.contains("42"), "stdout={stdout:?}");
 }
 
+/// A REPL session seeded with a file must be able to call that file's
+/// project-local modules.
+///
+/// Generated transcripts are compiled with the seeded file's directory as the
+/// module search base. Writing them to the system temp directory made
+/// `mod helper;` look for `%TEMP%\helper.mink` and fail with
+/// "module file ... not found".
+#[test]
+fn r15_repl_resolves_a_sibling_module() {
+    let dir = std::env::temp_dir().join(format!("mink_repl_dir_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create session directory");
+    std::fs::write(
+        dir.join("helper.mink"),
+        "pub fn triple(x: Int) -> Int { return x * 3; }\n",
+    )
+    .expect("write sibling module");
+    let main = dir.join("main.mink");
+    std::fs::write(
+        &main,
+        "mod helper;\nuse helper::triple;\n\nfn main() {\n    rt_print_int(triple(14));\n    return 0;\n}\n",
+    )
+    .expect("write main source");
+
+    let (code, stdout, stderr) = repl_with_file(&main, "triple(14)\n");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("42"),
+        "the sibling module must resolve: stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(!stderr.contains("not found"), "stderr={stderr:?}");
+}
+
 #[test]
 fn r14_repl_repeated_evaluation_is_stable() {
     let mut script = String::from("fn sq(x: Int) -> Int { return x * x; }\n");

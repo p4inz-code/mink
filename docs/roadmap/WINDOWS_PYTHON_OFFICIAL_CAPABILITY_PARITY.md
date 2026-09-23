@@ -67,7 +67,7 @@ probes). Every "every major claim must be traceable" row carries anchors in Note
 | Starting commit | `86642b4` (Session 117 close), clean tree | `git rev-parse HEAD`, `git status` |
 | Version | `mink 1.0.1` | `target/release/mink.exe --version` |
 | Release build | clean | `cargo build --release` |
-| Test suite | 72 test units (71 integration targets + lib); final-audit regression: **2 941 passed, 3 ignored, 0 failures** across every unit | `cargo test` per target group + repeated stress runs; see the Session 118 report |
+| Test suite | 72 test units (71 integration targets + lib); public-acceptance regression: **2 946 passed, 3 ignored, 0 failures** across every unit | `cargo test` per target group + repeated stress runs; see the Session 119 report |
 | Smoke/CLI/release suites | smoke 13/13 · release 68/68 · cli 74/74 (+1 ignored) | `cargo test --test {smoke,release,cli}` |
 | `windows_hardening` | 18/18 in **both** parallel and `--test-threads=1` modes, deterministically (Session 118 harness fix; was parallel-hanging before it) | `cargo test --test windows_hardening` × 6 parallel runs |
 | Windows target | `x86_64-windows-pe` implemented | `[code] src/backend/target.rs` |
@@ -664,7 +664,7 @@ Compiler pipeline and targets: `[code] src/{lexer,parser,ast,semantics,typecheck
 Entry/CLI: `[code] src/cli.rs`, `src/driver.rs`, `src/backend/mod.rs`. Modules: `src/module/mod.rs`.
 Runtime services/intrinsics: `[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`, `src/backend/emit/pe.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/{allocator,error,abi}.rs`.
 Standard library: `[code] stdlib/*.mink` (26 modules: assert, collections, crypto, csv, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, re, result, sqlite, strings, tasks, threads, time, tls, zip, zlib — each mirrored into the npm bundle, with `tests/release.rs` guarding the mirror byte-for-byte).
-Test suite (execution-verified native runs): `[test] tests/*.rs` (71 integration targets + the library unit tests; 2 941 passed · 3 ignored · 0 failed in the Session 118 final audit) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, sqlite_lib, zip_lib, zlib_lib, re_lib, threads_lib, async_lib, tls_lib, packages, package_manager, repl, test_runner, windows_hardening, release, cli, smoke.
+Test suite (execution-verified native runs): `[test] tests/*.rs` (71 integration targets + the library unit tests; 2 946 passed · 3 ignored · 0 failed in the Session 119 public-acceptance audit — 2 941 as of Session 118, plus the 5 regression tests that audit added) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, sqlite_lib, zip_lib, zlib_lib, re_lib, threads_lib, async_lib, tls_lib, packages, package_manager, repl, test_runner, windows_hardening, release, cli, smoke.
 Recorded real execution: `[exec]` SESSION_92..97 docs (crypto vectors, HTTP POST byte-exact echo, process 1 MB drain, npm clean installs ×2, standalone exe) and this session's native probes (short-circuit, div-by-zero fault status 148).
 Specs/plans: `[doc] docs/core/*`, `docs/language/*`, `docs/ecosystem/*` (C_ABI_SPEC, PACKAGE_ARCHITECTURE, SECURITY_ARCHITECTURE, STDLIB_ARCHITECTURE), `docs/roadmap/*`, `docs/implementation/SESSION_*`.
 

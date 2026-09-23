@@ -586,7 +586,7 @@ fn discover_modules_recursive(
     let canon = match path.canonicalize() {
         Ok(p) => p,
         Err(_) => {
-            errors.push(CheckError::Semantic(SemanticError::unresolved(
+            errors.push(CheckError::Semantic(SemanticError::module_not_found(
                 format!("module file '{}' not found", path.display()),
                 Span::new(SourceId::new(0), 0..0),
             )));
@@ -599,7 +599,7 @@ fn discover_modules_recursive(
     let source_id = match sources.load(path) {
         Ok(id) => id,
         Err(_) => {
-            errors.push(CheckError::Semantic(SemanticError::unresolved(
+            errors.push(CheckError::Semantic(SemanticError::module_not_found(
                 format!("module file '{}' not found", path.display()),
                 Span::new(SourceId::new(0), 0..0),
             )));

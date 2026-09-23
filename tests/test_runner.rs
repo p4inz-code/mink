@@ -53,6 +53,47 @@ fn test_with_full_source(body: &str) -> (i32, String) {
 }
 
 // ============================================================
+// MODULE RESOLUTION
+// ============================================================
+
+/// A test file's project-local `mod` declarations must resolve.
+///
+/// The wrapper that `mink test` generates is compiled with the file under
+/// test as its root, and module resolution is relative to that root file's
+/// directory. Writing the wrapper to the system temp directory made
+/// `mod helper;` look for `%TEMP%\helper.mink` and fail with
+/// "module file ... not found".
+#[test]
+fn t13_test_command_resolves_a_sibling_module() {
+    let dir = std::env::temp_dir().join(format!(
+        "mink_tr_dir_{}_{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    std::fs::write(
+        dir.join("helper.mink"),
+        "pub fn triple(x: Int) -> Int { return x * 3; }\n",
+    )
+    .expect("write sibling module");
+    let test_path = dir.join("test_helper.mink");
+    std::fs::write(
+        &test_path,
+        "mod helper;\nuse helper::triple;\n\nfn test_triple() {\n    if triple(14) != 42 { rt_exit(1); }\n    return;\n}\n\nfn main() { return 0; }\n",
+    )
+    .expect("write test source");
+
+    let (code, out) = run_mink_test(&test_path);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        code == 0,
+        "the sibling module must resolve (exit {code}): {out}"
+    );
+    assert!(out.contains("PASS: test_triple"), "{out}");
+    assert!(!out.contains("not found"), "{out}");
+}
+
+// ============================================================
 // TEST DISCOVERY
 // ============================================================
 

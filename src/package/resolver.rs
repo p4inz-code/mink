@@ -163,7 +163,11 @@ impl fmt::Display for ResolveError {
                 wanted,
                 available,
             } => {
-                write!(f, "no version of '{name}' satisfies {}", describe(wanted))?;
+                write!(
+                    f,
+                    "no version of '{name}' satisfies {}",
+                    describe_requirements(wanted)
+                )?;
                 if available.is_empty() {
                     write!(f, " (no versions of '{name}' are available)")
                 } else {
@@ -220,6 +224,24 @@ fn describe(wanted: &[Requested]) -> String {
         _ => wanted
             .iter()
             .map(|request| format!("'{}' wants '{}'", request.from, request.requirement))
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
+/// One requirement line in a "no candidate" diagnostic:
+/// `'^1.0.0' required by 'demo'`.
+///
+/// [`describe`] is used where a clause like `conflicting requirements for
+/// 'x': 'a' wants '^1'` reads as a sentence; a "no version satisfies …"
+/// diagnostic needs the requirement itself to lead, which is what this
+/// renders.
+fn describe_requirements(wanted: &[Requested]) -> String {
+    match wanted {
+        [] => "no requirement".to_string(),
+        _ => wanted
+            .iter()
+            .map(|request| format!("'{}' required by '{}'", request.requirement, request.from))
             .collect::<Vec<_>>()
             .join(", "),
     }
@@ -746,7 +768,16 @@ mod tests {
         );
         let error = resolve_scratch(&scratch).expect_err("missing");
         assert_eq!(error.code(), "E-PKG05");
-        assert!(error.to_string().contains("no versions of 'ghost'"));
+        let text = error.to_string();
+        assert!(text.contains("no versions of 'ghost'"), "{text}");
+        // The requirement leads the clause, so the sentence reads
+        // "no version of 'ghost' satisfies '^1.0.0' required by 'demo'"
+        // rather than "no version of 'ghost' satisfies 'demo' wants '^1.0.0'".
+        assert!(
+            text.contains("satisfies '^1.0.0' required by 'demo'"),
+            "{text}"
+        );
+        assert!(!text.contains("wants"), "{text}");
     }
 
     #[test]

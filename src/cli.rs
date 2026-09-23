@@ -4,7 +4,7 @@
 //! maps outcomes to process exit codes. Intentionally dependency-free and
 //! minimal; it will grow alongside the commands it serves.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::backend::{BackendError, TARGET_NAMES, Target};
@@ -726,12 +726,14 @@ fn parse_init(args: &[String]) -> Result<Command, String> {
         index += 1;
     }
     let path = path.unwrap_or_else(|| PathBuf::from("."));
-    // The default name is the directory's name, lowercased and sanitised.
+    // The default name is derived from the directory's name and sanitised
+    // into a legal package name, so `mink init` works in a directory called
+    // `My Project` or `proj-测试` without the user inventing a name.
     let default_name = path
         .canonicalize()
         .unwrap_or_else(|_| path.clone())
         .file_name()
-        .map(|name| name.to_string_lossy().to_lowercase())
+        .map(|name| crate::package::package_name_from_directory(&name.to_string_lossy()))
         .unwrap_or_else(|| "project".to_string());
     let name = name.unwrap_or(default_name);
     Ok(Command::Init {
@@ -1009,15 +1011,35 @@ fn render_repl_build_error(sources: &SourceMap, error: &BuildError) -> String {
     out
 }
 
+/// The directory a generated source (a `mink test` wrapper or a REPL
+/// transcript) must be written to.
+///
+/// Generated sources have to sit beside the file they are derived from:
+/// module resolution is relative to the *source file's* directory, so a file
+/// containing `mod helper;` only resolves `helper.mink` when it is compiled
+/// from a path whose parent holds it. The system temp directory is the right
+/// home only when there is no input file at all (a bare `mink repl`).
+fn generated_source_dir(input: &Path) -> PathBuf {
+    input
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
+
 /// Builds `source` as a native program and runs it, forwarding the child's
 /// stdout/stderr. Returns the rendered compile error on failure.
+///
+/// `dir` is the directory the generated source is written to (see
+/// [`generated_source_dir`]).
 fn repl_build_and_run(
+    dir: &Path,
     source: &str,
     target: Target,
     counter: u64,
     attempt: u64,
 ) -> Result<(), String> {
-    let path = std::env::temp_dir().join(format!(
+    let path = dir.join(format!(
         "mink_repl_{}_{}_{}.mink",
         std::process::id(),
         counter,
@@ -1059,7 +1081,7 @@ fn repl_build_and_run(
 /// Bare expressions are printed by trying `rt_print_int(expr)` first and then
 /// `rt_print_str(expr)`, so an interactive line produces a value without the
 /// user writing a print call explicitly.
-fn repl_eval(defs: &str, input: &str, target: Target, counter: u64) {
+fn repl_eval(defs: &str, input: &str, target: Target, dir: &Path, counter: u64) {
     let candidates: Vec<String> = if input.ends_with(';') || repl_is_statement(input) {
         vec![format!("fn main() {{\n{input}\n}}\n")]
     } else {
@@ -1071,7 +1093,7 @@ fn repl_eval(defs: &str, input: &str, target: Target, counter: u64) {
     let mut last_error = String::new();
     for (index, body) in candidates.iter().enumerate() {
         let source = format!("{defs}\n{body}");
-        match repl_build_and_run(&source, target, counter, index as u64) {
+        match repl_build_and_run(dir, &source, target, counter, index as u64) {
             Ok(()) => return,
             Err(message) => last_error = message,
         }
@@ -1085,9 +1107,14 @@ fn run_repl(initial: Option<&std::path::Path>, target: Target) -> ExitCode {
     use std::io::{BufRead, Write};
 
     let mut defs = String::new();
+    // Generated sources are compiled from the seeded file's own directory so
+    // its `mod` declarations resolve; a bare session has no file, so the
+    // system temp directory is used.
+    let mut dir = std::env::temp_dir();
     if let Some(path) = initial {
         match std::fs::read_to_string(path) {
             Ok(source) => {
+                dir = generated_source_dir(path);
                 defs.push_str(&strip_main_fn(&source));
                 defs.push('\n');
             }
@@ -1160,7 +1187,7 @@ fn run_repl(initial: Option<&std::path::Path>, target: Target) -> ExitCode {
             continue;
         }
         counter += 1;
-        repl_eval(&defs, trimmed, target, counter);
+        repl_eval(&defs, trimmed, target, &dir, counter);
     }
     ExitCode::SUCCESS
 }
@@ -1266,8 +1293,11 @@ fn run_test_command(path: &PathBuf, target: Target) -> ExitCode {
 
     // Strip any existing `fn main` from the source so the wrapper can provide its own.
     let source_no_main = strip_main_fn(&source);
+    // Wrappers are written beside the file under test so its `mod`
+    // declarations (sibling modules, installed packages) resolve.
+    let dir = generated_source_dir(path);
 
-    for test_name in &test_names {
+    for (index, test_name) in test_names.iter().enumerate() {
         // Build a wrapper source that includes the original source (minus main)
         // and adds a main function calling the test function.
         let wrapper = format!(
@@ -1275,9 +1305,14 @@ fn run_test_command(path: &PathBuf, target: Target) -> ExitCode {
             source_no_main, test_name
         );
 
-        let wrapper_path = std::env::temp_dir().join(format!("mink_test_{}.mink", test_name));
+        let wrapper_path = dir.join(format!(
+            "mink_test_{}_{}_{}.mink",
+            std::process::id(),
+            index,
+            test_name
+        ));
         if let Err(e) = std::fs::write(&wrapper_path, &wrapper) {
-            eprintln!("mink: error: failed to write temp file: {e}");
+            eprintln!("mink: error: failed to write test wrapper: {e}");
             failed += 1;
             failures.push(test_name.clone());
             continue;

@@ -55,6 +55,14 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 > 18/18 deterministically in parallel and serial modes with no `--test-threads=1`
 > workaround. See `docs/implementation/SESSION_118_WINDOWS_FINAL_AUDIT.md`.
 
+> **Session 119 note (public acceptance audit).** The checkpoint was then re-audited as a
+> *public contract* rather than as a parity gate: the README's commands, examples, standard
+> library, install steps and the packaged npm distribution were executed from clean external
+> directories. Four real defects were found and fixed (see
+> `docs/implementation/SESSION_119_WINDOWS_PUBLIC_ACCEPTANCE_AUDIT.md`) and the full regression
+> is now **2 946 passed / 3 ignored / 0 failed** — Session 118's 2 941 plus the 5 regression
+> tests the audit added. The 232 rows still reconcile mechanically with P0 = 0 and P1 = 0.
+
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
 completion gate; nothing in a later wave may silently redefine an earlier wave's gate.

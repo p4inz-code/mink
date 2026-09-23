@@ -1,8 +1,9 @@
 // ============================================================
 // MINK assert library — Session 108 (S78)
 // ============================================================
-// Provides assert_eq, assert_ne, assert_true, assert_false for
-// MINK-native test assertions.
+// Provides assert_true, assert_false and the typed comparisons
+// assert_eq_int / assert_ne_int / assert_eq_str / assert_ne_str /
+// assert_eq_float for MINK-native test assertions.
 //
 // On failure: prints a diagnostic to stderr and exits with code 1.
 // On success: silent (exit 0 from caller).

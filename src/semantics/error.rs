@@ -133,6 +133,23 @@ impl SemanticError {
         }
     }
 
+    /// Creates a module-resolution error at `span` whose message is
+    /// `detail` (for example `module file 'helper.mink' not found`).
+    ///
+    /// This shares the unresolved-name category — `E-S01`, whose documented
+    /// causes include a failed module import — but carries its own message
+    /// instead of the name-quoting template, so a missing `mod` file reads as
+    /// a sentence naming the file rather than as an unresolved *identifier*.
+    pub fn module_not_found(detail: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind: SemanticErrorKind::UnresolvedName,
+            span,
+            name: String::new(),
+            original: None,
+            detail: Some(detail.into()),
+        }
+    }
+
     /// Creates a duplicate-definition error for `name` at `span`, whose
     /// original declaration is at `original`.
     pub fn duplicate(name: impl Into<String>, span: Span, original: Span) -> Self {
@@ -376,9 +393,10 @@ impl SemanticError {
 impl fmt::Display for SemanticError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self.kind {
-            SemanticErrorKind::UnresolvedName => {
-                format!("cannot find name `{}` in this scope", self.name)
-            }
+            SemanticErrorKind::UnresolvedName => self
+                .detail
+                .clone()
+                .unwrap_or_else(|| format!("cannot find name `{}` in this scope", self.name)),
             SemanticErrorKind::DuplicateDefinition => {
                 format!("duplicate definition of `{}`", self.name)
             }

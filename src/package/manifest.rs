@@ -320,6 +320,44 @@ pub fn is_valid_package_name(name: &str) -> bool {
             .is_some_and(|b| b.is_ascii_alphanumeric())
 }
 
+/// Derives a legal package name from a directory name that may contain
+/// spaces, punctuation, uppercase, or non-ASCII characters.
+///
+/// ASCII letters are lowercased, digits are kept, and every other character
+/// separates words: `-` and `_` survive as themselves and anything else
+/// (spaces, dots, non-ASCII) becomes `-`. Leading, trailing, and repeated
+/// separators are dropped, so the result always starts with a letter or digit.
+/// A directory name with nothing usable left yields `project`.
+///
+/// The result always satisfies [`is_valid_package_name`]; this is what makes
+/// `mink init` work in a directory whose name is not already a legal package
+/// name (for example `My Project` or `proj-测试`).
+///
+/// This is only used for the *derived* default name; an explicit `--name` is
+/// still validated as typed.
+pub fn package_name_from_directory(directory: &str) -> String {
+    let mut name = String::new();
+    for ch in directory.chars() {
+        if ch.is_ascii_alphanumeric() {
+            name.push(ch.to_ascii_lowercase());
+        } else {
+            let separator = if ch == '_' { '_' } else { '-' };
+            if name.is_empty() || name.ends_with('-') || name.ends_with('_') {
+                continue;
+            }
+            name.push(separator);
+        }
+    }
+    while name.ends_with('-') || name.ends_with('_') {
+        name.pop();
+    }
+    if name.is_empty() {
+        "project".to_string()
+    } else {
+        name
+    }
+}
+
 /// Rejects an illegal package name.
 fn validate_package_name(name: &str, path: &Path) -> Result<(), ManifestError> {
     if is_valid_package_name(name) {
@@ -1196,5 +1234,44 @@ util = \"2.0.0\"
         assert!(!is_valid_package_name("Upper"));
         assert!(!is_valid_package_name("has space"));
         assert!(!is_valid_package_name("has/slash"));
+    }
+
+    #[test]
+    fn directory_names_derive_valid_package_names() {
+        // Already legal, apart from case.
+        assert_eq!(package_name_from_directory("demo"), "demo");
+        assert_eq!(package_name_from_directory("My Project"), "my-project");
+        assert_eq!(package_name_from_directory("my_project"), "my_project");
+        // Spaces, Unicode, and punctuation all become separators.
+        assert_eq!(
+            package_name_from_directory("my app ünicode"),
+            "my-app-nicode"
+        );
+        assert_eq!(package_name_from_directory("proj-测试"), "proj");
+        assert_eq!(package_name_from_directory("a (copy)"), "a-copy");
+        // Separators collapse and never lead or trail.
+        assert_eq!(package_name_from_directory("  a--b  "), "a-b");
+        assert_eq!(package_name_from_directory("2024 data"), "2024-data");
+        // Nothing usable left.
+        assert_eq!(package_name_from_directory(""), "project");
+        assert_eq!(package_name_from_directory("测试"), "project");
+        assert_eq!(package_name_from_directory("..."), "project");
+        // Every derived name must be legal.
+        for directory in [
+            "demo",
+            "My Project",
+            "my app ünicode",
+            "proj-测试",
+            "2024 data",
+            "...",
+            "测试",
+            "mink proj π",
+        ] {
+            let name = package_name_from_directory(directory);
+            assert!(
+                is_valid_package_name(&name),
+                "'{directory}' derived illegal name '{name}'"
+            );
+        }
     }
 }
