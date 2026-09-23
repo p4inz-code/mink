@@ -4440,6 +4440,13 @@ fn emit_map_insert(code: &mut Code, offsets: &RuntimeOffsets) {
     );
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x85, probe_next); // jne — different key
+    // FOUND: the table already owns an equal key, so it keeps its own copy.
+    // The call consumed the key argument, so release it here: otherwise a
+    // replacement leaks the caller's key and the program fails with a
+    // spurious E-R06 (memory leak) at exit.
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // key_desc
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
     // FOUND: free the previous value, then copy the new value words.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -104); // bucket key addr
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40); // key_size
@@ -5244,6 +5251,7 @@ fn emit_set_insert(code: &mut Code, offsets: &RuntimeOffsets) {
     let occ_empty = code.label();
     let probe_done = code.label();
     let probe_next = code.label();
+    let dup_found = code.label();
     code.bind_label(probe_loop);
     // bucket = set + SET_HEADER + idx*bucket_size.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
@@ -5269,8 +5277,17 @@ fn emit_set_insert(code: &mut Code, offsets: &RuntimeOffsets) {
         &[Reg::Rcx, Reg::R10, Reg::Rdx],
     );
     code.test_rr(Reg::Rax, Reg::Rax);
-    code.jcc_label(0x84, probe_done); // jz — duplicate: nothing to do
+    code.jcc_label(0x84, dup_found); // jz — duplicate element
     code.jmp_label(probe_next);
+    code.bind_label(dup_found);
+    // The set already holds an equal element, so it keeps its own copy. The
+    // call consumed the element argument, so release it here: otherwise a
+    // duplicate insert leaks and the program fails with a spurious E-R06 at
+    // exit.
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // elem_desc
+    call_service(code, RuntimeService::CollFreeValue, &[Reg::Rax, Reg::Rdx]);
+    code.jmp_label(probe_done);
     code.bind_label(probe_next);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
     code.add_rax_one();

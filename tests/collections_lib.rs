@@ -776,8 +776,190 @@ fn main() -> Int {
     assert_success(code, &out);
 }
 
-// BUG 4: Allocator free-list reuse returned blocks with stale occupied=1
-// bucket flags, causing insert probe loops to spin forever (hang).
+// SESSION 119 (BUG 5): `rt_map_insert` consumed its key argument but, on the
+// REPLACE path, freed only the previous value. The caller's key was therefore
+// never released, so an ordinary counting/grouping loop — `count[x] += 1`,
+// the most common map idiom there is — leaked one key per repeated key and
+// died with a spurious E-R06 (memory leak) at exit.
+#[test]
+fn s119_map_replacing_a_heap_key_does_not_leak() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut m = rt_map_new(4);
+    // A fresh heap key per insert: three allocations for one map slot.
+    let mut i = 0;
+    while i < 3 {
+        m = rt_map_insert(m, rt_str_concat("k", "ey"), i);
+        i = i + 1;
+    }
+    if rt_map_len(m) != 1 {
+        rt_print_str("FAIL: len");
+        return 1;
+    }
+    if rt_map_get(m, "key") != 2 {
+        rt_print_str("FAIL: replacement value");
+        return 2;
+    }
+    rt_map_free(m);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// SESSION 119 (BUG 5, literal keys): the replace path now releases the incoming
+// key. A string literal is not a heap allocation, so freeing one must stay a
+// no-op: replacing a literal key must not report an invalid free (E-R04).
+#[test]
+fn s119_map_replacing_a_literal_key_is_not_an_invalid_free() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, "one", 1);
+    m = rt_map_insert(m, "one", 2);
+    if rt_map_get(m, "one") != 2 {
+        rt_print_str("FAIL: value");
+        return 1;
+    }
+    rt_map_free(m);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// SESSION 119 (BUG 5, immediate keys): integer keys carry no allocation, so the
+// new key release must be a no-op for them as well.
+#[test]
+fn s119_map_replacing_an_int_key_does_not_leak() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, 7, 1);
+    m = rt_map_insert(m, 7, 2);
+    m = rt_map_insert(m, 8, 3);
+    if rt_map_len(m) != 2 {
+        rt_print_str("FAIL: len");
+        return 1;
+    }
+    if rt_map_get(m, 7) != 2 {
+        rt_print_str("FAIL: value");
+        return 2;
+    }
+    rt_map_free(m);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// SESSION 119 (BUG 6): `rt_set_insert` jumped straight to the exit on a
+// duplicate, so the element argument it had consumed was never released. A
+// set-dedupe loop therefore leaked one allocation per duplicate.
+#[test]
+fn s119_set_duplicate_heap_element_does_not_leak() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut s = rt_set_new(4);
+    let mut i = 0;
+    while i < 3 {
+        s = rt_set_insert(s, rt_str_concat("a", "b"));
+        i = i + 1;
+    }
+    if rt_set_len(s) != 1 {
+        rt_print_str("FAIL: len");
+        return 1;
+    }
+    if !rt_set_has(s, "ab") {
+        rt_print_str("FAIL: has");
+        return 2;
+    }
+    rt_set_free(s);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// SESSION 119 (BUG 6, literal elements): freeing the consumed element on a
+// duplicate must stay a no-op for literals and immediates.
+#[test]
+fn s119_set_duplicate_literal_element_is_not_an_invalid_free() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    // A set has one element type, so the literal case and the immediate case
+    // need a set each.
+    let mut strings = rt_set_new(4);
+    strings = rt_set_insert(strings, "echo");
+    strings = rt_set_insert(strings, "echo");
+    if rt_set_len(strings) != 1 {
+        rt_print_str("FAIL: string-set len");
+        return 1;
+    }
+    rt_set_free(strings);
+    let mut ints = rt_set_new(4);
+    ints = rt_set_insert(ints, 41);
+    ints = rt_set_insert(ints, 41);
+    if rt_set_len(ints) != 1 {
+        rt_print_str("FAIL: int-set len");
+        return 2;
+    }
+    rt_set_free(ints);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
+
+// SESSION 119: end-to-end shape of the real-world program that found BUG 5 —
+// count occurrences by key while allocating a key per item, then read the
+// counts back and release everything.
+#[test]
+fn s119_grouping_by_heap_key_round_trips_without_leaking() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut counts = rt_map_new(8);
+    let mut keys = rt_vec_new(8);
+    keys = rt_vec_push(keys, "txt");
+    keys = rt_vec_push(keys, "txt");
+    keys = rt_vec_push(keys, "md");
+    keys = rt_vec_push(keys, "txt");
+    let n = rt_vec_len(keys);
+    let mut i = 0;
+    while i < n {
+        let key = rt_str_concat("", rt_vec_get(keys, i));
+        let mut seen = 0;
+        if rt_map_has(counts, key) {
+            seen = rt_map_get(counts, key);
+        }
+        counts = rt_map_insert(counts, key, seen + 1);
+        i = i + 1;
+    }
+    if rt_map_len(counts) != 2 {
+        rt_print_str("FAIL: distinct keys");
+        return 1;
+    }
+    if rt_map_get(counts, "txt") != 3 {
+        rt_print_str("FAIL: txt count");
+        return 2;
+    }
+    if rt_map_get(counts, "md") != 1 {
+        rt_print_str("FAIL: md count");
+        return 3;
+    }
+    rt_vec_free(keys);
+    rt_map_free(counts);
+    return 0;
+}"#,
+    );
+    assert_success(code, &out);
+}
 // Construction + destruction must not hang.
 #[test]
 fn s106_set_construction_destruction_no_hang() {
