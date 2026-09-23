@@ -105,6 +105,14 @@ mink build hello.mink    # creates hello.exe
 ./hello.exe               # runs the executable
 ```
 
+Program arguments go to the built executable, not through `mink run` (which
+takes only the source file):
+
+```bash
+mink build program.mink    # creates program.exe
+./program.exe input.txt     # rt_argc() == 1, rt_argv(0) == "input.txt"
+```
+
 The generated `.exe` is a standalone Windows executable. Copy it to any Windows 10+ x86_64 machine and run it — no MINK compiler needed on the target.
 
 ## Commands
