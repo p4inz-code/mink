@@ -33,7 +33,7 @@
 | Target Triple | Architecture | OS | ABI | Status |
 |---------------|-------------|-----|-----|--------|
 | `x86_64-pc-windows-msvc` | x86_64 | Windows | MSVC | **Implemented** (as `x86_64-windows-pe`) |
-| `x86_64-unknown-linux-gnu` | x86_64 | Linux | GNU | Recognized, not implemented |
+| `x86_64-unknown-linux-gnu` | x86_64 | Linux | GNU | Implemented as `x86_64-linux-elf` (FROZEN by policy) |
 | `aarch64-unknown-linux-gnu` | ARM64 | Linux | GNU | Recognized, not implemented |
 | `aarch64-apple-darwin` | ARM64 | macOS | Darwin | Recognized, not implemented |
 | `x86_64-apple-darwin` | x86_64 | macOS | Darwin | Future |
@@ -104,7 +104,7 @@ The `Target` enum selects the emitter:
 ```rust
 pub enum Target {
     X86_64WindowsPe,    // Implemented
-    X86_64LinuxElf,     // Recognized, not implemented
+    X86_64LinuxElf,     // Implemented as `x86_64-linux-elf` (FROZEN by policy)
     AArch64LinuxElf,    // Recognized, not implemented
 }
 ```

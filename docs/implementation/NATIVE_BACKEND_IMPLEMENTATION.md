@@ -79,15 +79,17 @@ which finds and validates the entry function, lowers, verifies, and emits:
 
 `Target` (`src/backend/target.rs`) is an instruction-set/OS/format triple:
 
-- `x86_64-windows-pe` — **implemented**: 64-bit x86-64 Windows PE image.
-  Chosen first because the build environment is x86-64 Windows and the
-  target needs no external toolchain.
-- `x86_64-linux-elf` — recognized, not implemented (`E-B11`).
+- `x86_64-windows-pe` — **implemented**, the supported production target:
+  64-bit x86-64 Windows PE image. Chosen first because the build environment
+  is x86-64 Windows and the target needs no external toolchain.
+- `x86_64-linux-elf` — **implemented** (`src/backend/emit/elf.rs`,
+  `src/backend/emit/linux_runtime.rs`) but **FROZEN** by policy: the ELF emitter
+  exists, yet Linux development is paused and Linux is not a supported platform.
 - `aarch64-linux-elf` — recognized, not implemented (`E-B11`).
 
 `--target <name>` selects explicitly; unrecognized names are `E-B12`.
-`Target::native()` currently selects `x86_64-windows-pe` on every host (the
-first milestone implements one target).
+`Target::native()` selects `x86_64-linux-elf` on an x86-64 Linux host and
+`x86_64-windows-pe` otherwise.
 
 ## 4. The Backend Instruction Representation
 
@@ -319,8 +321,10 @@ documented in `src/runtime/abi.rs`:
   optimized the input).
 - Source mapping is preserved on every instruction for future diagnostics
   and debug info, but no consumer exists yet.
-- The image targets Windows only; `Target::native()` is the first target on
-  every host until more targets land.
+- The **supported** image targets Windows x86_64. A native `x86_64-linux-elf`
+  emitter also exists (`src/backend/emit/elf.rs`) and is what `Target::native()`
+  selects on an x86-64 Linux host, but Linux is FROZEN by policy and is not a
+  supported platform; `aarch64-linux-elf` remains unimplemented (`E-B11`).
 
 ## 13. Quality Gates
 

@@ -8,6 +8,23 @@
 
 ---
 
+> **SUPERSEDED — historical Session 82 baseline (audited commit `c329968`).** For every
+> *current* capability claim the authoritative document is
+> [`docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md`](../roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md)
+> (232 rows, recomputed through Sessions 118–119), which explicitly supersedes this audit
+> where the two disagree. The classifications below predate most of the Windows completion
+> program and are retained only as the historical baseline. Statements below that are **no
+> longer current** include: "no interactive interpreter / no REPL" (R01/T04 delivered
+> Session 109); "no async" (R20/S73 delivered Session 114); "no concurrency / no threads"
+> (R19/R21/S71 delivered Session 112); "no package manager" (P04–P09 delivered Session
+> 116); the environment (`rt_env_*`) stub note (wired in Session 99); `x86_64-linux-elf`
+> "recognized but not implemented" (the ELF backend exists and is FROZEN by policy); and
+> the "16 library files" count (the compiler now ships **26** stdlib modules, bundled and
+> byte-guarded against the repository copy). The audit's own pipeline description and
+> evidence anchors remain accurate for their time.
+
+---
+
 ## 1. Executive Summary
 
 This audit establishes an evidence-based capability baseline comparing MINK 1.0.1 against Python's official language, runtime, standard library, tooling, packaging, and platform capabilities. Every classification is backed by direct code inspection — no assumptions from file names, documentation claims, or session reports were used.

@@ -5,6 +5,12 @@
 **Status:** DESIGN ONLY — not implemented
 **Scope:** Complete standard library design for the MINK ecosystem
 
+> **Note.** This document describes a *future* layered, package-based standard library
+> with per-module metadata, tests and benchmarks. What ships today is a separate, flat set
+> of **26** MINK-source modules under `stdlib/` (bundled next to the compiler). See the
+> Standard Library table in [`README.md`](../../README.md). Do not read this design as a
+> description of the shipped library.
+
 ---
 
 ## 1. Goals

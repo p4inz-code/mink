@@ -1,7 +1,17 @@
 # MINK Linux x86_64 Implementation Plan
 
-**Status:** Implementation Blueprint (Session 83)
+**Status:** Implementation Blueprint (Session 83) — **INACTIVE: Linux development is FROZEN**
 **Date:** August 31, 2026
+
+---
+
+> **Status note (current HEAD).** A native `x86_64-linux-elf` backend now exists
+> (`src/backend/emit/elf.rs`, `src/backend/emit/linux_runtime.rs`) and `Target::native()`
+> selects it on an x86-64 Linux host, so parts of the phases below are already covered.
+> However, **Linux development is FROZEN by policy**: this blueprint is not being executed,
+> no new Linux behavior is being implemented, and Linux is *not* a supported platform. The
+> supported, completed baseline is Windows x86_64. Preserve this plan's sequencing only;
+> do not treat it as active work.
 
 ---
 

@@ -1,6 +1,6 @@
 # MINK COMPREHENSIVE VERIFICATION STANDARD
 
-VERSION: POST-SESSION-100
+VERSION: POST-SESSION-119 (baseline refreshed by the documentation audit at commit ea5d625)
 STATUS: MANDATORY FOR ALL FUTURE MINK WORK
 
 ======================================================================
@@ -43,11 +43,11 @@ A capability may only be called VERIFIED when evidence supports the claim.
 Current verified baseline:
 
 * Windows x86_64 base: COMPLETE / STABLE
-* Windows Python official capability parity: PARTIAL
+* Windows Python official capability parity: GATE PASSED (P0 = 0, P1 = 0); P2/P3 roadmap work remains
 * Linux development: FROZEN
 * Linux behavior must not be modified unless explicitly unfrozen later
-* Current Session 100 final commit: 218bc1b
-* Current deterministic test baseline: 2574 passing
+* Current final commit (documentation audit): ea5d625
+* Current deterministic test baseline: 2952 passing · 3 ignored · 0 failed
 * Current P0 introduced by active Windows work: 0
 * Current P1 introduced by active Windows work: 0
 
@@ -1695,7 +1695,7 @@ Any mismatch must be corrected before completion.
 
 A higher test count does not prove higher quality.
 
-2574 passing tests are useful evidence, but not proof of every possible
+2952 passing tests are useful evidence, but not proof of every possible
 situation.
 
 Prefer:

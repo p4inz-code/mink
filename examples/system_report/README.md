@@ -22,7 +22,7 @@ so no standard-library modules or other files are required.
 ## Requirements
 
 - MINK >= 1.0.1 (Windows x86_64)
-- Installed via `npm install -g mink` (or the release zip)
+- Installed via `npm install -g @p4inz-code/mink` (or the release zip)
 
 ## Build
 

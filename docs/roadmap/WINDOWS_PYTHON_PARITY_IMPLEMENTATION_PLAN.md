@@ -63,6 +63,11 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 > is now **2 946 passed / 3 ignored / 0 failed** — Session 118's 2 941 plus the 5 regression
 > tests the audit added. The 232 rows still reconcile mechanically with P0 = 0 and P1 = 0.
 
+> **Documentation audit note (current HEAD, commit `ea5d625`).** The gate above still
+> holds. The current full regression is **2 952 passed / 3 ignored / 0 failed**; the
+> numbers inside the Session 118 and Session 119 notes above (2 941 and 2 946) are
+> historical snapshots. Windows remains the only active platform; Linux stays FROZEN.
+
 This plan converts the parity gap map into a dependency-aware implementation sequence.
 Wave letters below are the same as the matrix `Wave` column. Every wave ends with a
 completion gate; nothing in a later wave may silently redefine an earlier wave's gate.

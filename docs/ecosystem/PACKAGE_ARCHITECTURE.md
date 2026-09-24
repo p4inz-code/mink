@@ -2,7 +2,7 @@
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY — the V1 subset is implemented (see §26); the rest is design
 **Scope:** Complete package system design for the MINK ecosystem
 
 ---

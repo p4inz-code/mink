@@ -16,7 +16,7 @@ Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarde
 
 ## What is MINK?
 
-MINK is a compiled, general-purpose programming language built from the ground up — its own lexer, parser, type system, intermediate representations, optimizer, native code generator, and runtime. No external toolchain required: the compiler produces standalone Windows executables with zero dependencies.
+MINK is a compiled, general-purpose programming language built from the ground up — its own lexer, parser, type system, intermediate representations, optimizer, native code generator, and runtime. No external toolchain is required: the compiler produces standalone Windows executables that carry no third-party runtime dependency and import only Windows system libraries.
 
 MINK is designed for systems programming and application development, with a focus on catching errors early and providing predictable, deterministic behavior.
 
@@ -25,6 +25,15 @@ MINK is designed for systems programming and application development, with a foc
 **MINK requires Windows x64.** Linux and macOS are not currently supported.
 
 MINK is distributed through npm. You need **Node.js 18 or newer** (which includes npm).
+
+> **Repository vs. published package — read before installing.** The npm registry
+> currently serves only `@p4inz-code/mink@1.0.1`, published before the fixes recorded in
+> this repository's later commits (verified: `npm view @p4inz-code/mink version` →
+> `1.0.1`, and `1.0.1` is the only published version). A global install therefore gives
+> you that earlier build, not the corrected compiler in this repository. The repository
+> and the package bundled in it (`npm/mink/`, whose binary was rebuilt from the fixed
+> source) are authoritative; republishing the corrected package requires npm registry
+> credentials and has not been done.
 
 ### Already have Node.js / npm?
 
@@ -113,7 +122,7 @@ mink build program.mink    # creates program.exe
 ./program.exe input.txt     # rt_argc() == 1, rt_argv(0) == "input.txt"
 ```
 
-The generated `.exe` is a standalone Windows executable. Copy it to any Windows 10+ x86_64 machine and run it — no MINK compiler needed on the target.
+The generated `.exe` is a standalone Windows executable. Copy it to any Windows 10+ x86_64 machine and run it — no MINK compiler needed on the target. Its only imports are Windows system libraries (kernel32, ws2_32 and bcrypt families); it inherits no C-runtime DLL dependency.
 
 ## Commands
 
@@ -123,7 +132,7 @@ The generated `.exe` is a standalone Windows executable. Copy it to any Windows 
 | `mink build <file>` | Compile to a native Windows executable |
 | `mink check <file>` | Analyze source for errors without producing output |
 | `mink test <file>` | Discover and run `fn test_*` functions in a source file |
-| `mink repl [file]` | Start an interactive compile-eval session (`Ctrl-D` or `:quit` exits) |
+| `mink repl [file]` | Start an interactive compile-eval session (ends at EOF — the end of piped input, or `Ctrl-Z` then `Enter` at a Windows console — or with `:quit`) |
 | `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
 | `mink version` | Print the compiler version |
 | `mink help` | Show usage information |
@@ -131,7 +140,8 @@ The generated `.exe` is a standalone Windows executable. Copy it to any Windows 
 
 ### Project and package commands
 
-Run these in a project directory (one containing a `mink.toml`):
+`mink init` creates the manifest; the other commands run in a project directory (one
+containing a `mink.toml`):
 
 | Command | Description |
 | --- | --- |
@@ -166,7 +176,7 @@ mink explain E-T01             # explain a type mismatch error
 
 - **npm distribution** — install with `npm install -g @p4inz-code/mink`, no manual download needed
 - **`mink run`** — compile and execute in one step
-- **Static CRT** — generated executables have no external DLL dependencies
+- **Static CRT** — generated executables link the C runtime statically: no external CRT DLL, only Windows system libraries
 - **Filesystem library** — path operations, file read/write/copy/move, directory operations
 - **Process execution** — spawn and manage external processes
 - **Networking** — TCP/UDP sockets via Winsock2
@@ -178,12 +188,14 @@ mink explain E-T01             # explain a type mismatch error
 - **Strings** — concatenation, comparison, integer/boolean conversion
 - **Math** — abs, min, max, clamp, pow, sqrt, div/mod, sign
 - **Encoding** — Base64, hex, URL encoding/decoding
-- **Time** — current time, formatting, epoch *(high-res timing partial)*
+- **Time** — current time, epoch, calendar fields, `strftime`/`strptime` formatting and parsing, monotonic ticks/frequency for durations
 - **Environment** — get/set/has/remove environment variables, wired to the Windows API
 
 ## What's Next
 
-MINK currently targets **Windows x64**. The next major platform expansion is **Linux**.
+MINK targets **Windows x64**, which is the completed, frozen baseline. Linux is frozen:
+a native ELF backend exists in source, but Linux development is paused and Linux is not
+a supported platform.
 
 | Area | Status |
 | --- | --- |
@@ -191,7 +203,7 @@ MINK currently targets **Windows x64**. The next major platform expansion is **L
 | npm distribution | Available |
 | Package manager | Available (manifest, resolver, lockfile, environments) |
 | Concurrency / threading | Available (threads, locks, async/await) |
-| Linux | Next major platform target |
+| Linux | Frozen — native ELF backend exists in source, development paused |
 | macOS | Future / TBD |
 
 The project will continue expanding platform support, ecosystem libraries, and production capabilities. See the [Implementation Roadmap](docs/roadmap/IMPLEMENTATION_ROADMAP.md) for the full plan.
@@ -213,7 +225,7 @@ MINK ships with a growing standard library covering common development needs:
 | `crypto` | HMAC-SHA256, HKDF-SHA256, secure random |
 | `hashing` | FNV-1a, DJB2, SHA-256, hex encoding |
 | `encoding` | Base64, hex, URL encoding/decoding |
-| `time` | Current time, formatting, epoch *(high-res timing partial)* |
+| `time` | Current time, epoch, calendar fields, `strftime`/`strptime`, monotonic ticks/frequency |
 | `random` | Random integers, bytes, boolean |
 | `environment` | Get/set/has/remove environment variables |
 | `tls` | TLS 1.2/1.3 client and HTTPS GET (Windows Schannel) |

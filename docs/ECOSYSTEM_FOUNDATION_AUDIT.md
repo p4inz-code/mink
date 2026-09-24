@@ -7,6 +7,17 @@
 
 ---
 
+> **HISTORICAL — v1.0.0 snapshot (commit `aaf8866`, 25 Aug 2026).** This audit records the
+> state of MINK 1.0.0 and its "163 unit tests". It predates the entire post-V1 program: the
+> module/package system, the 26-module standard library, concurrency/threads and
+> async/await, the `mink repl` session, TLS, SQLite, ZIP/deflate, and the whole Windows
+> official-Python capability-parity closure all landed afterwards. Read the *current* state
+> from [`README.md`](../README.md) and
+> [`docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md`](roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md);
+> the gap lists and "Not implemented" tables below are accurate only for v1.0.0.
+
+---
+
 ## 1. Executive Summary
 
 MINK 1.0.0 is shipped. The repository is clean, tests pass (163 unit tests, all green), the tag `v1.0.0` is committed, and the working tree is clean.

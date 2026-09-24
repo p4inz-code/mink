@@ -30,7 +30,7 @@ one standalone Windows executable.
 ## Requirements
 
 - MINK >= 1.0.1 (Windows x86_64) with the Session 99 runtime services
-- Installed via `npm install -g mink` (the package bundles the standard
+- Installed via `npm install -g @p4inz-code/mink` (the package bundles the standard
   library, so `mod math;` etc. resolve automatically)
 
 ## Build
