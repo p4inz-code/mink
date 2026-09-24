@@ -28,7 +28,7 @@ Commands:
   check <path> [--json]
                   Analyze a MINK source file without producing output
   test <path>     Discover and run test functions (fn test_*) in a source file
-  repl [path]     Start an interactive compile-eval session (Ctrl-D/:quit exits)
+  repl [path]     Start an interactive compile-eval session (EOF/:quit exits)
   explain [code]  Explain an error code (e.g., mink explain E-T01);
                   with no code, list all documented error codes
   version         Print the compiler version
@@ -1148,7 +1148,7 @@ fn run_repl(initial: Option<&std::path::Path>, target: Target) -> ExitCode {
                     println!("  :help          Show this help");
                     println!("  :show          Show the accumulated session declarations");
                     println!("  :clear         Clear the accumulated session declarations");
-                    println!("  :quit, :q      Exit the session (Ctrl-D / EOF also exits)");
+                    println!("  :quit, :q      Exit the session (Ctrl-Z+Enter / EOF also exits)");
                     println!(
                         "Enter a declaration (fn/struct/enum/use/mod/const) to add it to the session,"
                     );

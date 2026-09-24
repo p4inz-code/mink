@@ -174,6 +174,11 @@ mink explain E-T01             # explain a type mismatch error
 
 ### MINK 1.0.1
 
+This section describes the **repository** state — the corrected 1.0.1 source and the package
+bundled in `npm/mink/`. The artifact the npm registry currently serves is the earlier,
+pre-correction 1.0.1 build (see the note in [Install MINK](#install-mink)); the corrected
+package is not yet published.
+
 - **npm distribution** — install with `npm install -g @p4inz-code/mink`, no manual download needed
 - **`mink run`** — compile and execute in one step
 - **Static CRT** — generated executables link the C runtime statically: no external CRT DLL, only Windows system libraries

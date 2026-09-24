@@ -1,6 +1,6 @@
 # MINK COMPREHENSIVE VERIFICATION STANDARD
 
-VERSION: POST-SESSION-119 (baseline refreshed by the documentation audit at commit ea5d625)
+VERSION: POST-SESSION-119 (baseline refreshed by the documentation audit at commit 86c28de; Windows x86_64 frozen by the final cleanup)
 STATUS: MANDATORY FOR ALL FUTURE MINK WORK
 
 ======================================================================
@@ -37,19 +37,38 @@ Working only under the coding-agent environment is not enough.
 A capability may only be called VERIFIED when evidence supports the claim.
 
 ======================================================================
-1. CURRENT PROJECT STATE
+1. CURRENT PROJECT STATE — WINDOWS x86_64 FROZEN
 ======================================================================
 
-Current verified baseline:
+Verified at the final cleanup (base commit 86c28de; this record is carried by the
+commit that freezes Windows):
 
-* Windows x86_64 base: COMPLETE / STABLE
-* Windows Python official capability parity: GATE PASSED (P0 = 0, P1 = 0); P2/P3 roadmap work remains
-* Linux development: FROZEN
-* Linux behavior must not be modified unless explicitly unfrozen later
-* Current final commit (documentation audit): ea5d625
-* Current deterministic test baseline: 2952 passing · 3 ignored · 0 failed
+* Windows x86_64 base: COMPLETE / STABLE — FROZEN. No further feature development,
+  parity expansion, runtime expansion or Windows roadmap work. Only critical
+  maintenance, security and regression fixes may reopen the frozen state.
+* Windows Python official capability parity: GATE PASSED (P0 = 0, P1 = 0); the remaining
+  P2/P3 rows are non-blocking roadmap work.
+* Current deterministic test baseline: 2952 passing · 3 ignored · 0 failed.
 * Current P0 introduced by active Windows work: 0
 * Current P1 introduced by active Windows work: 0
+* Standard library: 26 modules.
+* Linux: FROZEN. Preserve all existing Linux progress; resume only in a future
+  explicitly authorized Linux phase. No Linux behavior may be modified while frozen.
+* Known P2 limitations (non-blocking): L05 `Str` is a byte buffer with a UTF-8 code-point
+  layer (`stdlib/encoding.mink`) but has no non-ASCII case operations and no Unicode
+  database (categories/normalization/collation); stdin is read-all only (no line-by-line
+  streaming); array/Vec slicing is function-form only (no slice views or step).
+* Known intentional CLI behavior: bare REPL expressions are compiled and run, session
+  declarations accumulate, and no value bindings persist between lines. REPL input ends at
+  EOF — the end of piped input, or `Ctrl-Z` then `Enter` at a Windows console — or with
+  `:quit`. `mink build --help` is reported as an unknown option (documented as such).
+* Public npm artifact: `@p4inz-code/mink@1.0.1` — the previously published, pre-correction
+  build. The repository and the package bundled in `npm/mink/` hold the corrected 1.0.1
+  source/package state.
+* npm publication status: RELEASE PENDING. The corrected package is not yet published; the
+  only blocker is missing npm registry credentials. This does not reopen Windows
+  engineering.
+* Repository state: clean working tree, `HEAD == origin/main`.
 
 Session 99 verified:
 
