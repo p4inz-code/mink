@@ -379,3 +379,84 @@ fn h24_hash_fnv1a_vs_djb2() {
         "FNV-1a and djb2 should differ: got {out}"
     );
 }
+
+// ============================================================
+// Owned (heap) input regressions
+// ============================================================
+// `hash_sha256` wrote its 0x80 padding byte in *every* block whose padding
+// offset was non-negative, so an earlier block computed a message-schedule
+// word index past the end of the workspace and the write faulted with E-R05
+// for any input of 256 bytes or more. The hashing entry points also never
+// released their Owned `Str` input, so hashing a heap buffer leaked (E-R06)
+// with no way for the caller to free it after the call.
+
+/// Build a MINK program that hashes a heap buffer of `n` 'a' bytes and
+/// prints the digest, exiting cleanly (so E-R06 would show as a non-zero
+/// exit code).
+fn sha256_heap_program(lib: &str, n: usize) -> String {
+    format!(
+        "{lib}\nfn main() {{\n    let b = rt_str_alloc({n});\n    let mut i = 0;\n    while i < {n} {{\n        rt_str_set_byte(b, i, 97);\n        i = i + 1;\n    }}\n    let h = hash_sha256(b);\n    rt_print_str(h);\n    rt_str_free(h);\n    rt_exit(0);\n}}\n"
+    )
+}
+
+#[test]
+fn h25_sha256_heap_input_below_fault_boundary() {
+    let lib = lib_source();
+    let (c, out) = build_and_run(&sha256_heap_program(&lib, 255));
+    assert!(c == 0, "expected a leak-free exit, got {c}, out: {out}");
+    assert_eq!(
+        out.trim(),
+        "b0f3323e7a3cad8ae6778340cc2a17ae0cb31c818df3767cda7c3dd423725e90",
+        "SHA-256(255*'a') mismatch"
+    );
+}
+
+#[test]
+fn h26_sha256_heap_input_at_fault_boundary() {
+    let lib = lib_source();
+    let (c, out) = build_and_run(&sha256_heap_program(&lib, 256));
+    assert!(c == 0, "expected a leak-free exit, got {c}, out: {out}");
+    assert_eq!(
+        out.trim(),
+        "02d7160d77e18c6447be80c2e355c7ed4388545271702c50253b0914c65ce5fe",
+        "SHA-256(256*'a') mismatch"
+    );
+}
+
+#[test]
+fn h27_sha256_heap_input_above_fault_boundary() {
+    let lib = lib_source();
+    let (c, out) = build_and_run(&sha256_heap_program(&lib, 257));
+    assert!(c == 0, "expected a leak-free exit, got {c}, out: {out}");
+    assert_eq!(
+        out.trim(),
+        "e8d95cc2b4bc198c54b40bd214df958afb65f5e73d2c2eafe0593cf5c635c1f0",
+        "SHA-256(257*'a') mismatch"
+    );
+}
+
+#[test]
+fn h28_sha256_heap_input_multiblock() {
+    let lib = lib_source();
+    let (c, out) = build_and_run(&sha256_heap_program(&lib, 4096));
+    assert!(c == 0, "expected a leak-free exit, got {c}, out: {out}");
+    assert_eq!(
+        out.trim(),
+        "c93eee2d0db02f10acc7460d9576e122dcf8cd53c4bf8dfcae1b3e74ebcfff5a",
+        "SHA-256(4096*'a') mismatch"
+    );
+}
+
+#[test]
+fn h29_fnv1a_djb2_heap_input_is_released() {
+    let lib = lib_source();
+    let code = format!(
+        "{lib}\nfn main() {{\n    let a = rt_str_alloc(200);\n    let mut i = 0;\n    while i < 200 {{\n        rt_str_set_byte(a, i, 97);\n        i = i + 1;\n    }}\n    let f = hash_fnv1a(a);\n    let b = rt_str_alloc(200);\n    i = 0;\n    while i < 200 {{\n        rt_str_set_byte(b, i, 97);\n        i = i + 1;\n    }}\n    let d = hash_djb2(b);\n    rt_print_int(f);\n    rt_print_str(\",\");\n    rt_print_int(d);\n    rt_exit(0);\n}}\n"
+    );
+    let (c, out) = build_and_run(&code);
+    assert!(c == 0, "expected a leak-free exit, got {c}, out: {out}");
+    assert!(
+        out.trim().contains(','),
+        "expected both hash values, got {out}"
+    );
+}

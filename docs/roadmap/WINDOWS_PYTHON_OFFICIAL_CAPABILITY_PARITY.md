@@ -17,10 +17,11 @@ explicitly out of scope. PyPI / third-party ecosystem parity is out of scope.
 > whose flags contradicted their own evidence were corrected with the evidence named
 > inline. The session's own tranche (L05) is recorded with native execution evidence.
 
-> **Documentation audit note (current HEAD, commit `ea5d625`).** This matrix remains the
+> **Documentation audit note (refreshed by the systems-readiness audit).** This matrix remains the
 > durable, evidence-based map of Windows × official-Python capability parity. The current
-> full regression is **2 952 passed · 3 ignored · 0 failed** (Session 119 recorded 2 946;
-> six permanent regression tests have landed since). The §2 baseline row and the §11
+> full regression is **2 957 passed · 3 ignored · 0 failed** (Session 119 recorded 2 946;
+> eleven permanent regression tests have landed since — six from the docs reconciliation,
+> five from the systems-readiness audit). The §2 baseline row and the §11
 > evidence index carry the same figure. Windows x86_64 is the completed, frozen baseline
 > (P0 = 0, P1 = 0) and Linux remains FROZEN. One fact is deliberately *not* a repository
 > claim: **the public npm registry still serves only `@p4inz-code/mink@1.0.1`**; the
@@ -76,7 +77,7 @@ probes). Every "every major claim must be traceable" row carries anchors in Note
 | Starting commit | `86642b4` (Session 117 close), clean tree | `git rev-parse HEAD`, `git status` |
 | Version | `mink 1.0.1` | `target/release/mink.exe --version` |
 | Release build | clean | `cargo build --release` |
-| Test suite | 72 test units (71 integration targets + lib); current regression at HEAD `ea5d625`: **2 952 passed, 3 ignored, 0 failures** across every unit (Session 119 recorded 2 946; six regression tests added since) | `cargo test` per target group + repeated stress runs; see the Session 119 report |
+| Test suite | 72 test units (71 integration targets + lib); current regression: **2 957 passed, 3 ignored, 0 failures** across every unit (Session 119 recorded 2 946; six regression tests added by the docs reconciliation, five by the systems-readiness audit) | `cargo test` per target group + repeated stress runs; see the Session 119 report |
 | Smoke/CLI/release suites | smoke 13/13 · release 68/68 · cli 74/74 (+1 ignored) | `cargo test --test {smoke,release,cli}` |
 | `windows_hardening` | 18/18 in **both** parallel and `--test-threads=1` modes, deterministically (Session 118 harness fix; was parallel-hanging before it) | `cargo test --test windows_hardening` × 6 parallel runs |
 | Windows target | `x86_64-windows-pe` implemented | `[code] src/backend/target.rs` |
@@ -673,7 +674,7 @@ Compiler pipeline and targets: `[code] src/{lexer,parser,ast,semantics,typecheck
 Entry/CLI: `[code] src/cli.rs`, `src/driver.rs`, `src/backend/mod.rs`. Modules: `src/module/mod.rs`.
 Runtime services/intrinsics: `[code] src/runtime/intrinsics.rs`, `src/backend/emit/runtime.rs`, `src/backend/emit/pe.rs`, `src/backend/emit/x86_64.rs`, `src/runtime/{allocator,error,abi}.rs`.
 Standard library: `[code] stdlib/*.mink` (26 modules: assert, collections, crypto, csv, encoding, environment, filesystem, hashing, http, json, logging, math, network, option, process, random, re, result, sqlite, strings, tasks, threads, time, tls, zip, zlib — each mirrored into the npm bundle, with `tests/release.rs` guarding the mirror byte-for-byte).
-Test suite (execution-verified native runs): `[test] tests/*.rs` (71 integration targets + the library unit tests; **2 952 passed · 3 ignored · 0 failed** at HEAD `ea5d625` — 2 946 in the Session 119 public-acceptance audit, 2 941 as of Session 118, plus the regression tests added since) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, sqlite_lib, zip_lib, zlib_lib, re_lib, threads_lib, async_lib, tls_lib, packages, package_manager, repl, test_runner, windows_hardening, release, cli, smoke.
+Test suite (execution-verified native runs): `[test] tests/*.rs` (71 integration targets + the library unit tests; **2 957 passed · 3 ignored · 0 failed** — 2 946 in the Session 119 public-acceptance audit, 2 941 as of Session 118, plus the regression tests added since, including the five hashing heap-input regressions from the systems-readiness audit) — per-domain: strings_lib, math_lib, encoding_lib, filesystem_lib, logging_lib, csv_lib, process_lib, network_lib, http_lib, json, crypto_lib, hashing_lib, collections_lib, time_lib, random_lib, sqlite_lib, zip_lib, zlib_lib, re_lib, threads_lib, async_lib, tls_lib, packages, package_manager, repl, test_runner, windows_hardening, release, cli, smoke.
 Recorded real execution: `[exec]` SESSION_92..97 docs (crypto vectors, HTTP POST byte-exact echo, process 1 MB drain, npm clean installs ×2, standalone exe) and this session's native probes (short-circuit, div-by-zero fault status 148).
 Specs/plans: `[doc] docs/core/*`, `docs/language/*`, `docs/ecosystem/*` (C_ABI_SPEC, PACKAGE_ARCHITECTURE, SECURITY_ARCHITECTURE, STDLIB_ARCHITECTURE), `docs/roadmap/*`, `docs/implementation/SESSION_*`.
 

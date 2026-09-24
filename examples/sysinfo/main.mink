@@ -1,0 +1,509 @@
+// ============================================================================
+// mink-sysinfo — a systems-oriented native Windows utility.
+//
+// This is the program used by the systems-readiness audit
+// (docs/audits/SYSTEMS_READINESS_AUDIT.md). Deliberately small, but it
+// combines the low-level capabilities a systems language must demonstrate in
+// one process:
+//
+//   * command-line arguments            (rt_argc / rt_argv)
+//   * environment variables             (rt_env_get/set/has/remove)
+//   * process + identity                (rt_process_id, rt_process_run/stdout)
+//   * filesystem                        (create/write/read/size/copy/move/
+//                                        remove, directory enumeration)
+//   * binary data + checksums           (byte buffers, SHA-256, FNV-1a,
+//                                        CRC-32, zlib round trip)
+//   * concurrency                       (4 OS threads + a lock, exact total)
+//   * local TCP loopback                (listen/dial/accept/send/recv/close)
+//   * time                              (rt_time_millis/now)
+//   * explicit resource ownership       (every heap Str freed exactly once)
+//
+// Output contract: stdout is deterministic (byte-identical across repeated
+// runs in the same directory/environment); the live identity and wall-clock
+// values go to stderr so the repeatability check can diff stdout directly.
+//
+// Exit code: 0 only when every check passes; otherwise the number of failed
+// checks. The runtime's exit-time leak scan (E-R06) makes a clean exit proof
+// that nothing the program allocated was left live.
+//
+// Build and run:
+//   mink build examples/sysinfo/main.mink
+//   examples/sysinfo/main.exe
+// ============================================================================
+
+mod threads;
+mod hashing;
+mod zlib;
+mod network;
+mod time;
+
+// --- argument read: default 1, or the byte value of argv[0]'s first char ---
+fn first_arg_flag() -> Int {
+    let argc = rt_argc();
+    let mut flag = 1;
+    if argc > 0 {
+        let a = rt_argv(0);
+        let l = rt_str_len(a);
+        if l > 0 {
+            flag = rt_str_byte(a, 0);
+        }
+        rt_str_free(a);
+    }
+    return flag;
+}
+
+// --- concurrency worker: sum of i*i over [start, end), accumulated under
+//     a shared lock so the total is exact regardless of interleaving -------
+fn sum_sq_worker(p: Ptr<Int>) -> Int {
+    let ctx = rt_int_to_ptr(rt_mem_load(p));
+    let start = rt_mem_load(p + 8);
+    let end = rt_mem_load(p + 16);
+    let lock = rt_mem_load(ctx);
+
+    let mut i = start;
+    let mut sub = 0;
+    while i < end {
+        sub = sub + i * i;
+        i = i + 1;
+    }
+
+    lock_acquire(lock);
+    rt_mem_store(ctx + 8, rt_mem_load(ctx + 8) + sub);
+    lock_release(lock);
+    return sub;
+}
+
+// --- per-thread argument block: [ctx @ 0][start @ 8][end @ 16] -------------
+fn make_args(ctx: Ptr<Int>, start: Int, end: Int) -> Ptr<Int> {
+    let p = rt_alloc(24);
+    rt_mem_store(p, rt_ptr_to_int(ctx));
+    rt_mem_store(p + 8, start);
+    rt_mem_store(p + 16, end);
+    return p;
+}
+
+// --- deterministic arithmetic for threads 1..=threads ---------------------
+fn expected_sum_sq(n: Int) -> Int {
+    return n * (n + 1) * (2 * n + 1) / 6;
+}
+
+// --- build one report line from a format string and three integers. MINK's
+//     print intrinsics are line-oriented, so a record must reach the caller
+//     as a single Str. Extra format arguments are ignored. --------------
+fn f3(fmt: Str, a: Int, b: Int, c: Int) -> Str {
+    let sa = rt_str_from_int(a);
+    let sb = rt_str_from_int(b);
+    let sc = rt_str_from_int(c);
+    let out = rt_str_format(fmt, sa, sb, sc);
+    rt_str_free(sa);
+    rt_str_free(sb);
+    rt_str_free(sc);
+    rt_str_free(fmt);
+    return out;
+}
+
+// --- local TCP loopback: client sends a patterned 64-byte payload, the
+//     accepted server socket echoes it back, both sides are verified.
+//     Returns 0 on success, otherwise a non-zero stage marker. ------------
+fn run_loopback(srv: Int, cli: Int) -> Int {
+    let payload = rt_str_alloc(64);
+    let mut i = 0;
+    while i < 64 {
+        rt_str_set_byte(payload, i, 65 + (i % 26));
+        i = i + 1;
+    }
+    let sent = net_send(cli, payload);
+
+    let ready = net_wait_readable(srv, 2000);
+    let acc = net_accept(srv);
+
+    let mut accepted = 0;
+    let mut echo_ok = 0;
+    if ready > 0 && acc > 0 {
+        accepted = 1;
+        let got = net_recv(acc, 256);
+        let glen = rt_str_len(got);
+        let mut gok = 0;
+        if glen == 64 {
+            gok = 1;
+            i = 0;
+            while i < 64 {
+                if rt_str_byte(got, i) != (65 + (i % 26)) {
+                    gok = 0;
+                }
+                i = i + 1;
+            }
+        }
+
+        // Echo the received bytes back; net_send consumes `got`.
+        let echoed_bytes = net_send(acc, got);
+        let echoed = net_recv(cli, 256);
+        let elen = rt_str_len(echoed);
+        let mut eok = 0;
+        if elen == 64 {
+            eok = 1;
+            i = 0;
+            while i < 64 {
+                if rt_str_byte(echoed, i) != (65 + (i % 26)) {
+                    eok = 0;
+                }
+                i = i + 1;
+            }
+        }
+        rt_str_free(echoed);
+        net_close(acc);
+        if gok == 1 && eok == 1 && echoed_bytes == 64 {
+            echo_ok = 1;
+        }
+    }
+
+    if sent != 64 {
+        return 1;
+    }
+    if ready <= 0 {
+        return 2;
+    }
+    if accepted == 0 {
+        return 3;
+    }
+    if echo_ok == 0 {
+        return 4;
+    }
+    return 0;
+}
+
+fn main() -> Int {
+    let mut failures = 0;
+    let pid = rt_process_id();
+    let uptime_ms = rt_time_millis();
+    let epoch = rt_time_now();
+
+    // ---- command-line arguments -------------------------------------------
+    let argc = rt_argc();
+    let flag = first_arg_flag();
+
+    // ---- environment ------------------------------------------------------
+    let pathv = rt_env_get("PATH");
+    let path_len = rt_str_len(pathv);
+    rt_str_free(pathv);
+
+    rt_env_set("MINK_SYSINFO_MARK", "audit");
+    let has_mark = rt_env_has("MINK_SYSINFO_MARK");
+    let markv = rt_env_get("MINK_SYSINFO_MARK");
+    let mark_ok = rt_str_eq(markv, "audit");
+    rt_str_free(markv);
+    rt_env_remove("MINK_SYSINFO_MARK");
+    let removed = rt_env_has("MINK_SYSINFO_MARK");
+    let mut env_ok = 0;
+    if has_mark && mark_ok && !removed {
+        env_ok = 1;
+    }
+    if env_ok == 0 {
+        failures = failures + 1;
+    }
+
+    // ---- filesystem + binary data -----------------------------------------
+    let cwd = rt_fs_get_cwd();
+    let cwd_len = rt_str_len(cwd);
+    rt_str_free(cwd);
+
+    // Start from a known-empty work directory.
+    rt_fs_remove_file("sys_audit_dir/data.bin");
+    rt_fs_remove_file("sys_audit_dir/copy.bin");
+    rt_fs_remove_file("sys_audit_dir/moved.bin");
+    rt_fs_remove_file("sys_audit_dir/empty.bin");
+    rt_fs_remove_file("sys_audit_dir/with space.bin");
+    rt_fs_remove_dir("sys_audit_dir");
+    let created = rt_fs_create_dir("sys_audit_dir");
+    let dir_ok = rt_fs_exists("sys_audit_dir");
+
+    // 4096 deterministic bytes: byte i = (i*31 + 7) & 0xFF
+    let n = 4096;
+    let buf = rt_str_alloc(n);
+    let mut i = 0;
+    while i < n {
+        rt_str_set_byte(buf, i, (i * 31 + 7) & 0xFF);
+        i = i + 1;
+    }
+    let written = rt_fs_write("sys_audit_dir/data.bin", buf);
+    let size_ok = rt_fs_file_size("sys_audit_dir/data.bin") == n;
+
+    let back = rt_fs_read("sys_audit_dir/data.bin");
+    let back_len = rt_str_len(back);
+    let mut same = 1;
+    i = 0;
+    while i < n {
+        if rt_str_byte(back, i) != ((i * 31 + 7) & 0xFF) {
+            same = 0;
+        }
+        i = i + 1;
+    }
+
+    // SHA-256 consumes its argument, so it takes the read-back buffer.
+    let sha = hash_sha256(back);
+    rt_str_free(buf);
+
+    // zlib round trip (compress consumes its input; decompress consumes the
+    // compressed stream).
+    let zsrc = rt_fs_read("sys_audit_dir/data.bin");
+    let comp = zlib_compress(zsrc, 6);
+    let comp_len = rt_str_len(comp);
+    let (dec, dcode) = zlib_decompress(comp);
+    let dec_len = rt_str_len(dec);
+    let mut zsame = 1;
+    i = 0;
+    while i < n {
+        if rt_str_byte(dec, i) != ((i * 31 + 7) & 0xFF) {
+            zsame = 0;
+        }
+        i = i + 1;
+    }
+    rt_str_free(dec);
+
+    // CRC-32 and FNV-1a over fresh reads (both consume their argument).
+    let csrc = rt_fs_read("sys_audit_dir/data.bin");
+    let (crc, cback) = zlib_crc32(csrc);
+    rt_str_free(cback);
+    let fsrc = rt_fs_read("sys_audit_dir/data.bin");
+    let fnv = hash_fnv1a(fsrc);
+
+    // Empty input and missing input edge cases.
+    let missing = rt_fs_read("sys_audit_dir/__absent__");
+    let missing_len = rt_str_len(missing);
+    rt_str_free(missing);
+    let missing_size = rt_fs_file_size("sys_audit_dir/__absent__");
+    let empty_w = rt_fs_write("sys_audit_dir/empty.bin", "");
+    let empty_r = rt_fs_read("sys_audit_dir/empty.bin");
+    let empty_len = rt_str_len(empty_r);
+    rt_str_free(empty_r);
+
+    // Path containing a space.
+    let spaced_w = rt_fs_write("sys_audit_dir/with space.bin", "spaced");
+    let spaced_ok = rt_fs_exists("sys_audit_dir/with space.bin");
+
+    // Copy / move / directory enumeration.
+    rt_fs_copy("sys_audit_dir/data.bin", "sys_audit_dir/copy.bin");
+    let copied = rt_fs_exists("sys_audit_dir/copy.bin");
+    rt_fs_move("sys_audit_dir/copy.bin", "sys_audit_dir/moved.bin");
+    let moved = rt_fs_exists("sys_audit_dir/moved.bin") && !rt_fs_exists("sys_audit_dir/copy.bin");
+
+    let dh = rt_dir_open("sys_audit_dir");
+    let mut listed = 0;
+    if dh != 0 {
+        let mut more = 1;
+        while more == 1 {
+            let nm = rt_dir_next(dh);
+            if rt_str_len(nm) == 0 {
+                more = 0;
+            } else {
+                listed = listed + 1;
+            }
+            rt_str_free(nm);
+        }
+        rt_dir_close(dh);
+    }
+
+    // Clean up the work tree.
+    rt_fs_remove_file("sys_audit_dir/data.bin");
+    rt_fs_remove_file("sys_audit_dir/moved.bin");
+    rt_fs_remove_file("sys_audit_dir/empty.bin");
+    rt_fs_remove_file("sys_audit_dir/with space.bin");
+    rt_fs_remove_dir("sys_audit_dir");
+    let cleaned = !rt_fs_exists("sys_audit_dir");
+
+    let bin_ok = written == n && size_ok && back_len == n && same == 1 && zsame == 1 && dec_len == n && dcode == 0;
+    let fs_ok = dir_ok && created == 0 && bin_ok && copied && moved && listed >= 3 && cleaned;
+    let edge_ok = missing_len == 0 && missing_size == -1 && empty_w == 0 && empty_len == 0 && spaced_w == 6 && spaced_ok;
+    if !fs_ok {
+        failures = failures + 1;
+    }
+    if !edge_ok {
+        failures = failures + 1;
+    }
+
+    // ---- concurrency ------------------------------------------------------
+    let threads_n = 400;
+    let ctx = rt_alloc(16);
+    let lock = lock_new();
+    rt_mem_store(ctx, lock);
+    rt_mem_store(ctx + 8, 0);
+
+    let a1 = make_args(ctx, 1, 101);
+    let a2 = make_args(ctx, 101, 201);
+    let a3 = make_args(ctx, 201, 301);
+    let a4 = make_args(ctx, 301, 401);
+    let t1 = thread_spawn(sum_sq_worker, a1);
+    let t2 = thread_spawn(sum_sq_worker, a2);
+    let t3 = thread_spawn(sum_sq_worker, a3);
+    let t4 = thread_spawn(sum_sq_worker, a4);
+
+    let s1 = thread_join(t1);
+    let s2 = thread_join(t2);
+    let s3 = thread_join(t3);
+    let s4 = thread_join(t4);
+    let total = rt_mem_load(ctx + 8);
+    let expected = expected_sum_sq(threads_n);
+
+    rt_free(a1);
+    rt_free(a2);
+    rt_free(a3);
+    rt_free(a4);
+    lock_free(lock);
+    rt_free(ctx);
+
+    let mut subtotals_ok = 0;
+    if s1 + s2 + s3 + s4 == expected {
+        subtotals_ok = 1;
+    }
+    let conc_ok = total == expected && subtotals_ok == 1;
+    if !conc_ok {
+        failures = failures + 1;
+    }
+
+    // ---- local TCP loopback ----------------------------------------------
+    let port = 41000 + (pid % 15000);
+    let srv = net_listen_on("127.0.0.1", port, 4);
+    let mut net_code = -2;
+    if srv > 0 {
+        let cli = net_dial("127.0.0.1", port);
+        if cli > 0 {
+            net_code = run_loopback(srv, cli);
+            net_close(cli);
+        }
+        net_close(srv);
+    }
+    net_cleanup();
+    let net_ok = net_code == 0;
+    if !net_ok {
+        failures = failures + 1;
+    }
+
+    // ---- process creation / captured stdout -------------------------------
+    let child = rt_process_run("cmd /c echo mink-sysinfo-child");
+    let out = rt_process_stdout();
+    let out_len = rt_process_stdout_len();
+    let needle = "mink-sysinfo-child";
+    let nlen = rt_str_len(needle);
+    let mut hit = 0;
+    let mut oi = 0;
+    while oi + nlen <= out_len {
+        let mut j = 0;
+        let mut eq = 1;
+        while j < nlen {
+            if rt_str_byte(out, oi + j) != rt_str_byte(needle, j) {
+                eq = 0;
+            }
+            j = j + 1;
+        }
+        if eq == 1 {
+            hit = 1;
+        }
+        oi = oi + 1;
+    }
+    let proc_ok = child == 0 && out_len > 0 && hit == 1;
+    if !proc_ok {
+        failures = failures + 1;
+    }
+
+    // ---- deterministic report on stdout -----------------------------------
+    let mut fs_ok_i = 0;
+    if fs_ok {
+        fs_ok_i = 1;
+    }
+    let mut edge_ok_i = 0;
+    if edge_ok {
+        edge_ok_i = 1;
+    }
+    let mut net_ok_i = 0;
+    if net_ok {
+        net_ok_i = 1;
+    }
+    let mut proc_ok_i = 0;
+    if proc_ok {
+        proc_ok_i = 1;
+    }
+    let mut sha_ok_i = 0;
+    if rt_str_eq(sha, "d41d438c379110c7f7b2c561b1f04f26c1b4549110791f8e022f48974280c13e") {
+        sha_ok_i = 1;
+    }
+
+    rt_print_str("mink-sysinfo report");
+
+    let mut l = f3("argv:    argc={} flag={}", argc, flag, 0);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("env:     path_len={} roundtrip_ok={}", path_len, env_ok, 0);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("fs:      cwd_len={} created=1 wrote={}", cwd_len, written, 0);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("fs:      read={} listed={} copied=1 move=1", back_len, listed, 0);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("fs:      missing_size={} empty_len={} spaced=1", missing_size, empty_len, 0);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("fs:      cleaned=1 ok={} edge_ok={}", fs_ok_i, edge_ok_i, 0);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("bin:     bytes={} sha256_ok={} zlib_in={}", n, sha_ok_i, comp_len);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("bin:     zlib_out={} roundtrip=1 fnv1a={}", dec_len, fnv, crc);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    // The digest is a Str, so it is concatenated rather than formatted.
+    l = rt_str_concat("bin:     sha256=", sha);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("conc:    threads=4 total={} expected={} match={}", total, expected, 1);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("conc:    subtotals_ok={}", subtotals_ok, 0, 0);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("net:     loopback={} stage={} closed=1", net_ok_i, net_code, 0);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    l = f3("proc:    exit={} stdout_len={} marker={}", child, out_len, proc_ok_i);
+    rt_print_str(l);
+    rt_str_free(l);
+
+    if failures == 0 {
+        rt_print_str("result:  OK");
+    } else {
+        rt_print_str("result:  FAIL");
+    }
+
+    // ---- live identity + wall clock on stderr (nondeterministic) ----------
+    let sp = rt_str_from_int(pid);
+    let su = rt_str_from_int(uptime_ms);
+    let se = rt_str_from_int(epoch);
+    let ident = rt_str_format("mink-sysinfo: pid={} uptime_ms={} epoch={}\n", sp, su, se);
+    rt_str_free(sp);
+    rt_str_free(su);
+    rt_str_free(se);
+    rt_stderr_write(ident);
+    rt_str_free(ident);
+
+    let date = time_strftime(epoch, "%Y-%m-%d");
+    rt_stderr_write(date);
+    rt_stderr_write("\n");
+    rt_str_free(date);
+
+    rt_str_free(sha);
+    return failures;
+}

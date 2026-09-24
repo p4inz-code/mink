@@ -48,10 +48,18 @@ commit that freezes Windows):
   maintenance, security and regression fixes may reopen the frozen state.
 * Windows Python official capability parity: GATE PASSED (P0 = 0, P1 = 0); the remaining
   P2/P3 rows are non-blocking roadmap work.
-* Current deterministic test baseline: 2952 passing · 3 ignored · 0 failed.
+* Current deterministic test baseline: 2957 passing · 3 ignored · 0 failed (2952 before the
+  systems-readiness audit, which added five hashing heap-input regressions).
 * Current P0 introduced by active Windows work: 0
 * Current P1 introduced by active Windows work: 0
 * Standard library: 26 modules.
+* Systems readiness: **supported** for Windows x86_64. A real native utility
+  (`mink-sysinfo`) verified native OS access, memory/ownership, filesystem, process,
+  concurrency, TCP/UDP networking and binary/compression/crypto on a standalone PE whose
+  only import is `kernel32.dll`. The audit also fixed two `stdlib/hashing.mink` defects
+  (an `E-R05` workspace overrun for inputs >= 256 bytes, and an unavoidable `E-R06` leak
+  when hashing an owned buffer). See `docs/audits/SYSTEMS_READINESS_AUDIT.md` for the
+  capability inventory, the claim boundary and the residual limitations.
 * Linux: FROZEN. Preserve all existing Linux progress; resume only in a future
   explicitly authorized Linux phase. No Linux behavior may be modified while frozen.
 * Known P2 limitations (non-blocking): L05 `Str` is a byte buffer with a UTF-8 code-point
@@ -1714,7 +1722,7 @@ Any mismatch must be corrected before completion.
 
 A higher test count does not prove higher quality.
 
-2952 passing tests are useful evidence, but not proof of every possible
+2957 passing tests are useful evidence, but not proof of every possible
 situation.
 
 Prefer:

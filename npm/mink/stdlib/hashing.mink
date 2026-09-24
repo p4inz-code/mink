@@ -17,6 +17,10 @@ fn hash_fnv1a(s: Str) -> Int {
         hash = hash * 16777619;
         i = i + 1;
     }
+    // The input is Owned on entry, so it must be released here: the caller's
+    // binding is dead after the call and cannot free it itself. A literal
+    // input is immortal, so this is a no-op for it.
+    rt_str_free(s);
     return hash;
 }
 
@@ -29,6 +33,8 @@ fn hash_djb2(s: Str) -> Int {
         hash = ((hash << 5) + hash) + byte;
         i = i + 1;
     }
+    // Owned input released here (see hash_fnv1a).
+    rt_str_free(s);
     return hash;
 }
 
@@ -209,9 +215,12 @@ fn hash_sha256(s: Str) -> Str {
             i = i + 1;
         }
 
-        // Set 0x80 padding byte (only in the block containing input_len)
+        // Set 0x80 padding byte, only in the block that actually contains
+        // byte `input_len`. Without the upper bound, an earlier block computes
+        // a word index past the end of the message-schedule region and the
+        // write faults with E-R05 as soon as `input_len` is >= 256 bytes.
         let byte_pos = input_len - block * 64;
-        if byte_pos >= 0 {
+        if byte_pos >= 0 && byte_pos < 64 {
             let word_idx = byte_pos >> 2;
             let byte_in_word = byte_pos & 3;
             let shift = (3 - byte_in_word) * 8;
@@ -378,5 +387,7 @@ fn hash_sha256(s: Str) -> Str {
     }
 
     rt_free(ws);
+    // Owned input released here (see hash_fnv1a).
+    rt_str_free(s);
     return result;
 }
