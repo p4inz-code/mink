@@ -5,7 +5,7 @@
 **A compiled general-purpose programming language — from lexer to native executable.**
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-1.0.1-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.2-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
 Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by Northbyte Studios.
@@ -26,14 +26,11 @@ MINK is designed for systems programming and application development, with a foc
 
 MINK is distributed through npm. You need **Node.js 18 or newer** (which includes npm).
 
-> **Repository vs. published package — read before installing.** The npm registry
-> currently serves only `@p4inz-code/mink@1.0.1`, published before the fixes recorded in
-> this repository's later commits (verified: `npm view @p4inz-code/mink version` →
-> `1.0.1`, and `1.0.1` is the only published version). A global install therefore gives
-> you that earlier build, not the corrected compiler in this repository. The repository
-> and the package bundled in it (`npm/mink/`, whose binary was rebuilt from the fixed
-> source) are authoritative; republishing the corrected package requires npm registry
-> credentials and has not been done.
+> **Published package state — verified.** The npm registry serves **1.0.2** as `latest`
+> (verified: `npm view @p4inz-code/mink version` → `1.0.2`, `dist-tags.latest` → `1.0.2`,
+> published 2026-09-25). A global install gives you this release. The published tarball
+> carries 28 files — `bin/mink.exe` plus all 26 bundled `stdlib/` modules — and its
+> compiler binary and standard library are byte-identical to the copies in `npm/mink/`.
 
 ### Already have Node.js / npm?
 
@@ -50,7 +47,7 @@ mink --version
 Expected output:
 
 ```text
-mink 1.0.1
+mink 1.0.2
 ```
 
 ### Don't have Node.js / npm?
@@ -172,12 +169,26 @@ mink explain E-T01             # explain a type mismatch error
 
 ## What's New
 
-### MINK 1.0.1
+### MINK 1.0.2
 
-This section describes the **repository** state — the corrected 1.0.1 source and the package
-bundled in `npm/mink/`. The artifact the npm registry currently serves is the earlier,
-pre-correction 1.0.1 build (see the note in [Install MINK](#install-mink)); the corrected
-package is not yet published.
+**Current public release.** `npm install -g @p4inz-code/mink` installs this build — the
+registry's `latest` tag points at `1.0.2` (see the note in [Install MINK](#install-mink)).
+
+Changed in this release:
+
+- **Corrected runtime ownership** — a map replace or set insert that discards an existing
+  key or element now releases the replaced value instead of leaking it
+- **Hashing on owned buffers fixed** — `stdlib/hashing.mink` no longer overruns its
+  workspace for inputs of 256 bytes or more, and no longer leaks when hashing an owned
+  buffer
+- **Refreshed bundled compiler** — `npm/mink/bin/mink.exe` is rebuilt from this source and
+  reports `mink 1.0.2`; the published tarball's binary and standard library are
+  byte-identical to the copies in `npm/mink/`
+- **26 standard-library modules** — `tls`, `sqlite`, `zip`, `zlib`, `re`, `threads`,
+  `tasks`, `csv`, `logging`, `assert` and the rest, all bundled beside the compiler
+- **Windows x86_64** — self-contained compiler, standalone PE output, no external toolchain
+
+Capabilities:
 
 - **npm distribution** — install with `npm install -g @p4inz-code/mink`, no manual download needed
 - **`mink run`** — compile and execute in one step

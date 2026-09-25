@@ -70,12 +70,12 @@ commit that freezes Windows):
   declarations accumulate, and no value bindings persist between lines. REPL input ends at
   EOF — the end of piped input, or `Ctrl-Z` then `Enter` at a Windows console — or with
   `:quit`. `mink build --help` is reported as an unknown option (documented as such).
-* Public npm artifact: `@p4inz-code/mink@1.0.1` — the previously published, pre-correction
-  build. The repository and the package bundled in `npm/mink/` hold the corrected 1.0.1
-  source/package state.
-* npm publication status: RELEASE PENDING. The corrected package is not yet published; the
-  only blocker is missing npm registry credentials. This does not reopen Windows
-  engineering.
+* Public npm artifact: `@p4inz-code/mink@1.0.2` — published and independently verified.
+  The registry's `latest` tag points at `1.0.2` (verified: `npm view @p4inz-code/mink
+  version` → `1.0.2`, `npm view @p4inz-code/mink@1.0.2 version` → `1.0.2`). The published
+  tarball carries 28 files (`bin/mink.exe` + 26 `stdlib/` modules), and its compiler
+  binary and standard library are byte-identical to the copies in `npm/mink/`.
+* npm publication status: PUBLISHED AND VERIFIED. No publication blocker remains.
 * Repository state: clean working tree, `HEAD == origin/main`.
 
 Session 99 verified:

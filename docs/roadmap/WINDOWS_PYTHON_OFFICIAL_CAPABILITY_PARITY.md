@@ -2,7 +2,7 @@
 
 **Session:** 118 (final Windows completion audit; matrix reconciled through Sessions 116–117, and §2/§3.10/§10/§11 recomputed **from the 232 rows** rather than from prose totals)
 **Starting commit:** `568dc04` (Session 106 close) → `48ed337` (Session 107 start) → `c3b8091` (Session 107 push) → `9abd6f9` (Session 116 close) → `86642b4` (Session 117 close; final-audit start)
-**MINK version:** 1.0.1
+**MINK version:** 1.0.2
 **Scope:** Windows x86_64 (the shipped platform). Official Python capabilities only.
 **Classification:** capability parity — what a Windows developer can accomplish with
 official Python must be accomplishable with MINK's own architecture. Syntax imitation is
@@ -23,9 +23,9 @@ explicitly out of scope. PyPI / third-party ecosystem parity is out of scope.
 > eleven permanent regression tests have landed since — six from the docs reconciliation,
 > five from the systems-readiness audit). The §2 baseline row and the §11
 > evidence index carry the same figure. Windows x86_64 is the completed, frozen baseline
-> (P0 = 0, P1 = 0) and Linux remains FROZEN. One fact is deliberately *not* a repository
-> claim: **the public npm registry still serves only `@p4inz-code/mink@1.0.1`**; the
-> corrected package bundled at `npm/mink/` has not been republished.
+> (P0 = 0, P1 = 0) and Linux remains FROZEN. The public npm registry serves
+> **`@p4inz-code/mink@1.0.2`** as `latest`; the published tarball's compiler binary and
+> standard library are byte-identical to the copies bundled at `npm/mink/`.
 
 This document is the durable, evidence-based master map. Companion documents:
 
@@ -75,7 +75,7 @@ probes). Every "every major claim must be traceable" row carries anchors in Note
 | Fact | Value | Evidence |
 |---|---|---|
 | Starting commit | `86642b4` (Session 117 close), clean tree | `git rev-parse HEAD`, `git status` |
-| Version | `mink 1.0.1` | `target/release/mink.exe --version` |
+| Version | `mink 1.0.2` | `target/release/mink.exe --version` |
 | Release build | clean | `cargo build --release` |
 | Test suite | 72 test units (71 integration targets + lib); current regression: **2 957 passed, 3 ignored, 0 failures** across every unit (Session 119 recorded 2 946; six regression tests added by the docs reconciliation, five by the systems-readiness audit) | `cargo test` per target group + repeated stress runs; see the Session 119 report |
 | Smoke/CLI/release suites | smoke 13/13 · release 68/68 · cli 74/74 (+1 ignored) | `cargo test --test {smoke,release,cli}` |
@@ -83,7 +83,7 @@ probes). Every "every major claim must be traceable" row carries anchors in Note
 | Windows target | `x86_64-windows-pe` implemented | `[code] src/backend/target.rs` |
 | Linux target | `x86_64-linux-elf` implemented but FROZEN by policy; not part of this audit | `[code] src/backend/target.rs`; session policy |
 | Architecture | AOT compiler, no external toolchain, zero Rust crate deps, standalone PE | `[code] Cargo.toml`, `src/backend/emit/*.rs` |
-| Distribution | npm `@p4inz-code/mink` 1.0.1 ships compiler `bin/mink.exe` + bundled `stdlib/` (all **26** `.mink` modules, `tls` included); `mod` resolves via `<exe>/../stdlib` with no config | `[code] npm/mink/package.json`, `src/driver.rs` resolve_module_path; `[exec]` Session 118 packaged-CLI audit (tarball packed and installed in a clean external directory whose path contains spaces and Unicode; bundled `mod` import, project init, dependency install and environment workflow all run from there) |
+| Distribution | npm `@p4inz-code/mink` 1.0.2 ships compiler `bin/mink.exe` + bundled `stdlib/` (all **26** `.mink` modules, `tls` included); `mod` resolves via `<exe>/../stdlib` with no config | `[code] npm/mink/package.json`, `src/driver.rs` resolve_module_path; `[exec]` Session 118 packaged-CLI audit (tarball packed and installed in a clean external directory whose path contains spaces and Unicode; bundled `mod` import, project init, dependency install and environment workflow all run from there) |
 | P0 / P1 on the Windows base | 0 / 0 | Session 97 gate |
 
 Short-circuit semantics of `&&` / `||` were probed natively this session: both **do**
@@ -471,7 +471,7 @@ distribution of the compiler is complete and does NOT constitute a MINK package 
 
 | ID | Python concept | MINK status | MINK equivalent / evidence | Gap | Pri | Diff | Blocks | Wave | Notes |
 |---|---|---|---|---|---|---|---|---|---|
-| P01 | Distributing the tool itself | VERIFIED | npm `@p4inz-code/mink` 1.0.1, clean install ×2, standalone exe (`[exec]` Session 97; `[code] npm/mink/package.json`) | None | - | - | N | - | Category (B) is done |
+| P01 | Distributing the tool itself | VERIFIED | npm `@p4inz-code/mink` 1.0.2 is `latest` on the registry, clean install ×2, standalone exe (`[exec]` Session 97; `[code] npm/mink/package.json`) | None | - | - | N | - | Category (B) is done |
 | P02 | Standard-library source available to installed users | VERIFIED | npm `@p4inz-code/mink` ships `npm/mink/stdlib/*.mink` (all 26 modules) beside `bin/mink.exe`, and `mod name;` resolves it via `<exe>/../stdlib` with no config (`[code] npm/mink/package.json` `files`, `src/driver.rs` resolve_module_path; `[test] tests/release.rs` s107_npm_stdlib_bundle_matches_repo_stdlib — bundle byte-identical to `stdlib/`; `[exec]` Session 99 clean-install stdlib import) | None for V1 | - | - | N | - | **Reclassified in Session 107**: the row still said MISSING although the bundled stdlib landed in Session 99 (see the §2 baseline row). Session 107 also synced the drifted copy (`str_split`/`str_join`, the UTF-8 layer) and added the permanent drift guard |
 | P03 | Import package (`import pkg`) | VERIFIED | `mod pkg;` imports a directory package (see L68) and `use pkg::item;` names its items; two or more sibling modules now resolve to distinct symbols (`[code] src/hir/lower.rs`, `src/typecheck/checker.rs`, `src/ownership/mod.rs` — declaration maps keyed by `(file, offset)`; `[test] tests/packages.rs` l68_two_sibling_modules_resolve_distinct_symbols; fixture `tests/packages/siblings/`; `[exec]` native PE run) | No namespace isolation between packages (V1 flattens all items); no package versioning | - | M | N | F | Delivered this session, including the multi-module symbol-collision defect fix |
 | P04 | Installed package / site-packages | VERIFIED | A **packages directory** is MINK's site-packages: `<project>/.mink/packages` (or `<project>/.mink/envs/<name>/packages` when an environment is active). `mink install` copies each resolved package to `<packages>/<name>/` and records `name`/`version`/`source`/`sha256:` content hash in `<packages>/.installed`; the compiler resolves `mod name;` against that directory (site-packages), then each path dependency, the declaring file's own directory and the bundled stdlib (`[code] src/package/{install,mod}.rs`, `src/driver.rs` `resolve_module_path` + `module_roots`; `[test] tests/package_manager.rs` p04_* and p05_install_then_run_imports_the_installed_package (native PE prints a value from the installed package), p04_spaces_and_unicode_in_the_project_path, p04_an_empty_project_installs_nothing_and_succeeds, p04_init_reports_an_existing_project; `[exec]` native PE runs) | No registry-provided binary packages (§6); installs are source copies, not symlink farms | - | M | N | F | Delivered in Session 116 |
@@ -481,7 +481,7 @@ distribution of the compiler is complete and does NOT constitute a MINK package 
 | P08 | Project metadata / manifest | VERIFIED | `mink.toml` per §3, read and edited by a dependency-free TOML-subset reader (tables, quoted strings, inline tables, string arrays, comments), preserving every section it does not act on; `mink init` writes a starter manifest (`[code] src/package/manifest.rs`, `[test] src/package/manifest.rs` unit tests + `tests/package_manager.rs` p08_*: malformed version reported with its location, whitespace/Unicode paths, missing path dependency reported, version+path together rejected) | Fields outside `name`/`version`/`dependencies`/`sources` are preserved but unused (no `edition`, `license`, `features` behaviour); a duplicate table is a reported error, but full TOML (dates, floats, nested tables) is not read | - | M | N | F | Delivered in Session 116 |
 | P09 | Virtual environment / environment isolation | VERIFIED | `mink env new/use/list/remove`: an environment is `<project>/.mink/envs/<name>/packages` plus a `.mink/active-env` pointer; creating one activates it, removing the active one clears the pointer, and installs land in — and module resolution reads — only the active environment (`[code] src/package/env.rs`, `src/cli.rs`, `src/driver.rs`); `[test] tests/package_manager.rs` p09_*: a fresh environment does not inherit the project's packages, install fills the active environment while the project's copy stays byte-identical, tampering inside the environment is detected there, `env remove` restores the project, unknown/invalid names report `E-PKG13`; `[test] src/package/env.rs` 7 unit tests; `[exec]` native PE runs in the project and inside the environment) | Isolation is directory-level (no interpreter/compiler shim, no activation shell script); an environment installs the project's dependencies rather than having its own manifest | - | M | N | F | Delivered in Session 116. Depends on P05 |
 | P10 | Registry / publishing workflow | MISSING | none | package registry | P2 | XL | N | F | Ecosystem-stage item, after P05-P09 |
-| P11 | Versioning / semver discipline | PARTIAL | compiler itself is 1.0.1 semantic; no library-version model | package versioning | P2 | S | N | F | |
+| P11 | Versioning / semver discipline | PARTIAL | compiler itself is 1.0.2 semantic; no library-version model | package versioning | P2 | S | N | F | |
 | P12 | Executable entry points (console_scripts) | INTENT. DIFF. | every build IS a standalone exe (stronger than Python) | — | - | - | N | - | No equivalent needed |
 | P13 | Source vs wheel/binary distribution | N/A | MINK ships source `.mink` libraries; the compiler ships native | distribution-shape decision deferred to package manager | P2 | M | N | F | |
 | P14 | Offline builds / cache | MISSING | none | dep cache | P3 | M | N | F | |

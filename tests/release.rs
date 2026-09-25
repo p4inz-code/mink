@@ -359,7 +359,7 @@ fn release_binary_version_works() {
     let output = mink().arg("--version").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("1.0.1"));
+    assert!(stdout.contains(env!("CARGO_PKG_VERSION")));
 }
 
 // =========================================================================

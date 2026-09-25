@@ -1,6 +1,6 @@
 {
   "name": "@p4inz-code/mink",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MINK programming language compiler for Windows x64",
   "bin": {
     "mink": "bin/mink.exe"
