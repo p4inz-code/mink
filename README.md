@@ -5,7 +5,7 @@
 **A systems-oriented native programming language for Windows x86_64.**
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-1.0.2-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.3-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
 Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by Northbyte Studios.
@@ -45,11 +45,15 @@ What makes it different:
 **Requires Windows x64** and **Node.js 18 or newer** (which includes npm). MINK is
 distributed through npm.
 
-> **Published package state — verified.** The npm registry serves **1.0.2** as `latest`
-> (verified: `npm view @p4inz-code/mink version` → `1.0.2`, `dist-tags.latest` → `1.0.2`,
-> published 2026-09-25). A global install gives you this release. The published tarball
-> carries 28 files — `bin/mink.exe` plus all 26 bundled `stdlib/` modules — and its
-> compiler binary and standard library are byte-identical to the copies in `npm/mink/`.
+> **Published package state.** The intended current release is **1.0.3** — a release-
+> distribution correction carrying the 1.0.2-era sources plus the four monomorphization
+> and capture fixes listed in [What's New](#whats-new). The tarball is built, verified
+> (`npm pack` → 28 files, 26 `stdlib/` modules, corrected `bin/mink.exe`), and proven by
+> a fresh isolated install of exactly that tarball; publishing it to the registry was
+> blocked because the stored npm token was rejected by the registry (E401). Until a
+> maintainer runs `npm publish ./npm/mink --access public` with a valid token, the
+> registry still serves 1.0.2 (which predates those fixes — do not pin it) and the
+> corrected 1.0.3 compiler is available from this repository at tag `v1.0.3`.
 
 ### Already have Node.js / npm?
 
@@ -66,7 +70,7 @@ mink --version
 Expected output:
 
 ```text
-mink 1.0.2
+mink 1.0.3
 ```
 
 ### Don't have Node.js / npm?
@@ -247,31 +251,34 @@ mink explain E-T01             # explain a type mismatch error
 
 ## What's New
 
-### MINK 1.0.2
+### MINK 1.0.3
 
-**Current public release.** `npm install -g @p4inz-code/mink` installs this build — the
-registry's `latest` tag points at `1.0.2` (see the note in [Install MINK](#install-mink)).
+**Current release.** Built, packaged, and verified; the registry copy follows the
+maintainer's `npm publish ./npm/mink --access public` (the stored token was rejected,
+E401 — see the note in [Install MINK](#install-mink)). 1.0.2 remains published but
+superseded: it was cut from an earlier commit, so its compiler binary predates the
+monomorphization and capture fixes below.
 
-Changed in this release:
+Changed in this release (a release-distribution correction; no new features):
 
+- **Corrected compiler ready for the registry** — the four monomorphization and capture
+  fixes below are what an installed user receives once 1.0.3 is published. The 1.0.2
+  registry package was published from the pre-fix commit and did not contain them; do
+  not pin 1.0.2.
 - **Corrected runtime ownership** — a map replace or set insert that discards an existing
   key or element now releases the replaced value instead of leaking it
 - **Hashing on owned buffers fixed** — `stdlib/hashing.mink` no longer overruns its
   workspace for inputs of 256 bytes or more, and no longer leaks when hashing an owned
   buffer
 - **Refreshed bundled compiler** — `npm/mink/bin/mink.exe` is rebuilt from this source and
-  reports `mink 1.0.2`; the published tarball's standard library is byte-identical to the
+  reports `mink 1.0.3`; the published tarball's standard library is byte-identical to the
   copy in `npm/mink/stdlib/`
 - **Monomorphization and capture repairs (maintenance pass)** — synthetic spans no longer
   collide with real declaration spans, so a capturing closure compiles regardless of the
   file's leading blank lines; literal spans survive monomorphization, so integer and
   string literals inside a generic function's body keep their values; capture order is
   preserved, so multi-capture closures receive the right values; a call whose callee is
-  an `rt_*` intrinsic no longer captures the intrinsic's name.
-  The npm registry still serves the 1.0.2 binary published before this pass: refreshing
-  the registry requires a republish (npm credentials are not available in this
-  environment), so the fixed compiler currently ships in `npm/mink/bin/` and in source,
-  not yet in the installed package.
+  an `rt_*` intrinsic no longer captures the intrinsic's name
 - **26 standard-library modules** — `tls`, `sqlite`, `zip`, `zlib`, `re`, `threads`,
   `tasks`, `csv`, `logging`, `assert` and the rest, all bundled beside the compiler
 - **Windows x86_64** — self-contained compiler, standalone PE output, no external toolchain
@@ -297,7 +304,7 @@ Capabilities:
 
 ## Limitations
 
-MINK 1.0.2 is explicit about its edges:
+MINK 1.0.3 is explicit about its edges:
 
 - **Windows x86_64 is the only supported platform.** A native ELF backend exists in source
   for Linux, but Linux is frozen and unsupported; macOS is not supported.
