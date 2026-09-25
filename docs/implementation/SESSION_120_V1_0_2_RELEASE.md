@@ -83,3 +83,52 @@ Platform Status
 - Linux: FROZEN. A native ELF backend exists in source, but Linux development is paused
   and Linux is not a supported platform.
 - Public npm: `1.0.2` PUBLISHED AND VERIFIED.
+
+Public Positioning and Launch Copy
+-----------------------------------
+
+Central positioning statement:
+
+> MINK is a systems-oriented native programming language for Windows x86_64.
+
+GitHub repository description:
+
+> Systems-oriented native programming language for Windows x86_64. Native compilation,
+> explicit ownership, standalone executables, and a bundled 26-module standard library.
+
+Project tagline:
+
+> A systems-oriented native programming language for Windows x86_64.
+
+Release announcement (v1.0.2):
+
+> **MINK 1.0.2** is available on npm: `npm install -g @p4inz-code/mink`
+>
+> MINK is a systems-oriented native programming language for Windows x86_64. It compiles to
+> standalone executables that import only Windows system libraries — no CRT DLL, no
+> interpreter, no external toolchain.
+>
+> This release:
+>
+> - Is the corrected public npm package (`@p4inz-code/mink@1.0.2`, now the registry's
+>   `latest`). The published compiler binary and standard library are byte-identical to the
+>   copies in this repository.
+> - Fixes runtime ownership: a map replace or a set insert that discards an existing key or
+>   element now releases the replaced value instead of leaking it.
+> - Fixes hashing on owned buffers in `stdlib/hashing.mink`: no more `E-R05` workspace
+>   overrun for inputs of 256 bytes or more, and no more `E-R06` leak when hashing an owned
+>   buffer.
+> - Ships 26 standard-library modules, including `tls`, `sqlite`, `zip`, `zlib`, `re`,
+>   `threads` and `tasks`.
+> - Keeps the standalone-executable workflow: `mink build` produces a single `.exe` that
+>   runs on any Windows 10+ x86_64 machine with no MINK installation.
+>
+> MINK 1.0.2 is **Windows x86_64 only**. Linux and macOS are not supported; a native Linux
+> ELF backend exists in source but Linux is frozen.
+>
+> Verify: `mink --version` → `mink 1.0.2`
+
+Showcase material: the repository contains no screenshots or terminal captures, and none
+were generated. The primary proof asset is the real source and the executable it produces —
+[`examples/sysinfo/main.mink`](../../examples/sysinfo/main.mink), built with the public CLI
+into a standalone 189,952-byte PE32+ executable whose only import is `kernel32.dll`.

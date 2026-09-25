@@ -2,7 +2,7 @@
 
 # MINK
 
-**A compiled general-purpose programming language — from lexer to native executable.**
+**A systems-oriented native programming language for Windows x86_64.**
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Version](https://img.shields.io/badge/version-1.0.2-brightgreen)
@@ -16,15 +16,34 @@ Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarde
 
 ## What is MINK?
 
-MINK is a compiled, general-purpose programming language built from the ground up — its own lexer, parser, type system, intermediate representations, optimizer, native code generator, and runtime. No external toolchain is required: the compiler produces standalone Windows executables that carry no third-party runtime dependency and import only Windows system libraries.
+MINK is a systems-oriented native programming language for **Windows x86_64**. It compiles
+straight to standalone `.exe` files — no interpreter, no virtual machine, no external
+toolchain — and reaches the operating system directly for files, processes, sockets,
+threads and time.
 
-MINK is designed for systems programming and application development, with a focus on catching errors early and providing predictable, deterministic behavior.
+MINK is for programmers writing native Windows tools: utilities that read and write real
+files, spawn and supervise child processes, talk TCP or UDP, run work on OS threads, and
+ship as a single executable with no runtime to install on the target machine.
+
+What makes it different:
+
+- **Natively compiled, end to end.** Its own lexer, parser, type system, HIR, MIR,
+  optimizer, x86-64 code generator and runtime. The compiler has zero Rust crate
+  dependencies.
+- **Explicit ownership.** Move semantics, `&`/`&mut` borrows and compile-time borrow
+  checking, over a heap that is tracked and leak-checked at exit.
+- **Standalone output.** A generated executable imports only Windows system libraries —
+  no CRT DLL and no third-party runtime. Copy it to any Windows 10+ x86_64 machine.
+- **A real standard library.** 26 modules bundled beside the compiler, including
+  filesystem, process, network, TLS, SQLite, ZIP/DEFLATE, threads and async.
+
+> **Platform:** Windows x86_64 only. Linux and macOS are not supported yet — see
+> [Limitations](#limitations).
 
 ## Install MINK
 
-**MINK requires Windows x64.** Linux and macOS are not currently supported.
-
-MINK is distributed through npm. You need **Node.js 18 or newer** (which includes npm).
+**Requires Windows x64** and **Node.js 18 or newer** (which includes npm). MINK is
+distributed through npm.
 
 > **Published package state — verified.** The npm registry serves **1.0.2** as `latest`
 > (verified: `npm view @p4inz-code/mink version` → `1.0.2`, `dist-tags.latest` → `1.0.2`,
@@ -106,20 +125,79 @@ That's it — no build step, no configuration, no runtime installation on the ta
 
 ### Build and Run
 
-```bash
-mink build hello.mink    # creates hello.exe
-./hello.exe               # runs the executable
+```bat
+mink build hello.mink    :: creates hello.exe
+.\hello.exe              :: runs the executable
 ```
 
 Program arguments go to the built executable, not through `mink run` (which
 takes only the source file):
 
-```bash
-mink build program.mink    # creates program.exe
-./program.exe input.txt     # rt_argc() == 1, rt_argv(0) == "input.txt"
+```bat
+mink build program.mink    :: creates program.exe
+.\program.exe input.txt    :: rt_argc() == 1, rt_argv(0) == "input.txt"
 ```
 
 The generated `.exe` is a standalone Windows executable. Copy it to any Windows 10+ x86_64 machine and run it — no MINK compiler needed on the target. Its only imports are Windows system libraries (kernel32, ws2_32 and bcrypt families); it inherits no C-runtime DLL dependency.
+
+## Systems Proof
+
+[`examples/sysinfo/main.mink`](examples/sysinfo/main.mink) is a ~500-line native Windows
+utility written in MINK and built with the public CLI into a standalone `.exe`. In a single
+process it exercises:
+
+| Capability | What the utility does |
+| --- | --- |
+| Command-line arguments | `rt_argc` / `rt_argv` |
+| Environment | get, set, has, remove, then read back |
+| Filesystem | create dir, write, read, size, copy, move, remove, enumerate |
+| Process control | create a child process and capture its stdout |
+| Binary data | a 4096-byte binary workload |
+| Hashing | SHA-256, FNV-1a and CRC-32 over that buffer |
+| Compression | zlib compress / decompress round trip, byte-verified |
+| Threads and locks | four OS threads accumulating under a lock, checked against the closed form |
+| TCP loopback | listen → dial → accept → send → receive → echo → close |
+| Time | `rt_time_millis`, `rt_time_now`, `time_strftime` |
+
+The compiled image is a PE32+ x86-64 console executable whose **only import is
+`kernel32.dll`**. Copied into an unrelated directory and run with `PATH` restricted to
+`C:\Windows\System32` — no compiler, no Rust, no repository files on the path — it prints
+the full report and exits 0.
+
+Build it yourself:
+
+```bat
+mink build examples\sysinfo\main.mink
+```
+
+More complete programs live in [`examples/`](examples/) — a TCP client, an HTTP client, a
+compression utility, a threaded-work demo, an async-task demo, a SQLite inventory app and
+a regex tool, among others.
+
+## Capability Snapshot
+
+| Area | Capability |
+| --- | --- |
+| Native compilation | x86-64 PE output, standalone `.exe`, no external toolchain, no CRT DLL |
+| Ownership | Move semantics, `&`/`&mut` borrows, compile-time borrow checking |
+| Memory | Explicit heap allocation, runtime-validated, exit-time leak check |
+| Filesystem | Paths, read/write/copy/move/remove, directories, enumeration |
+| Processes | Spawn, capture stdout/stderr, exit codes |
+| Environment | get / set / has / remove |
+| Networking | TCP and UDP sockets (Winsock2), non-blocking I/O and select |
+| Threads | Real OS threads and locks |
+| Async | `async fn` / `await` over a task event loop |
+| Binary data | Byte buffers, hashing, compression |
+| Compression | DEFLATE, zlib and gzip; PKZIP (`.zip`) read and write |
+| Hashing | SHA-256, FNV-1a, DJB2, CRC-32; HMAC-SHA256 / HKDF-SHA256 |
+| TLS / HTTPS | TLS 1.2/1.3 client and HTTPS GET (Windows Schannel) |
+| SQLite | Embedded relational database: statements, results, transactions |
+| Project tooling | `init` / `add` / `remove` / `install` / `update`, environments, lockfile |
+| Developer CLI | `run`, `build`, `check`, `test`, `repl`, `explain`, JSON diagnostics |
+
+Every row is backed by the repository's own test suite and session records. See
+[`docs/audits/SYSTEMS_READINESS_AUDIT.md`](docs/audits/SYSTEMS_READINESS_AUDIT.md) for the
+executed evidence and the exact claim boundary.
 
 ## Commands
 
@@ -206,6 +284,26 @@ Capabilities:
 - **Encoding** — Base64, hex, URL encoding/decoding
 - **Time** — current time, epoch, calendar fields, `strftime`/`strptime` formatting and parsing, monotonic ticks/frequency for durations
 - **Environment** — get/set/has/remove environment variables, wired to the Windows API
+
+## Limitations
+
+MINK 1.0.2 is explicit about its edges:
+
+- **Windows x86_64 is the only supported platform.** A native ELF backend exists in source
+  for Linux, but Linux is frozen and unsupported; macOS is not supported.
+- **Unicode is partial.** `Str` is a byte buffer with a UTF-8 code-point layer, but there
+  is no Unicode database — no non-ASCII case operations, categories, normalization or
+  collation. Command-line arguments and filesystem entries use the ANSI Windows APIs, so
+  non-ASCII arguments and paths are limited.
+- **Ownership coverage is incomplete in parts of the standard library.** A few functions
+  that consume an owned heap `Str` — in `encoding` and `strings`, beyond the fixed
+  `hashing` path — do not release it.
+- **Tooling is CLI-only.** There is no integrated debugger or profiler.
+- **Some ecosystem capabilities remain partial.** There is no package registry or
+  publishing workflow (dependencies are declared requirements or local paths), no
+  library-version model, and stdin is read-all rather than line-streamed. No long-running
+  soak testing has been done.
+- **No performance claims.** MINK has not been benchmarked against any other language.
 
 ## What's Next
 
