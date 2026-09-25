@@ -1,5 +1,6 @@
 //! Tests for generic functions, structs, enums, and monomorphization (Sessions 35–36).
 
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -429,4 +430,84 @@ fn enum_variant_still_works() {
          fn main() { return 0; }",
     );
     assert!(!has_type_errors(&report));
+}
+
+// ===========================================================================
+// MONOMORPHIZED BODIES: LITERALS AND NATIVE EXECUTION
+// ===========================================================================
+//
+// `check` stops at MIR, so the earlier tests here never reach the backend,
+// which is where a monomorphized body's literals are decoded from source
+// text. Rewriting a literal expression's span during instantiation made that
+// text unavailable: an integer literal silently became `0` and a string
+// literal failed with `E-B10`. These tests run the produced binary so the
+// decoded values are actually observed.
+
+/// Build `src` and return the produced program's exit code.
+fn native_exit_code(src: &str) -> i32 {
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "test_generic_native_{}_{}.mink",
+        std::process::id(),
+        n
+    ));
+    std::fs::write(&path, src).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_mink"))
+        .arg("build")
+        .arg(&path)
+        .output()
+        .expect("run mink build");
+    let exe = path.with_extension("exe");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&exe);
+        panic!("build failed:\n{stderr}");
+    }
+    let code = Command::new(&exe).status().unwrap().code().unwrap_or(-1);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&exe);
+    code
+}
+
+#[test]
+fn monomorphized_integer_literal_keeps_its_value() {
+    assert_eq!(
+        native_exit_code("fn ret42<T>(x: T) -> Int { return 42; } fn main() -> Int { return ret42(1); }"),
+        42
+    );
+}
+
+#[test]
+fn monomorphized_arithmetic_literal_keeps_its_value() {
+    assert_eq!(
+        native_exit_code(
+            "fn addn<T>(x: T) -> Int { return 5 + 6; } fn main() -> Int { return addn(1); }"
+        ),
+        11
+    );
+}
+
+#[test]
+fn monomorphized_string_literal_decodes() {
+    assert_eq!(
+        native_exit_code(
+            "fn len_of<T>(x: T) -> Int { let m = \"hello\"; return rt_str_len(m); } \
+             fn main() -> Int { return len_of(1); }"
+        ),
+        5
+    );
+}
+
+/// Two instantiations of the same generic function share the literal's
+/// original span; both must decode the same value.
+#[test]
+fn monomorphized_literal_shared_across_instantiations() {
+    assert_eq!(
+        native_exit_code(
+            "fn five<T>(x: T) -> Int { return 5; } \
+             fn main() -> Int { return five(1) + five(\"x\"); }"
+        ),
+        10
+    );
 }

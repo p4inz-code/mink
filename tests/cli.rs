@@ -1317,34 +1317,26 @@ fn explain_rejects_extra_arguments() {
 }
 
 // ============================================================================
-// Known compiler defect (recorded Session 107, NOT fixed)
+// Previously a known compiler defect (recorded Session 107).
 // ============================================================================
 
 /// A program that imports a module and calls one of its functions several
-/// times must compile. It does not.
+/// times must compile.
 ///
-/// Reproduction: `mod encoding;` (the stdlib module resolves through
-/// `cwd/stdlib`), then nine `if utf8_validate("...") { .. } else { .. }`
-/// statements. Lowering fails with `E-M04` ("cannot lower: identifier has
-/// no corresponding local") on the `rt_print_int` of a later `else` block;
-/// a nested-call variant fails type checking with `E-T05`
-/// ("expected `1` arguments, found `4`") on an unrelated call.
+/// History: this used to fail lowering with `E-M04` ("cannot lower:
+/// identifier has no corresponding local") on the `rt_print_int` of a later
+/// `else` block, or type checking with `E-T05` on an unrelated call — the
+/// trigger was content- and call-count-dependent and pre-existing in the
+/// shipped 1.0.1 compiler, so it was recorded as an `#[ignore]`d test with
+/// the exact reproduction so it could not be lost.
 ///
-/// Characterization (probed with the repository compiler and with the
-/// shipped `npm/mink/bin/mink.exe` 1.0.1):
-///   - identical shape with a LOCALLY defined function compiles;
-///   - a minimal custom module reproduces nothing;
-///   - the trigger is content-dependent (which module is imported) and
-///     call-count dependent, and is deterministic for a given input;
-///   - the defect is PRE-EXISTING in the shipped 1.0.1 compiler, so it is
-///     not a Session 107 regression.
-///
-/// Ignored until fixed: it documents the exact reproduction so the defect
-/// cannot be lost. It is unrelated to the Session 107 UTF-8 tranche, and
-/// diagnosing it was out of scope for that session.
+/// It no longer reproduces: the monomorphizer's synthetic-span and
+/// literal-span repairs also removed the span collisions this defect
+/// depended on. Promoted to a permanent regression: nine `if
+/// utf8_validate("...") { .. } else { .. }` statements after `mod encoding;`
+/// must compile (checked with `build`, which runs the full pipeline).
 #[test]
-#[ignore = "pre-existing defect: imported module function calls stop resolving after repeated calls (E-M04/E-T05)"]
-fn imported_function_calls_are_not_limited() {
+fn imported_function_calls_compile_repeatedly() {
     let dir = std::env::temp_dir().join(format!("mink_cli_s107_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("main.mink");

@@ -260,8 +260,18 @@ Changed in this release:
   workspace for inputs of 256 bytes or more, and no longer leaks when hashing an owned
   buffer
 - **Refreshed bundled compiler** — `npm/mink/bin/mink.exe` is rebuilt from this source and
-  reports `mink 1.0.2`; the published tarball's binary and standard library are
-  byte-identical to the copies in `npm/mink/`
+  reports `mink 1.0.2`; the published tarball's standard library is byte-identical to the
+  copy in `npm/mink/stdlib/`
+- **Monomorphization and capture repairs (maintenance pass)** — synthetic spans no longer
+  collide with real declaration spans, so a capturing closure compiles regardless of the
+  file's leading blank lines; literal spans survive monomorphization, so integer and
+  string literals inside a generic function's body keep their values; capture order is
+  preserved, so multi-capture closures receive the right values; a call whose callee is
+  an `rt_*` intrinsic no longer captures the intrinsic's name.
+  The npm registry still serves the 1.0.2 binary published before this pass: refreshing
+  the registry requires a republish (npm credentials are not available in this
+  environment), so the fixed compiler currently ships in `npm/mink/bin/` and in source,
+  not yet in the installed package.
 - **26 standard-library modules** — `tls`, `sqlite`, `zip`, `zlib`, `re`, `threads`,
   `tasks`, `csv`, `logging`, `assert` and the rest, all bundled beside the compiler
 - **Windows x86_64** — self-contained compiler, standalone PE output, no external toolchain

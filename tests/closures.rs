@@ -284,3 +284,61 @@ fn regression_generics() {
         42,
     );
 }
+
+// =========================================================================
+// Capture semantics regressions
+// =========================================================================
+
+/// Captures are the generated function's LEADING parameters, in the sorted
+/// order the call-site rewrite passes them. They used to be prepended one at
+/// a time, which reversed the list and silently swapped the captured values.
+/// Addition hid it; subtraction does not.
+#[test]
+fn closure_native_multi_capture_order_is_preserved() {
+    assert_exit_code(
+        "fn main() { let a = 50; let b = 8; let f = |x: Int| a - b + x; return f(0); }",
+        42,
+    );
+}
+
+/// The same with three captures, so a reversal of any pair is visible.
+#[test]
+fn closure_native_three_capture_order_is_preserved() {
+    assert_exit_code(
+        "fn main() { let a = 50; let b = 10; let c = 1; let f = |x: Int| a - b - c + x; return f(3); }",
+        42,
+    );
+}
+
+/// A call's callee that names a runtime intrinsic is a function, not a
+/// captured value: capturing its name shadowed the intrinsic inside the
+/// generated function (and passing an intrinsic as a capture is `E-B07`).
+#[test]
+fn closure_body_calls_an_intrinsic_by_name() {
+    assert_exit_code(
+        "fn main() { let f = |x: Int| rt_str_len(\"hello\") + x; return f(37); }",
+        42,
+    );
+}
+
+/// A source file that begins with a blank line (LF endings) used to break
+/// every capturing closure: the synthetic span minted for a captured
+/// parameter landed on `main`'s name and replaced its type, so lowering
+/// failed with `E-H03 cannot lower function: not a function type`.
+#[test]
+fn closure_native_capture_with_leading_blank_line() {
+    assert_exit_code(
+        "\nfn main() { let y = 10; let f = |x: Int| x + y; return f(32); }",
+        42,
+    );
+}
+
+/// Three leading blank lines used to break capturing closures the same way
+/// as one; the failure depended on the resulting offsets.
+#[test]
+fn closure_native_capture_with_three_leading_blank_lines() {
+    assert_exit_code(
+        "\n\n\nfn main() { let y = 10; let f = |x: Int| x + y; return f(32); }",
+        42,
+    );
+}

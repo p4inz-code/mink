@@ -47,8 +47,12 @@ repeat runs diff cleanly.
 | Size | 187,392 bytes |
 
 Winsock is reached through dynamically resolved entry points (`rt_sys_load_lib` /
-`rt_sys_get_proc`), not through the import table — which is also why a `net_*` call made
-before `net_init()` faults instead of returning a structured error (§7).
+`rt_sys_get_proc`), not through the import table. A `net_*` call made before
+`net_init()` does **not** fault: every entry point is resolved on demand and the
+unresolved ones return the failure convention (`-1`, or an empty string for
+`net_resolve`/`net_hostname`), verified again after the 1.0.2 closure pass.
+(An earlier revision of this audit recorded an access violation here; that claim
+was stale.)
 
 The same executable was copied into an unrelated directory and run with `PATH` restricted
 to `C:\Windows\System32`, with no MINK compiler, no Rust/Cargo and no repository files on
@@ -139,8 +143,10 @@ regressions in `tests/hashing_lib.rs`.
 * **Unicode.** `Str` is a byte buffer with a UTF-8 code-point layer but no non-ASCII case
   operations and no Unicode database. Command-line arguments and filesystem entries use
   the ANSI Windows APIs, so non-ASCII argv/entries are limited.
-* **Raw fault on precondition misuse.** Calling a `net_*` function before `net_init()`
-  faults (observed: access violation) rather than raising a structured error.
+* **Graceful precondition misuse in `network`.** Calling a `net_*` function before
+  `net_init()` returns the failure convention (`-1`; `net_resolve`/`net_hostname`
+  return an empty string) rather than faulting, verified on 1.0.2. An earlier
+  revision of this audit recorded an access violation, which no longer reproduces.
 * **Hash naming precision.** `hash_fnv1a` / `hash_djb2` are 64-bit-register variants (they
   do not truncate to 32 bits), so their values diverge from the classic 32-bit algorithms
   for longer inputs. `hash_sha256` matches the standard exactly.

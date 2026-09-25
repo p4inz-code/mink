@@ -999,9 +999,11 @@ fn main() -> Int {
 }
 
 #[test]
-#[ignore] // Existing closure tests cover capture semantics; suspected test-infrastructure issue
 fn adv_closure_capture_and_use() {
-    // Capture a value and use it in the body.
+    // Capture a value and use it in the body. The leading newline (LF) made
+    // this the reproduction for a synthetic-span collision: a captured
+    // parameter's span landed on `main`'s name and replaced its type, so the
+    // build failed with `E-H03`. It now compiles like every other layout.
     let src = r#"
 fn main() -> Int {
     let x = 10;

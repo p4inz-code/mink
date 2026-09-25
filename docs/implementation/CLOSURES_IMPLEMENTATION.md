@@ -53,7 +53,16 @@ function instantiation):
    as top-level items.
 
 All synthetic spans use `self.next_span()` to avoid collisions with
-the type checker's span-keyed resolution map.
+the type checker's span-keyed resolution map. Synthetic spans live in a
+reserved source id (`SYNTHETIC_FILE`, `u32::MAX`) that no `SourceMap` can
+hand out, so a synthetic span can never equal a real declaration span: a
+collision used to replace `main`'s registered type with a captured
+parameter's, which is why a capturing closure in a file that started with
+one blank line failed with `E-H03`. Literal expressions are deliberately
+excluded from span reassignment — the AST stores no literal text, the
+backend recovers a literal's value from source through its span, and a
+literal's type is fixed by its form, so clones share the original span
+(reassigning it made a monomorphized body's integer literal silently `0`)
 
 ## 5. Type System
 
@@ -82,7 +91,7 @@ emitted via `IndirectCall`.
 | Capture mode | By value (copy for `Int`/`Bool`/`Float`/`Char`, move otherwise) |
 | Mutable capture | Not supported — captured values are immutable |
 | Escaping | Limited — borrowing closures that outlive scope are rejected |
-| Ordering | Deterministic: captures sorted alphabetically |
+| Ordering | Deterministic: captures sorted alphabetically, as leading parameters and at call sites (an earlier revision prepended them one at a time, which reversed the order and silently swapped the captured values) |
 
 ## 8. Limitations
 

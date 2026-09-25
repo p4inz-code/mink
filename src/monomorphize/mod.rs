@@ -20,6 +20,17 @@ use crate::source::{SourceId, Span};
 /// A mapping from generic type parameter names to concrete type arguments.
 type TypeSubstitution = HashMap<String, Ty>;
 
+/// The reserved source id that owns every synthetic span.
+///
+/// Monomorphization and closure desugaring invent spans for identifier copies
+/// that have no text of their own. Those spans are used as keys throughout the
+/// compiler (`(span.file(), span.start())` indexes declarations in the semantic
+/// analyzer, the type checker, HIR lowering, and the ownership pass), so a
+/// synthetic span that happened to equal a real one would silently replace that
+/// declaration. A `SourceMap` hands out ids from `0` upward, so a reserved id
+/// no map can produce keeps every synthetic span disjoint from every real span.
+const SYNTHETIC_FILE: u32 = u32::MAX;
+
 /// The monomorphization state: tracks generic functions/structs/enums and
 /// their concrete instantiations.
 pub struct Monomorphizer {
@@ -75,9 +86,16 @@ impl Monomorphizer {
     }
 
     /// Generates the next unique synthetic span.
+    ///
+    /// The span lives in [`SYNTHETIC_FILE`], a reserved source id, so it can
+    /// never collide with a real declaration name span (which would make the
+    /// checker resolve the real declaration to the synthetic symbol's type).
     fn next_span(&mut self) -> Span {
         self.synthetic_id += 1;
-        Span::new(SourceId::new(0), self.synthetic_id..self.synthetic_id)
+        Span::new(
+            SourceId::new(SYNTHETIC_FILE),
+            self.synthetic_id..self.synthetic_id,
+        )
     }
 
     /// Runs monomorphization on an AST, replacing all generic uses with
@@ -629,23 +647,24 @@ impl Monomorphizer {
                 collect_free_vars(body, &param_names, &mut free_vars);
 
                 if !free_vars.is_empty() {
-                    // Capturing closure: add captured variables as extra parameters.
-                    let mut all_params = params.clone();
+                    // Capturing closure: captures become the LEADING parameters,
+                    // in the same sorted order the call-site rewrite passes them
+                    // as arguments (prepending them one by one would reverse the
+                    // list and silently swap the captured values).
                     let mut sorted_free: Vec<String> = free_vars.iter().cloned().collect();
                     sorted_free.sort();
-                    for fv in &sorted_free {
-                        all_params.insert(
-                            0,
-                            ClosureParam {
-                                name: Ident {
-                                    name: fv.clone(),
-                                    span: self.next_span(),
-                                },
-                                ty: None,
+                    let mut all_params: Vec<ClosureParam> = sorted_free
+                        .iter()
+                        .map(|fv| ClosureParam {
+                            name: Ident {
+                                name: fv.clone(),
                                 span: self.next_span(),
                             },
-                        );
-                    }
+                            ty: None,
+                            span: self.next_span(),
+                        })
+                        .collect();
+                    all_params.extend(params.iter().cloned());
                     self.closure_captures
                         .insert(name.clone(), sorted_free.clone());
                     self.desugar_closure_to_fn(&name, name_span, &all_params, body);
@@ -2222,6 +2241,25 @@ impl Monomorphizer {
     }
 
     fn reassign_expr_spans(&mut self, expr: &mut Expr) {
+        // Literal expressions keep their original span. The AST stores no
+        // literal text for `Int`/`Float` (and the backend recovers every
+        // literal's value from source through its span), so rewriting the span
+        // would make the clone decode an empty string: an integer literal
+        // silently became `0` and a string literal failed with `E-B10`. A
+        // literal's type is fixed by its form (there is one integer type, one
+        // float type, ...), so clones may share the original span without a
+        // resolution conflict.
+        if matches!(
+            &expr.kind,
+            ExprKind::Int
+                | ExprKind::Float
+                | ExprKind::Str
+                | ExprKind::Char
+                | ExprKind::Bool(_)
+                | ExprKind::Null
+        ) {
+            return;
+        }
         expr.span = self.next_span();
         match &mut expr.kind {
             ExprKind::Ident(ident) => {
@@ -2311,6 +2349,8 @@ impl Monomorphizer {
                 }
                 self.reassign_expr_spans(body);
             }
+            // Literal arms are handled by the early return above: their
+            // spans must keep pointing at the original literal text.
             ExprKind::Int
             | ExprKind::Float
             | ExprKind::Str
@@ -2447,7 +2487,18 @@ fn collect_free_vars(
             collect_free_vars(rhs, bound, out);
         }
         ExprKind::Call { callee, args, .. } => {
-            collect_free_vars(callee, bound, out);
+            // A callee that names a runtime intrinsic is a function, not a
+            // captured value. Capturing it would shadow the intrinsic inside
+            // the generated function, and intrinsics are not first-class
+            // values, so passing one as a capture is a backend error (`E-B07`).
+            let intrinsic_callee = matches!(
+                &callee.kind,
+                ExprKind::Ident(ident)
+                    if crate::runtime::intrinsics::by_name(&ident.name).is_some()
+            );
+            if !intrinsic_callee {
+                collect_free_vars(callee, bound, out);
+            }
             for arg in args {
                 collect_free_vars(arg, bound, out);
             }
