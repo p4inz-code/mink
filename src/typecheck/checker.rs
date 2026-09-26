@@ -227,6 +227,17 @@ struct Checker<'a> {
     /// The current loop's break value type, while inside a loop expression
     /// (session 30). `Some(ty)` means `break expr;` must produce `ty`.
     loop_result: Option<TypeId>,
+    /// Arithmetic/comparison/shift/bitwise operand pairs whose types were
+    /// not both concrete when the operator was checked. After every call
+    /// site and the deferred re-type pass have constrained what they can,
+    /// any operand still unresolved here is pinned to `Int`: these operator
+    /// categories lower to integer machine operations (a `Float` operand
+    /// always pins during checking), so an operand the whole program left
+    /// unconstrained has exactly one possible backend shape. Without this,
+    /// a never-called function with an untyped parameter reached the
+    /// backend with unit-classified operands (E-B07: "binary operand type
+    /// does not match the operator" in stdlib `vec_min`/`vec_max`).
+    pending_scalar_operands: Vec<(TypeId, TypeId)>,
 }
 
 impl<'a> Checker<'a> {
@@ -254,6 +265,7 @@ impl<'a> Checker<'a> {
             errors: Vec::new(),
             fn_result: None,
             loop_result: None,
+            pending_scalar_operands: Vec::new(),
         }
     }
 
@@ -278,6 +290,45 @@ impl<'a> Checker<'a> {
         // (a body is checked before the calls that constrain its
         // parameters). See [`Checker::resolve_deferred_members`].
         self.resolve_deferred_members();
+        // Pin the remaining unconstrained operator operands to `Int` (see
+        // the `pending_scalar_operands` field documentation). This runs
+        // after `resolve_deferred_members` so a variable that the re-type
+        // pass resolved is never overwritten, and an operand it pinned to
+        // `Float` is left alone (the pin skips non-variables).
+        self.pin_remaining_operator_operands();
+    }
+
+    /// Pins every recorded operator operand that is still an unresolved
+    /// inference variable to `Int`.
+    ///
+    /// The arithmetic, comparison, shift, and bitwise operator categories
+    /// lower to integer machine operations; the backend verifier rejects
+    /// any other operand shape for them. The checker's comparison rule
+    /// deliberately leaves two unconstrained operands linked but unpinned
+    /// ("any scalar is valid"), which is correct for a called function —
+    /// the call site constrains the parameters — but leaves nothing behind
+    /// when no call site exists. Because this language has exactly one
+    /// integer type, an operand these operators never got a constraint for
+    /// *is* an integer operand, so the pin supplies the one shape the
+    /// backend can accept instead of an invalid `unit`. Deterministic: the
+    /// recorded order is source order, and unifying an already-concrete or
+    /// error-typed operand is skipped or fails harmlessly.
+    fn pin_remaining_operator_operands(&mut self) {
+        for (lhs, rhs) in std::mem::take(&mut self.pending_scalar_operands) {
+            let l = self.types.canonical(lhs);
+            let r = self.types.canonical(rhs);
+            // Error operands poison their operator already; leave them so
+            // the unknown/error type keeps absorbing unifications.
+            if self.types.is_error(l) || self.types.is_error(r) {
+                continue;
+            }
+            let int = self.int_ty();
+            // Only genuinely unresolved operands change: unifying a
+            // concrete non-integer operand (a pointer result, a `Float`)
+            // with `Int` fails and is ignored.
+            let _ = self.types.unify(l, int);
+            let _ = self.types.unify(r, int);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -3765,6 +3816,19 @@ impl<'a> Checker<'a> {
         let category = OpCategory::of(op);
         let l_unknown = matches!(self.types.kind(l), Some(TypeKind::Infer(_)));
         let r_unknown = matches!(self.types.kind(r), Some(TypeKind::Infer(_)));
+        // Record integer-shaped operator operands for the final pin pass
+        // (see `pending_scalar_operands`). Recording every such pair —
+        // concrete or not — keeps the pass order-independent; the pass
+        // only acts on operands the whole program left unresolved.
+        if matches!(
+            category,
+            OpCategory::Arithmetic
+                | OpCategory::Comparison
+                | OpCategory::Shift
+                | OpCategory::Bitwise
+        ) {
+            self.pending_scalar_operands.push((l, r));
+        }
         match (l_unknown, r_unknown) {
             (true, true) => {
                 let _ = self.types.unify(l, r);
@@ -4272,6 +4336,10 @@ impl<'a> Checker<'a> {
         };
         let l = self.types.canonical(target_ty);
         let r = self.types.canonical(value_ty);
+        // Compound assignment shares the binary operator rules; record the
+        // operand pair so the final pin pass covers `x += y` in a
+        // never-called function too.
+        self.pending_scalar_operands.push((l, r));
         let result = if self.types.is_error(l) || self.types.is_error(r) {
             self.types.push(TypeKind::Error)
         } else {

@@ -5,7 +5,7 @@
 **A systems-oriented native programming language for Windows x86_64.**
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-1.0.3-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
 Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by Northbyte Studios.
@@ -45,15 +45,20 @@ What makes it different:
 **Requires Windows x64** and **Node.js 18 or newer** (which includes npm). MINK is
 distributed through npm.
 
-> **Published package state.** The intended current release is **1.0.3** — a release-
-> distribution correction carrying the 1.0.2-era sources plus the four monomorphization
-> and capture fixes listed in [What's New](#whats-new). The tarball is built, verified
-> (`npm pack` → 28 files, 26 `stdlib/` modules, corrected `bin/mink.exe`), and proven by
-> a fresh isolated install of exactly that tarball; publishing it to the registry was
-> blocked because the stored npm token was rejected by the registry (E401). Until a
-> maintainer runs `npm publish ./npm/mink --access public` with a valid token, the
-> registry still serves 1.0.2 (which predates those fixes — do not pin it) and the
-> corrected 1.0.3 compiler is available from this repository at tag `v1.0.3`.
+> **Published package state.** The registry serves **1.0.3** (`npm view
+> @p4inz-code/mink version` → `1.0.3`, `latest: 1.0.3`). The prepared current release is
+> **1.0.4** — the defect closure for the `mod collections;` build failure reported against
+> 1.0.3, listed in [What's New](#whats-new). Its tarball is built and verified (`npm pack`
+> → 28 files, 26 `stdlib/` modules, corrected `bin/mink.exe`, packaged `stdlib/`
+> byte-identical to the repository copy) and proven by a fresh isolated install of exactly
+> that tarball: `mink --version` reports `mink 1.0.4`, the original `mod collections;`
+> repro now builds and runs, and the mink-scout fixture is re-verified (`VERIFY: PASS`,
+> output identical to its 1.0.3 build). Publishing it to the registry is pending: the
+> stored npm token is rejected by the registry (E401/E404), the same condition recorded for
+> 1.0.3. Until a maintainer runs `npm publish ./npm/mink --access public` with a valid
+> token, the registry still serves 1.0.3 — which ships the `mod collections;` `E-B07` build
+> failure — and the corrected 1.0.4 compiler is prepared in this repository as the local
+> tag `v1.0.4` (push it together with the publish).
 
 ### Already have Node.js / npm?
 
@@ -70,7 +75,7 @@ mink --version
 Expected output:
 
 ```text
-mink 1.0.3
+mink 1.0.4
 ```
 
 ### Don't have Node.js / npm?
@@ -251,9 +256,50 @@ mink explain E-T01             # explain a type mismatch error
 
 ## What's New
 
+### MINK 1.0.4
+
+**Current release — prepared and independently verified; the registry publish is pending a
+valid token (see the note in [Install MINK](#install-mink)).** This is a defect-closure
+release: it fixes the public `mod collections;` build failure reported against 1.0.3. A
+program that imported the bundled `collections` module but never called `vec_min` or
+`vec_max` passed `mink check` and then failed `mink build` with four `E-B07` diagnostics
+("invalid backend IR: binary operand type does not match the operator") pointing at
+`stdlib/collections.mink`.
+
+Root cause: an untyped function parameter is an inference variable, and the checker's
+comparison rule left two unconstrained operands linked but unpinned. With no call site to
+unify them, the operands stayed unresolved; the backend classified the unresolved type as
+`unit`; and the backend verifier — which requires `Int` operands for `<`, `<=`, `>`, `>=`
+— rejected a function the program never called. The fix pins operator operands that the
+whole program left unconstrained to `Int` at the end of type checking, so unresolved
+operands can no longer reach the backend as `unit`. The standard library is unchanged; the
+monomorphizer and the backend are untouched.
+
+Changed in this release (a defect closure; no new features):
+
+- **`mod collections;` builds again** — importing the module is enough; its aggregate
+  functions no longer depend on a call site to resolve their comparison operands
+- **Runtime values verified, not just exit codes** — permanent native-executing regressions
+  in `tests/collections_lib.rs` assert `vec_max`/`vec_min` on `[5,2,9]` → `9, 2`, `vec_sum`
+  → `60`, and an untyped `smaller(a, b)` helper → `2, -7`
+- **No behaviour change elsewhere** — `tests/typecheck.rs`'s contract test was updated to
+  the corrected rule (`arithmetic_on_unconstrained_operands_resolves_to_int`), and the full
+  sweep is green: **2973 passed · 0 failed · 1 ignored** (2852 integration passes across all
+  71 test targets, plus the 121 unit tests; the single ignored test needs public internet
+  access). On this machine `tests/process_lib.rs` additionally requires
+  `NoDefaultCurrentDirectoryInExePath` to be unset — an environment property, not compiler
+  behaviour: the same 8 tests fail identically under the shipped 1.0.3 binary
+- **Bundled compiler refreshed** — `npm/mink/bin/mink.exe` is rebuilt from this source and
+  reports `mink 1.0.4`; the packaged `stdlib/` is byte-identical to the repository copy
+- **Verified from the exact tarball** — a fresh isolated `npm install` of
+  `p4inz-code-mink-1.0.4.tgz` (28 files, 26 `stdlib/` modules) builds and runs the original
+  repro correctly and passes the CLI workflow (`init`, `check`, `test`, `build`, `run`,
+  `repl`); the mink-scout showcase rebuilds from that install and its fixture verifier
+  still reports `VERIFY: PASS` with byte-identical output
+
 ### MINK 1.0.3
 
-**Current release.** Built, packaged, and verified; the registry copy follows the
+**Previous release (superseded by 1.0.4).** Built, packaged, and verified; the registry copy follows the
 maintainer's `npm publish ./npm/mink --access public` (the stored token was rejected,
 E401 — see the note in [Install MINK](#install-mink)). 1.0.2 remains published but
 superseded: it was cut from an earlier commit, so its compiler binary predates the
@@ -304,7 +350,7 @@ Capabilities:
 
 ## Limitations
 
-MINK 1.0.3 is explicit about its edges:
+MINK 1.0.4 is explicit about its edges:
 
 - **Windows x86_64 is the only supported platform.** A native ELF backend exists in source
   for Linux, but Linux is frozen and unsupported; macOS is not supported.

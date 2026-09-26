@@ -1218,3 +1218,163 @@ fn main() -> Int {
     );
     assert_success(code, &out);
 }
+
+// ===========================================================================
+// `mod collections` regression (1.0.3 defect closure)
+//
+// 1.0.3 shipped `stdlib/collections.mink` whose `vec_min`/`vec_max` have
+// untyped parameters. A program that only imported the module — calling
+// neither function — failed `mink build` with four E-B07 diagnostics
+// ("binary operand type does not match the operator") because the
+// functions' `val < result` / `val > result` comparisons stayed
+// unresolved (the checker links two unconstrained operands without
+// pinning them), the backend classified unresolved inference types as
+// `unit`, and the verifier requires `Int` operands for `<`/`>`. The fix
+// pins operator operands the whole program left unconstrained to `Int`
+// at the end of type checking; these tests hold that fix in place.
+// ===========================================================================
+
+// THE original failure: importing `collections` without calling the
+// aggregate functions must build and run. Before the fix this failed to
+// build with E-B07 in `vec_min` (collections.mink:142) and `vec_max`
+// (collections.mink:156) even though `mink check` passed.
+#[test]
+fn collections_module_import_builds_without_calling_aggregates() {
+    let (code, out) = build_and_run(
+        r#"
+mod collections;
+mod filesystem;
+
+fn main() -> Int {
+    let v = rt_vec_new(4);
+    rt_vec_free(v);
+    rt_print_str("clean exit\n");
+    return 0;
+}"#,
+    );
+    assert_eq!(code, 0, "mod collections must build and run: {}", out);
+    assert!(out.contains("clean exit"), "expected output: {}", out);
+}
+
+// `vec_max`/`vec_min` on an Int vector must return the actual runtime
+// extremes, not a silently wrong value.
+#[test]
+fn collections_vec_min_max_int_runtime_values() {
+    let (code, out) = build_and_run(
+        r#"
+mod collections;
+
+fn main() -> Int {
+    let mut v = rt_vec_new(4);
+    v = rt_vec_push(v, 5);
+    v = rt_vec_push(v, 2);
+    v = rt_vec_push(v, 9);
+    let mx = vec_max(v);
+    let mn = vec_min(v);
+    rt_print_int(mx);
+    rt_print_int(mn);
+    rt_vec_free(v);
+    return 0;
+}"#,
+    );
+    assert_eq!(code, 0, "int vec_max/vec_min: {}", out);
+    assert_eq!(all_ints(&out), vec![9, 2], "max/min of [5,2,9]: {}", out);
+}
+
+// `vec_sum` through the real module (not hand-rolled loops) must still
+// aggregate correctly after the pin pass runs.
+#[test]
+fn collections_vec_sum_int_runtime_value() {
+    let (code, out) = build_and_run(
+        r#"
+mod collections;
+
+fn main() -> Int {
+    let mut v = rt_vec_new(4);
+    v = rt_vec_push(v, 10);
+    v = rt_vec_push(v, 20);
+    v = rt_vec_push(v, 30);
+    let total = vec_sum(v);
+    rt_print_int(total);
+    rt_vec_free(v);
+    return 0;
+}"#,
+    );
+    assert_eq!(code, 0, "int vec_sum: {}", out);
+    assert_eq!(all_ints(&out), vec![60], "sum of [10,20,30]: {}", out);
+}
+
+// The linked-variable contract: an untyped function whose comparison
+// operands were both unconstrained at check time (the exact shape that
+// broke the backend) must produce correct values when it IS called.
+// Integer literals pin the parameters at the call site; the function is
+// also called with negative literals to cover sign handling.
+#[test]
+fn collections_untyped_min_helper_runtime_values() {
+    let (code, out) = build_and_run(
+        r#"
+fn smaller(a, b) {
+    let mut r = a;
+    if b < r {
+        r = b;
+    }
+    return r;
+}
+
+fn main() -> Int {
+    rt_print_int(smaller(2, 5));
+    rt_print_int(smaller(-7, -3));
+    return 0;
+}"#,
+    );
+    assert_eq!(code, 0, "untyped min helper: {}", out);
+    assert_eq!(
+        all_ints(&out),
+        vec![2, -7],
+        "smaller(2,5), smaller(-7,-3): {}",
+        out
+    );
+}
+
+// A second supported element type: `Float` through the same untyped
+// function shape (the call site pins the parameters to `Float`, so the
+// pin pass must leave them alone — and must not have pinned them to
+// `Int` earlier). This exercises direct Float comparisons; note that
+// *Float element equality inside `Vec<Float>* is a separate, pre-existing
+// 1.0.3 runtime defect (reproduced unchanged on the public 1.0.3
+// compiler) and is deliberately not part of this coverage.
+#[test]
+fn untyped_min_max_float_runtime_values() {
+    let (code, out) = build_and_run(
+        r#"
+fn smallerf(a, b) {
+    let mut r = a;
+    if b < r {
+        r = b;
+    }
+    return r;
+}
+
+fn largerf(a, b) {
+    let mut r = a;
+    if b > r {
+        r = b;
+    }
+    return r;
+}
+
+fn main() -> Int {
+    let mn = smallerf(2.5, 7.5);
+    let mx = largerf(2.5, 7.5);
+    let min_ok = mn == 2.5;
+    let max_ok = mx == 7.5;
+    if min_ok {
+        if max_ok {
+            return 0;
+        }
+    }
+    return 1;
+}"#,
+    );
+    assert_eq!(code, 0, "float min/max through untyped fns: {}", out);
+}

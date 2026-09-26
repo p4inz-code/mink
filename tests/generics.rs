@@ -473,7 +473,9 @@ fn native_exit_code(src: &str) -> i32 {
 #[test]
 fn monomorphized_integer_literal_keeps_its_value() {
     assert_eq!(
-        native_exit_code("fn ret42<T>(x: T) -> Int { return 42; } fn main() -> Int { return ret42(1); }"),
+        native_exit_code(
+            "fn ret42<T>(x: T) -> Int { return 42; } fn main() -> Int { return ret42(1); }"
+        ),
         42
     );
 }

@@ -1629,16 +1629,24 @@ fn no_determinable_type_leaks_unresolved() {
 }
 
 #[test]
-fn genuinely_ambiguous_types_stay_unresolved() {
-    // Arithmetic on two unconstrained operands cannot be pinned (Int and
-    // Float are both valid); staying unresolved is the honest outcome.
+fn arithmetic_on_unconstrained_operands_resolves_to_int() {
+    // Arithmetic, comparison, shift, and bitwise operands that the whole
+    // program leaves unconstrained resolve to `Int`: these operator
+    // categories lower to integer machine operations, and the language has
+    // exactly one integer type, so the operand has exactly one possible
+    // shape. (This test previously asserted the opposite contract — "staying
+    // unresolved is the honest outcome" — which shipped the 1.0.3
+    // `mod collections` defect: `vec_min`/`vec_max` reached the backend with
+    // unit-classified comparison operands and failed E-B07. A called
+    // function's parameters are still pinned by its call sites before this
+    // resolution matters; see `tests/collections_lib.rs`.)
     let src = "fn f() { return; } fn g() { let a = f(); let b = f(); let r = a + b; }";
     let (_sources, _ast, _semantic, types) = check_src(src);
     assert!(!types.has_errors());
     for name in ["a", "b", "r"] {
         assert_eq!(
             type_name(&types, symbol_ty(&types, &_semantic, name)),
-            "unresolved"
+            "Int"
         );
     }
 }
