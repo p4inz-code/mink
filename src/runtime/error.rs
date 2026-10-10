@@ -58,6 +58,14 @@ pub enum RuntimeErrorKind {
     /// given a handle that is not a live, uncollected task of the task loop
     /// (a second await of the same task, or an arbitrary word).
     InvalidTaskHandle,
+    /// Integer division (or remainder) by zero (Session 125): the generated
+    /// code checks the divisor before `idiv`, so the failure is a structured
+    /// diagnostic instead of a raw Windows divide-by-zero exception.
+    IntegerDivisionByZero,
+    /// Integer arithmetic overflow (Session 125): the only overflowing
+    /// 64-bit division is `i64::MIN / -1` (and `i64::MIN % -1`), checked by
+    /// the generated code before `idiv`.
+    ArithmeticOverflow,
 }
 
 impl RuntimeErrorKind {
@@ -78,6 +86,8 @@ impl RuntimeErrorKind {
             Self::MissingKey => 11,
             Self::ThreadCreateFailed => 12,
             Self::InvalidTaskHandle => 13,
+            Self::IntegerDivisionByZero => 14,
+            Self::ArithmeticOverflow => 15,
         }
     }
 
@@ -97,6 +107,8 @@ impl RuntimeErrorKind {
             Self::MissingKey => "E-R11",
             Self::ThreadCreateFailed => "E-R12",
             Self::InvalidTaskHandle => "E-R13",
+            Self::IntegerDivisionByZero => "E-R14",
+            Self::ArithmeticOverflow => "E-R15",
         }
     }
 
@@ -123,6 +135,8 @@ impl RuntimeErrorKind {
             Self::InvalidTaskHandle => {
                 "invalid task handle: the task was already collected or is not a live task"
             }
+            Self::IntegerDivisionByZero => "integer division by zero",
+            Self::ArithmeticOverflow => "integer arithmetic overflow: i64::MIN divided by -1",
         }
     }
 

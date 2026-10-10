@@ -603,3 +603,159 @@ fn native_invalid_ownership_program_fails_before_codegen() {
         "no executable may be produced"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Session 126 (Windows practical validation): branch-local move state.
+//
+// The arms of a conditional (and of a `match`) are mutually exclusive, so a
+// move performed in one arm must not be visible to the other arms. Before
+// this fix a program that freed a string on an early-exit path and used it
+// in the sibling arm was rejected with a spurious `E-S10` — the state was
+// carried straight through the branch boundary. The A2 file-automation
+// application (`validation/a2_treeops`) could not compile because of it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn branch_state_is_isolated_between_if_arms() {
+    let (_, _, _, ownership) = check_src(
+        "fn main() {\n\
+             let s = rt_str_alloc(3);\n\
+             let flag = rt_env_get(\"FLAG\");\n\
+             if rt_str_len(flag) == 0 {\n\
+                 rt_str_free(s);\n\
+             } else {\n\
+                 rt_print_int(rt_str_len(s));\n\
+                 rt_str_free(s);\n\
+             }\n\
+             return 0;\n\
+         }\n",
+    );
+    assert!(
+        ownership.errors().is_empty(),
+        "a move in one arm must not be visible in the other: {:?}",
+        ownership.errors()
+    );
+}
+
+#[test]
+fn branch_state_is_isolated_in_loops_and_nested_if() {
+    let (_, _, _, ownership) = check_src(
+        "fn main() {\n\
+             let s = rt_str_alloc(4);\n\
+             let mut i = 0;\n\
+             while i < 3 {\n\
+                 let name = rt_str_alloc(2);\n\
+                 if rt_str_len(name) == 0 {\n\
+                     rt_str_free(name);\n\
+                 } else {\n\
+                     rt_str_free(name);\n\
+                     rt_print_int(rt_str_len(s));\n\
+                 }\n\
+                 i = i + 1;\n\
+             }\n\
+             rt_str_free(s);\n\
+             return 0;\n\
+         }\n",
+    );
+    assert!(
+        ownership.errors().is_empty(),
+        "branch-local moves inside a loop body must not leak: {:?}",
+        ownership.errors()
+    );
+}
+
+#[test]
+fn branch_join_still_reports_a_move_after_the_if() {
+    let (_, _, _, ownership) = check_src(
+        "fn main() {\n\
+             let s = rt_str_alloc(3);\n\
+             let flag = rt_env_get(\"FLAG\");\n\
+             if rt_str_len(flag) == 0 {\n\
+                 rt_str_free(s);\n\
+             }\n\
+             rt_print_int(rt_str_len(s));\n\
+             return 0;\n\
+         }\n",
+    );
+    let errors = ownership_errors(&ownership, SemanticErrorKind::UseOfMovedValue);
+    assert_eq!(
+        errors.len(),
+        1,
+        "a binding moved on one arm is dead after the join: {:?}",
+        ownership.errors()
+    );
+}
+
+#[test]
+fn branch_join_reports_a_move_from_the_else_arm() {
+    let (_, _, _, ownership) = check_src(
+        "fn main() {\n\
+             let s = rt_str_alloc(3);\n\
+             let flag = rt_env_get(\"FLAG\");\n\
+             if rt_str_len(flag) == 0 {\n\
+                 rt_print_int(rt_str_len(s));\n\
+             } else {\n\
+                 rt_str_free(s);\n\
+             }\n\
+             rt_print_int(rt_str_len(s));\n\
+             return 0;\n\
+         }\n",
+    );
+    let errors = ownership_errors(&ownership, SemanticErrorKind::UseOfMovedValue);
+    assert_eq!(
+        errors.len(),
+        1,
+        "a binding moved in any arm is dead after the join: {:?}",
+        ownership.errors()
+    );
+}
+
+#[test]
+fn match_arms_do_not_see_each_others_moves() {
+    let (_, _, _, ownership) = check_src(
+        "enum Shape { Circle(Int), Empty }\n\
+         fn main() {\n\
+             let s = rt_str_alloc(3);\n\
+             let shape = Shape::Empty;\n\
+             match shape {\n\
+                 Shape::Empty => { rt_str_free(s); },\n\
+                 Shape::Circle(r) => { rt_print_int(r); rt_print_int(rt_str_len(s)); },\n\
+             }\n\
+             return 0;\n\
+         }\n",
+    );
+    let errors = ownership_errors(&ownership, SemanticErrorKind::UseOfMovedValue);
+    assert!(
+        errors.is_empty(),
+        "an unrelated arm's move must not kill the binding: {:?}",
+        ownership.errors()
+    );
+}
+
+#[test]
+fn native_branch_local_move_program_runs() {
+    let exe = build(
+        "fn release(s) {\n\
+             rt_str_free(s);\n\
+             return 0;\n\
+         }\n\
+         fn main() {\n\
+             let s = rt_str_alloc(3);\n\
+             let flag = rt_env_get(\"BRANCH_FLAG\");\n\
+             if rt_str_len(flag) == 0 {\n\
+                 rt_print_int(rt_str_len(s));\n\
+                 rt_str_free(s);\n\
+             } else {\n\
+                 rt_print_str(\"else\");\n\
+                 rt_str_free(s);\n\
+             }\n\
+             rt_str_free(flag);\n\
+             rt_print_str(\"done\");\n\
+             release(rt_str_alloc(0));\n\
+             return 0;\n\
+         }\n",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0, "stdout: {stdout}");
+    assert_eq!(stdout, "3\ndone\n");
+}

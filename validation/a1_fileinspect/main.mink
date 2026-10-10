@@ -1,0 +1,307 @@
+// ============================================================================
+// fileinspect — Validation milestone 1 / A1: CLI utility.
+//
+// A real command-line utility: inspect a file and report on it.
+//
+//   fileinspect <path> [--grep PATTERN] [--max-bytes N] [--sha] [--lines]
+//
+// Exercises: argv, environment, filesystem, stdout/stderr, exit codes,
+// error handling, hashing and the regex engine. Exit codes:
+//
+//   0  success
+//   1  usage error
+//   2  path does not exist
+//   3  path is a directory, not a file
+//   4  file exceeds the inspection window (reported, never truncated)
+//   5  read failed (short read)
+//
+// The window defaults to 1 MiB and can be overridden with --max-bytes or the
+// FILEINSPECT_MAX_BYTES environment variable; the report says which applied.
+//
+// Ownership note: the V1 checker rejects a value used after a move even when
+// the move sits in another branch, and every stdlib function *consumes* its
+// Str parameters. Strings that are needed more than once are therefore
+// duplicated with the intrinsic `rt_str_concat(s, "")` (an intrinsic borrows
+// its arguments and returns a fresh owned copy), and argv values are fetched
+// by index at the point of use instead of being carried around.
+// ============================================================================
+
+mod encoding;
+mod filesystem;
+mod hashing;
+mod re;
+mod strings;
+
+// Duplicate an owned string without consuming it: rt_str_concat borrows.
+fn dup_str(s: Str) -> Str {
+    return rt_str_concat(s, "");
+}
+fn usage() -> Int {
+    rt_print_str("usage: fileinspect <path> [--grep PATTERN] [--max-bytes N] [--sha] [--lines]");
+    rt_print_str("  FILEINSPECT_MAX_BYTES sets the default inspection window");
+    return 1;
+}
+
+// Emit "fileinspect: <label><detail>" on stderr. Consumes both strings, so
+// both are released here (literals are immortal, owned values are not).
+// `rt_stderr_write` writes the bytes as given; `rt_print_str` appends CRLF.
+fn fail_msg(label: Str, detail: Str) -> Int {
+    let head = rt_str_concat("fileinspect: ", label);
+    let body = rt_str_concat(head, detail);
+    let line = rt_str_concat(body, "\r\n");
+    rt_str_free(label);
+    rt_str_free(detail);
+    rt_str_free(head);
+    rt_str_free(body);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// Emit one "<label>: <value>" report line. `rt_print_str` is
+// println-equivalent (it appends CRLF), so the value carries no newline.
+// Consumes both strings.
+fn report(label: Str, value: Str) -> Int {
+    let head = rt_str_concat(label, ": ");
+    let body = rt_str_concat(head, value);
+    rt_str_free(label);
+    rt_str_free(value);
+    rt_str_free(head);
+    let written = rt_str_len(body);
+    rt_print_str(body);
+    rt_str_free(body);
+    return written;
+}
+
+// Count newline-terminated lines; a trailing partial line still counts.
+fn count_lines(data: Str) -> Int {
+    let len = rt_str_len(data);
+    let mut lines = 0;
+    let mut i = 0;
+    while i < len {
+        if rt_str_byte(data, i) == 10 { lines = lines + 1; }
+        i = i + 1;
+    }
+    if len > 0 {
+        let last = rt_str_byte(data, len - 1);
+        if last != 10 { lines = lines + 1; }
+    }
+    rt_str_free(data);
+    return lines;
+}
+
+// The first `limit` lines of `data`. Consumes data. A trailing line without
+// a newline still counts and is included.
+fn first_lines(data: Str, limit: Int) -> Str {
+    let len = rt_str_len(data);
+    let mut taken = 0;
+    let mut pos = 0;
+    let mut cut = 0;
+    let mut partial = 0;
+    let mut done = 0;
+    while done == 0 {
+        if taken >= limit { done = 1; }
+        if done == 0 {
+            if pos >= len { partial = 1; done = 1; }
+        }
+        if done == 0 {
+            let b = rt_str_byte(data, pos);
+            if b == 10 {
+                cut = pos; // the line ends before its newline
+                taken = taken + 1;
+            }
+            pos = pos + 1;
+        }
+    }
+    if partial == 1 { cut = len; }
+    let out = str_sub(data, 0, cut);
+    return out;
+}
+
+fn main() -> Int {
+    // rt_argc()/rt_argv() exclude the program name (unlike C argv), so the
+    // first user argument is index 0.
+    let argc = rt_argc();
+    if argc < 1 { return usage(); }
+
+    let mut max_bytes = 1048576;
+    let mut max_src = 0; // 0 = default, 1 = environment, 2 = flag
+    let mut want_sha = 0;
+    let mut want_lines = 0;
+    let mut path_index = -1;
+    let mut grep_index = -1;
+
+    // Environment default; an explicit flag overrides it. str_parse_int
+    // consumes its argument, so this is the single exit for `env_max`.
+    let mut bad = 0;
+    let env_max = rt_env_get("FILEINSPECT_MAX_BYTES");
+    let (env_value, env_ok) = str_parse_int(env_max);
+    if env_ok == true {
+        if env_value > 0 {
+            max_bytes = env_value;
+            max_src = 1;
+        }
+    }
+
+    // Argument scan. Only indexes are carried forward; every argv string is
+    // released at the single free at the bottom of the loop body.
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut next_i = i + 1;
+        if rt_str_eq(arg, "--grep") {
+            if i + 1 >= argc { bad = 1; } else { grep_index = i + 1; next_i = i + 2; }
+        } else {
+            if rt_str_eq(arg, "--max-bytes") {
+                if i + 1 >= argc {
+                    bad = 1;
+                } else {
+                    let value_arg = rt_argv(i + 1);
+                    let (value, ok) = str_parse_int(value_arg);
+                    if ok == false {
+                        bad = 2;
+                    } else {
+                        if value > 0 { max_bytes = value; max_src = 2; }
+                    }
+                    next_i = i + 2;
+                }
+            } else {
+                if rt_str_eq(arg, "--sha") { want_sha = 1; } else {
+                    if rt_str_eq(arg, "--lines") { want_lines = 1; } else {
+                        if rt_str_eq(arg, "--help") { bad = 4; } else {
+                            if path_index < 0 { path_index = i; } else { bad = 3; }
+                        }
+                    }
+                }
+            }
+        }
+        rt_str_free(arg);
+        i = next_i;
+    }
+
+    if bad == 2 {
+        fail_msg("--max-bytes", " expects a positive integer");
+        return usage();
+    }
+    if bad == 3 {
+        fail_msg("only one path may be given", "");
+        return usage();
+    }
+    if bad == 1 {
+        fail_msg("missing value for an option", "");
+        return usage();
+    }
+    if bad == 4 {
+        return usage();
+    }
+    if path_index < 0 {
+        fail_msg("no path given", "");
+        return usage();
+    }
+
+    // Everything below funnels into one exit so that `path` and `data` are
+    // released exactly once on the success and the error paths alike: the V1
+    // ownership checker is not path-sensitive, so an early `return` between
+    // two uses of the same binding is either rejected or a guaranteed leak.
+    let path = rt_argv(path_index);
+    let data = rt_fs_read(path);
+    let len = rt_str_len(data);
+    let mut size = rt_fs_file_size(path);
+    if size < 0 { size = 0; }
+    let mut code = 0;
+
+    if !rt_fs_exists(path) {
+        fail_msg("no such file: ", rt_str_concat(path, ""));
+        code = 2;
+    }
+    if code == 0 {
+        // rt_fs_file_size returns -1 for a directory, which is how the
+        // filesystem library distinguishes one.
+        if rt_fs_file_size(path) < 0 {
+            fail_msg("not a regular file: ", rt_str_concat(path, ""));
+            code = 3;
+        }
+    }
+    if code == 0 {
+        if size > max_bytes {
+            let over = rt_str_from_int(size - max_bytes);
+            let limit = rt_str_from_int(max_bytes);
+            let d1 = rt_str_concat(" is ", over);
+            let d2 = rt_str_concat(d1, " bytes over the inspection window of ");
+            let d3 = rt_str_concat(d2, limit);
+            let d4 = rt_str_concat(d3, " bytes; raise it with --max-bytes");
+            rt_str_free(over);
+            rt_str_free(limit);
+            rt_str_free(d1);
+            rt_str_free(d2);
+            rt_str_free(d3);
+            fail_msg("refusing to inspect ", d4);
+            code = 4;
+        }
+    }
+    if code == 0 {
+        if len != size {
+            let got = rt_str_from_int(len);
+            let want = rt_str_from_int(size);
+            let d1 = rt_str_concat(got, " bytes but the file reports ");
+            let d2 = rt_str_concat(d1, want);
+            rt_str_free(got);
+            rt_str_free(want);
+            rt_str_free(d1);
+            fail_msg("short read: ", d2);
+            code = 5;
+        }
+    }
+
+    if code == 0 {
+        report("path", rt_str_concat(path, ""));
+        let size_s = rt_str_from_int(size);
+        report("size", size_s);
+        report("extension", path_extension(rt_str_concat(path, "")));
+        report("name", path_stem(rt_str_concat(path, "")));
+        let win = rt_str_from_int(max_bytes);
+        report("window", win);
+        if max_src == 0 {
+            report("window_source", "default");
+        } else {
+            if max_src == 1 { report("window_source", "FILEINSPECT_MAX_BYTES"); } else { report("window_source", "--max-bytes"); }
+        }
+    }
+
+    if code == 0 {
+        if want_sha == 1 {
+            report("sha256", hash_sha256(rt_str_concat(data, "")));
+        }
+    }
+
+    if code == 0 {
+        if want_lines == 1 {
+            let lines = count_lines(rt_str_concat(data, ""));
+            let line_s = rt_str_from_int(lines);
+            report("lines", line_s);
+            report("preview", first_lines(rt_str_concat(data, ""), 5));
+        }
+    }
+
+    if code == 0 {
+        if grep_index >= 0 {
+            let pattern = rt_argv(grep_index);
+            // re_* consume their arguments and hand the text back, so both
+            // are passed as intrinsic copies and the returned copies are
+            // released here; `data` itself is freed once, at the end.
+            let (matches, text1) = re_count(rt_str_concat(pattern, ""), rt_str_concat(data, ""));
+            let m = rt_str_from_int(matches);
+            report("grep_matches", m);
+            // `re_match_end` is the anchored test (Python `re.match`);
+            // `re_is_match` searches anywhere in the text.
+            let (end, text2) = re_match_end(rt_str_concat(pattern, ""), text1);
+            if end >= 0 { report("grep_at_start", "yes"); } else { report("grep_at_start", "no"); }
+            rt_str_free(text2);
+            rt_str_free(pattern);
+        }
+    }
+
+    rt_str_free(data);
+    rt_str_free(path);
+    return code;
+}

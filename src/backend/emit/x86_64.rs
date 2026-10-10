@@ -1447,6 +1447,16 @@ pub(crate) fn emit_elf(program: &BProgram, entry: usize) -> EmittedImage {
         static_bases.push(data.len());
         data.extend_from_slice(&s.bytes);
     }
+    // Pad `.data` to a 16-byte multiple. Both the patch resolver
+    // (`bss_rva = data_rva + data.len()`) and the ELF loader (which places
+    // `.bss` at `p_vaddr + p_filesz`) derive the BSS base from this length,
+    // so padding the buffer keeps them in agreement and keeps the runtime's
+    // 16-byte-aligned BSS layout (the heap arena in particular) aligned.
+    // Without it, a single 8-byte static image shifts `.bss` by 8 bytes and
+    // every heap block is misaligned, failing `rt_str_free` with E-R07.
+    while data.len() % 16 != 0 {
+        data.push(0);
+    }
 
     // ------------------------------------------------------------------
     // Patch resolution for ELF.
@@ -1664,6 +1674,38 @@ fn emit_block(
             code.jmp(block_target(function_index, *else_block));
         }
     }
+}
+
+/// Emits the pre-`idiv` guard for integer `/` and `%`: the divisor is in
+/// `rcx`, the dividend in `rax`.
+///
+/// Two cases would otherwise raise a raw Windows exception instead of a
+/// structured MINK diagnostic:
+///
+/// - a zero divisor (`0xC0000094`, integer divide by zero) fails `E-R14`;
+/// - `i64::MIN / -1` (`0xC0000095`, integer overflow) fails `E-R15` — the
+///   one 64-bit division whose quotient does not fit in `i64`.
+///
+/// Both checks use only scratch registers (`r10`) and leave `rax`/`rcx`
+/// untouched on the success path, so the `cqo`/`idiv` sequence follows
+/// unchanged.
+fn emit_checked_divisor(code: &mut Code) {
+    let divisor_ok = code.label();
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x85, divisor_ok); // jnz — divisor != 0
+    runtime::fail(code, 14); // E-R14
+    code.bind_label(divisor_ok);
+
+    let not_min = code.label();
+    code.movabs(Reg::R10, i64::MIN as u64);
+    code.cmp_rr(Reg::Rax, Reg::R10);
+    code.jcc_label(0x85, not_min); // jne — not the overflowing dividend
+    let not_neg_one = code.label();
+    code.cmp_r_imm8(Reg::Rcx, 0xFF); // -1 (sign-extended imm8)
+    code.jcc_label(0x85, not_neg_one);
+    runtime::fail(code, 15); // E-R15
+    code.bind_label(not_neg_one);
+    code.bind_label(not_min);
 }
 
 /// Evaluates an operand into `rax`.
@@ -1935,10 +1977,14 @@ fn emit_inst(
                     Sub => code.alu_rax_rcx(0x29),
                     Mul => code.imul_rax_rcx(),
                     Div => {
+                        mark_fail_site(code, loc, inst);
+                        emit_checked_divisor(code);
                         code.cqo();
                         code.idiv_rcx();
                     }
                     Rem => {
+                        mark_fail_site(code, loc, inst);
+                        emit_checked_divisor(code);
                         code.cqo();
                         code.idiv_rcx();
                         code.mov_rax_rdx();
@@ -2505,12 +2551,24 @@ fn copy_into_slot(code: &mut Code, slots: &Slots, dst: crate::mir::LocalId, src:
         code.mov_r_mem(Reg::Rax, src, -k);
         code.mov_mem_r(Reg::Rbp, word0 - k, Reg::Rax);
     }
-    for k in 0..(size % 8) {
+    let rem = size % 8;
+    for k in 0..rem {
         // The remainder bytes sit at the start of the piece's last chunk,
         // in normal byte order (the same relative positions in both the
         // source region and the destination slot).
         code.movzx_byte(Reg::Rax, src, -8 * words as i32 + k as i32);
         code.mov_mem_r8(Reg::Rbp, word0 - 8 * words as i32 + k as i32, Reg::Rax);
+    }
+    if rem != 0 {
+        // The last chunk is partial. Zero its padding bytes so the chunk
+        // is canonical: a sub-word local (a Bool) is read back as a whole
+        // word when it is passed to a call, returned, or compared, and a
+        // stale high byte would turn `false` into a nonzero (true) value.
+        let base = word0 - 8 * words as i32;
+        for k in rem..8 {
+            code.mov_r32_imm32(Reg::Rax, 0);
+            code.mov_mem_r8(Reg::Rbp, base + k as i32, Reg::Rax);
+        }
     }
 }
 
@@ -2533,13 +2591,22 @@ fn copy_static_into_slot(
         code.mov_r_mem(Reg::Rax, src, k);
         code.mov_mem_r(Reg::Rbp, word0 - k, Reg::Rax);
     }
-    for k in 0..(size % 8) {
+    let rem = size % 8;
+    for k in 0..rem {
         // The remainder bytes sit at the start of the piece's last chunk,
         // so the data byte at `base + words*8 + k` lands at the slot's
         // corresponding chunk position.
         let byte = (words * 8 + k) as i32;
         code.movzx_byte(Reg::Rax, src, byte);
         code.mov_mem_r8(Reg::Rbp, word0 - 8 * words as i32 + k as i32, Reg::Rax);
+    }
+    if rem != 0 {
+        // Canonicalize the partial last chunk (see `copy_into_slot`).
+        let base = word0 - 8 * words as i32;
+        for k in rem..8 {
+            code.mov_r32_imm32(Reg::Rax, 0);
+            code.mov_mem_r8(Reg::Rbp, base + k as i32, Reg::Rax);
+        }
     }
 }
 

@@ -1,0 +1,204 @@
+// ============================================================================
+// jobrun — Validation milestone 1 / F: process automation.
+//
+//   jobrun argv <a> [b ...]           print every user argument
+//   jobrun run <command>              run a child, report exit/stdout/stderr
+//   jobrun runin <command> <input>    same, with `input` on the child's stdin
+//   jobrun stamp <epoch> <fmt>        format a UTC timestamp
+//   jobrun env <name>                 read, set, read back and remove a var
+//
+// The subprocess executes through the stdlib `process` module
+// (`process_run` / `process_run_input`, `CreateProcessA`), stdout/stderr are
+// runtime-captured windows (print, never free), the clock is the stdlib `time`
+// module (`time_strftime` is UTC), and the environment uses the `rt_env_*`
+// intrinsics directly (there is no wrapper module).
+//
+// Exit codes:
+//   0  ok
+//   1  usage error (missing/extra arguments or any option)
+//
+// Ownership: single-exit style. `process_run`/`process_run_input` and
+// `time_strftime` consume their Str arguments; captured stdout/stderr are
+// runtime-owned and must not be freed.
+// ============================================================================
+
+mod process;
+mod strings;
+mod time;
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("jobrun: ", label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_str_free(label);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// Print `label` + `value` as one line. Consumes and frees both.
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn say_bool(label: Str, b: Bool) {
+    if b == true {
+        say(label, rt_str_concat("true", ""));
+    } else {
+        say(label, rt_str_concat("false", ""));
+    }
+}
+
+// Report the child outcome after a process_run/process_run_input.
+fn report_child(code: Int) -> Int {
+    say("exit=", rt_str_from_int(code));
+    say("stdout-len=", rt_str_from_int(process_stdout_len()));
+    // Captured stdout/stderr live in runtime-owned windows: print, do not free.
+    let out = process_stdout();
+    let oline = rt_str_concat("stdout=", out);
+    rt_print_str(oline);
+    rt_str_free(oline);
+    say("stderr-len=", rt_str_from_int(process_stderr_len()));
+    let err = process_stderr();
+    let eline = rt_str_concat("stderr=", err);
+    rt_print_str(eline);
+    rt_str_free(eline);
+    return 0;
+}
+
+fn cmd_argv(pos: Vec<Str>, n: Int) -> Int {
+    let total = rt_argc();
+    say("argc=", rt_str_from_int(total));
+    let mut i = 0;
+    while i < total {
+        // rt_str_concat borrows: bind the converted index before nesting.
+        let num = rt_str_from_int(i);
+        let label = rt_str_concat("arg[", num);
+        rt_str_free(num);
+        let label2 = rt_str_concat(label, "]=");
+        rt_str_free(label);
+        let v = rt_argv(i); // owned
+        say(label2, v);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn cmd_run(cmd: Str) -> Int {
+    let code = process_run(cmd); // consumes cmd
+    return report_child(code);
+}
+
+fn cmd_runin(cmd: Str, input: Str) -> Int {
+    let code = process_run_input(cmd, input); // consumes both
+    return report_child(code);
+}
+
+fn cmd_stamp(epoch_s: Str, fmt: Str) -> Int {
+    let (epoch, ok) = str_parse_int(epoch_s);
+    if ok == false {
+        rt_str_free(fmt);
+        fail_msg("usage: jobrun stamp <epoch> <fmt>");
+        return 1;
+    }
+    let text = time_strftime(epoch, fmt); // consumes fmt
+    say("time=", text);
+    return 0;
+}
+
+fn cmd_env(name: Str) -> Int {
+    let before = rt_env_get(name); // intrinsic: `name` is borrowed
+    let vlen = rt_str_len(before);
+    if vlen == 0 {
+        rt_str_free(before);
+        say("value=", rt_str_concat("(unset)", ""));
+    } else {
+        say("value=", before);
+    }
+    say_bool("has=", rt_env_has(name));
+    // The rt_env_* intrinsics do not consume: every temporary is bound and
+    // released by hand.
+    let ncopy = rt_str_concat(name, "");
+    let vcopy = rt_str_concat("probe-value", "");
+    rt_env_set(ncopy, vcopy);
+    rt_str_free(ncopy);
+    rt_str_free(vcopy);
+    let after = rt_env_get(name);
+    say("after-set=", after);
+    let ncopy2 = rt_str_concat(name, "");
+    rt_env_remove(ncopy2);
+    rt_str_free(ncopy2);
+    say_bool("after-remove-has=", rt_env_has(name));
+    rt_str_free(name);
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+
+    let mut pos = rt_vec_new(4);
+    let mut bad = 0;
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut optionish = 0;
+        if rt_str_len(arg) > 0 {
+            if rt_str_byte(arg, 0) == 45 { optionish = 1; }
+        }
+        if optionish == 1 {
+            bad = 1;
+            rt_str_free(arg);
+        } else {
+            pos = rt_vec_push(pos, arg);
+        }
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    let n = rt_vec_len(pos);
+    if bad == 1 {
+        fail_msg("this tool has no options");
+    } else if n < 1 {
+        fail_msg("usage: jobrun <argv|run|runin|stamp|env> ...");
+    } else {
+        let cmd = rt_vec_get(pos, 0);
+        if rt_str_eq(cmd, "argv") {
+            code = cmd_argv(pos, n);
+        } else if rt_str_eq(cmd, "run") {
+            if n != 2 {
+                fail_msg("usage: jobrun run <command>");
+            } else {
+                code = cmd_run(rt_str_concat(rt_vec_get(pos, 1), ""));
+            }
+        } else if rt_str_eq(cmd, "runin") {
+            if n != 3 {
+                fail_msg("usage: jobrun runin <command> <input>");
+            } else {
+                code = cmd_runin(rt_str_concat(rt_vec_get(pos, 1), ""),
+                                 rt_str_concat(rt_vec_get(pos, 2), ""));
+            }
+        } else if rt_str_eq(cmd, "stamp") {
+            if n != 3 {
+                fail_msg("usage: jobrun stamp <epoch> <fmt>");
+            } else {
+                code = cmd_stamp(rt_str_concat(rt_vec_get(pos, 1), ""),
+                                 rt_str_concat(rt_vec_get(pos, 2), ""));
+            }
+        } else if rt_str_eq(cmd, "env") {
+            if n != 2 {
+                fail_msg("usage: jobrun env <name>");
+            } else {
+                code = cmd_env(rt_str_concat(rt_vec_get(pos, 1), ""));
+            }
+        } else {
+            fail_msg("usage: jobrun <argv|run|runin|stamp|env> ...");
+        }
+    }
+
+    rt_vec_free(pos);
+    return code;
+}

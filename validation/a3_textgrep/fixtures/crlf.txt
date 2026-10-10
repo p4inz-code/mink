@@ -1,0 +1,3 @@
+alpha error one
+beta ok
+Gamma ERROR two

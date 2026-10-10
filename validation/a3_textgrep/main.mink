@@ -1,0 +1,302 @@
+// ============================================================================
+// textgrep — Validation milestone 1 / A3: text-processing (grep-like) tool.
+//
+//   textgrep [-n|--line-number] [-v|--invert] [-c|--count]
+//            [-i|--ignore-case] [-m N|--max-count N] [-o FILE|--output FILE]
+//            <pattern> <file>
+//
+// Reads <file>, splits it into lines on LF, selects the lines whose regular
+// expression <pattern> matches (or does not match, with --invert), and prints
+// them. Matching uses the stdlib `re` engine (`re_is_match`), the MINK-native
+// Python-`re` subset (see stdlib/re.mink for the supported syntax and limits;
+// it is byte-oriented and there are no capture groups).
+//
+// Exit codes:
+//   0  at least one line selected
+//   1  usage error (missing/invalid option value, missing positional)
+//   2  input file missing or not a regular file
+//   3  no lines selected
+//   4  the --output file could not be written
+//
+// Ownership: the V1 checker is flow-sensitive but not path-sensitive, so every
+// binding is released exactly once in a straight-line style and each function
+// funnels to a single `return`; strings handed to consuming user functions are
+// intrinsic copies (`rt_str_concat(x, "")`) unless the transfer is intended.
+// ============================================================================
+
+mod filesystem;
+mod strings;
+mod re;
+
+// Print `textgrep: <label><path>` plus CRLF to stderr. Consumes both
+// arguments; returns the number of bytes written.
+fn fail_file(label: Str, path: Str) -> Int {
+    let head = rt_str_concat("textgrep: ", label);
+    let mid = rt_str_concat(head, path);
+    rt_str_free(head);
+    let line = rt_str_concat(mid, "\r\n");
+    rt_str_free(mid);
+    rt_str_free(label);
+    rt_str_free(path);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// Print `textgrep: <label>` plus CRLF to stderr. Consumes `label`.
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("textgrep: ", label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_str_free(label);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// Render one selected line: "<lineno>:<line>" when `numbered`, else "<line>".
+// Consumes `line`; returns an owned string with no trailing newline.
+fn render(line: Str, lineno: Int, numbered: Int) -> Str {
+    let mut out = "";
+    if numbered == 1 {
+        let num = rt_str_from_int(lineno);
+        let head = rt_str_concat(num, ":");
+        rt_str_free(num);
+        out = rt_str_concat(head, line);
+        rt_str_free(head);
+        // rt_str_concat is read-borrowing: `line` was copied, not consumed.
+        rt_str_free(line);
+    } else {
+        out = line;
+    }
+    return out;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+
+    let mut pattern_index = -1;
+    let mut file_index = -1;
+    let mut out_index = -1;
+    let mut numbered = 0;
+    let mut invert = 0;
+    let mut count_mode = 0;
+    let mut ignore_case = 0;
+    let mut max_count = 0;
+    let mut bad = 0;
+
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut next_i = i + 1;
+        if rt_str_eq(arg, "-n") {
+            numbered = 1;
+        } else if rt_str_eq(arg, "--line-number") {
+            numbered = 1;
+        } else if rt_str_eq(arg, "-v") {
+            invert = 1;
+        } else if rt_str_eq(arg, "--invert") {
+            invert = 1;
+        } else if rt_str_eq(arg, "-c") {
+            count_mode = 1;
+        } else if rt_str_eq(arg, "--count") {
+            count_mode = 1;
+        } else if rt_str_eq(arg, "-i") {
+            ignore_case = 1;
+        } else if rt_str_eq(arg, "--ignore-case") {
+            ignore_case = 1;
+        } else if rt_str_eq(arg, "-m") {
+            if i + 1 >= argc {
+                bad = 1;
+            } else {
+                let v = rt_argv(i + 1);
+                let (value, ok) = str_parse_int(v);
+                if ok == true {
+                    if value > 0 { max_count = value; } else { bad = 1; }
+                } else {
+                    bad = 1;
+                }
+                next_i = i + 2;
+            }
+        } else if rt_str_eq(arg, "--max-count") {
+            if i + 1 >= argc {
+                bad = 1;
+            } else {
+                let v = rt_argv(i + 1);
+                let (value, ok) = str_parse_int(v);
+                if ok == true {
+                    if value > 0 { max_count = value; } else { bad = 1; }
+                } else {
+                    bad = 1;
+                }
+                next_i = i + 2;
+            }
+        } else if rt_str_eq(arg, "-o") {
+            if i + 1 >= argc {
+                bad = 1;
+            } else {
+                out_index = i + 1;
+                next_i = i + 2;
+            }
+        } else if rt_str_eq(arg, "--output") {
+            if i + 1 >= argc {
+                bad = 1;
+            } else {
+                out_index = i + 1;
+                next_i = i + 2;
+            }
+        } else {
+            if pattern_index < 0 {
+                pattern_index = i;
+            } else if file_index < 0 {
+                file_index = i;
+            } else {
+                bad = 2;
+            }
+        }
+        rt_str_free(arg);
+        i = next_i;
+    }
+
+    if bad == 1 {
+        fail_msg("missing or invalid value for an option");
+        return 1;
+    }
+    if bad == 2 {
+        fail_msg("too many positional arguments");
+        return 1;
+    }
+    if pattern_index < 0 {
+        fail_msg("usage: textgrep [options] <pattern> <file>");
+        return 1;
+    }
+    if file_index < 0 {
+        fail_msg("usage: textgrep [options] <pattern> <file>");
+        return 1;
+    }
+
+    let pattern = rt_argv(pattern_index);
+    let file = rt_argv(file_index);
+    let mut code = 0;
+
+    if fs_exists(rt_str_concat(file, "")) == false {
+        fail_file("input file does not exist: ", rt_str_concat(file, ""));
+        code = 2;
+    }
+    if code == 0 {
+        if fs_is_file(rt_str_concat(file, "")) == false {
+            fail_file("not a regular file: ", rt_str_concat(file, ""));
+            code = 2;
+        }
+    }
+
+    if code == 0 {
+        let content = fs_read(rt_str_concat(file, ""));
+        let lines = str_split(content, "\n");
+        let total = rt_vec_len(lines);
+        // A trailing LF terminates the final line; it must not create an
+        // extra empty line (stdlib `str_split` keeps the trailing empty part).
+        let mut effective = total;
+        if total > 0 {
+            if rt_str_len(rt_vec_get(lines, total - 1)) == 0 {
+                effective = total - 1;
+            }
+        }
+
+        // The effective pattern: lower-cased for an ASCII case-insensitive
+        // match (the `re` engine itself has no `(?i)` flag). Note: this turns
+        // uppercase escapes (`\D`, `\W`, `\S`) into their lowercase cousins,
+        // so `-i` is only meaningful for literal/class patterns.
+        let mut pat_eff = "";
+        if ignore_case == 1 {
+            pat_eff = str_to_lower(rt_str_concat(pattern, ""));
+        } else {
+            pat_eff = rt_str_concat(pattern, "");
+        }
+
+        let mut selected = rt_vec_new(8);
+        let mut k = 0;
+        let mut stop = 0;
+        while k < effective {
+            if stop == 0 {
+                let orig = rt_str_concat(rt_vec_get(lines, k), "");
+                let mut subject = "";
+                if ignore_case == 1 {
+                    subject = str_to_lower(rt_str_concat(rt_vec_get(lines, k), ""));
+                } else {
+                    subject = rt_str_concat(rt_vec_get(lines, k), "");
+                }
+                let (hit, back) = re_is_match(rt_str_concat(pat_eff, ""), subject);
+                let mut keep = hit;
+                if invert == 1 { keep = !hit; }
+                if keep == true {
+                    let rendered = render(orig, k + 1, numbered);
+                    selected = rt_vec_push(selected, rendered);
+                    if max_count > 0 {
+                        if rt_vec_len(selected) >= max_count { stop = 1; }
+                    }
+                } else {
+                    rt_str_free(orig);
+                }
+                rt_str_free(back);
+            }
+            k = k + 1;
+        }
+
+        rt_vec_free(lines);
+        rt_str_free(pat_eff);
+
+        let count = rt_vec_len(selected);
+        let mut code2 = 3;
+        if count > 0 { code2 = 0; }
+
+        if count_mode == 1 {
+            rt_vec_free(selected);
+            let num = rt_str_from_int(count);
+            let mut wrote = 0;
+            if out_index >= 0 {
+                let text = rt_str_concat(num, "\n");
+                rt_str_free(num);
+                // `fs_write` consumes its path argument, so hand it a fresh
+                // owned argv copy; a second copy is only needed on failure.
+                wrote = fs_write(rt_argv(out_index), text);
+            } else {
+                rt_print_str(num);
+                rt_str_free(num);
+            }
+            if wrote < 0 {
+                fail_file("cannot write output file: ", rt_argv(out_index));
+                code2 = 4;
+            }
+        } else if out_index >= 0 {
+            let mut body = str_join(selected, "\n");
+            if rt_str_len(body) > 0 {
+                let with_nl = rt_str_concat(body, "\n");
+                rt_str_free(body);
+                body = with_nl;
+            }
+            let wrote = fs_write(rt_argv(out_index), body);
+            if wrote < 0 {
+                fail_file("cannot write output file: ", rt_argv(out_index));
+                code2 = 4;
+            }
+        } else {
+            let n = rt_vec_len(selected);
+            let mut idx = 0;
+            while idx < n {
+                // `rt_print_str` is a read-borrowing intrinsic: the copy must
+                // be bound and released or the run ends with E-R06 (106).
+                let line = rt_str_concat(rt_vec_get(selected, idx), "");
+                rt_print_str(line);
+                rt_str_free(line);
+                idx = idx + 1;
+            }
+            rt_vec_free(selected);
+        }
+        code = code2;
+    }
+
+    rt_str_free(pattern);
+    rt_str_free(file);
+    return code;
+}

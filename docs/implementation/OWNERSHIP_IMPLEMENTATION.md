@@ -133,6 +133,24 @@ The following rules are authoritative for this session.
   (`UseOfMovedValue` → `E-S10`, `MutatingImmutableString` → `E-S11`),
   rendered through the existing semantic diagnostic machinery.
 
+### 3.2 Control flow (Session 126: branch-local + conservative join)
+
+- The walk is **branch-local**. `walk_block`, `walk_if`, `walk_if_expr` and
+  `walk_match` return a `bool` ("control flow terminates on all paths"),
+  `walk_stmt` returns `Option<bool>` and stops walking after a `return`, and
+  `snapshot_flow` / `restore_flow` / `join_flow` (with `join_binding_state`)
+  capture a branch's state, restore the pre-branch state before the next arm,
+  and merge the arms with a conservative "may have moved" join afterwards.
+- Consequences: `rt_str_free(x)` in one arm no longer poisons a sibling arm
+  (`E-S10` false positives removed), while a move on *every* arm is still
+  reported after the `if`, and a loop body that frees and then uses a binding
+  is still reported. Regression tests: the 6 `branch_*`/`match_arms_do_not_*`
+  cases in `tests/ownership.rs` (49/49 pass).
+- Still **not path-sensitive**: state is not tracked per condition
+  (`if flag { free(x) }` followed by `x` is not reported), so the single-exit
+  idiom (release each owned string exactly once, on the way to the one exit)
+  remains the documented safe style.
+
 ### 3.1 Intrinsic conventions
 
 | Intrinsic | `Str` argument mode | Result |
@@ -173,6 +191,10 @@ The following rules are authoritative for this session.
   was marked dead. Unit-only enums (no payloads) remain copy scrutinees.
 - A function that returns a `Str` with mixed provenance (owned and
   literal paths) has an Owned result.
+- **Branch-local, still not path-sensitive (Session 126).** See §3.2: arms no
+  longer see each other's moves and the join is conservative, but flag-guarded
+  frees are not tracked; `validation/*/record.md` all choose the single-exit
+  idiom for that reason.
 - `const` bindings are evaluated per use: reading a `const` copies its
   value and never moves it (a `const` initialized from an owned source is
   rejected later by the backend, `E-B05`).

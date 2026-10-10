@@ -26,9 +26,10 @@ fn build_and_run(source: &str) -> (i32, String) {
 }
 
 fn lib_source() -> String {
-    let hashing = std::fs::read_to_string("stdlib/hashing.mink").unwrap();
-    let crypto = std::fs::read_to_string("stdlib/crypto.mink").unwrap();
-    format!("{}\n{}", hashing, crypto)
+    // `stdlib/crypto.mink` declares `mod hashing;`, so the module loader
+    // pulls in the hashing dependency itself (resolved from the bundled
+    // `stdlib/`); the test no longer concatenates it by hand.
+    std::fs::read_to_string("stdlib/crypto.mink").unwrap()
 }
 
 // ============================================================

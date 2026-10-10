@@ -1,0 +1,282 @@
+// ============================================================================
+// netcheck — Validation milestone 1 / E: HTTP / TCP / UDP clients.
+//
+//   netcheck http  <host> <port> <path>
+//   netcheck https <host> <port> <path>
+//   netcheck tcp   <host> <port> <payload>
+//   netcheck udp   <host> <port> <payload>
+//
+// `http` performs an HTTP/1.1 GET (the stdlib http client sends
+// `Connection: close` and reads until the peer closes) and prints the status,
+// reason, content type, content length and body. `https` is the same request
+// over TLS with the repository's deterministic test CA (`tests/tls/ca.pem`)
+// as the explicit trust anchor. `tcp` connects, sends the payload and prints
+// the byte count and the echoed reply. `udp` sends one datagram and prints
+// the reply. All four are compared byte-for-byte against a Python reference
+// (`http.client` / `ssl` / `socket`) hitting the same local servers (see
+// record.md).
+//
+// Exit codes:
+//   0  ok
+//   1  usage error (bad/missing arguments, non-numeric port, any option)
+//   2  connection or I/O failure (message on stderr)
+//
+// Ownership: single-exit style within each branch. `http_client_get`,
+// `https_client_get` and the stdlib http parsers consume their inputs, so
+// every parse is handed a `rt_str_concat(resp, "")` copy;
+// `net_connect`/`net_send`/`net_sendto` consume their Str arguments.
+// ============================================================================
+
+mod http;
+mod network;
+mod strings;
+mod tls;
+
+// The explicit trust anchor for `netcheck https` (the committed test CA used
+// by `tests/tls_lib.rs`); verify.py runs from the repository root.
+fn CA_PATH() -> Str { return "tests/tls/ca.pem"; }
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("netcheck: ", label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_str_free(label);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// Print `label` + `value` as one line. Consumes and frees both.
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+// Parse a port argument; returns (port, ok). Consumes `s`.
+fn parse_port(s: Str) -> (Int, Bool) {
+    let (port, ok) = str_parse_int(s);
+    if port <= 0 { return (port, false); }
+    return (port, ok);
+}
+
+// Report one parsed HTTP(S) response and release it.
+fn report(resp: Str) -> Int {
+    let code = http_status_code(rt_str_concat(resp, ""));
+    let reason = http_status_text(rt_str_concat(resp, ""));
+    let ctype = http_header(rt_str_concat(resp, ""), "Content-Type");
+    let clen = http_content_length(rt_str_concat(resp, ""));
+    let body = http_body(rt_str_concat(resp, ""));
+    rt_str_free(resp);
+    say("status=", rt_str_from_int(code));
+    say("reason=", reason);
+    say("content-type=", ctype);
+    say("content-length=", rt_str_from_int(clen));
+    say("body=", body);
+    return 0;
+}
+
+fn run_http(host: Str, port_s: Str, path: Str) -> Int {
+    let (port, ok) = parse_port(port_s);
+    if ok == false {
+        rt_str_free(host);
+        rt_str_free(path);
+        fail_msg("usage: netcheck http <host> <port> <path>");
+        return 1;
+    }
+    // Build "http://<host>:<port><path>" with every intermediate bound
+    // (a nested rt_str_concat would leak the inner temporary). rt_str_concat
+    // borrows, so `host`/`path` are released once the pieces are built.
+    let a = rt_str_concat("http://", host);
+    rt_str_free(host);
+    let b = rt_str_concat(a, ":");
+    rt_str_free(a);
+    let pstr = rt_str_from_int(port);
+    let c = rt_str_concat(b, pstr);
+    rt_str_free(b);
+    rt_str_free(pstr);
+    let url = rt_str_concat(c, path);
+    rt_str_free(c);
+    rt_str_free(path);
+
+    let resp = http_client_get(url);
+    let rlen = rt_str_len(resp);
+    if rlen == 0 {
+        rt_str_free(resp);
+        fail_msg("connection failed");
+        return 2;
+    }
+    return report(resp);
+}
+
+fn run_https(host: Str, port_s: Str, path: Str) -> Int {
+    let (port, ok) = parse_port(port_s);
+    if ok == false {
+        rt_str_free(host);
+        rt_str_free(path);
+        fail_msg("usage: netcheck https <host> <port> <path>");
+        return 1;
+    }
+    let a = rt_str_concat("https://", host);
+    rt_str_free(host);
+    let b = rt_str_concat(a, ":");
+    rt_str_free(a);
+    let pstr = rt_str_from_int(port);
+    let c = rt_str_concat(b, pstr);
+    rt_str_free(b);
+    rt_str_free(pstr);
+    let url = rt_str_concat(c, path);
+    rt_str_free(c);
+    rt_str_free(path);
+
+    let resp = https_client_get(url, CA_PATH());
+    let rlen = rt_str_len(resp);
+    if rlen == 0 {
+        rt_str_free(resp);
+        fail_msg("connection failed");
+        return 2;
+    }
+    return report(resp);
+}
+
+fn run_tcp(host: Str, port_s: Str, payload: Str) -> Int {
+    let (port, ok) = parse_port(port_s);
+    if ok == false {
+        rt_str_free(host);
+        rt_str_free(payload);
+        fail_msg("usage: netcheck tcp <host> <port> <payload>");
+        return 1;
+    }
+    let r = net_init();
+    if r != 0 {
+        rt_str_free(host);
+        rt_str_free(payload);
+        fail_msg("winsock init failed");
+        return 2;
+    }
+    let sock = net_tcp_socket();
+    if sock == -1 {
+        rt_str_free(host);
+        rt_str_free(payload);
+        fail_msg("socket failed");
+        net_cleanup();
+        return 2;
+    }
+    let conn = net_connect(sock, host, port);
+    if conn != 0 {
+        rt_str_free(payload);
+        fail_msg("connect failed");
+        net_close(sock);
+        net_cleanup();
+        return 2;
+    }
+    let sent = net_send(sock, payload);
+    if sent < 0 {
+        fail_msg("send failed");
+        net_close(sock);
+        net_cleanup();
+        return 2;
+    }
+    let got = net_recv(sock, 4096);
+    say("sent=", rt_str_from_int(sent));
+    say("recv=", rt_str_from_int(rt_str_len(got)));
+    say("echo=", got);
+    net_close(sock);
+    net_cleanup();
+    return 0;
+}
+
+fn run_udp(host: Str, port_s: Str, payload: Str) -> Int {
+    let (port, ok) = parse_port(port_s);
+    if ok == false {
+        rt_str_free(host);
+        rt_str_free(payload);
+        fail_msg("usage: netcheck udp <host> <port> <payload>");
+        return 1;
+    }
+    let r = net_init();
+    if r != 0 {
+        rt_str_free(host);
+        rt_str_free(payload);
+        fail_msg("winsock init failed");
+        return 2;
+    }
+    let sock = net_udp_socket();
+    if sock == -1 {
+        rt_str_free(host);
+        rt_str_free(payload);
+        fail_msg("socket failed");
+        net_cleanup();
+        return 2;
+    }
+    let sent = net_sendto(sock, payload, host, port);
+    if sent < 0 {
+        fail_msg("send failed");
+        net_close(sock);
+        net_cleanup();
+        return 2;
+    }
+    let got = net_recvfrom(sock, 4096);
+    say("sent=", rt_str_from_int(sent));
+    say("recv=", rt_str_from_int(rt_str_len(got)));
+    say("echo=", got);
+    net_close(sock);
+    net_cleanup();
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+
+    let mut pos = rt_vec_new(4);
+    let mut bad = 0;
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut optionish = 0;
+        if rt_str_len(arg) > 0 {
+            if rt_str_byte(arg, 0) == 45 { optionish = 1; }
+        }
+        if optionish == 1 {
+            bad = 1;
+            rt_str_free(arg);
+        } else {
+            pos = rt_vec_push(pos, arg);
+        }
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    let n = rt_vec_len(pos);
+    if bad == 1 {
+        fail_msg("this tool has no options");
+    } else if n != 4 {
+        fail_msg("usage: netcheck <http|https|tcp|udp> <host> <port> <arg>");
+    } else {
+        let cmd = rt_vec_get(pos, 0);
+        if rt_str_eq(cmd, "http") {
+            code = run_http(rt_str_concat(rt_vec_get(pos, 1), ""),
+                            rt_str_concat(rt_vec_get(pos, 2), ""),
+                            rt_str_concat(rt_vec_get(pos, 3), ""));
+        } else if rt_str_eq(cmd, "https") {
+            code = run_https(rt_str_concat(rt_vec_get(pos, 1), ""),
+                             rt_str_concat(rt_vec_get(pos, 2), ""),
+                             rt_str_concat(rt_vec_get(pos, 3), ""));
+        } else if rt_str_eq(cmd, "tcp") {
+            code = run_tcp(rt_str_concat(rt_vec_get(pos, 1), ""),
+                           rt_str_concat(rt_vec_get(pos, 2), ""),
+                           rt_str_concat(rt_vec_get(pos, 3), ""));
+        } else if rt_str_eq(cmd, "udp") {
+            code = run_udp(rt_str_concat(rt_vec_get(pos, 1), ""),
+                           rt_str_concat(rt_vec_get(pos, 2), ""),
+                           rt_str_concat(rt_vec_get(pos, 3), ""));
+        } else {
+            fail_msg("usage: netcheck <http|https|tcp|udp> <host> <port> <arg>");
+        }
+    }
+
+    rt_vec_free(pos);
+    return code;
+}

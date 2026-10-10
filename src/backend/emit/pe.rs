@@ -68,6 +68,8 @@ const KERNEL32_IMPORTS: &[&str] = &[
     "CreateThread",
     "ExitThread",
     "GetCurrentThreadId",
+    // --- Growable heap (Session 125) ---
+    "VirtualAlloc",
 ];
 
 const K32_COUNT: u32 = KERNEL32_IMPORTS.len() as u32;
@@ -136,6 +138,8 @@ pub(crate) mod iat {
     pub const CREATE_THREAD: u32 = 37;
     pub const EXIT_THREAD: u32 = 38;
     pub const GET_CURRENT_THREAD_ID: u32 = 39;
+    // --- Growable heap (Session 125) ---
+    pub const VIRTUAL_ALLOC: u32 = 40;
 }
 
 /// The layout of the sections, computed from their contents.

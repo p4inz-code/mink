@@ -3,6 +3,13 @@
 //
 // HTTP/1.1 client library over TCP sockets.
 //
+// Declares its TCP dependency explicitly: `mod network;` (resolved as a
+// sibling module, or from the bundled standard library) provides
+// `net_tcp_socket`, `net_close`, `net_recv` and `net_last_error`.  A user
+// only needs `mod http;` — the transitive dependency is discovered by the
+// module loader instead of failing with a missing `net_*` name.
+mod network;
+//
 // IMPORTANT: MINK strings must be explicitly freed with rt_str_free.
 //   User functions with Str parameters CONSUME (move) the argument.
 //   Runtime intrinsics (rt_str_byte, rt_str_len, rt_str_set_byte) do NOT consume.
@@ -16,15 +23,45 @@
 //   - Connection: close semantics (no keep-alive)
 //
 // Limits:
-//   - Max body size: 1,048,576 bytes (1 MB)
+//   - Max body size: 4,194,304 bytes (4 MB, Session 125)
 //   - Max headers: 64
 //   - No chunked transfer encoding (V1)
 //   - No HTTPS (TLS is a separate library)
+//
+// Failure model (Session 125): an HTTP response always contains a status
+// line, so an empty string returned by http_client_get/http_client_post
+// never means "successful empty response" — it means the request failed
+// (DNS, connect, send, or an oversized body). The reason is available from
+// http_last_error(): 0 after a completed request, a Winsock error code
+// after a network failure, or one of the local HTTP_ERR_* codes.
 // ==========================================================================
 
 // --- Constants ---
 
-fn MAX_BODY() -> Int { return 1048576; }
+fn MAX_BODY() -> Int { return 4194304; }
+
+// Local http_last_error() codes (negative; Winsock codes are positive).
+fn HTTP_ERR_SOCKET() -> Int { return -1; }
+fn HTTP_ERR_CONNECT() -> Int { return -2; }
+fn HTTP_ERR_SEND() -> Int { return -3; }
+fn HTTP_ERR_TOO_LARGE() -> Int { return -4; }
+
+// The outcome of the most recent http_send: 0 after a completed request,
+// a Winsock error code after a network failure, or an HTTP_ERR_* code.
+let mut http_last_error_code = 0;
+
+// The error code of the most recent HTTP request (0 = it completed).
+fn http_last_error() -> Int {
+    return http_last_error_code;
+}
+
+// True when `response` is a completed HTTP response (non-empty; every
+// real response starts with a status line).
+fn http_response_ok(response: Str) -> Bool {
+    let ok = rt_str_len(response) > 0;
+    rt_str_free(response);
+    return ok;
+}
 
 // --- Utility Functions ---
 
@@ -42,6 +79,7 @@ fn http_parse_int_from_bytes(s: Str, start: Int, end: Int) -> Int {
         }
         i = i + 1;
     }
+    rt_str_free(s);
     return result;
 }
 
@@ -70,6 +108,7 @@ fn rt_str_parse_int(s: Str) -> Int {
     if negative == true {
         result = 0 - result;
     }
+    rt_str_free(s);
     return result;
 }
 
@@ -81,15 +120,16 @@ fn http_sub_bytes(s: Str, start: Int, end: Int) -> Str {
         actual_end = len;
     }
     let size = actual_end - start;
-    if size <= 0 {
-        return "";
+    let mut result = "";
+    if size > 0 {
+        result = rt_str_alloc(size);
+        let mut i = 0;
+        while i < size {
+            rt_str_set_byte(result, i, rt_str_byte(s, start + i));
+            i = i + 1;
+        }
     }
-    let result = rt_str_alloc(size);
-    let mut i = 0;
-    while i < size {
-        rt_str_set_byte(result, i, rt_str_byte(s, start + i));
-        i = i + 1;
-    }
+    rt_str_free(s);
     return result;
 }
 
@@ -187,8 +227,13 @@ fn http_url_port(url: Str) -> Int {
             }
         }
     }
+    // Parse inline instead of forwarding to `http_parse_int_from_bytes`: a
+    // user call would consume `url`, and the port may simply be absent, so
+    // the release below must be the one unconditional move.
+    let mut port = 80;
+    let mut found = 0;
     let mut i = skip;
-    while i < len {
+    while i < len && found == 0 {
         let b = rt_str_byte(url, i);
         if b == 58 {
             let port_start = i + 1;
@@ -201,11 +246,23 @@ fn http_url_port(url: Str) -> Int {
                 }
                 j = j + 1;
             }
-            return http_parse_int_from_bytes(url, port_start, port_end);
+            port = 0;
+            let mut pi = port_start;
+            while pi < port_end {
+                let digit = rt_str_byte(url, pi) - 48;
+                if digit >= 0 {
+                    if digit <= 9 {
+                        port = port * 10 + digit;
+                    }
+                }
+                pi = pi + 1;
+            }
+            found = 1;
         }
         i = i + 1;
     }
-    return 80;
+    rt_str_free(url);
+    return port;
 }
 
 // Extract the path from a URL string. Caller must rt_str_free the result.
@@ -238,10 +295,14 @@ fn http_url_path(url: Str) -> Str {
         }
         i = i + 1;
     }
-    if path_start == len {
-        return "/";
+    // Always forward `url` to the consuming helper (one unconditional move),
+    // then substitute the default path when the URL has none.
+    let sub = http_sub_bytes(url, path_start, len);
+    let mut result = sub;
+    if rt_str_len(result) == 0 {
+        result = "/";
     }
-    return http_sub_bytes(url, path_start, len);
+    return result;
 }
 
 // --- Request Creation ---
@@ -273,6 +334,8 @@ fn http_request(method: Str, path: Str) -> Str {
         rt_str_set_byte(result, m_len + 1 + p_len + i, rt_str_byte(suffix, i));
         i = i + 1;
     }
+    rt_str_free(method);
+    rt_str_free(path);
     return result;
 }
 
@@ -324,6 +387,9 @@ fn http_add_header(request: Str, name: Str, value: Str) -> Str {
         rt_str_set_byte(result, pos + i, rt_str_byte(crlf, i));
         i = i + 1;
     }
+    rt_str_free(request);
+    rt_str_free(name);
+    rt_str_free(value);
     return result;
 }
 
@@ -344,6 +410,7 @@ fn http_finalize_request(request: Str) -> Str {
         rt_str_set_byte(result, r_len + i, rt_str_byte(crlf, i));
         i = i + 1;
     }
+    rt_str_free(request);
     return result;
 }
 
@@ -353,25 +420,26 @@ fn http_finalize_request(request: Str) -> Str {
 fn http_header(response: Str, name: Str) -> Str {
     let len = rt_str_len(response);
     let name_len = rt_str_len(name);
+    // Single-exit structure: V1 ownership is not path-sensitive, so the
+    // consumed inputs are released exactly once below instead of at each
+    // early return.
+    let mut result = "";
+    let mut done = 0;
     let mut i = 0;
-    while i < len - 1 {
+    while i < len - 1 && done == 0 {
         let b1 = rt_str_byte(response, i);
         let b2 = rt_str_byte(response, i + 1);
-        if b1 == 13 {
-            if b2 == 10 {
-                i = i + 2;
-                let mut header_count = 0;
-                while i < len - 1 {
-                    let h1 = rt_str_byte(response, i);
-                    let h2 = rt_str_byte(response, i + 1);
-                    if h1 == 13 {
-                        if h2 == 10 {
-                            return "";
-                        }
-                    }
-                    if header_count >= 64 {
-                        return "";
-                    }
+        if b1 == 13 && b2 == 10 {
+            i = i + 2;
+            let mut header_count = 0;
+            while i < len - 1 && done == 0 {
+                let h1 = rt_str_byte(response, i);
+                let h2 = rt_str_byte(response, i + 1);
+                if h1 == 13 && h2 == 10 {
+                    done = 1;
+                } else if header_count >= 64 {
+                    done = 1;
+                } else {
                     let mut colon_pos = i;
                     while colon_pos < len {
                         if rt_str_byte(response, colon_pos) == 58 {
@@ -394,77 +462,75 @@ fn http_header(response: Str, name: Str) -> Str {
                         }
                         j = j + 1;
                     }
-                    if name_match == true {
-                        if j == name_len {
-                            let mut vs = colon_pos + 1;
-                            if vs < len {
-                                if rt_str_byte(response, vs) == 32 {
-                                    vs = vs + 1;
-                                }
+                    if name_match == true && j == name_len {
+                        let mut vs = colon_pos + 1;
+                        if vs < len {
+                            if rt_str_byte(response, vs) == 32 {
+                                vs = vs + 1;
                             }
-                            let mut ve = vs;
-                            while ve < len - 1 {
-                                if rt_str_byte(response, ve) == 13 {
-                                    break;
-                                }
-                                ve = ve + 1;
+                        }
+                        let mut ve = vs;
+                        while ve < len - 1 {
+                            if rt_str_byte(response, ve) == 13 {
+                                break;
                             }
-                            let vsize = ve - vs;
-                            if vsize <= 0 {
-                                return "";
-                            }
-                            let result = rt_str_alloc(vsize);
+                            ve = ve + 1;
+                        }
+                        let vsize = ve - vs;
+                        if vsize > 0 {
+                            result = rt_str_alloc(vsize);
                             let mut vi = 0;
                             while vi < vsize {
                                 rt_str_set_byte(result, vi, rt_str_byte(response, vs + vi));
                                 vi = vi + 1;
                             }
-                            return result;
                         }
-                    }
-                    while i < len - 1 {
-                        let hb1 = rt_str_byte(response, i);
-                        let hb2 = rt_str_byte(response, i + 1);
-                        if hb1 == 13 {
-                            if hb2 == 10 {
+                        done = 1;
+                    } else {
+                        while i < len - 1 {
+                            let hb1 = rt_str_byte(response, i);
+                            let hb2 = rt_str_byte(response, i + 1);
+                            if hb1 == 13 && hb2 == 10 {
                                 i = i + 2;
                                 break;
                             }
+                            i = i + 1;
                         }
-                        i = i + 1;
+                        header_count = header_count + 1;
                     }
-                    header_count = header_count + 1;
                 }
-                return "";
             }
+            done = 1;
+        } else {
+            i = i + 1;
         }
-        i = i + 1;
     }
-    return "";
+    rt_str_free(response);
+    rt_str_free(name);
+    return result;
 }
 
 // Get Content-Length from response. Returns -1 if not found.
 fn http_content_length(response: Str) -> Int {
     let len = rt_str_len(response);
+    // Single-exit structure (see http_header): one unconditional release.
+    let mut result = -1;
+    let mut done = 0;
     let mut i = 0;
-    while i < len - 1 {
+    while i < len - 1 && done == 0 {
         let b1 = rt_str_byte(response, i);
         let b2 = rt_str_byte(response, i + 1);
-        if b1 == 13 {
-            if b2 == 10 {
-                i = i + 2;
-                let mut header_count = 0;
-                while i < len - 1 {
-                    let h1 = rt_str_byte(response, i);
-                    let h2 = rt_str_byte(response, i + 1);
-                    if h1 == 13 {
-                        if h2 == 10 {
-                            return -1;
-                        }
-                    }
-                    if header_count >= 64 {
-                        return -1;
-                    }
+        if b1 == 13 && b2 == 10 {
+            i = i + 2;
+            let mut header_count = 0;
+            while i < len - 1 && done == 0 {
+                let h1 = rt_str_byte(response, i);
+                let h2 = rt_str_byte(response, i + 1);
+                if h1 == 13 && h2 == 10 {
+                    done = 1;
+                } else if header_count >= 64 {
+                    done = 1;
+                } else {
                     let mut is_cl = true;
                     let cl_upper = "Content-Length";
                     let cl_lower = "content-length";
@@ -515,27 +581,29 @@ fn http_content_length(response: Str) -> Int {
                             cl_val = cl_val * 10 + (cb - 48);
                             ci = ci + 1;
                         }
-                        return cl_val;
-                    }
-                    while i < len - 1 {
-                        let hb1 = rt_str_byte(response, i);
-                        let hb2 = rt_str_byte(response, i + 1);
-                        if hb1 == 13 {
-                            if hb2 == 10 {
+                        result = cl_val;
+                        done = 1;
+                    } else {
+                        while i < len - 1 {
+                            let hb1 = rt_str_byte(response, i);
+                            let hb2 = rt_str_byte(response, i + 1);
+                            if hb1 == 13 && hb2 == 10 {
                                 i = i + 2;
                                 break;
                             }
+                            i = i + 1;
                         }
-                        i = i + 1;
+                        header_count = header_count + 1;
                     }
-                    header_count = header_count + 1;
                 }
-                return -1;
             }
+            done = 1;
+        } else {
+            i = i + 1;
         }
-        i = i + 1;
     }
-    return -1;
+    rt_str_free(response);
+    return result;
 }
 
 // --- Response Parsing ---
@@ -543,56 +611,55 @@ fn http_content_length(response: Str) -> Int {
 // Parse status code from HTTP response (directly from bytes, no alloc).
 fn http_status_code(response: Str) -> Int {
     let len = rt_str_len(response);
-    if len < 12 {
-        return 0;
-    }
     let mut code = 0;
-    let mut ci = 9;
-    while ci < len {
-        let b = rt_str_byte(response, ci);
-        if b == 32 {
-            break;
+    if len >= 12 {
+        let mut ci = 9;
+        while ci < len {
+            let b = rt_str_byte(response, ci);
+            if b == 32 {
+                break;
+            }
+            code = code * 10 + (b - 48);
+            ci = ci + 1;
         }
-        code = code * 10 + (b - 48);
-        ci = ci + 1;
     }
+    rt_str_free(response);
     return code;
 }
 
 // Parse reason phrase from HTTP response. Caller must rt_str_free the result.
 fn http_status_text(response: Str) -> Str {
     let len = rt_str_len(response);
-    if len < 12 {
-        return "";
-    }
-    let mut status_end = 9;
-    while status_end < len {
-        if rt_str_byte(response, status_end) == 32 {
-            break;
+    let mut result = "";
+    if len >= 12 {
+        let mut status_end = 9;
+        while status_end < len {
+            if rt_str_byte(response, status_end) == 32 {
+                break;
+            }
+            status_end = status_end + 1;
         }
-        status_end = status_end + 1;
-    }
-    let reason_start = status_end + 1;
-    if reason_start >= len {
-        return "";
-    }
-    let mut reason_end = reason_start;
-    while reason_end < len - 1 {
-        if rt_str_byte(response, reason_end) == 13 {
-            break;
+        let reason_start = status_end + 1;
+        if reason_start < len {
+            let mut reason_end = reason_start;
+            while reason_end < len - 1 {
+                if rt_str_byte(response, reason_end) == 13 {
+                    break;
+                }
+                reason_end = reason_end + 1;
+            }
+            let size = reason_end - reason_start;
+            if size > 0 {
+                result = rt_str_alloc(size);
+                let mut ti = 0;
+                while ti < size {
+                    rt_str_set_byte(result, ti, rt_str_byte(response, reason_start + ti));
+                    ti = ti + 1;
+                }
+            }
         }
-        reason_end = reason_end + 1;
     }
-    let size = reason_end - reason_start;
-    if size <= 0 {
-        return "";
-    }
-    let result = rt_str_alloc(size);
-    let mut ti = 0;
-    while ti < size {
-        rt_str_set_byte(result, ti, rt_str_byte(response, reason_start + ti));
-        ti = ti + 1;
-    }
+    rt_str_free(response);
     return result;
 }
 
@@ -601,8 +668,10 @@ fn http_status_text(response: Str) -> Str {
 // Extract body from HTTP response (after first \r\n\r\n).
 fn http_body(response: Str) -> Str {
     let len = rt_str_len(response);
+    let mut result = "";
+    let mut found = 0;
     let mut i = 0;
-    while i < len - 3 {
+    while i < len - 3 && found == 0 {
         let b1 = rt_str_byte(response, i);
         let b2 = rt_str_byte(response, i + 1);
         let b3 = rt_str_byte(response, i + 2);
@@ -613,31 +682,43 @@ fn http_body(response: Str) -> Str {
                     if b4 == 10 {
                         let body_start = i + 4;
                         let size = len - body_start;
-                        if size <= 0 {
-                            return "";
+                        if size > 0 {
+                            result = rt_str_alloc(size);
+                            let mut bi = 0;
+                            while bi < size {
+                                rt_str_set_byte(result, bi, rt_str_byte(response, body_start + bi));
+                                bi = bi + 1;
+                            }
                         }
-                        let result = rt_str_alloc(size);
-                        let mut bi = 0;
-                        while bi < size {
-                            rt_str_set_byte(result, bi, rt_str_byte(response, body_start + bi));
-                            bi = bi + 1;
-                        }
-                        return result;
+                        found = 1;
                     }
                 }
             }
         }
         i = i + 1;
     }
-    return "";
+    rt_str_free(response);
+    return result;
 }
 
 // --- Client ---
 
-// Receive all data from a socket until connection close.
+// Receive all data from a socket until connection close. On return the
+// module's http_last_error_code is 0 when the transfer completed within
+// the body limit, or HTTP_ERR_TOO_LARGE when the peer produced more than
+// MAX_BODY bytes.
 fn http_recv_all(sock: Int) -> Str {
+    // Start with a small staging buffer and grow it by doubling as the body
+    // arrives. The runtime arena can be a fixed 4 MiB bump heap (Linux), so
+    // reserving `max_size` (MAX_BODY() + 8 KiB) upfront exhausts it before a
+    // single byte is read; most responses fit in the small buffer and never
+    // touch the rest.
     let max_size = MAX_BODY() + 8192;
-    let buf = rt_str_alloc(max_size);
+    let mut cap = 8192;
+    if cap > max_size {
+        cap = max_size;
+    }
+    let mut buf = rt_str_alloc(cap);
     let mut total = 0;
     let mut chunk_count = 0;
     // open tracks whether the peer is still sending. V1 move semantics
@@ -653,6 +734,24 @@ fn http_recv_all(sock: Int) -> Str {
         }
         let mut ci = 0;
         if open == 1 {
+            if total + data_len > cap && cap < max_size {
+                // Double, clamped to max_size. total <= cap and data_len is
+                // at most one net_recv chunk, so the doubled capacity always
+                // holds this chunk (the copy below still clips at max_size).
+                let mut newcap = cap * 2;
+                if newcap > max_size {
+                    newcap = max_size;
+                }
+                let grown = rt_str_alloc(newcap);
+                while ci < total {
+                    rt_str_set_byte(grown, ci, rt_str_byte(buf, ci));
+                    ci = ci + 1;
+                }
+                rt_str_free(buf);
+                buf = grown;
+                cap = newcap;
+                ci = 0;
+            }
             while ci < data_len {
                 if total + ci < max_size {
                     rt_str_set_byte(buf, total + ci, rt_str_byte(data, ci));
@@ -664,6 +763,18 @@ fn http_recv_all(sock: Int) -> Str {
         if open == 1 {
             total = total + data_len;
             chunk_count = chunk_count + 1;
+        }
+    }
+    if open == 1 {
+        // The buffer filled while the peer was still sending. One extra
+        // byte distinguishes an exactly-limit response from an overflow:
+        // a closed peer returns 0, more data sets HTTP_ERR_TOO_LARGE so
+        // the truncation is never silent.
+        let extra = net_recv(sock, 1);
+        let extra_len = rt_str_len(extra);
+        rt_str_free(extra);
+        if extra_len > 0 {
+            http_last_error_code = HTTP_ERR_TOO_LARGE();
         }
     }
     // Copy the received bytes into an exact-length result so that
@@ -683,8 +794,23 @@ fn http_recv_all(sock: Int) -> Str {
 // Consumes `request` and `host` (freed on every path). The raw rt_net_*
 // intrinsics below borrow their string arguments, so both parameters stay
 // live here and are freed exactly once, at the single textual exit.
+//
+// On any failure the result is "" and http_last_error() reports the
+// reason: a socket-creation failure (HTTP_ERR_SOCKET), a DNS/connect
+// failure (HTTP_ERR_CONNECT; net_last_error() still holds the Winsock
+// code), or a send failure (HTTP_ERR_SEND). A response that outgrew
+// MAX_BODY is HTTP_ERR_TOO_LARGE (the received prefix is still returned).
 fn http_send(request: Str, host: Str, port: Int) -> Str {
-    let sock = net_tcp_socket();
+    http_last_error_code = 0;
+    // Initialize Winsock on first use so `http_client_get`/`http_client_post`
+    // work in a fresh program: the stdlib client is a complete entry point
+    // and callers are not required to call `net_init` themselves. WSAStartup
+    // is idempotent, and the session is released by the process exit (or by
+    // the caller's `net_cleanup`).
+    let mut sock = -1;
+    if net_init() == 0 {
+        sock = net_tcp_socket();
+    }
     let mut can_send = 0;
     if sock != -1 {
         can_send = 1;
@@ -694,12 +820,17 @@ fn http_send(request: Str, host: Str, port: Int) -> Str {
         let conn = rt_net_connect(sock, host, port);
         if conn == 0 {
             sent_ok = 1;
+        } else {
+            http_last_error_code = HTTP_ERR_CONNECT();
         }
+    } else {
+        http_last_error_code = HTTP_ERR_SOCKET();
     }
     if sent_ok == 1 {
         let sent = rt_net_send(sock, request);
         if sent == -1 {
             sent_ok = 0;
+            http_last_error_code = HTTP_ERR_SEND();
         }
     }
     let mut response = "";

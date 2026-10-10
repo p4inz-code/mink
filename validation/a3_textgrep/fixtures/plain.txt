@@ -1,0 +1,6 @@
+INFO starting
+INFO still going
+warning: careful
+ERROR stopped
+# comment line
+INFO done

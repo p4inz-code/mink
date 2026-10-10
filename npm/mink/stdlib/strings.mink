@@ -13,6 +13,16 @@
 //   - Search/inspection: fn f(s, ...) -> (result, Str)  [s returned at end]
 //   - Transformation: fn f(s, ...) -> Str  [new string returned, s consumed]
 //   - Validation: fn f(s) -> (Bool, Str)  [s returned at end]
+//
+// OWNERSHIP CONTRACT (the audited leak class): a `Str` parameter that is
+// consumed and NOT returned to the caller must be released with
+// `rt_str_free` before the function returns, otherwise a heap input leaks as
+// E-R06 at exit and the caller cannot free it (the value is already moved).
+// Every helper `Str` parameter (`sub`, `prefix`, `suffix`, `old`, `new`, ...)
+// therefore is freed here after its last use.  The release is unconditional
+// and happens once on the single return path: MINK V1 ownership is not
+// path-sensitive, so a release inside a conditional branch would mark the
+// value moved for the rest of the function.
 
 // ============================================================================
 // Comparison
@@ -35,6 +45,8 @@ fn str_cmp(a: Str, b: Str) -> Int {
     }
     if done == 0 && alen < blen { result = -1; }
     if done == 0 && alen > blen { result = 1; }
+    rt_str_free(a);
+    rt_str_free(b);
     return result;
 }
 
@@ -64,6 +76,7 @@ fn str_index_of(s: Str, sub: Str) -> (Int, Str) {
             i = i + 1;
         }
     }
+    rt_str_free(sub);
     return (result, s);
 }
 
@@ -90,6 +103,7 @@ fn str_last_index_of(s: Str, sub: Str) -> (Int, Str) {
             if done == 0 { i = i - 1; }
         }
     }
+    rt_str_free(sub);
     return (result, s);
 }
 
@@ -110,6 +124,7 @@ fn str_starts_with(s: Str, prefix: Str) -> (Bool, Str) {
             i = i + 1;
         }
     }
+    rt_str_free(prefix);
     return (result, s);
 }
 
@@ -125,6 +140,7 @@ fn str_ends_with(s: Str, suffix: Str) -> (Bool, Str) {
             i = i + 1;
         }
     }
+    rt_str_free(suffix);
     return (result, s);
 }
 
@@ -150,6 +166,7 @@ fn str_count(s: Str, sub: Str) -> (Int, Str) {
             if !match_found { pos = pos + 1; }
         }
     }
+    rt_str_free(sub);
     return (count, s);
 }
 
@@ -210,12 +227,16 @@ fn str_sub(s: Str, start_in: Int, end_in: Int) -> Str {
     if end > len { end = len; }
     if end < start { end = start; }
     let sublen = end - start;
-    let out = rt_str_alloc(sublen);
-    let mut i = 0;
-    while i < sublen {
-        rt_str_set_byte(out, i, rt_str_byte(s, start + i));
-        i = i + 1;
+    let mut out = "";
+    if sublen > 0 {
+        out = rt_str_alloc(sublen);
+        let mut i = 0;
+        while i < sublen {
+            rt_str_set_byte(out, i, rt_str_byte(s, start + i));
+            i = i + 1;
+        }
     }
+    rt_str_free(s);
     return out;
 }
 
@@ -245,18 +266,18 @@ fn str_trim(s: Str) -> Str {
         }
         if start_done == 0 { start = start + 1; }
     }
-    if start == len {
-        return rt_str_alloc(0);
-    }
-    // Find last non-whitespace + 1
-    let mut end = len;
-    let mut end_done = 0;
-    while end > start && end_done == 0 {
-        let b = rt_str_byte(s, end - 1);
-        if b != 32 && b != 9 && b != 10 && b != 13 {
-            end_done = 1;
+    // Find last non-whitespace + 1 (an all-whitespace input stays empty)
+    let mut end = start;
+    if start < len {
+        end = len;
+        let mut end_done = 0;
+        while end > start && end_done == 0 {
+            let b = rt_str_byte(s, end - 1);
+            if b != 32 && b != 9 && b != 10 && b != 13 {
+                end_done = 1;
+            }
+            if end_done == 0 { end = end - 1; }
         }
-        if end_done == 0 { end = end - 1; }
     }
     return str_sub(s, start, end);
 }
@@ -295,7 +316,8 @@ fn str_trim_end(s: Str) -> Str {
 
 fn str_to_upper(s: Str) -> Str {
     let len = rt_str_len(s);
-    let out = rt_str_alloc(len);
+    let mut out = "";
+    if len > 0 { out = rt_str_alloc(len); }
     let mut i = 0;
     while i < len {
         let b = rt_str_byte(s, i);
@@ -306,12 +328,14 @@ fn str_to_upper(s: Str) -> Str {
         }
         i = i + 1;
     }
+    rt_str_free(s);
     return out;
 }
 
 fn str_to_lower(s: Str) -> Str {
     let len = rt_str_len(s);
-    let out = rt_str_alloc(len);
+    let mut out = "";
+    if len > 0 { out = rt_str_alloc(len); }
     let mut i = 0;
     while i < len {
         let b = rt_str_byte(s, i);
@@ -322,6 +346,7 @@ fn str_to_lower(s: Str) -> Str {
         }
         i = i + 1;
     }
+    rt_str_free(s);
     return out;
 }
 
@@ -330,10 +355,11 @@ fn str_to_lower(s: Str) -> Str {
 // ============================================================================
 
 fn str_repeat(s: Str, count: Int) -> Str {
-    if count <= 0 { return rt_str_alloc(0); }
     let slen = rt_str_len(s);
-    let total = slen * count;
-    let out = rt_str_alloc(total);
+    let mut total = slen * count;
+    if count <= 0 { total = 0; }
+    let mut out = "";
+    if total > 0 { out = rt_str_alloc(total); }
     let mut i = 0;
     while i < count {
         let mut j = 0;
@@ -343,47 +369,46 @@ fn str_repeat(s: Str, count: Int) -> Str {
         }
         i = i + 1;
     }
+    rt_str_free(s);
     return out;
 }
 
 fn str_pad_left(s: Str, target_len: Int, pad_byte: Int) -> Str {
     let slen = rt_str_len(s);
+    let mut out_len = slen;
+    if target_len > out_len { out_len = target_len; }
+    let mut out = "";
+    if out_len > 0 { out = rt_str_alloc(out_len); }
     if slen >= target_len {
-        let out = rt_str_alloc(slen);
         let mut i = 0;
         while i < slen {
             rt_str_set_byte(out, i, rt_str_byte(s, i));
             i = i + 1;
         }
-        return out;
     }
-    let pad_len = target_len - slen;
-    let out = rt_str_alloc(target_len);
-    let mut i = 0;
-    while i < pad_len {
-        rt_str_set_byte(out, i, pad_byte);
-        i = i + 1;
+    if slen < target_len {
+        let pad_len = target_len - slen;
+        let mut i = 0;
+        while i < pad_len {
+            rt_str_set_byte(out, i, pad_byte);
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < slen {
+            rt_str_set_byte(out, pad_len + j, rt_str_byte(s, j));
+            j = j + 1;
+        }
     }
-    let mut j = 0;
-    while j < slen {
-        rt_str_set_byte(out, pad_len + j, rt_str_byte(s, j));
-        j = j + 1;
-    }
+    rt_str_free(s);
     return out;
 }
 
 fn str_pad_right(s: Str, target_len: Int, pad_byte: Int) -> Str {
     let slen = rt_str_len(s);
-    if slen >= target_len {
-        let out = rt_str_alloc(slen);
-        let mut i = 0;
-        while i < slen {
-            rt_str_set_byte(out, i, rt_str_byte(s, i));
-            i = i + 1;
-        }
-        return out;
-    }
-    let out = rt_str_alloc(target_len);
+    let mut out_len = slen;
+    if target_len > out_len { out_len = target_len; }
+    let mut out = "";
+    if out_len > 0 { out = rt_str_alloc(out_len); }
     let mut i = 0;
     while i < slen {
         rt_str_set_byte(out, i, rt_str_byte(s, i));
@@ -393,6 +418,7 @@ fn str_pad_right(s: Str, target_len: Int, pad_byte: Int) -> Str {
         rt_str_set_byte(out, i, pad_byte);
         i = i + 1;
     }
+    rt_str_free(s);
     return out;
 }
 
@@ -402,12 +428,14 @@ fn str_pad_right(s: Str, target_len: Int, pad_byte: Int) -> Str {
 
 fn str_reverse(s: Str) -> Str {
     let len = rt_str_len(s);
-    let out = rt_str_alloc(len);
+    let mut out = "";
+    if len > 0 { out = rt_str_alloc(len); }
     let mut i = 0;
     while i < len {
         rt_str_set_byte(out, i, rt_str_byte(s, len - 1 - i));
         i = i + 1;
     }
+    rt_str_free(s);
     return out;
 }
 
@@ -424,7 +452,8 @@ fn str_replace(s: Str, old: Str, new: Str) -> Str {
     let s2 = r.1;
     let mut result_len = slen;
     if idx >= 0 { result_len = slen - oldlen + newlen; }
-    let out = rt_str_alloc(result_len);
+    let mut out = "";
+    if result_len > 0 { out = rt_str_alloc(result_len); }
     if idx < 0 {
         let mut ci = 0;
         while ci < slen {
@@ -449,6 +478,10 @@ fn str_replace(s: Str, old: Str, new: Str) -> Str {
             k = k + 1;
         }
     }
+    // `str_index_of` returned ownership of `s` as `s2`; `new` is never
+    // returned.  Both are released here, so a replacement cannot leak.
+    rt_str_free(s2);
+    rt_str_free(new);
     return out;
 }
 
@@ -456,46 +489,43 @@ fn str_replace_all(s: Str, old: Str, new: Str) -> Str {
     let oldlen = rt_str_len(old);
     let slen = rt_str_len(s);
     let newlen = rt_str_len(new);
-    if oldlen == 0 {
-        let out = rt_str_alloc(slen);
-        let mut ci = 0;
-        while ci < slen {
-            rt_str_set_byte(out, ci, rt_str_byte(s, ci));
-            ci = ci + 1;
-        }
-        return out;
-    }
-    // First pass: count occurrences
+    let mut out = "";
+    // First pass: count occurrences (skipped when there is nothing to
+    // replace, so an empty needle or haystack copies the input unchanged).
     let mut count = 0;
     let mut pos = 0;
-    while pos <= slen - oldlen {
-        let mut match_found = true;
-        let mut j = 0;
-        while j < oldlen {
-            if rt_str_byte(s, pos + j) != rt_str_byte(old, j) {
-                match_found = false;
-                j = oldlen;
-            } else {
-                j = j + 1;
+    if oldlen > 0 && slen > 0 {
+        while pos <= slen - oldlen {
+            let mut match_found = true;
+            let mut j = 0;
+            while j < oldlen {
+                if rt_str_byte(s, pos + j) != rt_str_byte(old, j) {
+                    match_found = false;
+                    j = oldlen;
+                } else {
+                    j = j + 1;
+                }
             }
+            if match_found { count = count + 1; }
+            if match_found { pos = pos + oldlen; }
+            if !match_found { pos = pos + 1; }
         }
-        if match_found { count = count + 1; }
-        if match_found { pos = pos + oldlen; }
-        if !match_found { pos = pos + 1; }
     }
     if count == 0 {
-        let out = rt_str_alloc(slen);
-        let mut ci = 0;
-        while ci < slen {
-            rt_str_set_byte(out, ci, rt_str_byte(s, ci));
-            ci = ci + 1;
+        if slen > 0 {
+            out = rt_str_alloc(slen);
+            let mut ci = 0;
+            while ci < slen {
+                rt_str_set_byte(out, ci, rt_str_byte(s, ci));
+                ci = ci + 1;
+            }
         }
-        return out;
     }
-    // Second pass: build result
-    let result_len = slen + count * (newlen - oldlen);
-    let out = rt_str_alloc(result_len);
-    let mut out_pos = 0;
+    if count > 0 {
+        // Second pass: build result
+        let result_len = slen + count * (newlen - oldlen);
+        out = rt_str_alloc(result_len);
+        let mut out_pos = 0;
     let mut src_pos = 0;
     let mut replacements_done = 0;
     while replacements_done < count {
@@ -533,12 +563,19 @@ fn str_replace_all(s: Str, old: Str, new: Str) -> Str {
             replacements_done = replacements_done + 1;
         }
     }
-    // Copy rest
-    while src_pos < slen {
-        rt_str_set_byte(out, out_pos, rt_str_byte(s, src_pos));
-        out_pos = out_pos + 1;
-        src_pos = src_pos + 1;
+        // Copy rest
+        while src_pos < slen {
+            rt_str_set_byte(out, out_pos, rt_str_byte(s, src_pos));
+            out_pos = out_pos + 1;
+            src_pos = src_pos + 1;
+        }
     }
+    // All three parameters are consumed and never returned; release them on
+    // the single return path (a conditional release would mark them moved
+    // for the rest of the function under V1 ownership).
+    rt_str_free(s);
+    rt_str_free(old);
+    rt_str_free(new);
     return out;
 }
 
@@ -547,12 +584,18 @@ fn str_replace_all(s: Str, old: Str, new: Str) -> Str {
 // ============================================================================
 
 fn str_join_2(a: Str, b: Str) -> Str {
-    return rt_str_concat(a, b);
+    let result = rt_str_concat(a, b);
+    rt_str_free(a);
+    rt_str_free(b);
+    return result;
 }
 
 fn str_join_3(a: Str, b: Str, c: Str) -> Str {
     let ab = rt_str_concat(a, b);
     let result = rt_str_concat(ab, c);
+    rt_str_free(a);
+    rt_str_free(b);
+    rt_str_free(c);
     rt_str_free(ab);
     return result;
 }

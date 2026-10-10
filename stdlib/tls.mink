@@ -181,6 +181,7 @@ fn _low32(v: Int) -> Int {
 fn _res(tab: Ptr<Int>, slot: Int, lib: Int, name: Str) -> Int {
     let p = rt_sys_get_proc(lib, name);
     rt_mem_store(tab + slot * 8, p);
+    rt_str_free(name);
     return p;
 }
 
@@ -764,6 +765,7 @@ fn _cstr_eq(p: Int, lit: Str) -> Int {
         i = i + 1;
     }
     if ok == 1 && _rb(p, n) != 0 { ok = 0; }
+    rt_str_free(lit);
     return ok;
 }
 

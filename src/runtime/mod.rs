@@ -19,11 +19,13 @@
 //!   service);
 //! - **static storage** — module bindings live in the image's `.data`
 //!   section, initialized by the loader;
-//! - **heap storage** — a fixed-size arena in the image's `.bss` section,
-//!   managed by the deterministic validated allocator ([`allocator`]) with
-//!   a bounded liveness table, reached through the `rt_alloc` /
-//!   `rt_free` / `rt_mem_load` / `rt_mem_store` intrinsics
-//!   ([`intrinsics`]).
+//! - **heap storage** — a logical arena whose first
+//!   [`abi::HEAP_BSS_BYTES`] live in the image's `.bss` section and whose
+//!   remainder is committed on demand from a lazily reserved
+//!   `VirtualAlloc` region (Windows), managed by the deterministic
+//!   validated allocator ([`allocator`]) with a bounded liveness table,
+//!   reached through the `rt_alloc` / `rt_free` / `rt_mem_load` /
+//!   `rt_mem_store` intrinsics ([`intrinsics`]).
 //!
 //! The foundation deliberately does **not** claim: garbage collection,
 //! borrowing or full ownership checking, thread safety, or automatic
@@ -42,7 +44,10 @@ pub mod intrinsics;
 pub mod layout;
 pub mod verify;
 
-pub use abi::{HEAP_SIZE, MAX_LIVE_ALLOCS, RuntimeLayout};
+pub use abi::{
+    HEAP_BSS_BYTES, HEAP_COMMIT_CHUNK, HEAP_GROWTH_RESERVE, HEAP_MAX_BYTES, MAX_LIVE_ALLOCS,
+    RuntimeLayout,
+};
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use intrinsics::{Intrinsic, IntrinsicId, IntrinsicType};
 pub use layout::{MemoryLayout, ValueClass};

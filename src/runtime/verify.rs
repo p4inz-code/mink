@@ -19,7 +19,7 @@
 //! 5. the free list contains no duplicate offsets and no cycles (it is
 //!    bounded by the table size).
 
-use super::abi::{ALLOC_ALIGNMENT, HEAP_SIZE, MAX_LIVE_ALLOCS};
+use super::abi::{ALLOC_ALIGNMENT, HEAP_MAX_BYTES, MAX_LIVE_ALLOCS};
 use super::allocator::Allocator;
 
 /// A single invariant violation, rendered for diagnostics.
@@ -45,12 +45,12 @@ impl Violation {
 pub fn check(heap: &Allocator) -> Vec<Violation> {
     let mut violations = Vec::new();
 
-    // V-01: the cursor stays within the arena.
-    if heap.cursor() > HEAP_SIZE {
+    // V-01: the cursor stays within the logical arena capacity.
+    if heap.cursor() > HEAP_MAX_BYTES {
         violations.push(Violation::new(
             "V-01",
             format!(
-                "bump cursor {} exceeds the arena size {HEAP_SIZE}",
+                "bump cursor {} exceeds the arena capacity {HEAP_MAX_BYTES}",
                 heap.cursor()
             ),
         ));

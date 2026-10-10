@@ -838,19 +838,19 @@ pub enum RuntimeService {
     FsExists,
     /// `rt_fs_file_size(path) -> Int`: get file size in bytes (-1 on error).
     FsFileSize,
-    /// `rt_fs_create_dir(path) -> Int`: create directory, 0=ok, -1=error.
+    /// `rt_fs_create_dir(path) -> Int`: create directory, 0=ok, 1=error.
     FsCreateDir,
-    /// `rt_fs_remove_dir(path) -> Int`: remove empty directory, 0=ok, -1=error.
+    /// `rt_fs_remove_dir(path) -> Int`: remove empty directory, 0=ok, 1=error.
     FsRemoveDir,
-    /// `rt_fs_remove_file(path) -> Int`: delete file, 0=ok, -1=error.
+    /// `rt_fs_remove_file(path) -> Int`: delete file, 0=ok, 1=error.
     FsRemoveFile,
-    /// `rt_fs_copy(src, dst) -> Int`: copy file, 0=ok, -1=error.
+    /// `rt_fs_copy(src, dst) -> Int`: copy file, 0=ok, 1=error.
     FsCopy,
-    /// `rt_fs_move(src, dst) -> Int`: rename/move file, 0=ok, -1=error.
+    /// `rt_fs_move(src, dst) -> Int`: rename/move file, 0=ok, 1=error.
     FsMove,
     /// `rt_fs_get_cwd() -> Str`: get current working directory.
     FsGetCwd,
-    /// `rt_fs_set_cwd(path) -> Int`: set current working directory, 0=ok, -1=error.
+    /// `rt_fs_set_cwd(path) -> Int`: set current working directory, 0=ok, 1=error.
     FsSetCwd,
     /// `rt_to_cstr(s) -> Ptr<Int>`: allocate null-terminated copy of Str for Win32.
     ToCstr,
@@ -859,6 +859,10 @@ pub enum RuntimeService {
     // --- Process (Session 59) ---
     /// `rt_process_run(cmd: Str) -> Int`: run command, return exit code.
     ProcessRun,
+    /// `rt_process_run_input(cmd: Str, input: Str) -> Int`: run command with
+    /// `input` written to its standard input, then return its exit code.
+    /// Captured stdout/stderr are published exactly as for `rt_process_run`.
+    ProcessRunInput,
     /// `rt_process_stdout() -> Str`: get captured stdout of last process.
     ProcessStdout,
     /// `rt_process_stderr() -> Str`: get captured stderr of last process.
@@ -932,6 +936,19 @@ pub enum RuntimeService {
     NetGetHostName,
     /// `rt_net_htons(value: Int) -> Int`: host-to-network byte order.
     NetHtons,
+    /// `rt_net_sendto(sock: Int, data: Str, addr: Str, port: Int) -> Int`: send
+    /// a datagram to `addr`:`port` without connecting the socket first (bytes
+    /// sent, or -1 on failure; the reason is in `net_last_error`).
+    NetSendTo,
+    /// `rt_net_recvfrom(sock: Int, maxlen: Int) -> Str`: receive one datagram
+    /// and remember its sender for `rt_net_sender_ip` / `rt_net_sender_port`.
+    NetRecvFrom,
+    /// `rt_net_sender_port() -> Int`: host-order port of the last datagram's
+    /// sender, or -1 when no datagram has been received yet.
+    NetSenderPort,
+    /// `rt_net_sender_ip() -> Str`: dotted-quad address of the last
+    /// datagram's sender (OWNED Str), or "" when none was received.
+    NetSenderIp,
     // --- Crypto (Session 71) ---
     /// `rt_crypto_init() -> Int`: load bcryptprimitives.dll and resolve BCryptGenRandom. Returns 0 on success.
     CryptoInit,
@@ -1122,6 +1139,7 @@ impl RuntimeService {
             Self::ToCstr => 1,
             Self::FreeCstr => 1,
             Self::ProcessRun => 1,
+            Self::ProcessRunInput => 2,
             Self::ProcessStdout => 0,
             Self::ProcessStderr => 0,
             Self::ProcessStdoutLen => 0,
@@ -1149,6 +1167,10 @@ impl RuntimeService {
             Self::NetListen | Self::NetShutdown | Self::NetSend | Self::NetRecv => 2,
             Self::NetSocket | Self::NetConnect | Self::NetBind => 3,
             Self::NetGetAddrInfo => 2,
+            // --- Unconnected UDP (Session 126) ---
+            Self::NetSendTo => 4,
+            Self::NetRecvFrom => 2,
+            Self::NetSenderPort | Self::NetSenderIp => 0,
             // --- Crypto (Session 71) ---
             Self::CryptoInit => 0,
             Self::CryptoRandomBytes => 2,
@@ -1245,6 +1267,7 @@ impl RuntimeService {
                 | Self::ToCstr
                 | Self::FreeCstr
                 | Self::ProcessRun
+                | Self::ProcessRunInput
                 | Self::ProcessStdout
                 | Self::ProcessStderr
                 | Self::ProcessStdoutLen
@@ -1279,6 +1302,10 @@ impl RuntimeService {
                 | Self::NetFreeAddrInfo
                 | Self::NetGetHostName
                 | Self::NetHtons
+                | Self::NetSendTo
+                | Self::NetRecvFrom
+                | Self::NetSenderPort
+                | Self::NetSenderIp
                 | Self::CryptoInit
                 | Self::CryptoRandomBytes
                 | Self::CryptoRandomInt

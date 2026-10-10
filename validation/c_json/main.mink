@@ -1,0 +1,267 @@
+// ============================================================================
+// jsontool — Validation milestone 1 / C: JSON processing.
+//
+//   jsontool <command> <file> [args]
+//     validate <file>            parse the document; print "ok" or fail (3)
+//     type     <file>            type name of the root value
+//     keys     <file>            object member names, document order
+//     count    <file>            array length
+//     get      <file> <key>      object member value, re-serialized as JSON
+//     sum      <file> <field>    sum an integer field over an array of objects
+//     compact  <file>            re-serialize the parsed document
+//
+// Uses the arena-based stdlib `json` module (`json_parse`, the typed
+// accessors, `json_to_str`). The arena is a raw `rt_alloc(65536)` block held
+// by the program and released at the single exit; `json_parse` consumes the
+// input string (it pre-reads the bytes and frees it), so the caller must not
+// free the content again.
+//
+// Exit codes:
+//   0  ok
+//   1  usage error (unknown command, missing/extra arguments, any option)
+//   2  input file missing or not a regular file
+//   3  the document is not valid JSON
+//   4  the document has the wrong shape (key/field missing, not an object...)
+//
+// Ownership: single-exit style. Read-borrowing intrinsics (`rt_str_concat`,
+// `rt_print_str`, `rt_str_eq`) do not free their arguments, so copies passed
+// to them are bound and released.
+// ============================================================================
+
+mod filesystem;
+mod json;
+mod strings;
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("jsontool: ", label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_str_free(label);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn fail_file(label: Str, path: Str) -> Int {
+    let head = rt_str_concat("jsontool: ", label);
+    let mid = rt_str_concat(head, path);
+    rt_str_free(head);
+    let line = rt_str_concat(mid, "\r\n");
+    rt_str_free(mid);
+    rt_str_free(label);
+    rt_str_free(path);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// Return (content, status): status 0 ok, 2 file error (message printed).
+// Consumes `path`. On the error path the returned empty string is owned by
+// the caller and must be released.
+fn load_doc(path: Str) -> (Str, Int) {
+    if fs_exists(rt_str_concat(path, "")) == false {
+        fail_file("input file does not exist: ", rt_str_concat(path, ""));
+        rt_str_free(path);
+        return (rt_str_alloc(0), 2);
+    }
+    if fs_is_file(rt_str_concat(path, "")) == false {
+        fail_file("not a regular file: ", rt_str_concat(path, ""));
+        rt_str_free(path);
+        return (rt_str_alloc(0), 2);
+    }
+    let content = fs_read(rt_str_concat(path, ""));
+    rt_str_free(path);
+    return (content, 0);
+}
+
+fn print_tag(tag: Int) {
+    if tag == 0 { rt_print_str("null"); }
+    else if tag == 1 { rt_print_str("bool"); }
+    else if tag == 2 { rt_print_str("number"); }
+    else if tag == 3 { rt_print_str("string"); }
+    else if tag == 4 { rt_print_str("array"); }
+    else if tag == 5 { rt_print_str("object"); }
+    else { rt_print_str("unknown"); }
+}
+
+// Index of member `name` in object `obj`, or -1. Borrows `name`.
+fn find_key(arena: Ptr<Int>, obj: Int, name: Str) -> Int {
+    let n = json_obj_len(arena, obj);
+    let mut found = -1;
+    let mut i = 0;
+    while i < n {
+        let k = json_obj_get_key(arena, obj, i);
+        let eq = rt_str_eq(k, name);
+        rt_str_free(k);
+        if eq == true {
+            found = i;
+            i = n;
+        } else {
+            i = i + 1;
+        }
+    }
+    rt_str_free(name);
+    return found;
+}
+
+fn cmd_validate(arena: Ptr<Int>, v: Int, n: Int) -> Int {
+    if n != 2 { fail_msg("usage: jsontool validate <file>"); return 1; }
+    rt_print_str("ok");
+    return 0;
+}
+
+fn cmd_type(arena: Ptr<Int>, v: Int, n: Int) -> Int {
+    if n != 2 { fail_msg("usage: jsontool type <file>"); return 1; }
+    print_tag(json_tag(arena, v));
+    return 0;
+}
+
+fn cmd_keys(arena: Ptr<Int>, v: Int, n: Int) -> Int {
+    if n != 2 { fail_msg("usage: jsontool keys <file>"); return 1; }
+    if json_tag(arena, v) != 5 {
+        fail_msg("document is not an object");
+        return 4;
+    }
+    let count = json_obj_len(arena, v);
+    let mut i = 0;
+    while i < count {
+        let k = json_obj_get_key(arena, v, i);
+        rt_print_str(k);
+        rt_str_free(k);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn cmd_count(arena: Ptr<Int>, v: Int, n: Int) -> Int {
+    if n != 2 { fail_msg("usage: jsontool count <file>"); return 1; }
+    if json_tag(arena, v) != 4 {
+        fail_msg("document is not an array");
+        return 4;
+    }
+    rt_print_int(json_arr_len(arena, v));
+    return 0;
+}
+
+fn cmd_get(arena: Ptr<Int>, v: Int, n: Int, pos: Vec<Str>) -> Int {
+    if n != 3 { fail_msg("usage: jsontool get <file> <key>"); return 1; }
+    if json_tag(arena, v) != 5 {
+        fail_msg("document is not an object");
+        return 4;
+    }
+    let name = rt_str_concat(rt_vec_get(pos, 2), "");
+    // find_key consumes its Str parameter: hand it a copy.
+    let idx = find_key(arena, v, rt_str_concat(name, ""));
+    if idx < 0 {
+        let head = rt_str_concat("no such key: ", name);
+        fail_msg(head);
+        rt_str_free(name);
+        return 4;
+    }
+    rt_str_free(name);
+    let val = json_obj_get_val(arena, v, idx);
+    let s = json_to_str(arena, val);
+    rt_print_str(s);
+    rt_str_free(s);
+    return 0;
+}
+
+fn cmd_sum(arena: Ptr<Int>, v: Int, n: Int, pos: Vec<Str>) -> Int {
+    if n != 3 { fail_msg("usage: jsontool sum <file> <field>"); return 1; }
+    if json_tag(arena, v) != 4 {
+        fail_msg("document is not an array");
+        return 4;
+    }
+    let field = rt_str_concat(rt_vec_get(pos, 2), "");
+    let count = json_arr_len(arena, v);
+    let mut total = 0;
+    let mut i = 0;
+    while i < count {
+        let el = json_arr_get(arena, v, i);
+        if json_tag(arena, el) == 5 {
+            let idx = find_key(arena, el, rt_str_concat(field, ""));
+            if idx >= 0 {
+                let vo = json_obj_get_val(arena, el, idx);
+                if json_tag(arena, vo) == 2 {
+                    total = total + json_as_int(arena, vo);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    rt_str_free(field);
+    rt_print_int(total);
+    return 0;
+}
+
+fn cmd_compact(arena: Ptr<Int>, v: Int, n: Int) -> Int {
+    if n != 2 { fail_msg("usage: jsontool compact <file>"); return 1; }
+    let s = json_to_str(arena, v);
+    rt_print_str(s);
+    rt_str_free(s);
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+
+    let mut pos = rt_vec_new(4);
+    let mut bad = 0;
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut optionish = 0;
+        if rt_str_len(arg) > 0 {
+            if rt_str_byte(arg, 0) == 45 { optionish = 1; }
+        }
+        if optionish == 1 {
+            bad = 1;
+            rt_str_free(arg);
+        } else {
+            pos = rt_vec_push(pos, arg);
+        }
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    let n = rt_vec_len(pos);
+    if bad == 1 {
+        fail_msg("this tool has no options");
+    } else if n < 2 {
+        fail_msg("usage: jsontool <validate|type|keys|count|get|sum|compact> <file> [args]");
+    } else {
+        let cmd = rt_vec_get(pos, 0);
+        let (content, status) = load_doc(rt_str_concat(rt_vec_get(pos, 1), ""));
+        if status != 0 {
+            rt_str_free(content);
+            code = status;
+        } else {
+            let arena = rt_alloc(65536);
+            let v = json_parse(content, arena);
+            if v == 0 {
+                fail_msg("invalid JSON");
+                code = 3;
+            } else if rt_str_eq(cmd, "validate") {
+                code = cmd_validate(arena, v, n);
+            } else if rt_str_eq(cmd, "type") {
+                code = cmd_type(arena, v, n);
+            } else if rt_str_eq(cmd, "keys") {
+                code = cmd_keys(arena, v, n);
+            } else if rt_str_eq(cmd, "count") {
+                code = cmd_count(arena, v, n);
+            } else if rt_str_eq(cmd, "get") {
+                code = cmd_get(arena, v, n, pos);
+            } else if rt_str_eq(cmd, "sum") {
+                code = cmd_sum(arena, v, n, pos);
+            } else if rt_str_eq(cmd, "compact") {
+                code = cmd_compact(arena, v, n);
+            } else {
+                fail_msg("usage: jsontool <validate|type|keys|count|get|sum|compact> <file> [args]");
+            }
+            rt_free(arena);
+        }
+    }
+
+    rt_vec_free(pos);
+    return code;
+}

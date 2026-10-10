@@ -67,6 +67,10 @@ fn assert_eq_str(a: Str, b: Str) {
         rt_print_str("\"\n");
         rt_exit(1);
     }
+    // Success path: the consumed arguments are released (the failure path
+    // exits the process, so nothing leaks at exit).
+    rt_str_free(a);
+    rt_str_free(b);
 }
 
 /// assert_ne_str(a, b): pass if strings differ, else fail.
@@ -75,6 +79,8 @@ fn assert_ne_str(a: Str, b: Str) {
         rt_print_str("assertion failed: strings are equal\n");
         rt_exit(1);
     }
+    rt_str_free(a);
+    rt_str_free(b);
 }
 
 /// assert_eq_float(a, b): pass if a == b (exact), else fail.

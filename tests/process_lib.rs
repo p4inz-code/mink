@@ -50,6 +50,63 @@ fn run_ok(test_body: &str) -> (i32, String) {
     (code, String::from_utf8_lossy(&stdout).to_string())
 }
 
+/// [`build_and_run`], but the program is killed and the test fails after
+/// `secs` instead of hanging forever.
+///
+/// The stdin-feeding tests need this: a regression that fails to close the
+/// child's write end (or deadlocks on a full pipe) leaves the child waiting
+/// for an EOF that never comes, and an unguarded `output()` would block the
+/// whole suite with no diagnostic. Output is redirected to files rather than
+/// pipes so the guard itself can never fill a pipe and stall the child.
+fn build_and_run_timeout(test_body: &str, secs: u64) -> (i32, Vec<u8>, Vec<u8>) {
+    let lib = process_lib();
+    let source = format!("{}\n{}", lib, test_body);
+    let path = temp_source("timeout", &source);
+    let output = mink().arg("build").arg(&path).output().unwrap();
+    let exe = path.with_extension("exe");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&exe);
+        panic!("build failed:\n{stderr}");
+    }
+    let stdout_path = path.with_extension("out");
+    let stderr_path = path.with_extension("err");
+    let mut child = Command::new(&exe)
+        .stdout(std::fs::File::create(&stdout_path).unwrap())
+        .stderr(std::fs::File::create(&stderr_path).unwrap())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            let code = status.code().unwrap_or(-1);
+            let stdout = std::fs::read(&stdout_path).unwrap_or_default();
+            let stderr = std::fs::read(&stderr_path).unwrap_or_default();
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&exe);
+            let _ = std::fs::remove_file(&stdout_path);
+            let _ = std::fs::remove_file(&stderr_path);
+            return (code, stdout, stderr);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&path);
+            panic!(
+                "test program did not exit within {secs}s: pipe deadlock, or the child never saw \
+                 the stdin EOF it was waiting for"
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+fn run_ok_timeout(test_body: &str, secs: u64) -> (i32, String) {
+    let (code, stdout, _stderr) = build_and_run_timeout(test_body, secs);
+    (code, String::from_utf8_lossy(&stdout).to_string())
+}
+
 // =========================================================================
 // Basic process execution
 // =========================================================================
@@ -1307,12 +1364,15 @@ fn main() {
 // Linux crypto regression tests (Session 92)
 // ==========================================================================
 
-/// Build and run a MINK program on Linux with hashing.mink + crypto.mink.
+/// Build and run a MINK program on Linux with the crypto module.
+///
+/// `crypto.mink` declares `mod hashing;` itself, so the loader brings the
+/// `hash_sha256` dependency in. Prepending `hashing.mink` here would define
+/// `hash_sha256` twice and fail the build.
 fn build_and_run_linux_crypto(test_body: &str) -> (bool, i32) {
-    let hashing = std::fs::read_to_string("stdlib/hashing.mink").unwrap_or_default();
     let crypto =
         std::fs::read_to_string("stdlib/crypto.mink").expect("failed to read stdlib/crypto.mink");
-    let source = format!("{}\n{}\n{}", hashing, crypto, test_body);
+    let source = format!("{}\n{}", crypto, test_body);
     let exe = build_linux_elf(&source);
     let code = run_linux_elf(&exe);
     let _ = std::fs::remove_file(&exe);
@@ -1484,9 +1544,11 @@ if __name__ == "__main__":
 /// Build network.mink + http.mink + `body` for the Linux ELF target and
 /// return the produced executable.
 fn build_linux_http_source(body: &str) -> std::path::PathBuf {
-    let net = std::fs::read_to_string("stdlib/network.mink").unwrap_or_default();
+    // `http.mink` declares `mod network;`, so the loader pulls the TCP
+    // dependency in itself. Concatenating `network.mink` by hand would now
+    // define every `net_*` name twice and fail the build.
     let http = std::fs::read_to_string("stdlib/http.mink").expect("stdlib/http.mink");
-    let source = format!("{net}\n{http}\n{body}");
+    let source = format!("{http}\n{body}");
     build_linux_elf(&source)
 }
 
@@ -1680,8 +1742,10 @@ fn main() {
 // `PeekNamedPipe` + bounded reads) while the child runs.
 //
 // These tests exercise the actual draining behavior with generated MINK
-// children; they are NOT timeout-based. Capture remains bounded at 4088 bytes
-// per stream (the documented V1 contract), and overflow is discarded.
+// children; they are NOT timeout-based. Capture is not truncated: each stream
+// holds its full output up to the 8 MiB window (`STDIO_CAPTURE_WINDOW_BYTES`),
+// and a stream that exceeds the window fails the program with the structured
+// `E-R02` instead of silently discarding bytes (Session 125).
 // =========================================================================
 
 /// Build a MINK child executable that prints `count` copies of `'A'` (plus the
@@ -1762,7 +1826,7 @@ fn parse_code_len_content(stdout: &[u8]) -> (i32, usize, Vec<u8>) {
 }
 
 #[test]
-fn s97_large_stdout_drains_and_caps() {
+fn s97_large_stdout_drains_fully() {
     // 5002 bytes (5000 'A' + CRLF) > 4096-byte pipe buffer: deadlocked before.
     let dir = s97_dir("caps");
     build_large_child(&dir, "big", 5000, 0);
@@ -1773,17 +1837,18 @@ fn s97_large_stdout_drains_and_caps() {
     let (rc, len, content) = parse_code_len_content(&out);
     assert_eq!(code, 0, "parent must exit 0");
     assert_eq!(rc, 0, "child must exit 0");
-    assert_eq!(len, 4088, "capture must cap at 4088 (V1 contract)");
-    // The 5000-byte 'A' stream is capped at 4088; the CRLF trail is discarded.
+    assert_eq!(len, 5002, "the full 5002 bytes must be captured");
+    // The whole 5000-byte 'A' stream and its trailing CRLF arrive intact.
     assert_eq!(
-        &content[..4088],
-        vec![b'A'; 4088],
-        "captured prefix must be exact"
+        &content[..5000],
+        vec![b'A'; 5000],
+        "captured bytes must be exact"
     );
+    assert_eq!(&content[5000..5002], b"\r\n", "trailing CRLF must be kept");
     assert_eq!(
         content.len(),
-        4090,
-        "captured string + parent CRLF = 4090 bytes"
+        5004,
+        "captured string + parent CRLF = 5004 bytes"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1800,7 +1865,7 @@ fn s97_stdout_just_above_pipe_buffer() {
     let (rc, len, _) = parse_code_len_content(&out);
     assert_eq!(code, 0, "parent must exit 0");
     assert_eq!(rc, 0, "child must exit 0 without deadlock");
-    assert_eq!(len, 4088, "capture capped at 4088");
+    assert_eq!(len, 4097, "all 4097 bytes must be captured");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1816,7 +1881,7 @@ fn s97_stdout_exact_pipe_buffer_boundary() {
     let (rc, len, _) = parse_code_len_content(&out);
     assert_eq!(code, 0, "parent must exit 0");
     assert_eq!(rc, 0, "must complete without deadlock");
-    assert_eq!(len, 4088, "capture capped at 4088");
+    assert_eq!(len, 4098, "all 4098 bytes must be captured");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1853,7 +1918,7 @@ fn s97_large_stdout_64k() {
     let (rc, len, _) = parse_code_len_content(&out);
     assert_eq!(code, 0, "parent must exit 0");
     assert_eq!(rc, 0, "large output must drain without deadlock");
-    assert_eq!(len, 4088, "capture capped at 4088; overflow discarded");
+    assert_eq!(len, 70002, "all 70002 bytes must be captured");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1868,7 +1933,7 @@ fn s97_large_stdout_1mb() {
     let (rc, len, _) = parse_code_len_content(&out);
     assert_eq!(code, 0, "parent must exit 0");
     assert_eq!(rc, 0, "1 MB output must drain without deadlock");
-    assert_eq!(len, 4088, "capture capped at 4088");
+    assert_eq!(len, 1000002, "all 1000002 bytes must be captured");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1883,12 +1948,12 @@ fn s97_large_output_nonzero_exit() {
     let (rc, len, _) = parse_code_len_content(&out);
     assert_eq!(code, 0, "parent must exit 0");
     assert_eq!(rc, 3, "non-zero exit code must be preserved");
-    assert_eq!(len, 4088);
+    assert_eq!(len, 5002);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn s97_large_stderr_caps() {
+fn s97_large_stderr_captured() {
     // 3000 lines of `e` on stderr = 6000 bytes; stdout empty. Exercises the
     // stderr drain path without needing a helper interpreter.
     let dir = s97_dir("bigstderr");
@@ -1906,7 +1971,8 @@ fn s97_large_stderr_caps() {
     assert_eq!(parts.len(), 3, "expected rc, out_len, err_len: {s}");
     assert_eq!(parts[0], 0);
     assert_eq!(parts[1], 0, "stdout must stay empty");
-    assert_eq!(parts[2], 4088, "large stderr must be capped at 4088");
+    // cmd's `echo e 1>&2` emits "e " + CRLF = 4 bytes per line.
+    assert_eq!(parts[2], 12000, "all 12000 stderr bytes must be captured");
     // `rc` from parse is the parent's own exit code
     assert_eq!(rc, 0);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1915,12 +1981,12 @@ fn s97_large_stderr_caps() {
 #[test]
 fn s97_repeated_large_executions() {
     // Run the same big child three times sequentially; each call must return
-    // the same capped length with no stale state, no hang, no crash.
+    // the same full length with no stale state, no hang, no crash.
     let dir = s97_dir("repeat");
     build_large_child(&dir, "big", 5000, 0);
     let (code, out) = run_parent_from(
         &dir,
-        "    let a = process_run(\"big.exe\");\n    let la = process_stdout_len();\n    let b = process_run(\"big.exe\");\n    let lb = process_stdout_len();\n    let c = process_run(\"big.exe\");\n    let lc = process_stdout_len();\n    if a != 0 { rt_exit(21); }\n    if b != 0 { rt_exit(22); }\n    if c != 0 { rt_exit(23); }\n    if la != 4088 { rt_exit(24); }\n    if lb != 4088 { rt_exit(25); }\n    if lc != 4088 { rt_exit(26); }\n    rt_exit(0);",
+        "    let a = process_run(\"big.exe\");\n    let la = process_stdout_len();\n    let b = process_run(\"big.exe\");\n    let lb = process_stdout_len();\n    let c = process_run(\"big.exe\");\n    let lc = process_stdout_len();\n    if a != 0 { rt_exit(21); }\n    if b != 0 { rt_exit(22); }\n    if c != 0 { rt_exit(23); }\n    if la != 5002 { rt_exit(24); }\n    if lb != 5002 { rt_exit(25); }\n    if lc != 5002 { rt_exit(26); }\n    rt_exit(0);",
     );
     assert_eq!(
         code,
@@ -1929,6 +1995,134 @@ fn s97_repeated_large_executions() {
         String::from_utf8_lossy(&out)
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// =========================================================================
+// Session 125 — process_run_input: feeding a child's stdin
+// =========================================================================
+
+#[test]
+fn s125_input_reaches_child_stdin() {
+    // `findstr` filters its stdin, so the captured output can only contain
+    // `hello` if the fed bytes actually reached the child.
+    let test = r#"
+fn main() {
+    let code = rt_process_run_input("findstr hello", "hello world\nbye\n");
+    if code != 0 { rt_exit(1); }
+    let (found, out2) = str_contains(rt_process_stdout(), "hello");
+    if found == false { rt_exit(2); }
+    let (unexpected, _out3) = str_contains(out2, "bye");
+    if unexpected == true { rt_exit(3); }
+    rt_exit(0);
+}
+"#;
+    let (code, out) = run_ok_timeout(test, 60);
+    assert_eq!(code, 0, "fed stdin must reach the child: {out}");
+}
+
+#[test]
+fn s125_input_eof_is_delivered_to_child() {
+    // `sort` buffers all of stdin and writes nothing until it sees EOF, so a
+    // missing close of the write end hangs (caught by the timeout guard),
+    // and the sorted order proves both lines arrived.
+    let test = r#"
+fn main() {
+    let code = rt_process_run_input("sort", "banana\napple\n");
+    if code != 0 { rt_exit(1); }
+    let (found, out2) = str_contains(rt_process_stdout(), "apple");
+    if found == false { rt_exit(2); }
+    let (first, _out3) = str_index_of(out2, "apple");
+    if first != 0 { rt_exit(3); }
+    rt_exit(0);
+}
+"#;
+    let (code, out) = run_ok_timeout(test, 60);
+    assert_eq!(code, 0, "sort must finish at EOF with sorted output: {out}");
+}
+
+#[test]
+fn s125_empty_input_still_runs_child() {
+    // An empty input must not stall the pipeline: stdin is simply closed.
+    let test = r#"
+fn main() {
+    let code = rt_process_run_input("echo hi", "");
+    if code != 0 { rt_exit(1); }
+    if rt_process_stdout_len() == 0 { rt_exit(2); }
+    rt_exit(0);
+}
+"#;
+    let (code, out) = run_ok_timeout(test, 60);
+    assert_eq!(code, 0, "empty input must still run the child: {out}");
+}
+
+#[test]
+fn s125_exit_code_preserved_with_input() {
+    let test = r#"
+fn main() {
+    let code = rt_process_run_input("exit 7", "ignored");
+    if code != 7 { rt_exit(9); }
+    rt_exit(0);
+}
+"#;
+    let (code, out) = run_ok_timeout(test, 60);
+    assert_eq!(code, 0, "exit code 7 must survive the input path: {out}");
+}
+
+#[test]
+fn s125_child_that_ignores_stdin_does_not_deadlock() {
+    // 8 KiB of heap input (more than one pipe buffer) while the child never
+    // reads stdin and floods stdout. A parent that wrote the whole input
+    // synchronously would block while the child blocked on its stdout pipe.
+    // The heap string also exercises the ownership contract: it must be
+    // released by the callee, or the exit-time leak check fails with 106.
+    let test = r#"
+fn main() {
+    let input = str_repeat("x", 8192);
+    let code = process_run_input("for /L %i in (1,1,1000) do @echo 0123456789012345678901234567890123456789", input);
+    if code != 0 { rt_exit(1); }
+    if rt_process_stdout_len() < 40000 { rt_exit(2); }
+    rt_exit(0);
+}
+"#;
+    let (code, out) = run_ok_timeout(test, 60);
+    assert_eq!(
+        code, 0,
+        "a child that ignores stdin must still drain and exit: {out}"
+    );
+}
+
+#[test]
+fn linux_heap_stays_aligned_with_module_bindings() {
+    if !wsl_available() {
+        eprintln!("skipping: WSL not available");
+        return;
+    }
+    // A module-level binding gives the ELF image a non-empty `.data`. The
+    // runtime BSS layout places the heap arena at a 16-byte-aligned offset and
+    // `rt_alloc`/`rt_free` require 16-byte-aligned blocks, so `.data` has to be
+    // padded to a 16-byte multiple: an 8-byte image used to shift the whole
+    // `.bss` by 8, which misaligned the arena and failed *every* `rt_str_free`
+    // with E-R07 (exit 107) in any Linux program that imported a module with
+    // bindings.
+    let source = r#"
+let probe_binding = 1;
+
+fn main() {
+    let s = rt_str_alloc(4096);
+    rt_str_free(s);
+    let t = rt_str_concat("min", "k");
+    rt_str_free(t);
+    if probe_binding == 1 { rt_exit(0); }
+    rt_exit(1);
+}
+"#;
+    let exe = build_linux_elf(source);
+    let code = run_linux_elf(&exe);
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(
+        code, 0,
+        "a Linux program with module bindings must be able to allocate and free"
+    );
 }
 
 #[test]

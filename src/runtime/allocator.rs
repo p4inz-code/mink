@@ -10,8 +10,12 @@
 //!
 //! The model:
 //!
-//! - addresses are **offsets into the arena** (`0 .. HEAP_SIZE`), which
-//!   the machine runtime translates to absolute addresses (`arena + offset`);
+//! - addresses are **offsets into the logical arena**
+//!   (`0 .. HEAP_MAX_BYTES`), which the machine runtime translates to
+//!   absolute addresses (the `.bss` prefix for the first
+//!   [`HEAP_BSS_BYTES`] of the space, the lazily reserved growth region
+//!   beyond it); the reference model backs its arena sparsely, so tests
+//!   can exercise far more than the `.bss` prefix without allocating it;
 //! - allocation rounds the requested size up to [`ALLOC_ALIGNMENT`],
 //!   then first-fits the LIFO free list from most recently freed (walking
 //!   past too-small blocks so they cannot hide a large reusable block),
@@ -24,9 +28,13 @@
 //! - `load`/`store` require the 8-byte word to lie entirely inside a live
 //!   slot;
 //! - the reference models the arena bytes too, so load/store round-trips
-//!   are exercised end to end.
+//!   are exercised end to end. The backing store is sparse: it grows only
+//!   to the highest address actually written, so the logical capacity can
+//!   be far larger than any single test's working set.
 
-use super::abi::{ALLOC_ALIGNMENT, HEAP_SIZE, MAX_LIVE_ALLOCS, WORD_SIZE, align_up};
+use super::abi::{
+    ALLOC_ALIGNMENT, HEAP_BSS_BYTES, HEAP_MAX_BYTES, MAX_LIVE_ALLOCS, WORD_SIZE, align_up,
+};
 use super::error::{RuntimeError, RuntimeErrorKind};
 
 /// A slot of the liveness table: the live flag plus the block's start
@@ -53,7 +61,10 @@ pub struct Allocator {
     free: Vec<(u64, u64)>,
     /// The liveness table: `MAX_LIVE_ALLOCS` slots, `None` when dead.
     table: Vec<Option<LiveEntry>>,
-    /// The arena contents, `HEAP_SIZE` zero-initialized bytes.
+    /// The arena contents, grown lazily up to the highest address any
+    /// access has touched. Freshly grown regions read as zero (matching
+    /// the loader/first-commit contract); reused blocks retain their old
+    /// contents (matching the machine runtime).
     memory: Vec<u8>,
 }
 
@@ -70,13 +81,27 @@ impl Allocator {
             cursor: 0,
             free: Vec::new(),
             table: vec![None; MAX_LIVE_ALLOCS],
-            memory: vec![0; HEAP_SIZE as usize],
+            memory: Vec::new(),
         }
     }
 
-    /// The arena size in bytes.
+    /// The number of bytes of the `.bss` prefix arena.
+    pub fn bss_prefix_size() -> u64 {
+        HEAP_BSS_BYTES
+    }
+
+    /// The logical arena capacity in bytes.
     pub fn heap_size(&self) -> u64 {
-        HEAP_SIZE
+        HEAP_MAX_BYTES
+    }
+
+    /// Extends the sparse backing store so the word at `addr` is present
+    /// (zero-filled on first touch).
+    fn ensure_memory(&mut self, addr: u64, len: u64) {
+        let end = addr + len;
+        if end > self.memory.len() as u64 {
+            self.memory.resize(end as usize, 0);
+        }
     }
 
     /// The number of simultaneously live allocations.
@@ -127,7 +152,7 @@ impl Allocator {
                     block
                 }
                 None => {
-                    if self.cursor + size > HEAP_SIZE {
+                    if self.cursor + size > HEAP_MAX_BYTES {
                         return Err(RuntimeError::new(RuntimeErrorKind::OutOfMemory, Some(size)));
                     }
                     let block = self.cursor;
@@ -180,11 +205,15 @@ impl Allocator {
     /// is not entirely inside a live allocation.
     pub fn load(&self, addr: u64) -> Result<u64, RuntimeError> {
         self.check_access(addr)?;
-        Ok(u64::from_le_bytes(
-            self.memory[addr as usize..addr as usize + 8]
-                .try_into()
-                .unwrap(),
-        ))
+        // The access is inside a live block, so the sparse backing store
+        // always already covers it (alloc marks nothing; only stores grow
+        // it, and a load of never-stored bytes reads zero-initialized
+        // backing).
+        let slice = self
+            .memory
+            .get(addr as usize..addr as usize + 8)
+            .unwrap_or(&[0u8; 8]);
+        Ok(u64::from_le_bytes(slice.try_into().unwrap()))
     }
 
     /// Stores the 8-byte word `value` at `addr` (an arena offset).
@@ -194,6 +223,7 @@ impl Allocator {
     /// is not entirely inside a live allocation.
     pub fn store(&mut self, addr: u64, value: u64) -> Result<(), RuntimeError> {
         self.check_access(addr)?;
+        self.ensure_memory(addr, 8);
         self.memory[addr as usize..addr as usize + 8].copy_from_slice(&value.to_le_bytes());
         Ok(())
     }
@@ -238,6 +268,7 @@ impl Allocator {
             return Err(RuntimeError::new(RuntimeErrorKind::InvalidSize, Some(size)));
         }
         let start = self.alloc(size + WORD_SIZE)?;
+        self.ensure_memory(start, WORD_SIZE);
         self.memory[start as usize..start as usize + 8].copy_from_slice(&size.to_le_bytes());
         Ok(start)
     }
@@ -250,9 +281,11 @@ impl Allocator {
     /// (`E-R05`).
     pub fn string_len(&self, s: u64) -> Result<u64, RuntimeError> {
         self.check_string(s)?;
-        Ok(u64::from_le_bytes(
-            self.memory[s as usize..s as usize + 8].try_into().unwrap(),
-        ))
+        let slice = self
+            .memory
+            .get(s as usize..s as usize + 8)
+            .unwrap_or(&[0u8; 8]);
+        Ok(u64::from_le_bytes(slice.try_into().unwrap()))
     }
 
     /// The byte at `index` of the string blob at `s`, bounds-checked
@@ -266,7 +299,11 @@ impl Allocator {
                 Some(index),
             ));
         }
-        Ok(self.memory[s as usize + 8 + index as usize])
+        Ok(self
+            .memory
+            .get(s as usize + 8 + index as usize)
+            .copied()
+            .unwrap_or(0))
     }
 
     /// Writes the byte `value` at `index` of the string blob at `s`,
@@ -280,6 +317,7 @@ impl Allocator {
                 Some(index),
             ));
         }
+        self.ensure_memory(s + 8 + index, 1);
         self.memory[s as usize + 8 + index as usize] = value;
         Ok(())
     }
@@ -400,9 +438,10 @@ mod tests {
     #[test]
     fn out_of_memory_is_reported() {
         let mut heap = Allocator::new();
-        // Two 512 KiB blocks fit (1 MiB arena); the third does not.
-        heap.alloc(HEAP_SIZE / 2).unwrap();
-        heap.alloc(HEAP_SIZE / 2).unwrap();
+        // Two half-capacity blocks fit; the third does not. The sparse
+        // backing store keeps this cheap even at the full logical size.
+        heap.alloc(HEAP_MAX_BYTES / 2).unwrap();
+        heap.alloc(HEAP_MAX_BYTES / 2).unwrap();
         assert_eq!(
             heap.alloc(16).unwrap_err().kind(),
             RuntimeErrorKind::OutOfMemory
@@ -530,7 +569,12 @@ mod tests {
         // Every live entry must fit exactly in LIVE_ENTRY_BYTES.
         assert_eq!(std::mem::size_of::<LiveEntry>(), 16);
         const _: () = assert!(crate::runtime::abi::LIVE_ENTRY_BYTES >= 16);
-        assert_eq!(HEAP_SIZE % ALLOC_ALIGNMENT, 0);
+        assert_eq!(HEAP_MAX_BYTES % ALLOC_ALIGNMENT, 0);
+        assert_eq!(HEAP_BSS_BYTES % ALLOC_ALIGNMENT, 0);
+        assert_eq!(
+            HEAP_MAX_BYTES % crate::runtime::abi::HEAP_COMMIT_CHUNK,
+            0
+        );
     }
 
     #[test]

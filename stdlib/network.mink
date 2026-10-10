@@ -15,6 +15,10 @@
 //   net_accept(sock) -> Int               Accept (new socket or -1).
 //   net_send(sock, data) -> Int            Send data (bytes sent or -1).
 //   net_recv(sock, maxlen) -> Str          Receive data (owned Str).
+//   net_sendto(sock, data, addr, port) -> Int  Send one datagram (unconnected).
+//   net_recvfrom(sock, maxlen) -> Str      Receive one datagram (unconnected).
+//   net_sender_ip() -> Str                 Last datagram sender (owned Str).
+//   net_sender_port() -> Int               Last datagram sender's port.
 //   net_close(sock) -> Int                 Close socket (0=ok, -1=error).
 //   net_shutdown(sock, how) -> Int         Shutdown (0=ok, -1=error).
 //   net_resolve(host, port) -> Str         Resolve host to IPv4 text (owned).
@@ -84,9 +88,13 @@ fn net_socket(af: Int, ty: Int, proto: Int) -> Int {
     return rt_net_socket(af, ty, proto);
 }
 
-// Connect to an IPv4 address and port.
-// addr is an IPv4 string like "127.0.0.1".
-// Returns 0 on success, -1 on error.
+// Connect to an address and port (Session 125).
+// addr may be an IPv4 literal like "127.0.0.1" or a host name like
+// "example.com"; host names are resolved with Winsock's getaddrinfo, the
+// same resolver net_resolve uses. Returns 0 on success, -1 on error.
+// A resolver failure is explicit: the call returns -1 and net_last_error()
+// then reports the resolver code (e.g. 11001, WSAHOST_NOT_FOUND), so a
+// failure can never be mistaken for a successful empty result.
 fn net_connect(sock: Int, addr: Str, port: Int) -> Int {
     let r = rt_net_connect(sock, addr, port);
     rt_str_free(addr);
@@ -132,6 +140,47 @@ fn net_send(sock: Int, data: Str) -> Int {
 // allocation every call and is never overwritten by a later net_recv.
 fn net_recv(sock: Int, maxlen: Int) -> Str {
     return rt_net_recv(sock, maxlen);
+}
+
+// --- Unconnected UDP (datagram) I/O ---------------------------------------
+//
+// `net_send`/`net_recv` work on a UDP socket only after `net_connect` has
+// picked a single peer. The two calls below are the unconnected form: one
+// socket can talk to many peers, and a received datagram carries the address
+// it came from.
+
+// Send `data` as one datagram to `addr`:`port` (IPv4 literal or host name —
+// the resolver runs exactly as it does for net_connect).
+// Returns the number of bytes sent, or -1 on failure; net_last_error() then
+// holds the reason (including the resolver code for a bad name).
+fn net_sendto(sock: Int, data: Str, addr: Str, port: Int) -> Int {
+    let r = rt_net_sendto(sock, data, addr, port);
+    rt_str_free(data);
+    rt_str_free(addr);
+    return r;
+}
+
+// Receive one datagram (blocking). `maxlen` is clamped to the runtime receive
+// buffer (4088 bytes), so a larger request is a bounded read rather than an
+// overrun. Winsock never truncates a datagram that does not fit: a too-small
+// `maxlen` fails with WSAEMSGSIZE (10040), which surfaces as an empty Str.
+// Returns an OWNED Str — empty on error, with net_last_error()
+// holding the reason — which the caller frees with rt_str_free.
+// The sender is available afterwards through net_sender_ip/net_sender_port.
+fn net_recvfrom(sock: Int, maxlen: Int) -> Str {
+    return rt_net_recvfrom(sock, maxlen);
+}
+
+// The source address of the last datagram received with net_recvfrom, as
+// dotted-quad IPv4 text (OWNED Str), or "" when no datagram was received yet.
+fn net_sender_ip() -> Str {
+    return rt_net_sender_ip();
+}
+
+// The source port of the last datagram received with net_recvfrom, in host
+// byte order, or -1 when no datagram was received yet.
+fn net_sender_port() -> Int {
+    return rt_net_sender_port();
 }
 
 // --- Lifecycle ---
@@ -204,7 +253,9 @@ fn net_is_ok(result: Int) -> Bool {
 }
 
 // Simple TCP connect helper: init + connect in one call.
-// Returns the connected socket, or -1 on error.
+// `addr` may be an IPv4 literal or a host name (see net_connect).
+// Returns the connected socket, or -1 on error (net_last_error() holds
+// the reason).
 fn net_dial(addr: Str, port: Int) -> Int {
     let init_result = net_init();
     if init_result != 0 {

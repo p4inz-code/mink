@@ -426,6 +426,70 @@ fn native_packed_bools_pass_and_return_through_slots() {
     assert_eq!(out, "505\n306");
 }
 
+#[test]
+fn native_bool_field_passed_to_a_call_stays_canonical() {
+    // Session 127 regression: reading a Bool out of an aggregate wrote only
+    // the field's byte into the destination local's 8-byte chunk and left
+    // the chunk's high bytes as whatever the frame held before. Passing
+    // that Bool to a function (`show(h)`), returning it, or comparing it
+    // reads the whole word, so a stale high byte turned `false` into a
+    // nonzero (true) value. `copy_into_slot` / `copy_static_into_slot` now
+    // zero the padding bytes of a partial chunk.
+    //
+    // The loop case is the one that failed before the fix: the reused frame
+    // carries nonzero words from the earlier call at the same depth, so the
+    // stale high bytes are not zero.
+    let out = output_of(
+        "fn my_index_of(s: Str, sub: Str) -> (Int, Str) {
+             let slen = rt_str_len(s);
+             let sublen = rt_str_len(sub);
+             let mut result = -1;
+             if sublen == 0 { result = 0; }
+             if sublen > slen { result = -1; }
+             rt_str_free(sub);
+             return (result, s);
+         }
+         fn my_contains(s: Str, sub: Str) -> (Bool, Str) {
+             let r = my_index_of(s, sub);
+             return (r.0 >= 0, r.1);
+         }
+         fn show(h: Bool) {
+             let o = rt_str_from_bool(h);
+             rt_print_str(o);
+             rt_str_free(o);
+             return 0;
+         }
+         fn caller_once(cell: Str, needle: Str) -> Int {
+             let (h, b) = my_contains(rt_str_concat(cell, \"\"), rt_str_concat(needle, \"\"));
+             show(h);
+             rt_str_free(b);
+             rt_str_free(cell);
+             rt_str_free(needle);
+             return 0;
+         }
+         fn caller_loop(cell: Str, needle: Str) -> Int {
+             let mut i = 0;
+             while i < 1 {
+                 let (h, b) = my_contains(rt_str_concat(cell, \"\"), rt_str_concat(needle, \"\"));
+                 show(h);
+                 rt_str_free(b);
+                 i = i + 1;
+             }
+             rt_str_free(cell);
+             rt_str_free(needle);
+             return 0;
+         }
+         fn main() -> Int {
+             rt_print_str(\"once:\");
+             caller_once(rt_str_concat(\"Paris\", \"\"), rt_str_concat(\"Berlin\", \"\"));
+             rt_print_str(\"loop:\");
+             caller_loop(rt_str_concat(\"Paris\", \"\"), rt_str_concat(\"Berlin\", \"\"));
+             return 0;
+         }",
+    );
+    assert_eq!(out, "once:\nfalse\nloop:\nfalse");
+}
+
 // ---------------------------------------------------------------------------
 // Native: module-scope statics with packed booleans
 // ---------------------------------------------------------------------------

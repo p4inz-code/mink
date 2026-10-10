@@ -71,21 +71,23 @@ fn hex_encode_byte(b: Int) -> Str {
 fn hash_digest_equal(a: Str, b: Str) -> Bool {
     let len_a = rt_str_len(a);
     let len_b = rt_str_len(b);
-    if len_a != len_b {
-        return false;
+    let mut equal = false;
+    if len_a == len_b {
+        let mut diff = 0;
+        let mut i = 0;
+        while i < len_a {
+            let ba = rt_str_byte(a, i);
+            let bb = rt_str_byte(b, i);
+            diff = diff | (ba ^ bb);
+            i = i + 1;
+        }
+        if diff == 0 {
+            equal = true;
+        }
     }
-    let mut diff = 0;
-    let mut i = 0;
-    while i < len_a {
-        let ba = rt_str_byte(a, i);
-        let bb = rt_str_byte(b, i);
-        diff = diff | (ba ^ bb);
-        i = i + 1;
-    }
-    if diff == 0 {
-        return true;
-    }
-    return false;
+    rt_str_free(a);
+    rt_str_free(b);
+    return equal;
 }
 
 // ============================================================

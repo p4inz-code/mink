@@ -513,3 +513,140 @@ fn monomorphized_literal_shared_across_instantiations() {
         10
     );
 }
+
+// ===========================================================================
+// TYPE-ARGUMENT INFERENCE FROM VARIABLES
+// ===========================================================================
+//
+// `infer_type_from_expr` used to return a type only for literal arguments,
+// so `pick_first(x, y)` with ordinary variables left the call generic.
+// Monomorphization then removed the generic declaration, and the call failed
+// as a misleading unresolved name (`E-S01: cannot find name pick_first`)
+// instead of instantiating `pick_first__Int`.
+
+#[test]
+fn generic_inference_from_annotated_variables() {
+    let report = check_source(
+        "fn pick_first<T>(a: T, b: T) -> T { return a; }
+         fn main() {
+             let x: Int = 10;
+             let y: Int = 20;
+             let r = pick_first(x, y);
+             return 0;
+         }",
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+#[test]
+fn generic_inference_from_inferred_variables() {
+    let report = check_source(
+        "fn pick_first<T>(a: T, b: T) -> T { return a; }
+         fn main() {
+             let x = 10;
+             let y = 20;
+             let r = pick_first(x, y);
+             return 0;
+         }",
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+#[test]
+fn generic_inference_from_variable_rebinding() {
+    let report = check_source(
+        "fn pick_first<T>(a: T, b: T) -> T { return a; }
+         fn main() {
+             let x = 10;
+             let z = x;
+             let y = 20;
+             let r = pick_first(z, y);
+             return 0;
+         }",
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+#[test]
+fn generic_inference_from_arithmetic_variable() {
+    let report = check_source(
+        "fn pick_first<T>(a: T, b: T) -> T { return a; }
+         fn main() {
+             let x = 10;
+             let y = x + 1;
+             let r = pick_first(y, x);
+             return 0;
+         }",
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+#[test]
+fn generic_inference_from_function_result() {
+    let report = check_source(
+        "fn make() -> Int { return 7; }
+         fn pick_first<T>(a: T, b: T) -> T { return a; }
+         fn main() {
+             let x = make();
+             let y = 20;
+             let r = pick_first(x, y);
+             return 0;
+         }",
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+#[test]
+fn generic_inference_from_function_parameter() {
+    let report = check_source(
+        "fn pick_first<T>(a: T, b: T) -> T { return a; }
+         fn use_param(x: Int) -> Int { return pick_first(x, x); }
+         fn main() { return use_param(1); }",
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+#[test]
+fn generic_inference_native_variables() {
+    assert_eq!(
+        native_exit_code(
+            "fn pick_first<T>(a: T, b: T) -> T { return a; }
+             fn main() -> Int {
+                 let x = 10;
+                 let y = 20;
+                 let r = pick_first(x, y);
+                 if r == 10 { return 42; }
+                 return 1;
+             }"
+        ),
+        42
+    );
+}
+
+#[test]
+fn generic_turbofish_still_works_with_variables() {
+    let report = check_source(
+        "fn pick_first<T>(a: T, b: T) -> T { return a; }
+         fn main() {
+             let x = 10;
+             let y = 20;
+             let r = pick_first::<Int>(x, y);
+             return 0;
+         }",
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+#[test]
+fn generic_struct_inference_from_variables() {
+    let report = check_source(
+        "struct Pair<T> { first: T, second: T }
+         fn main() {
+             let a = 10;
+             let b = 20;
+             let p = Pair { first: a, second: b };
+             return 0;
+         }",
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}

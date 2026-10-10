@@ -35,7 +35,9 @@
 //! - every live allocation is recorded in a bounded liveness table
 //!   ([`MAX_LIVE_ALLOCS`] entries); invalid operations are detected
 //!   against the table and reported as runtime errors (`E-R02`…`E-R08`);
-//! - the heap is exhausted when the bump cursor reaches [`HEAP_SIZE`]
+//! - on Windows the heap continues past the `.bss` prefix into a lazily
+//!   reserved, chunk-committed growth region up to [`HEAP_MAX_BYTES`], and
+//!   the heap is exhausted when the bump cursor would cross that limit
 //!   (`E-R02`).
 //!
 //! ## Process lifecycle
@@ -55,13 +57,44 @@ pub const WORD_SIZE: u64 = 8;
 /// The alignment (and minimum rounded size) of every heap allocation.
 pub const ALLOC_ALIGNMENT: u64 = 16;
 
-/// The size of the runtime heap arena, in bytes. Fixed at compile time so
-/// allocation is deterministic and needs no operating-system interaction.
-// 4 MiB arena. The HTTP receive path buffers up to `MAX_BODY` (1 MiB)
-// plus framing slack and copies it once into an exact-length result, so
-// the arena must hold roughly twice a maximum body plus live network
-// chunks; the original 1 MiB arena could not fit even one such buffer.
-pub const HEAP_SIZE: u64 = 4 * 1024 * 1024;
+/// The size of the runtime heap arena that lives in the image's `.bss`
+/// section, in bytes. This is the initial, pre-committed part of the
+/// Windows heap; allocations that fit here need no operating-system
+/// interaction (Session 125).
+// 4 MiB .bss prefix. The HTTP receive path buffers up to `MAX_BODY`
+// (1 MiB) plus framing slack and copies it once into an exact-length
+// result, so the prefix must hold roughly twice a maximum body plus live
+// network chunks; the original 1 MiB arena could not fit even one such
+// buffer. Everything beyond the prefix is committed on demand from the
+// growth region (see [`HEAP_MAX_BYTES`]).
+pub const HEAP_BSS_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The maximum size of the Windows heap, in bytes: the `.bss` prefix plus
+/// the growth region. The growth region is reserved lazily on first use
+/// (one `VirtualAlloc(MEM_RESERVE)` of [`HEAP_GROWTH_RESERVE`] bytes) and
+/// committed on demand in [`HEAP_COMMIT_CHUNK`]-sized steps, so a program
+/// only pays for the memory it actually allocates. A bump that would
+/// cross this limit is `E-R02`; a failed commit is also `E-R02`, so
+/// allocation failure stays diagnosable.
+pub const HEAP_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// The reserved-but-uncommitted growth region, in bytes (everything above
+/// the `.bss` prefix).
+pub const HEAP_GROWTH_RESERVE: u64 = HEAP_MAX_BYTES - HEAP_BSS_BYTES;
+
+/// The commit granularity of the growth region, in bytes. A bump that
+/// crosses the committed frontier commits at least this much.
+pub const HEAP_COMMIT_CHUNK: u64 = 1024 * 1024;
+
+/// The per-stream capacity of the stdio capture region, in bytes. The
+/// region is three consecutive windows of this size (stdin, stdout,
+/// stderr); each window holds an 8-byte length prefix followed by data.
+/// Reading or capturing past the window is a structured `E-R02` — never a
+/// silent truncation.
+pub const STDIO_CAPTURE_WINDOW_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The total size of the stdio capture region (three windows).
+pub const STDIO_CAPTURE_BYTES: u64 = STDIO_CAPTURE_WINDOW_BYTES * 3;
 
 /// The maximum number of simultaneously live allocations. The liveness
 /// table is a fixed-size array, so the bound is part of the ABI.
@@ -211,6 +244,34 @@ pub struct RuntimeLayout {
     /// A task runs on a real OS thread; its completion releases one
     /// semaphore token. `rt_task_await`/`rt_task_run` consume tokens.
     pub task_loop: u64,
+    // --- Session 125: growable heap (Windows) ---
+    /// Base address of the lazily reserved growth region (0 until the
+    /// first allocation that crosses [`HEAP_BSS_BYTES`]). Reserved with
+    /// `VirtualAlloc(MEM_RESERVE)` and committed in chunks.
+    pub heap_base: u64,
+    /// Bytes of the growth region committed so far.
+    pub heap_committed: u64,
+    // --- Session 125: extended ws2_32 function table ---
+    /// Second function-pointer table for ws2_32 entry points added after
+    /// Session 67: `WSASetLastError`, `getsockopt`, `sendto`, `recvfrom`
+    /// (4 × 8 = 32 bytes). Keeping it separate leaves every earlier BSS
+    /// offset unchanged.
+    pub net_func_table2: u64,
+    /// Base of the stdio capture region (Windows): one lazily reserved and
+    /// committed 24 MiB block holding three [`STDIO_CAPTURE_WINDOW_BYTES`]
+    /// windows — stdin, captured stdout, captured stderr, in that order —
+    /// so large standard I/O and process capture no longer hit the old
+    /// fixed 4 KiB/64 KiB buffers. 0 until the first use. The region is
+    /// runtime-owned scratch: it is not part of the heap liveness table,
+    /// and callers receive copies (stdin) or borrowed views (process
+    /// output).
+    pub stdio_capture_base: u64,
+    /// The `sockaddr_in` of the datagram sender of the last `rt_net_recvfrom`
+    /// call (16 bytes), written by `recvfrom` itself. `rt_net_sender_ip` and
+    /// `rt_net_sender_port` read it; before the first datagram the family word
+    /// is zero, which both accessors report as "no sender". Appended last so
+    /// every earlier BSS offset is unchanged.
+    pub net_sender_sockaddr: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -234,24 +295,24 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
     proc_stderr_ptr: 1456,
     proc_stderr_len: 1464,
     arena: 1488,
-    table: 1488 + HEAP_SIZE,
+    table: 1488 + HEAP_BSS_BYTES,
     // Output buffers after liveness table (Session 62)
-    stdout_buf: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES,
-    stderr_buf: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096,
+    stdout_buf: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES,
+    stderr_buf: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096,
     // --- Networking (Session 67) ---
-    wsa_initialized: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2,
-    ws2_dll_handle: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 8,
-    net_func_table: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16,
-    recv_buf: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8,
+    wsa_initialized: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096 * 2,
+    ws2_dll_handle: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096 * 2 + 8,
+    net_func_table: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096 * 2 + 16,
+    recv_buf: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8,
     // Crypto BSS after networking
-    bcrypt_dll_handle: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096,
-    crypto_func_table: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8,
+    bcrypt_dll_handle: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096,
+    crypto_func_table: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8,
     // --- Random (Session 73) ---
-    rng_state: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24,
+    rng_state: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24,
     // --- Environment (Session 73) ---
-    env_storage: 1488 + HEAP_SIZE + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24 + 8,
+    env_storage: 1488 + HEAP_BSS_BYTES + LIVE_TABLE_BYTES + 4096 * 2 + 16 + 17 * 8 + 4096 + 8 + 24 + 8,
     env_ptr: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -265,7 +326,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
     // argv_ready / argv_count / argv_table(64×16) / arg_data(4096) /
     // stdin_buf(65536) / write_redirect / float_sink(80)
     argv_ready: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -277,7 +338,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 4096
         + 8,
     argv_count: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -290,7 +351,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 8,
     argv_table: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -303,7 +364,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 16,
     arg_data: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -317,7 +378,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 16
         + 64 * 16,
     stdin_buf: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -332,7 +393,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 64 * 16
         + 4096,
     write_redirect: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -348,7 +409,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 4096
         + 65536,
     float_sink: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -365,7 +426,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 65536
         + 8,
     fail_loc: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -383,7 +444,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80,
     rt_lock: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -402,7 +463,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 80
         + 8,
     net_poll_fn: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -421,7 +482,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 80
         + 16,
     net_ioctl_fn: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -440,7 +501,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 80
         + 24,
     net_name_buf: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -459,7 +520,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 80
         + 32,
     task_loop: 1488
-        + HEAP_SIZE
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -477,8 +538,8 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 96,
-    size: 1488
-        + HEAP_SIZE
+    heap_base: 1488
+        + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
         + 16
@@ -496,6 +557,101 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 128,
+    heap_committed: 1488
+        + HEAP_BSS_BYTES
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 136,
+    net_func_table2: 1488
+        + HEAP_BSS_BYTES
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 144,
+    stdio_capture_base: 1488
+        + HEAP_BSS_BYTES
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 176,
+    net_sender_sockaddr: 1488
+        + HEAP_BSS_BYTES
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 184,
+    size: 1488
+        + HEAP_BSS_BYTES
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 200,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

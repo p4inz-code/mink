@@ -137,6 +137,34 @@ fn join_bounded<T: Send + 'static>(handle: std::thread::JoinHandle<T>, what: &st
     }
 }
 
+/// Runs an executable with `input` on its stdin pipe, returns
+/// (exit_code, stdout, stderr).
+///
+/// The write happens on a helper thread with a bound so a child that never
+/// drains its pipe fails the test in bounded time instead of deadlocking the
+/// whole target; the pipe is closed before the read so the child sees EOF.
+fn run_exe_with_stdin(exe: &Path, input: &[u8]) -> (i32, String, String) {
+    let mut child = Command::new(exe)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn exe");
+    let mut stdin = child.stdin.take().expect("child stdin");
+    let payload = input.to_vec();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&payload);
+        drop(stdin);
+    });
+    let output = child.wait_with_output().expect("wait for child");
+    join_bounded(writer, "stdin writer");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
 // =========================================================================
 // Allocator / memory hardening (Phase 2)
 // =========================================================================
@@ -632,6 +660,74 @@ fn main() {{
     assert_eq!(code, 0, "udp round trip failed: {err}");
 }
 
+/// The same round trip over an UNCONNECTED socket, which is the path
+/// `net_sendto` / `net_recvfrom` exist for: no `net_connect`, every datagram
+/// addressed explicitly, and the sender of the reply reported back through
+/// `net_sender_ip` / `net_sender_port`. Both directions are checked against
+/// ground truth — the Rust peer asserts MINK's source port is the bound one,
+/// and MINK asserts the reply's source address and port are the peer's — so a
+/// byte-swapped or stale sender record fails the test.
+#[test]
+fn udp_unconnected_sendto_recvfrom_round_trip() {
+    let mink_port = free_port();
+    let peer_port = free_port();
+
+    let sock = UdpSocket::bind(("127.0.0.1", peer_port)).expect("bind udp peer");
+    let peer = std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        let (n, from) = sock.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"mink-datagram");
+        assert_eq!(from.ip().to_string(), "127.0.0.1");
+        assert_eq!(from.port(), mink_port, "sendto must use the bound port");
+        sock.send_to(b"rust-datagram", from).unwrap();
+    });
+
+    let body = format!(
+        r#"
+fn main() {{
+    if net_init() != 0 {{ rt_exit(10); }}
+    let sock = net_udp_socket();
+    if sock == -1 {{ rt_exit(11); }}
+    if net_bind(sock, "127.0.0.1", {mink_port}) != 0 {{ rt_exit(12); }}
+
+    let sent = net_sendto(sock, "mink-datagram", "127.0.0.1", {peer_port});
+    if sent != 13 {{ rt_exit(13); }}
+
+    let data = net_recvfrom(sock, 2048);
+    let len = rt_str_len(data);
+    let exp = "rust-datagram";
+    let mut good = 1;
+    let mut i = 0;
+    while i < len {{
+        if rt_str_byte(data, i) != rt_str_byte(exp, i) {{ good = 0; }}
+        i = i + 1;
+    }}
+    rt_str_free(data);
+
+    let sip = net_sender_ip();
+    let ip_len = rt_str_len(sip);
+    let mut ip_ok = 1;
+    if ip_len != 9 {{ ip_ok = 0; }}
+    let mut j = 0;
+    while j < ip_len {{
+        if rt_str_byte(sip, j) != rt_str_byte("127.0.0.1", j) {{ ip_ok = 0; }}
+        j = j + 1;
+    }}
+    rt_str_free(sip);
+    let sport = net_sender_port();
+
+    net_close(sock);
+    net_cleanup();
+    if len == 13 && good == 1 && ip_ok == 1 && sport == {peer_port} {{ rt_exit(0); }}
+    rt_exit(14);
+}}
+"#
+    );
+    let (code, _out, err) = build_and_run(&["network.mink"], &body, "udp_sendto");
+    join_bounded(peer, "udp unconnected peer");
+    assert_eq!(code, 0, "unconnected udp round trip failed: {err}");
+}
+
 /// Every net intrinsic must fail cleanly (socket -1, recv/hostname empty
 /// string) when called BEFORE net_init() — previously this faulted through a
 /// NULL Winsock function pointer. The program must exit 0 with no crash and
@@ -925,10 +1021,10 @@ fn http_windows_split_server_multi_recv_and_errors() {
     let source = HTTP_CLIENT_SRC
         .replace("{PORT}", &port.to_string())
         .replace("{PORT2}", &refused_port.to_string());
-    let mut full = stdlib_file("network.mink");
-    full.push('\n');
-    full.push_str(&stdlib_file("http.mink"));
-    full.push('\n');
+    // `http.mink` declares its own `mod network;`, so importing it pulls the
+    // TCP layer in transitively — concatenating both files by hand would
+    // define every `net_*` name twice.
+    let mut full = String::from("mod http;\n");
     full.push_str(&source);
     let exe = build_win(&full, "http_client");
     let (code, _out, err) = run_exe(&exe);
@@ -1008,10 +1104,9 @@ fn main() {{
 }}
 "#
     );
-    let mut full = stdlib_file("network.mink");
-    full.push('\n');
-    full.push_str(&stdlib_file("http.mink"));
-    full.push('\n');
+    // `http.mink` declares its own `mod network;` — see the note in
+    // `http_windows_split_server_multi_recv_and_errors`.
+    let mut full = String::from("mod http;\n");
     full.push_str(&source);
     let exe = build_win(&full, "http_big");
     let (code, _out, err) = run_exe(&exe);
@@ -1125,10 +1220,9 @@ fn main() {{
 }}
 "#
     );
-    let mut full = stdlib_file("network.mink");
-    full.push('\n');
-    full.push_str(&stdlib_file("http.mink"));
-    full.push('\n');
+    // `http.mink` declares its own `mod network;` — see the note in
+    // `http_windows_split_server_multi_recv_and_errors`.
+    let mut full = String::from("mod http;\n");
     full.push_str(&source);
     let exe = build_win(&full, "http_post");
     let (code, _out, err) = run_exe(&exe);
@@ -1183,4 +1277,97 @@ fn main() {
     let code = output.status.code().unwrap_or(-1);
     let _ = std::fs::remove_file(&exe);
     assert_eq!(code, 0, "env behavior mismatch: {cmd:?}");
+}
+
+// =========================================================================
+// Large-transfer hardening (session 125)
+// =========================================================================
+
+/// `rt_stdin_read` must drain a pipe far larger than one 4 KiB read, and the
+/// returned `Str` must be exactly as long as the bytes delivered.
+///
+/// A short-read implementation would return the first chunk only, so the
+/// length check (200 000 > 64 KiB, past several pipe-buffer refills) is the
+/// assertion; the first and last byte checks confirm the buffer is not
+/// padded with garbage at either end.
+#[test]
+fn stdin_read_drains_more_than_64_kib() {
+    let body = r#"
+fn main() -> Int {
+    let input = rt_stdin_read();
+    let len = rt_str_len(input);
+    if len < 100000 { return 1; }
+    // The fixture is a run of 'A' bytes.
+    if rt_str_byte(input, 0) != 65 { return 2; }
+    if rt_str_byte(input, len - 1) != 65 { return 3; }
+    rt_str_free(input);
+    return 42;
+}
+"#;
+    let exe = build_win(body, "stdin_big");
+    let payload = vec![b'A'; 200_000];
+    let (code, out, err) = run_exe_with_stdin(&exe, &payload);
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(code, 42, "200 KiB on stdin: {out}{err}");
+}
+
+/// A captured child process must hold more than 4 KiB of output, and a
+/// second run must **overwrite** the capture rather than append to it.
+///
+/// The 2000-line command produces about 82 KiB, so a fixed 4 KiB capture
+/// buffer would truncate it; the second run is the regression for a buffer
+/// that is grown but never reset between runs.
+#[test]
+fn process_capture_holds_more_than_4_kib_and_resets_per_run() {
+    let body = r#"
+fn main() -> Int {
+    let code = rt_process_run("for /L %i in (1,1,2000) do @echo 0123456789012345678901234567890123456789");
+    if code != 0 { return 9; }
+    let out = rt_process_stdout();
+    let len = rt_process_stdout_len();
+    if len < 80000 { return 1; }
+    if rt_str_len(out) != len { return 2; }
+    if rt_str_byte(out, 0) != 48 { return 3; }
+    if rt_str_byte(out, len - 1) != 10 { return 4; }
+
+    // A second run must overwrite the capture rather than accumulate.
+    let code2 = rt_process_run("echo second");
+    if code2 != 0 { return 5; }
+    if rt_process_stdout_len() >= len { return 6; }
+    return 42;
+}
+"#;
+    let exe = build_win(body, "proc_big");
+    let (code, out, err) = run_exe(&exe);
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(code, 42, "large process capture: {out}{err}");
+}
+
+/// The heap must grow past its initial arena to serve a 6 MiB allocation,
+/// and the block must be writable at both ends.
+///
+/// A fixed-size arena would fault with `E-R05` here; the byte writes prove
+/// the grown block is real memory rather than an over-committed mapping.
+#[test]
+fn heap_grows_to_serve_a_six_mib_allocation() {
+    let body = r#"
+fn main() -> Int {
+    let size = 6 * 1024 * 1024;
+    let s = rt_str_alloc(size);
+    rt_str_set_byte(s, 0, 65);
+    rt_str_set_byte(s, size - 1, 90);
+    let len = rt_str_len(s);
+    let b1 = rt_str_byte(s, 0);
+    let b2 = rt_str_byte(s, size - 1);
+    rt_str_free(s);
+    if len == size { return 42; }
+    if b1 != 65 { return 2; }
+    if b2 != 90 { return 3; }
+    return 1;
+}
+"#;
+    let exe = build_win(body, "heap_grow");
+    let (code, out, err) = run_exe(&exe);
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(code, 42, "6 MiB allocation: {out}{err}");
 }

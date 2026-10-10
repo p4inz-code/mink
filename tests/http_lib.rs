@@ -15,10 +15,6 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-fn net_lib() -> String {
-    std::fs::read_to_string("stdlib/network.mink").expect("failed to read stdlib/network.mink")
-}
-
 fn http_lib() -> String {
     std::fs::read_to_string("stdlib/http.mink").expect("failed to read stdlib/http.mink")
 }
@@ -34,9 +30,10 @@ fn temp_source(name: &str, content: &str) -> PathBuf {
 }
 
 fn build_and_run(test_body: &str) -> (i32, Vec<u8>, Vec<u8>) {
+    // `stdlib/http.mink` declares `mod network;`, so the module loader pulls
+    // in the network dependency itself (resolved from the bundled
+    // `stdlib/`); the test no longer concatenates it by hand.
     let mut source = String::new();
-    source.push_str(&net_lib());
-    source.push('\n');
     source.push_str(&http_lib());
     source.push('\n');
     source.push_str(test_body);
@@ -582,9 +579,7 @@ fn main() -> Int {
     return 0;
 }"#;
     assert_eq!(native_exit_code(src), 1);
-}
-
-#[test]
+}#[test]
 fn h35_header_value_with_space() {
     let src = r#"
 fn main() -> Int {
@@ -594,6 +589,128 @@ fn main() -> Int {
     rt_str_free(val);
     if len == 13 { return 1; }
     return 0;
-}"#;
+}
+"#;
+    assert_eq!(native_exit_code(src), 1);
+}
+
+// ==========================================================================
+// SECTION 9: live request against a local fixture server (Session 125)
+// ==========================================================================
+//
+// The rest of this file parses hand-written responses, which never exercises
+// the socket path. These two cases drive `http_client_get` end to end against
+// a server that lives in the test program itself: a thread bound before the
+// client connects, so there is no timing race and no external dependency.
+
+#[test]
+fn h40_client_get_by_host_name() {
+    // URL parsing, host-name resolution (getaddrinfo), connect, send, receive
+    // and status parsing in one request. The URL carries a host name, not an
+    // IPv4 literal, so the resolver path is part of what is verified.
+    let src = r#"
+mod threads;
+
+fn fixture(p: Ptr<Int>) -> Int {
+    let listener = rt_mem_load(p);
+    let client = net_accept(listener);
+    if client == -1 { return 0; }
+    let request = net_recv(client, 1024);
+    rt_str_free(request);
+    net_send(client, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+    net_shutdown(client, SD_BOTH());
+    net_close(client);
+    return 1;
+}
+
+fn main() -> Int {
+    // Windows reserves whole port ranges (WSL/Hyper-V excluded ranges), so a
+    // hardcoded port can fail to bind with WSAEACCES (10013). Try a few
+    // candidates and use the first that binds.
+    let ports = [19881, 19081, 21081, 25081, 17081, 16081];
+    let mut listener = -1;
+    let mut port = 0;
+    let mut i = 0;
+    while i < 6 && listener == -1 {
+        let candidate = net_listen_on("127.0.0.1", ports[i], 1);
+        if candidate != -1 {
+            listener = candidate;
+            port = ports[i];
+        }
+        i = i + 1;
+    }
+    if listener == -1 { return 2; }
+    let p = rt_alloc(8);
+    rt_mem_store(p, listener);
+    let t = thread_spawn(fixture, p);
+    let host = rt_str_from_int(port);
+    let url = rt_str_concat("http://localhost:", host);
+    rt_str_free(host); // rt_str_concat borrows its arguments
+    let response = http_client_get(url);
+    let code = http_status_code(response);
+    let err = http_last_error();
+    let served = thread_join(t);
+    rt_free(p);
+    net_close(listener);
+    if code == 200 && err == 0 && served == 1 { return 1; }
+    return 4;
+}
+"#;
+    assert_eq!(native_exit_code(src), 1);
+}
+
+#[test]
+fn h42_client_get_initializes_winsock_standalone() {
+    // Session 127: `http_client_get` must initialize Winsock itself. In a
+    // fresh program with no in-program server — nothing else calls
+    // `net_init` — the request used to fail with a socket error because
+    // `http_send` called `net_tcp_socket` before any WSAStartup. The stdlib
+    // client now calls `net_init` in `http_send`, so the standalone client is
+    // a complete entry point as its own header documents.
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf);
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+            let _ = stream.flush();
+        }
+    });
+
+    let src = format!(
+        r#"
+fn main() -> Int {{
+    let response = http_client_get("http://127.0.0.1:{port}/x");
+    let code = http_status_code(response);
+    if code == 200 {{ return 42; }}
+    return 0;
+}}
+"#,
+        port = port
+    );
+    assert_eq!(native_exit_code(&src), 42);
+    let _ = server.join();
+}
+
+#[test]
+fn h41_client_get_refused_reports_error() {
+    // The failure model: a request that cannot connect returns an empty
+    // string and leaves the reason in http_last_error() (WSAECONNREFUSED),
+    // so an empty result is never mistaken for a successful empty response.
+    let src = r#"
+fn main() -> Int {
+    let response = http_client_get("http://localhost:19996/nothing");
+    let len = rt_str_len(response);
+    rt_str_free(response);
+    let err = http_last_error();
+    if len == 0 && err != 0 { return 1; }
+    return 0;
+}
+"#;
     assert_eq!(native_exit_code(src), 1);
 }

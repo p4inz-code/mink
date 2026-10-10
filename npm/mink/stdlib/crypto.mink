@@ -11,6 +11,11 @@
 //   User-defined functions DO consume Str parameters (MINK move semantics).
 //   This library is carefully structured to only pass freshly-allocated strings
 //   to user functions.
+//
+// MODULE DEPENDENCIES:
+//   `hash_sha256` (`stdlib/hashing.mink`) is declared below, so the module
+//   loader pulls in the dependency: a user only needs `mod crypto;`.
+mod hashing;
 
 // ============================================================
 // CRYPTO INIT
@@ -85,10 +90,10 @@ fn crypto_verify(a: Str, b: Str) -> Bool {
         diff = diff | (ba ^ bb);
         i = i + 1;
     }
-    if diff == 0 {
-        return true;
-    }
-    return false;
+    let equal = diff == 0;
+    rt_str_free(a);
+    rt_str_free(b);
+    return equal;
 }
 
 // ============================================================
@@ -114,6 +119,7 @@ fn _hex_to_raw(hex_str: Str) -> Str {
         rt_str_set_byte(raw, i, hi * 16 + lo);
         i = i + 1;
     }
+    rt_str_free(hex_str);
     return raw;
 }
 
@@ -137,6 +143,7 @@ fn _raw_to_hex(raw_str: Str) -> Str {
         rt_str_set_byte(hex, i * 2 + 1, lo + lo_digit);
         i = i + 1;
     }
+    rt_str_free(raw_str);
     return hex;
 }
 
@@ -161,10 +168,19 @@ fn hmac_sha256(key: Str, message: Str) -> Str {
         }
         i = i + 1;
     }
-    // Now handle key > 64: hash key, then copy hash into key_block
+    // Now handle key > 64: hash the key, then copy the hash into key_block.
+    // `hash_sha256` consumes its argument, so it is given a copy: the
+    // original `key` is released exactly once at the end (V1 ownership is
+    // not path-sensitive, so a conditional release would be a move for the
+    // rest of the function).
     if key_len > 64 {
-        // key consumed by hash_sha256
-        let key_hex = hash_sha256(key);
+        let key_copy = rt_str_alloc(key_len);
+        i = 0;
+        while i < key_len {
+            rt_str_set_byte(key_copy, i, rt_str_byte(key, i));
+            i = i + 1;
+        }
+        let key_hex = hash_sha256(key_copy);
         let hashed_raw = _hex_to_raw(key_hex);
         i = 0;
         while i < 32 {
@@ -218,6 +234,8 @@ fn hmac_sha256(key: Str, message: Str) -> Str {
 
     // hash_sha256 consumes outer
     let result = hash_sha256(outer);
+    rt_str_free(key);
+    rt_str_free(message);
     return result;
 }
 
@@ -328,6 +346,8 @@ fn hkdf_expand(prk_raw: Str, info: Str, length: Int) -> Str {
         block = block + 1;
     }
     rt_str_free(prev_raw);
+    rt_str_free(prk_raw);
+    rt_str_free(info);
     return result;
 }
 

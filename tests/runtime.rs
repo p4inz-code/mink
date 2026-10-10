@@ -157,7 +157,11 @@ fn double_free_is_e_ro4() {
 }
 
 #[test]
-fn heap_exhaustion_is_e_ro2() {
+fn heap_grows_beyond_the_initial_arena() {
+    // Session 125: the Windows heap is no longer capped at the 4 MiB `.bss`
+    // prefix. The bump allocator reserves a growth region lazily and commits
+    // it in chunks, so allocations past the initial arena succeed and the
+    // program exits cleanly.
     let exe = build(
         "fn main() {
             let a = rt_alloc(2097152);
@@ -170,7 +174,17 @@ fn heap_exhaustion_is_e_ro2() {
         }",
     );
     let (code, _) = run(&exe);
-    assert_eq!(code, 102, "exhausting the 4 MiB arena is E-R02");
+    assert_eq!(code, 0, "the heap grows past the initial 4 MiB arena");
+}
+
+#[test]
+fn heap_exhaustion_is_e_ro2() {
+    // A request past the growth ceiling (`HEAP_MAX_BYTES`, 1 GiB) is E-R02.
+    // The ceiling is checked before anything is reserved or committed, so the
+    // program never touches the memory.
+    let exe = build("fn main() { let a = rt_alloc(1073742336); return 0; }");
+    let (code, _) = run(&exe);
+    assert_eq!(code, 102, "an allocation past HEAP_MAX_BYTES is E-R02");
 }
 
 #[test]

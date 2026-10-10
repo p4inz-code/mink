@@ -502,3 +502,29 @@ fn main() -> Int {
 fn multiple_independent_parses() {
     assert_multi_parse(&["null", "true", "42", "\"abc\"", "[]", "{}"]);
 }
+
+// =========================================================================
+// Session 127: insignificant whitespace
+// =========================================================================
+
+#[test]
+fn object_members_allow_whitespace_between_tokens() {
+    // The object parser consumed `,` without skipping the whitespace that
+    // follows, so a pretty-printed document (`{ "a": 1, "b": 2 }`) was
+    // rejected while its compact twin parsed — the very form `json.dump`
+    // emits by default. Regression for the H validation milestone.
+    assert_parse_ok(r#"{"a": 1, "b": 2}"#);
+    assert_parse_ok(r#"{ "a" : 1 , "b" : 2 }"#);
+    assert_parse_ok("{\n  \"a\": 1,\n  \"b\": 2\n}");
+    assert_parse_ok("{\t\"a\":\t1,\t\"b\":\t2\t}");
+    assert_parse_ok(r#"{"a": {"b": 1, "c": 2}, "d": [1, 2]}"#);
+    assert_parse_ok("{\r\n  \"root\": \"x\",\r\n  \"out\": \"y\",\r\n  \"extensions\": [\".txt\", \".log\"]\r\n}");
+}
+
+#[test]
+fn object_members_still_reject_garbage_after_comma() {
+    // The whitespace fix must not make the parser permissive.
+    assert_parse_err(r#"{"a": 1, }"#);
+    assert_parse_err(r#"{"a": 1 "b": 2}"#);
+    assert_parse_err(r#"{,}"#);
+}

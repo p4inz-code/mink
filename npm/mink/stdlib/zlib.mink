@@ -399,6 +399,7 @@ fn _z_fill(t: Ptr<Int>, at: Int, spec: Str) {
         }
         i = i + 1;
     }
+    rt_str_free(spec);
 }
 
 /// _z_fill_tables(t): write the static RFC 1951 tables into `t`.

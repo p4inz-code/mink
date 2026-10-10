@@ -2089,6 +2089,7 @@ impl<'a> Lowerer<'a> {
             "rt_free_cstr" => RuntimeService::FreeCstr,
             // --- Process (Session 59) ---
             "rt_process_run" => RuntimeService::ProcessRun,
+            "rt_process_run_input" => RuntimeService::ProcessRunInput,
             "rt_process_stdout" => RuntimeService::ProcessStdout,
             "rt_process_stderr" => RuntimeService::ProcessStderr,
             "rt_process_stdout_len" => RuntimeService::ProcessStdoutLen,
@@ -2130,6 +2131,11 @@ impl<'a> Lowerer<'a> {
             "rt_net_freeaddrinfo" => RuntimeService::NetFreeAddrInfo,
             "rt_net_gethostname" => RuntimeService::NetGetHostName,
             "rt_net_htons" => RuntimeService::NetHtons,
+            // --- Unconnected UDP (Session 126) ---
+            "rt_net_sendto" => RuntimeService::NetSendTo,
+            "rt_net_recvfrom" => RuntimeService::NetRecvFrom,
+            "rt_net_sender_port" => RuntimeService::NetSenderPort,
+            "rt_net_sender_ip" => RuntimeService::NetSenderIp,
             // --- Crypto (Session 71) ---
             "rt_crypto_init" => RuntimeService::CryptoInit,
             "rt_crypto_random_bytes" => RuntimeService::CryptoRandomBytes,

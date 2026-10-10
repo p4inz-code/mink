@@ -342,3 +342,71 @@ fn closure_native_capture_with_three_leading_blank_lines() {
         42,
     );
 }
+
+// =========================================================================
+// Nested closures
+// =========================================================================
+
+/// A closure defined inside another closure's body must be desugared and
+/// callable like any other closure. It used to pass `check` and fail the
+/// backend (`E-B06`), so `check` and `build` disagreed about a valid
+/// program.
+#[test]
+fn closure_native_nested_definition() {
+    assert_exit_code(
+        "fn main() { let f = |x: Int| { let g = |y: Int| x + y; g(5) }; let r = f(10); return r; }",
+        15,
+    );
+}
+
+/// The nested closure captures its enclosing closure's parameter, which is
+/// a parameter of the generated outer function.
+#[test]
+fn closure_native_nested_captures_outer_param() {
+    assert_exit_code(
+        "fn main() -> Int { let f = |x: Int| { let g = |y: Int| x * y; g(4) }; return f(10); }",
+        40,
+    );
+}
+
+/// `check` and `build` must agree: a nested-closure program accepted by the
+/// checker must also build and run. They used to disagree (check passed,
+/// build failed `E-B06`).
+#[test]
+fn closure_nested_check_and_build_agree() {
+    let src = "fn main() { let f = |x: Int| { let g = |y: Int| x + y; g(5) }; let r = f(10); return r; }";
+    assert_check_ok(src);
+    assert_exit_code(src, 15);
+}
+
+/// A closure body may call a capturing closure declared in the enclosing
+/// function. The captured values must be threaded through the generated
+/// function; they used to be missing, so the call failed as `E-T05` even
+/// though the program is valid.
+#[test]
+fn closure_native_body_calls_capturing_closure() {
+    assert_exit_code(
+        "fn main() -> Int { let base = 10; let add_base = |x: Int| x + base; let twice = |y: Int| add_base(y) + add_base(y); let r = twice(5); if r == 30 { return 42; } return 1; }",
+        42,
+    );
+}
+
+/// A zero-capture closure called from inside another closure body stays a
+/// function value and is called indirectly, as before.
+#[test]
+fn closure_native_body_calls_zero_capture_closure() {
+    assert_exit_code(
+        "fn main() -> Int { let inc = |x: Int| x + 1; let twice = |y: Int| inc(inc(y)); return twice(40); }",
+        42,
+    );
+}
+
+/// Three levels of enclosing closures: each level's captures must reach the
+/// call site of the next level.
+#[test]
+fn closure_native_three_levels() {
+    assert_exit_code(
+        "fn main() -> Int { let base = 1; let a = |x: Int| x + base; let b = |y: Int| a(y) + 1; let c = |z: Int| b(z) + 1; return c(39); }",
+        42,
+    );
+}

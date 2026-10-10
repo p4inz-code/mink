@@ -477,6 +477,18 @@ pub const ALL: &[Intrinsic] = &[
         params: &[IntrinsicType::Str],
         result: IntrinsicType::Int,
     },
+    // Session 125: run a command with `input` written to its standard input.
+    // The child's stdin is a pipe closed before the parent starts draining,
+    // so the child sees EOF exactly as it would from a redirected file, and
+    // `rt_process_stdout` / `rt_process_stderr` are published unchanged. At
+    // most one pipe buffer (4096 bytes) of `input` is written: a larger
+    // synchronous write would block against a child that has not started
+    // reading stdin, deadlocking the parent before it drains stdout.
+    Intrinsic {
+        name: "rt_process_run_input",
+        params: &[IntrinsicType::Str, IntrinsicType::Str],
+        result: IntrinsicType::Int,
+    },
     Intrinsic {
         name: "rt_process_stdout",
         params: &[],
@@ -644,6 +656,31 @@ pub const ALL: &[Intrinsic] = &[
     },
     Intrinsic {
         name: "rt_net_gethostname",
+        params: &[],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_net_sendto",
+        params: &[
+            IntrinsicType::Int,
+            IntrinsicType::Str,
+            IntrinsicType::Str,
+            IntrinsicType::Int,
+        ],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_recvfrom",
+        params: &[IntrinsicType::Int, IntrinsicType::Int],
+        result: IntrinsicType::Str,
+    },
+    Intrinsic {
+        name: "rt_net_sender_port",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_net_sender_ip",
         params: &[],
         result: IntrinsicType::Str,
     },

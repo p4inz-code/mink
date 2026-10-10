@@ -58,6 +58,23 @@ pub struct Monomorphizer {
     current_fn_return_ty: Option<Ty>,
     /// The parameter types of the currently-enclosing function, if any.
     current_fn_params: Option<Vec<Ty>>,
+    /// Non-generic function return types, used to infer the type arguments
+    /// of a generic call whose arguments come from other calls
+    /// (function name → declared return type).
+    simple_fn_returns: HashMap<String, Ty>,
+    /// Lexical scopes for the Phase 3 walk, innermost last: local variable
+    /// types (for generic type-argument inference) and closure-variable
+    /// bindings (for transitive capture expansion).
+    scopes: Vec<Phase3Scope>,
+}
+
+/// One lexical scope of the Phase 3 AST walk.
+#[derive(Default, Clone)]
+struct Phase3Scope {
+    /// Local variable name → known type.
+    locals: HashMap<String, Ty>,
+    /// Variable name → generated closure function name.
+    closures: HashMap<String, String>,
 }
 
 impl Default for Monomorphizer {
@@ -82,6 +99,8 @@ impl Monomorphizer {
             closure_counter: 0,
             current_fn_return_ty: None,
             current_fn_params: None,
+            simple_fn_returns: HashMap::new(),
+            scopes: Vec::new(),
         }
     }
 
@@ -116,6 +135,13 @@ impl Monomorphizer {
                     self.generic_enums
                         .insert(e.name.name.clone(), (e.generic_params.clone(), e.clone()));
                 }
+                ItemKind::Fn(f) => {
+                    if f.generic_params.is_empty() {
+                        if let Some(ret) = &f.return_ty {
+                            self.simple_fn_returns.insert(f.name.name.clone(), ret.clone());
+                        }
+                    }
+                }
                 ItemKind::Pub(pub_item) => match &pub_item.item.kind {
                     ItemKind::Fn(f) if !f.generic_params.is_empty() => {
                         self.generic_fns
@@ -129,6 +155,13 @@ impl Monomorphizer {
                         self.generic_enums
                             .insert(e.name.name.clone(), (e.generic_params.clone(), e.clone()));
                     }
+                    ItemKind::Fn(f) => {
+                        if f.generic_params.is_empty() {
+                            if let Some(ret) = &f.return_ty {
+                                self.simple_fn_returns.insert(f.name.name.clone(), ret.clone());
+                            }
+                        }
+                    }
                     _ => {}
                 },
                 _ => {}
@@ -141,10 +174,30 @@ impl Monomorphizer {
         // (like Pair<Int>) with Named types (like Pair__Int).
         self.resolve_all_named_app_types(ast);
 
-        // Phase 3: Walk all expressions and monomorphize.
+        // Phase 3: Walk all expressions and monomorphize. A scope stack
+        // tracks local bindings (their types, and which variables name
+        // generated closures) while walking.
+        self.scopes.push(Phase3Scope::default());
         for item in &mut ast.items {
             self.monomorphize_item(item);
         }
+        self.scopes.pop();
+
+        // Phase 3.4: Inject the generated closure functions before the
+        // call-site rewrite. A closure body is a top-level function, and a
+        // call to an enclosing closure variable inside it needs that
+        // closure's captured values passed through, so those bodies must be
+        // part of the rewrite too. Injecting them earlier also lets the
+        // rewrite collect `let name = __closure_N` bindings that appear
+        // inside another closure's body (nested closures).
+        let mut new_items: Vec<Item> = Vec::new();
+        for (_key, closure_fn) in self.closure_fns.drain() {
+            new_items.push(Item {
+                kind: ItemKind::Fn(closure_fn),
+                span: Span::new(SourceId::new(0), 0..0),
+            });
+        }
+        ast.items.extend(new_items);
 
         // Phase 3.5: Rewrite closure call sites.
         // After Phase 3, closures are replaced with Ident("__closure_N").
@@ -182,12 +235,6 @@ impl Monomorphizer {
         for (_key, enum_item) in self.concrete_enums.drain() {
             new_items.push(Item {
                 kind: ItemKind::Enum(enum_item),
-                span: Span::new(SourceId::new(0), 0..0),
-            });
-        }
-        for (_key, closure_fn) in self.closure_fns.drain() {
-            new_items.push(Item {
-                kind: ItemKind::Fn(closure_fn),
                 span: Span::new(SourceId::new(0), 0..0),
             });
         }
@@ -368,7 +415,16 @@ impl Monomorphizer {
                 let saved_fn_params = self.current_fn_params.clone();
                 self.current_fn_params =
                     Some(f.params.iter().filter_map(|p| p.ty.clone()).collect());
+                self.push_scope();
+                for param in &f.params {
+                    if let Some(ty) = &param.ty {
+                        if self.ty_is_concrete(ty) {
+                            self.bind_local_type(&param.name.name, ty.clone());
+                        }
+                    }
+                }
                 self.monomorphize_block(&mut f.body);
+                self.pop_scope();
                 self.current_fn_return_ty = saved_return_ty;
                 self.current_fn_params = saved_fn_params;
             }
@@ -377,12 +433,18 @@ impl Monomorphizer {
                     self.resolve_named_app_type(ty);
                 }
                 self.monomorphize_expr(&mut binding.init);
+                let name = binding.name.name.clone();
+                let declared = binding.ty.clone();
+                self.register_binding(&name, declared.as_ref(), &binding.init);
             }
             ItemKind::Const(binding) => {
                 if let Some(ty) = &mut binding.ty {
                     self.resolve_named_app_type(ty);
                 }
                 self.monomorphize_expr(&mut binding.init);
+                let name = binding.name.name.clone();
+                let declared = binding.ty.clone();
+                self.register_binding(&name, declared.as_ref(), &binding.init);
             }
             ItemKind::Pub(pub_item) => self.monomorphize_item(pub_item.item.as_mut()),
             ItemKind::Struct(s) => {
@@ -402,12 +464,14 @@ impl Monomorphizer {
     }
 
     fn monomorphize_block(&mut self, block: &mut Block) {
+        self.push_scope();
         for stmt in &mut block.stmts {
             self.monomorphize_stmt(stmt);
         }
         if let Some(result) = &mut block.result {
             self.monomorphize_expr(result);
         }
+        self.pop_scope();
     }
 
     fn monomorphize_stmt(&mut self, stmt: &mut Stmt) {
@@ -417,12 +481,18 @@ impl Monomorphizer {
                     self.resolve_named_app_type(ty);
                 }
                 self.monomorphize_expr(&mut binding.init);
+                let name = binding.name.name.clone();
+                let declared = binding.ty.clone();
+                self.register_binding(&name, declared.as_ref(), &binding.init);
             }
             StmtKind::Const(binding) => {
                 if let Some(ty) = &mut binding.ty {
                     self.resolve_named_app_type(ty);
                 }
                 self.monomorphize_expr(&mut binding.init);
+                let name = binding.name.name.clone();
+                let declared = binding.ty.clone();
+                self.register_binding(&name, declared.as_ref(), &binding.init);
             }
             StmtKind::Return(Some(e)) | StmtKind::Break(Some(e)) => {
                 self.monomorphize_expr(e);
@@ -548,6 +618,13 @@ impl Monomorphizer {
                                 self.instantiations
                                     .insert(concrete_name.clone(), concrete_fn);
                             }
+                            // Record the concrete return type so later generic
+                            // calls can infer arguments from this call's result.
+                            if let Some(ret) = &fn_item.return_ty {
+                                let mut ret = ret.clone();
+                                self.substitute_type(&mut ret, &subst);
+                                self.simple_fn_returns.insert(concrete_name.clone(), ret);
+                            }
                             if let ExprKind::Ident(ident) = &mut callee.kind {
                                 ident.name = concrete_name;
                             }
@@ -633,18 +710,40 @@ impl Monomorphizer {
             ExprKind::Group(inner) => self.monomorphize_expr(inner),
             ExprKind::Try { operand } => self.monomorphize_expr(operand),
             ExprKind::Closure { params, body, .. } => {
-                // Desugar closure into a named function.
-                self.closure_counter += 1;
-                let name = format!("__closure_{}", self.closure_counter);
-                let name_span = self.next_span();
+                // Desugar nested closures and monomorphize generic calls in
+                // the body first: capture analysis must see the body in its
+                // final shape, where a nested closure has already become a
+                // `__closure_N` reference. The closure's own parameters are
+                // visible during that walk.
+                self.push_scope();
+                for p in params.iter() {
+                    if let Some(ty) = &p.ty {
+                        if self.ty_is_concrete(ty) {
+                            self.bind_local_type(&p.name.name, ty.clone());
+                        }
+                    }
+                }
+                self.monomorphize_expr(body);
 
-                // Collect free variables in the body.
+                // Collect free variables in the (rewritten) body.
                 let mut param_names = std::collections::HashSet::new();
                 for p in params.iter() {
                     param_names.insert(p.name.name.clone());
                 }
                 let mut free_vars = std::collections::HashSet::new();
                 collect_free_vars(body, &param_names, &mut free_vars);
+                // A call to an enclosing capturing closure needs the values
+                // that closure itself captured. Replace such a name with its
+                // transitive captures so this generated function carries the
+                // values the inner call site will pass (see
+                // `expand_closure_captures`).
+                self.expand_closure_captures(&mut free_vars, body);
+                self.pop_scope();
+
+                // Desugar closure into a named function.
+                self.closure_counter += 1;
+                let name = format!("__closure_{}", self.closure_counter);
+                let name_span = self.next_span();
 
                 if !free_vars.is_empty() {
                     // Capturing closure: captures become the LEADING parameters,
@@ -736,6 +835,123 @@ impl Monomorphizer {
     }
 
     // ------------------------------------------------------------------
+    // Phase 3 scope tracking
+    // ------------------------------------------------------------------
+
+    /// Pushes a lexical scope for the Phase 3 walk.
+    fn push_scope(&mut self) {
+        self.scopes.push(Phase3Scope::default());
+    }
+
+    /// Pops the innermost Phase 3 scope.
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    /// Records a local binding's type for generic-call inference.
+    fn bind_local_type(&mut self, name: &str, ty: Ty) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.locals.insert(name.to_string(), ty);
+        }
+    }
+
+    /// Records that `name` refers to the generated closure `closure_fn`.
+    fn bind_closure_var(&mut self, name: &str, closure_fn: &str) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope
+                .closures
+                .insert(name.to_string(), closure_fn.to_string());
+        }
+    }
+
+    /// The type of a local variable visible at this point, if known.
+    fn lookup_local_type(&self, name: &str) -> Option<Ty> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(ty) = scope.locals.get(name) {
+                return Some(ty.clone());
+            }
+        }
+        None
+    }
+
+    /// The generated closure function a visible variable refers to, if any.
+    fn lookup_closure_var(&self, name: &str) -> Option<String> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(f) = scope.closures.get(name) {
+                return Some(f.clone());
+            }
+        }
+        None
+    }
+
+    /// Registers a `let`/`const` binding in the current scope after its
+    /// initializer has been walked: a closure binding when the initializer
+    /// is a generated closure function, otherwise the binding's type when
+    /// known (annotation first, then simple inference).
+    fn register_binding(&mut self, name: &str, declared: Option<&Ty>, init: &Expr) {
+        if let ExprKind::Ident(ident) = &init.kind {
+            if self.closure_captures.contains_key(&ident.name) {
+                self.bind_closure_var(name, &ident.name);
+                return;
+            }
+        }
+        let ty = match declared {
+            Some(ty) => Some(ty.clone()),
+            None => self.infer_type_from_expr(init),
+        };
+        // Only concrete types are recorded: a binding whose type is still a
+        // generic parameter must not be used to instantiate a generic call
+        // (that would create a bogus concrete `T` instantiation and the
+        // declaration of `T` would then be reported as an unknown type).
+        if let Some(ty) = ty {
+            if self.ty_is_concrete(&ty) {
+                self.bind_local_type(name, ty);
+            }
+        }
+    }
+
+    /// Replaces free variables that name an enclosing *capturing* closure
+    /// with that closure's own (transitively expanded) captures.
+    ///
+    /// A generated closure function has no environment: when its body calls
+    /// an enclosing closure variable, the call-site rewrite passes that
+    /// closure's captured values as leading arguments, so those values must
+    /// be in scope — i.e. this closure must carry them. A name used anywhere
+    /// other than as a direct call callee is kept as an ordinary captured
+    /// value (V1 passes function values, not closure environments), and a
+    /// zero-capture closure is kept too: it is callable through its function
+    /// pointer, which is the supported value form.
+    fn expand_closure_captures(
+        &self,
+        free_vars: &mut std::collections::HashSet<String>,
+        body: &Expr,
+    ) {
+        let mut work: Vec<String> = free_vars.iter().cloned().collect();
+        work.sort();
+        while let Some(name) = work.pop() {
+            if !free_vars.contains(&name) {
+                continue;
+            }
+            let Some(closure_fn) = self.lookup_closure_var(&name) else {
+                continue;
+            };
+            let Some(caps) = self.closure_captures.get(&closure_fn).cloned() else {
+                // Zero-capture closure: nothing to pass through.
+                continue;
+            };
+            if caps.is_empty() || !name_is_only_called(body, &name) {
+                continue;
+            }
+            free_vars.remove(&name);
+            for cap in caps {
+                if free_vars.insert(cap.clone()) {
+                    work.push(cap);
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Closure call-site rewriting
     // ------------------------------------------------------------------
 
@@ -802,7 +1018,8 @@ impl Monomorphizer {
         }
     }
 
-    /// Collects closure bindings recursively from a let-init expression.
+    /// Collects closure bindings from a let-init expression (and any blocks
+    /// nested inside it).
     fn collect_closure_binding(
         expr: &Expr,
         var_name: &str,
@@ -814,6 +1031,11 @@ impl Monomorphizer {
                 out.insert(var_name.to_string(), (ident.name.clone(), caps.clone()));
             }
         }
+        // The initializer can contain further blocks with their own closure
+        // bindings — a closure body is wrapped in `return <body>`, so a
+        // nested closure bound in its body is only reachable through the
+        // returned block expression.
+        Self::collect_closure_bindings_in_expr(expr, captures, out);
     }
 
     /// Collects closure bindings recursively from a block (all nested scopes).
@@ -827,48 +1049,164 @@ impl Monomorphizer {
                 StmtKind::Let(binding) => {
                     Self::collect_closure_binding(&binding.init, &binding.name.name, captures, out);
                 }
-                StmtKind::If(if_stmt) => {
-                    Self::collect_closure_bindings_in_block(&if_stmt.then_block, captures, out);
+                StmtKind::Const(binding) => {
+                    Self::collect_closure_binding(&binding.init, &binding.name.name, captures, out);
                 }
-                StmtKind::While { body, .. } => {
+                StmtKind::Expr(e) | StmtKind::Return(Some(e)) | StmtKind::Break(Some(e)) => {
+                    Self::collect_closure_bindings_in_expr(e, captures, out);
+                }
+                StmtKind::If(if_stmt) => {
+                    Self::collect_closure_bindings_in_expr(&if_stmt.cond, captures, out);
+                    Self::collect_closure_bindings_in_block(&if_stmt.then_block, captures, out);
+                    Self::collect_closure_bindings_in_else(
+                        if_stmt.else_branch.as_ref(),
+                        captures,
+                        out,
+                    );
+                }
+                StmtKind::While { cond, body } => {
+                    Self::collect_closure_bindings_in_expr(cond, captures, out);
                     Self::collect_closure_bindings_in_block(body, captures, out);
                 }
                 StmtKind::Loop(body) => {
                     Self::collect_closure_bindings_in_block(body, captures, out);
                 }
-                StmtKind::For { body, .. } => {
+                StmtKind::For { iterable, body, .. } => {
+                    Self::collect_closure_bindings_in_expr(iterable, captures, out);
                     Self::collect_closure_bindings_in_block(body, captures, out);
                 }
                 StmtKind::Match(m) => {
+                    Self::collect_closure_bindings_in_expr(&m.scrutinee, captures, out);
                     for arm in &m.arms {
+                        if let Some(guard) = &arm.guard {
+                            Self::collect_closure_bindings_in_expr(guard, captures, out);
+                        }
                         Self::collect_closure_bindings_in_block(&arm.body, captures, out);
                     }
                 }
-                _ => {}
+                StmtKind::Return(None) | StmtKind::Break(None) | StmtKind::Continue => {}
             }
         }
         if let Some(result) = &block.result {
-            Self::collect_closure_binding_in_expr(result, captures, out);
+            Self::collect_closure_bindings_in_expr(result, captures, out);
         }
     }
 
-    /// Helper: collect closure bindings from an expression.
-    fn collect_closure_binding_in_expr(
+    /// Helper: collects closure bindings from an expression, descending
+    /// into every nested block (all scopes reachable from the expression).
+    fn collect_closure_bindings_in_expr(
         expr: &Expr,
         captures: &HashMap<String, Vec<String>>,
         out: &mut HashMap<String, (String, Vec<String>)>,
     ) {
         match &expr.kind {
-            ExprKind::Block(b) => {
-                Self::collect_closure_bindings_in_block(b, captures, out);
-            }
+            ExprKind::Block(b) => Self::collect_closure_bindings_in_block(b, captures, out),
             ExprKind::IfExpr(inner) => {
+                Self::collect_closure_bindings_in_expr(&inner.cond, captures, out);
                 Self::collect_closure_bindings_in_block(&inner.then_block, captures, out);
-                if let ElseBranch::Block(b) = &inner.else_branch {
-                    Self::collect_closure_bindings_in_block(b, captures, out)
+                Self::collect_closure_bindings_in_else(Some(&inner.else_branch), captures, out);
+            }
+            ExprKind::WhileExpr { cond, body, .. } => {
+                Self::collect_closure_bindings_in_expr(cond, captures, out);
+                Self::collect_closure_bindings_in_block(body, captures, out);
+            }
+            ExprKind::LoopExpr { body, .. } => {
+                Self::collect_closure_bindings_in_block(body, captures, out)
+            }
+            ExprKind::MatchExpr(m) => {
+                Self::collect_closure_bindings_in_expr(&m.scrutinee, captures, out);
+                for arm in &m.arms {
+                    if let Some(guard) = &arm.guard {
+                        Self::collect_closure_bindings_in_expr(guard, captures, out);
+                    }
+                    Self::collect_closure_bindings_in_expr(&arm.body, captures, out);
                 }
             }
-            _ => {}
+            ExprKind::Call { callee, args, .. } => {
+                Self::collect_closure_bindings_in_expr(callee, captures, out);
+                for arg in args {
+                    Self::collect_closure_bindings_in_expr(arg, captures, out);
+                }
+            }
+            ExprKind::Unary { operand, .. } => {
+                Self::collect_closure_bindings_in_expr(operand, captures, out)
+            }
+            ExprKind::Binary { lhs, rhs, .. } => {
+                Self::collect_closure_bindings_in_expr(lhs, captures, out);
+                Self::collect_closure_bindings_in_expr(rhs, captures, out);
+            }
+            ExprKind::Assign { target, value, .. } => {
+                Self::collect_closure_bindings_in_expr(target, captures, out);
+                Self::collect_closure_bindings_in_expr(value, captures, out);
+            }
+            ExprKind::Range { start, end, .. } => {
+                Self::collect_closure_bindings_in_expr(start, captures, out);
+                Self::collect_closure_bindings_in_expr(end, captures, out);
+            }
+            ExprKind::Member { base, .. } => {
+                Self::collect_closure_bindings_in_expr(base, captures, out)
+            }
+            ExprKind::Index { base, index } => {
+                Self::collect_closure_bindings_in_expr(base, captures, out);
+                Self::collect_closure_bindings_in_expr(index, captures, out);
+            }
+            ExprKind::StructLit { fields, .. } => {
+                for field in fields {
+                    Self::collect_closure_bindings_in_expr(&field.value, captures, out);
+                }
+            }
+            ExprKind::ArrayLit(elems) | ExprKind::Tuple(elems) => {
+                for e in elems {
+                    Self::collect_closure_bindings_in_expr(e, captures, out);
+                }
+            }
+            ExprKind::EnumVariant { payload, .. } => {
+                if let Some(p) = payload {
+                    Self::collect_closure_bindings_in_expr(p, captures, out);
+                }
+            }
+            ExprKind::Group(inner) => Self::collect_closure_bindings_in_expr(inner, captures, out),
+            ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => {
+                Self::collect_closure_bindings_in_expr(operand, captures, out)
+            }
+            ExprKind::Try { operand } => {
+                Self::collect_closure_bindings_in_expr(operand, captures, out)
+            }
+            ExprKind::TupleFieldAccess { base, .. } => {
+                Self::collect_closure_bindings_in_expr(base, captures, out)
+            }
+            ExprKind::Closure { body, .. } => {
+                Self::collect_closure_bindings_in_expr(body, captures, out)
+            }
+            ExprKind::Int
+            | ExprKind::Float
+            | ExprKind::Str
+            | ExprKind::Char
+            | ExprKind::Bool(_)
+            | ExprKind::Null
+            | ExprKind::Ident(_) => {}
+        }
+    }
+
+    /// Helper: collects closure bindings from an optional `else` branch.
+    fn collect_closure_bindings_in_else(
+        branch: Option<&ElseBranch>,
+        captures: &HashMap<String, Vec<String>>,
+        out: &mut HashMap<String, (String, Vec<String>)>,
+    ) {
+        match branch {
+            Some(ElseBranch::Block(b)) => Self::collect_closure_bindings_in_block(b, captures, out),
+            Some(ElseBranch::If(inner)) => {
+                Self::collect_closure_bindings_in_expr(&inner.cond, captures, out);
+                Self::collect_closure_bindings_in_block(&inner.then_block, captures, out);
+                Self::collect_closure_bindings_in_else(inner.else_branch.as_ref(), captures, out);
+            }
+            Some(ElseBranch::IfExpr(inner)) => {
+                Self::collect_closure_bindings_in_expr(&inner.cond, captures, out);
+                Self::collect_closure_bindings_in_block(&inner.then_block, captures, out);
+                Self::collect_closure_bindings_in_else(Some(&inner.else_branch), captures, out);
+            }
+            None => {}
         }
     }
 
@@ -1413,6 +1751,15 @@ impl Monomorphizer {
         }
     }
 
+    /// Infers the type of a simple expression, used to infer the type
+    /// arguments of a generic call whose arguments are ordinary variables.
+    ///
+    /// Handles literals, local variables whose type is known, simple
+    /// arithmetic/comparison combinations of those, and calls to
+    /// non-generic functions with a declared return type. Anything more
+    /// complex returns `None`, and the generic call stays generic (the
+    /// driver then reports it as an uninferable generic call instead of a
+    /// misleading unresolved name).
     fn infer_type_from_expr(&self, expr: &Expr) -> Option<Ty> {
         let name = match &expr.kind {
             ExprKind::Int => "Int",
@@ -1421,6 +1768,48 @@ impl Monomorphizer {
             ExprKind::Char => "Char",
             ExprKind::Str => "Str",
             ExprKind::Null => "Null",
+            ExprKind::Ident(ident) => return self.lookup_local_type(&ident.name),
+            ExprKind::Group(inner) => return self.infer_type_from_expr(inner),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => return self.infer_type_from_expr(operand),
+            ExprKind::Unary {
+                op: UnaryOp::Not, ..
+            } => "Bool",
+            ExprKind::Binary { op, lhs, rhs } => match op {
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Rem
+                | BinaryOp::BitAnd
+                | BinaryOp::BitXor
+                | BinaryOp::BitOr
+                | BinaryOp::Shl
+                | BinaryOp::Shr => {
+                    let left = self.infer_type_from_expr(lhs)?;
+                    let right = self.infer_type_from_expr(rhs)?;
+                    if !types_are_same_named(&left, &right) {
+                        return None;
+                    }
+                    return Some(left);
+                }
+                BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge
+                | BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::And
+                | BinaryOp::Or => "Bool",
+            },
+            ExprKind::Call { callee, .. } => {
+                if let ExprKind::Ident(ident) = &callee.kind {
+                    return self.simple_fn_returns.get(&ident.name).cloned();
+                }
+                return None;
+            }
             _ => return None,
         };
         Some(Ty {
@@ -2477,7 +2866,9 @@ fn collect_free_vars(
 ) {
     match &expr.kind {
         ExprKind::Ident(ident) => {
-            if !bound.contains(&ident.name) {
+            // Compiler-generated closure functions are top-level items, not
+            // values captured from an enclosing scope.
+            if !ident.name.starts_with("__closure_") && !bound.contains(&ident.name) {
                 out.insert(ident.name.clone());
             }
         }
@@ -2655,5 +3046,236 @@ fn collect_free_vars_block(
     }
     if let Some(result) = &block.result {
         collect_free_vars(result, &inner_bound, out);
+    }
+}
+
+/// True when two inferred types are the same named type. This is only an
+/// inference hint (the checker remains the authority), so comparing type
+/// names is sufficient and keeps the monomorphizer decoupled from the type
+/// checker's representation.
+fn types_are_same_named(a: &Ty, b: &Ty) -> bool {
+    match (&a.kind, &b.kind) {
+        (TyKind::Named(x), TyKind::Named(y)) => x.name == y.name,
+        _ => false,
+    }
+}
+
+/// True when every reference to `name` in `expr` is the callee of a direct
+/// call, and there is at least one such reference.
+///
+/// Used to decide whether a closure variable can be replaced by the closure's
+/// captures: only when the name is never needed as a value. The walk counts
+/// conservatively — anything it does not understand is a value use — so a
+/// misclassification can only keep an existing capture, never drop one.
+fn name_is_only_called(expr: &Expr, name: &str) -> bool {
+    let mut callee_uses = 0usize;
+    let mut value_uses = 0usize;
+    collect_name_uses(expr, name, false, &mut callee_uses, &mut value_uses);
+    callee_uses > 0 && value_uses == 0
+}
+
+/// Counts references to `name` in `expr`, split into direct call callees
+/// (`in_callee`) and every other (value) position.
+fn collect_name_uses(
+    expr: &Expr,
+    name: &str,
+    in_callee: bool,
+    callee_uses: &mut usize,
+    value_uses: &mut usize,
+) {
+    match &expr.kind {
+        ExprKind::Ident(ident) => {
+            if ident.name == name {
+                if in_callee {
+                    *callee_uses += 1;
+                } else {
+                    *value_uses += 1;
+                }
+            }
+        }
+        ExprKind::Call { callee, args, .. } => {
+            collect_name_uses(callee, name, true, callee_uses, value_uses);
+            for arg in args {
+                collect_name_uses(arg, name, false, callee_uses, value_uses);
+            }
+        }
+        ExprKind::Unary { operand, .. } => {
+            collect_name_uses(operand, name, false, callee_uses, value_uses)
+        }
+        ExprKind::Binary { lhs, rhs, .. } => {
+            collect_name_uses(lhs, name, false, callee_uses, value_uses);
+            collect_name_uses(rhs, name, false, callee_uses, value_uses);
+        }
+        ExprKind::Assign { target, value, .. } => {
+            collect_name_uses(target, name, false, callee_uses, value_uses);
+            collect_name_uses(value, name, false, callee_uses, value_uses);
+        }
+        ExprKind::Range { start, end, .. } => {
+            collect_name_uses(start, name, false, callee_uses, value_uses);
+            collect_name_uses(end, name, false, callee_uses, value_uses);
+        }
+        ExprKind::Member { base, .. } => {
+            collect_name_uses(base, name, false, callee_uses, value_uses)
+        }
+        ExprKind::Index { base, index } => {
+            collect_name_uses(base, name, false, callee_uses, value_uses);
+            collect_name_uses(index, name, false, callee_uses, value_uses);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for field in fields {
+                collect_name_uses(&field.value, name, false, callee_uses, value_uses);
+            }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::Tuple(elems) => {
+            for e in elems {
+                collect_name_uses(e, name, false, callee_uses, value_uses);
+            }
+        }
+        ExprKind::EnumVariant { payload, .. } => {
+            if let Some(p) = payload {
+                collect_name_uses(p, name, false, callee_uses, value_uses);
+            }
+        }
+        ExprKind::Group(inner) => {
+            collect_name_uses(inner, name, false, callee_uses, value_uses)
+        }
+        ExprKind::IfExpr(inner) => {
+            collect_name_uses(&inner.cond, name, false, callee_uses, value_uses);
+            collect_name_uses_block(&inner.then_block, name, callee_uses, value_uses);
+            collect_name_uses_else(&inner.else_branch, name, callee_uses, value_uses);
+        }
+        ExprKind::Block(b) => {
+            collect_name_uses_block(b, name, callee_uses, value_uses)
+        }
+        ExprKind::WhileExpr { cond, body, .. } => {
+            collect_name_uses(cond, name, false, callee_uses, value_uses);
+            collect_name_uses_block(body, name, callee_uses, value_uses);
+        }
+        ExprKind::LoopExpr { body, .. } => {
+            collect_name_uses_block(body, name, callee_uses, value_uses)
+        }
+        ExprKind::MatchExpr(m) => {
+            collect_name_uses(&m.scrutinee, name, false, callee_uses, value_uses);
+            for arm in &m.arms {
+                if let Some(guard) = &arm.guard {
+                    collect_name_uses(guard, name, false, callee_uses, value_uses);
+                }
+                collect_name_uses(&arm.body, name, false, callee_uses, value_uses);
+            }
+        }
+        ExprKind::Borrow { operand, .. } | ExprKind::Deref { operand } => {
+            collect_name_uses(operand, name, false, callee_uses, value_uses)
+        }
+        ExprKind::TupleFieldAccess { base, .. } => {
+            collect_name_uses(base, name, false, callee_uses, value_uses)
+        }
+        ExprKind::Try { operand } => {
+            collect_name_uses(operand, name, false, callee_uses, value_uses)
+        }
+        ExprKind::Closure { body, .. } => {
+            collect_name_uses(body, name, false, callee_uses, value_uses)
+        }
+        ExprKind::Int
+        | ExprKind::Float
+        | ExprKind::Str
+        | ExprKind::Char
+        | ExprKind::Bool(_)
+        | ExprKind::Null => {}
+    }
+}
+
+/// Counts name uses across a block's statements and trailing expression.
+fn collect_name_uses_block(
+    block: &Block,
+    name: &str,
+    callee_uses: &mut usize,
+    value_uses: &mut usize,
+) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let(binding) => {
+                collect_name_uses(&binding.init, name, false, callee_uses, value_uses);
+            }
+            StmtKind::Const(binding) => {
+                collect_name_uses(&binding.init, name, false, callee_uses, value_uses);
+            }
+            StmtKind::Expr(e) | StmtKind::Return(Some(e)) | StmtKind::Break(Some(e)) => {
+                collect_name_uses(e, name, false, callee_uses, value_uses);
+            }
+            StmtKind::Return(None) | StmtKind::Break(None) | StmtKind::Continue => {}
+            StmtKind::If(if_stmt) => {
+                collect_name_uses(&if_stmt.cond, name, false, callee_uses, value_uses);
+                collect_name_uses_block(&if_stmt.then_block, name, callee_uses, value_uses);
+                collect_name_uses_else_opt(
+                    if_stmt.else_branch.as_ref(),
+                    name,
+                    callee_uses,
+                    value_uses,
+                );
+            }
+            StmtKind::While { cond, body } => {
+                collect_name_uses(cond, name, false, callee_uses, value_uses);
+                collect_name_uses_block(body, name, callee_uses, value_uses);
+            }
+            StmtKind::For { iterable, body, .. } => {
+                collect_name_uses(iterable, name, false, callee_uses, value_uses);
+                collect_name_uses_block(body, name, callee_uses, value_uses);
+            }
+            StmtKind::Loop(body) => {
+                collect_name_uses_block(body, name, callee_uses, value_uses)
+            }
+            StmtKind::Match(m) => {
+                collect_name_uses(&m.scrutinee, name, false, callee_uses, value_uses);
+                for arm in &m.arms {
+                    if let Some(guard) = &arm.guard {
+                        collect_name_uses(guard, name, false, callee_uses, value_uses);
+                    }
+                    collect_name_uses_block(&arm.body, name, callee_uses, value_uses);
+                }
+            }
+        }
+    }
+    if let Some(result) = &block.result {
+        collect_name_uses(result, name, false, callee_uses, value_uses);
+    }
+}
+
+/// Counts name uses across an optional `else` branch.
+fn collect_name_uses_else_opt(
+    branch: Option<&ElseBranch>,
+    name: &str,
+    callee_uses: &mut usize,
+    value_uses: &mut usize,
+) {
+    if let Some(branch) = branch {
+        collect_name_uses_else(branch, name, callee_uses, value_uses);
+    }
+}
+
+/// Counts name uses across an `else` branch (block, `else if`, or
+/// `else if` expression chain).
+fn collect_name_uses_else(
+    branch: &ElseBranch,
+    name: &str,
+    callee_uses: &mut usize,
+    value_uses: &mut usize,
+) {
+    match branch {
+        ElseBranch::Block(b) => collect_name_uses_block(b, name, callee_uses, value_uses),
+        ElseBranch::If(inner) => {
+            collect_name_uses(&inner.cond, name, false, callee_uses, value_uses);
+            collect_name_uses_block(&inner.then_block, name, callee_uses, value_uses);
+            collect_name_uses_else_opt(
+                inner.else_branch.as_ref(),
+                name,
+                callee_uses,
+                value_uses,
+            );
+        }
+        ElseBranch::IfExpr(inner) => {
+            collect_name_uses(&inner.cond, name, false, callee_uses, value_uses);
+            collect_name_uses_block(&inner.then_block, name, callee_uses, value_uses);
+            collect_name_uses_else(&inner.else_branch, name, callee_uses, value_uses);
+        }
     }
 }

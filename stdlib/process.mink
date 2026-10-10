@@ -6,7 +6,8 @@
 //
 // API:
 //   process_run(cmd: Str) -> Int       Run a command, return exit code.
-//                                       Captures stdout/stderr (up to 4088 bytes each).
+//   process_run_input(cmd, input)      Run a command with `input` written to
+//                                      its standard input, return exit code.
 //   process_stdout() -> Str            Get stdout from the last process_run.
 //   process_stderr() -> Str            Get stderr from the last process_run.
 //   process_stdout_len() -> Int        Length of captured stdout.
@@ -19,9 +20,10 @@
 //   Stdout/stderr are empty strings if the process produced no output.
 //
 // Memory:
-//   stdout/stderr are stored in fixed BSS buffers (no heap allocation).
-//   The contents are overwritten by each process_run call.
-//   Max capture: 4088 bytes per stream (excess truncated).
+//   stdout/stderr are captured in runtime-owned windows (no heap allocation).
+//   Each run overwrites them, and they grow with demand up to the stream
+//   window; exceeding it fails the program with E-R02 instead of truncating
+//   silently.
 //
 // Platform:
 //   Currently Windows-only via kernel32 CreateProcessA.
@@ -29,10 +31,30 @@
 // ==========================================================================
 
 // Run an external command and return its exit code.
-// stdout and stderr are captured (up to 4088 bytes each) and available
-// via process_stdout() and process_stderr().
+// stdout and stderr are captured and available via process_stdout() and
+// process_stderr().
 fn process_run(cmd: Str) -> Int {
-    return rt_process_run(cmd);
+    let code = rt_process_run(cmd);
+    // `cmd` is Owned on entry, so this frame releases it: the caller's
+    // binding is dead after the call. A literal is immortal, so this is a
+    // no-op for it.
+    rt_str_free(cmd);
+    return code;
+}
+
+// Run an external command with `input` written to its standard input and
+// return its exit code. The child then sees EOF on stdin, exactly as if the
+// input had been redirected from a file. At most one pipe buffer (4096
+// bytes) of input is delivered; longer input is truncated there, because a
+// larger synchronous write could deadlock against a child that has not
+// started reading stdin yet. stdout/stderr are captured and available via
+// process_stdout() and process_stderr(), as for process_run.
+fn process_run_input(cmd: Str, input: Str) -> Int {
+    let code = rt_process_run_input(cmd, input);
+    // Both strings are Owned on entry and released here (see process_run).
+    rt_str_free(cmd);
+    rt_str_free(input);
+    return code;
 }
 
 // Get the stdout output from the last process_run call.
@@ -62,10 +84,9 @@ fn process_id() -> Int {
 
 // Check if a command string is non-empty and likely valid.
 fn process_is_valid_cmd(cmd: Str) -> Bool {
-    if rt_str_len(cmd) == 0 {
-        return false;
-    }
-    return true;
+    let valid = rt_str_len(cmd) > 0;
+    rt_str_free(cmd);
+    return valid;
 }
 
 // Run a command and return true if it succeeded (exit code 0).

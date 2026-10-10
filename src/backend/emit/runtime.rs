@@ -46,7 +46,9 @@ use std::collections::HashMap;
 
 use super::super::ir::RuntimeService;
 use super::x86_64::{Code, PatchKind, Reg};
-use crate::runtime::abi::{BSS, HEAP_SIZE, MAX_LIVE_ALLOCS};
+use crate::runtime::abi::{
+    BSS, HEAP_BSS_BYTES, HEAP_COMMIT_CHUNK, HEAP_GROWTH_RESERVE, HEAP_MAX_BYTES, MAX_LIVE_ALLOCS,
+};
 use crate::runtime::error::RuntimeErrorKind;
 
 /// The liveness table size in bytes.
@@ -60,6 +62,26 @@ const NET_RECV_BUF: u32 = BSS.recv_buf as u32;
 const NET_POLL_FN: u32 = BSS.net_poll_fn as u32;
 const NET_IOCTL_FN: u32 = BSS.net_ioctl_fn as u32;
 const NET_NAME_BUF: u32 = BSS.net_name_buf as u32;
+// --- Session 125: growable heap + extended ws2_32 table ---
+const HEAP_BASE: u32 = BSS.heap_base as u32;
+const HEAP_COMMITTED: u32 = BSS.heap_committed as u32;
+const NET_FUNC_TABLE2: u32 = BSS.net_func_table2 as u32;
+// --- Session 126: unconnected UDP ---
+/// The `sockaddr_in` written by the last `recvfrom` (source of the datagram).
+const NET_SENDER_SOCKADDR: u32 = BSS.net_sender_sockaddr as u32;
+/// Usable bytes in `recv_buf` (4096 bytes, minus the Str length prefix).
+const NET_RECV_DATA: u32 = 4096 - 8;
+// --- Session 125: stdio capture region (stdin / stdout / stderr windows) ---
+const STDIO_CAPTURE: u32 = BSS.stdio_capture_base as u32;
+const STDIO_STDOUT_OFF: u64 = crate::runtime::abi::STDIO_CAPTURE_WINDOW_BYTES;
+const STDIO_STDERR_OFF: u64 = crate::runtime::abi::STDIO_CAPTURE_WINDOW_BYTES * 2;
+/// Usable data bytes per capture window (the first word is the Str length
+/// prefix).
+const STDIO_WINDOW_DATA: u64 = crate::runtime::abi::STDIO_CAPTURE_WINDOW_BYTES - 8;
+/// Most bytes `rt_process_run_input` feeds to a child at once: the default
+/// anonymous-pipe buffer. A larger synchronous write would block until the
+/// child reads, which a child that ignores stdin never does.
+const STDIN_PIPE_LIMIT: u64 = 4096;
 // --- Crypto BSS (Session 71) ---
 const CRYPTO_DLL: u32 = BSS.bcrypt_dll_handle as u32;
 const CRYPTO_TABLE: u32 = BSS.crypto_func_table as u32;
@@ -70,7 +92,6 @@ const ARGV_READY: u32 = BSS.argv_ready as u32;
 const ARGV_COUNT: u32 = BSS.argv_count as u32;
 const ARGV_TABLE: u32 = BSS.argv_table as u32;
 const ARG_DATA: u32 = BSS.arg_data as u32;
-const STDIN_BUF: u32 = BSS.stdin_buf as u32;
 const WRITE_REDIRECT: u32 = BSS.write_redirect as u32;
 const FLOAT_SINK: u32 = BSS.float_sink as u32;
 // --- Session 100: R06 source-location metadata ---
@@ -341,6 +362,16 @@ pub(crate) fn emit_services(
     emit(code, RuntimeService::NetShutdown, |code, _| {
         emit_net_shutdown(code)
     });
+    emit(code, RuntimeService::NetSendTo, |code, _| emit_net_sendto(code));
+    emit(code, RuntimeService::NetRecvFrom, |code, _| {
+        emit_net_recvfrom(code)
+    });
+    emit(code, RuntimeService::NetSenderPort, |code, _| {
+        emit_net_sender_port(code)
+    });
+    emit(code, RuntimeService::NetSenderIp, |code, _| {
+        emit_net_sender_ip(code)
+    });
     emit(code, RuntimeService::NetGetAddrInfo, |code, _| {
         emit_net_get_addr_info(code)
     });
@@ -408,6 +439,9 @@ pub(crate) fn emit_services(
     });
     emit(code, RuntimeService::ProcessRun, |code, _| {
         emit_process_run(code)
+    });
+    emit(code, RuntimeService::ProcessRunInput, |code, _| {
+        emit_process_run_input(code)
     });
     emit(code, RuntimeService::ProcessStdout, |code, _| {
         emit_process_stdout(code)
@@ -581,6 +615,8 @@ pub(crate) fn emit_data(
         RuntimeErrorKind::MissingKey,
         RuntimeErrorKind::ThreadCreateFailed,
         RuntimeErrorKind::InvalidTaskHandle,
+        RuntimeErrorKind::IntegerDivisionByZero,
+        RuntimeErrorKind::ArithmeticOverflow,
     ];
     kinds.sort_by_key(|kind| kind.number());
     let messages = kinds
@@ -659,6 +695,9 @@ fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
     code.mov_rip_imm32(PatchKind::Bss(BSS.cursor as u32), 0);
     code.mov_rip_imm32(PatchKind::Bss(BSS.free_head as u32), 0);
+    // Session 125: the growth region starts unreserved/uncommitted.
+    code.mov_rip_imm32(PatchKind::Bss(HEAP_BASE), 0);
+    code.mov_rip_imm32(PatchKind::Bss(HEAP_COMMITTED), 0);
     code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.str_data_start));
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.str_data_start as u32));
     code.lea_r_rip(Reg::Rax, PatchKind::Label(offsets.str_data_end));
@@ -718,19 +757,121 @@ fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_rip_r(Reg::Rcx, PatchKind::Bss(BSS.free_head as u32));
     code.jmp_label(record);
 
-    // Otherwise bump the cursor within the arena bounds.
+    // Otherwise bump the cursor within the logical arena.
+    //
+    // Session 125: the heap is no longer capped at the `.bss` prefix. The
+    // first `HEAP_BSS_BYTES` of the offset space live in `.bss`; anything
+    // beyond is served from a growth region reserved lazily with
+    // `VirtualAlloc(MEM_RESERVE)` and committed in `HEAP_COMMIT_CHUNK`
+    // steps. A bump that crosses the committed frontier commits more; a
+    // bump beyond `HEAP_MAX_BYTES` (or a failed reserve/commit) is E-R02,
+    // so the ceiling stays diagnosable instead of silently truncating.
     code.bind_label(bump);
     code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.cursor as u32));
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
     code.mov_rr(Reg::Rax, Reg::Rcx);
-    code.add_rr(Reg::Rax, Reg::Rdx); // new offset
-    code.cmp_r_imm32(Reg::Rax, HEAP_SIZE as u32);
+    code.add_rr(Reg::Rax, Reg::Rdx); // tentative end offset
+    // A block must live entirely in one backing region: the `.bss` prefix
+    // and the growth region are not address-contiguous. When a block would
+    // straddle the boundary, place it at the start of the growth region
+    // and leave the remaining prefix tail unused (small waste, correct
+    // contiguous blocks).
+    let no_straddle = code.label();
+    code.cmp_r_imm32(Reg::Rcx, HEAP_BSS_BYTES as u32);
+    code.jcc_label(0x83, no_straddle); // jae — starts in growth already
+    code.cmp_r_imm32(Reg::Rax, HEAP_BSS_BYTES as u32);
+    code.jcc_label(0x86, no_straddle); // jbe — ends inside the prefix
+    code.movabs(Reg::Rcx, HEAP_BSS_BYTES);
+    code.mov_rr(Reg::Rax, Reg::Rcx);
+    code.add_rr(Reg::Rax, Reg::Rdx); // block start moved to the boundary
+    code.bind_label(no_straddle);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // spill the new cursor
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx); // spill the block offset
+    code.cmp_r_imm32(Reg::Rax, HEAP_MAX_BYTES as u32);
     let oom = code.label();
     code.jcc_label(0x87, oom); // ja
+
+    // Capacity check: commit more when the new cursor crosses
+    // `HEAP_BSS_BYTES + heap_committed`.
+    let growth_ok = code.label();
+    code.mov_r_rip(Reg::R8, PatchKind::Bss(HEAP_COMMITTED));
+    code.movabs(Reg::R9, HEAP_BSS_BYTES);
+    code.add_rr(Reg::R8, Reg::R9); // committed total
+    code.cmp_rr(Reg::Rax, Reg::R8);
+    code.jcc_label(0x86, growth_ok); // jbe — capacity already committed
+
+    // Reserve the growth region once (lazy: small programs never call
+    // VirtualAlloc at all).
+    let reserved = code.label();
+    code.mov_r_rip(Reg::R9, PatchKind::Bss(HEAP_BASE));
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x85, reserved); // jnz — already reserved
+    code.sub_rsp(32);
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // lpAddress = NULL
+    code.movabs(Reg::Rdx, HEAP_GROWTH_RESERVE);
+    code.movabs(Reg::R8, 0x2000); // MEM_RESERVE
+    code.movabs(Reg::R9, 0x01); // PAGE_NOACCESS
+    code.call_rip(PatchKind::Iat(IAT_VIRTUAL_ALLOC));
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, oom); // jz — reserve failed
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(HEAP_BASE));
+    code.bind_label(reserved);
+
+    // Commit `align_up(need, HEAP_COMMIT_CHUNK)` bytes at
+    // `heap_base + heap_committed`, clamped to the reservation.
+    code.mov_r_rip(Reg::R9, PatchKind::Bss(HEAP_BASE)); // base
+    code.mov_r_rip(Reg::R8, PatchKind::Bss(HEAP_COMMITTED)); // committed
+    code.movabs(Reg::R10, HEAP_BSS_BYTES);
+    code.add_rr(Reg::R10, Reg::R8);
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -24); // new cursor
+    code.sub_rr(Reg::R11, Reg::R10); // need
+    code.movabs(Reg::R10, HEAP_COMMIT_CHUNK - 1);
+    code.add_rr(Reg::R11, Reg::R10);
+    code.movabs(Reg::R10, !(HEAP_COMMIT_CHUNK - 1));
+    code.and_rr(Reg::R11, Reg::R10); // aligned chunk
+    code.movabs(Reg::R10, HEAP_GROWTH_RESERVE);
+    code.sub_rr(Reg::R10, Reg::R8); // remaining reservation
+    code.cmp_rr(Reg::R11, Reg::R10);
+    let chunk_ok = code.label();
+    code.jcc_label(0x86, chunk_ok); // jbe
+    code.mov_rr(Reg::R11, Reg::R10); // clamp
+    code.bind_label(chunk_ok);
+    code.mov_rr(Reg::Rcx, Reg::R9);
+    code.add_rr(Reg::Rcx, Reg::R8); // base + committed
+    code.mov_rr(Reg::Rdx, Reg::R11); // size
+    code.movabs(Reg::R8, 0x1000); // MEM_COMMIT
+    code.movabs(Reg::R9, 0x04); // PAGE_READWRITE
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_VIRTUAL_ALLOC));
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, oom); // jz — commit failed
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(HEAP_COMMITTED));
+    code.add_rr(Reg::Rax, Reg::R11);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(HEAP_COMMITTED));
+    code.bind_label(growth_ok);
+
+    // Store the new cursor, then translate the block's offset to its
+    // absolute address: the `.bss` prefix below `HEAP_BSS_BYTES`, the
+    // growth region above it.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32); // adjusted block offset
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24); // new cursor
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.cursor as u32));
     code.mov_rr(Reg::Rax, Reg::Rcx); // block offset
-    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.arena as u32));
-    code.add_rr(Reg::Rax, Reg::Rcx); // absolute block address
+    let in_growth = code.label();
+    let translated = code.label();
+    code.cmp_r_imm32(Reg::Rcx, HEAP_BSS_BYTES as u32);
+    code.jcc_label(0x83, in_growth); // jae
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(BSS.arena as u32));
+    code.add_rr(Reg::Rax, Reg::Rdx); // absolute block address (prefix)
+    code.jmp_label(translated);
+    code.bind_label(in_growth);
+    code.movabs(Reg::Rdx, HEAP_BSS_BYTES);
+    code.sub_rr(Reg::Rax, Reg::Rdx);
+    code.mov_r_rip(Reg::Rdx, PatchKind::Bss(HEAP_BASE));
+    code.add_rr(Reg::Rax, Reg::Rdx); // absolute block address (growth)
+    code.bind_label(translated);
 
     // Record the allocation in the first dead table slot.
     code.bind_label(record);
@@ -760,6 +901,32 @@ fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
     fail(code, 2); // E-R02
     code.bind_label(table_full);
     fail(code, 3); // E-R03
+}
+
+/// Emits the lazy setup of the stdio capture region: one
+/// `VirtualAlloc(MEM_RESERVE | MEM_COMMIT)` of [`STDIO_CAPTURE_BYTES`],
+/// stored in [`BSS.stdio_capture_base`]. A failed allocation is `E-R02`.
+/// Private convention: clobbers `rax`, `rcx`, `rdx`, `r8`, `r9`; the
+/// region base ends up in `rax` (the caller usually reloads it).
+fn ensure_stdio_capture(code: &mut Code) {
+    let have = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(STDIO_CAPTURE));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, have); // jnz — already set up
+    code.sub_rsp(32);
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // lpAddress = NULL
+    code.movabs(Reg::Rdx, crate::runtime::abi::STDIO_CAPTURE_BYTES);
+    code.movabs(Reg::R8, 0x3000); // MEM_RESERVE | MEM_COMMIT
+    code.movabs(Reg::R9, 0x04); // PAGE_READWRITE
+    code.call_rip(PatchKind::Iat(IAT_VIRTUAL_ALLOC));
+    code.add_rsp(32);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let ok = code.label();
+    code.jcc_label(0x85, ok); // jnz — committed
+    fail(code, 2); // E-R02: the capture region could not be committed
+    code.bind_label(ok);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(STDIO_CAPTURE));
+    code.bind_label(have);
 }
 
 /// `rt_free(ptr)` (ptr at `[rbp + 16]`).
@@ -1099,14 +1266,24 @@ fn emit_str_validate(code: &mut Code, heap_only: bool) {
     if heap_only {
         code.jmp_label(fail5);
     } else {
-        // Check BSS stdout/stderr capture buffers
-        code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.stdout_buf as u32));
+        // Check the runtime-owned stdio capture windows (stdin, stdout,
+        // stderr): accessors hand out borrowed views into them.
+        let check_image = code.label();
+        code.mov_r_rip(Reg::Rcx, PatchKind::Bss(STDIO_CAPTURE));
+        code.test_rr(Reg::Rcx, Reg::Rcx);
+        code.jcc_label(0x84, check_image); // no region yet
         code.cmp_rr(Reg::Rax, Reg::Rcx);
-        code.jcc_label(0x84, not_heap_next); // je — valid stdout_buf
-        code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.stderr_buf as u32));
-        code.cmp_rr(Reg::Rax, Reg::Rcx);
-        code.jcc_label(0x84, not_heap_next); // je — valid stderr_buf
+        code.jcc_label(0x84, not_heap_next); // stdin window
+        code.movabs(Reg::R11, STDIO_STDOUT_OFF);
+        code.add_rr(Reg::R11, Reg::Rcx);
+        code.cmp_rr(Reg::Rax, Reg::R11);
+        code.jcc_label(0x84, not_heap_next); // stdout window
+        code.movabs(Reg::R11, STDIO_STDERR_OFF);
+        code.add_rr(Reg::R11, Reg::Rcx);
+        code.cmp_rr(Reg::Rax, Reg::R11);
+        code.jcc_label(0x84, not_heap_next); // stderr window
         // Check image immutable string-data region
+        code.bind_label(check_image);
         code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.str_data_start as u32));
         code.mov_r_rip(Reg::Rdx, PatchKind::Bss(BSS.str_data_end as u32));
         code.cmp_rr(Reg::Rax, Reg::Rcx);
@@ -6133,6 +6310,34 @@ fn emit_net_wsa_startup(code: &mut Code) {
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 15 * 8));
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 16 * 8));
 
+    // Session 125: the extended table — WSASetLastError (so resolver
+    // failures are visible through net_last_error), getsockopt, sendto and
+    // recvfrom (UDP datagram send/receive). The names stage in recv_buf
+    // after the 16 base names (the table slots are what matter later).
+    let extra_names: [&[u8]; 4] = [
+        b"WSASetLastError\0",
+        b"getsockopt\0\0\0\0\0\0",
+        b"sendto\0\0\0\0\0\0\0\0\0\0",
+        b"recvfrom\0\0\0\0\0\0\0\0",
+    ];
+    for (i, name_bytes) in extra_names.iter().enumerate() {
+        let name_off = NET_RECV_BUF + (names.len() as u32 + i as u32) * name_size;
+        for chunk_off in (0..name_bytes.len()).step_by(8) {
+            let mut buf = [0u8; 8];
+            let end = (chunk_off + 8).min(name_bytes.len());
+            buf[..end - chunk_off].copy_from_slice(&name_bytes[chunk_off..end]);
+            code.movabs(Reg::Rax, u64::from_le_bytes(buf));
+            code.mov_rip_r(Reg::Rax, PatchKind::Bss(name_off + chunk_off as u32));
+        }
+        code.mov_r_rip(Reg::Rcx, PatchKind::Bss(NET_DLL_HANDLE));
+        code.lea_r_rip(Reg::Rdx, PatchKind::Bss(name_off));
+        code.sub_rsp(32);
+        code.call_rip(PatchKind::Iat(33)); // GetProcAddress
+        code.add_rsp(32);
+        let slot = NET_FUNC_TABLE2 + (i as u32) * 8;
+        code.mov_rip_r(Reg::Rax, PatchKind::Bss(slot));
+    }
+
     // Call WSAStartup(MAKEWORD(2,2), &wsadata)
     // WSADATA is 408 bytes, stored at NET_RECV_BUF as temp
     // Already cleared (zero-init BSS)
@@ -6228,102 +6433,149 @@ fn emit_net_socket(code: &mut Code) {
     code.leave_ret();
 }
 
-/// `rt_net_connect(sock, addr, port) -> Int`: Connect to IPv4 address.
-/// addr is a Str containing "x.x.x.x". Returns 0 on success, -1 on error.
+/// `rt_net_connect(sock, addr, port) -> Int`: connect the socket to
+/// `addr`, which may be an IPv4 literal (`"127.0.0.1"`) or a host name
+/// (`"example.com"`).
+///
+/// Resolution goes through Winsock's `getaddrinfo`, the same resolver the
+/// `rt_net_getaddrinfo` intrinsic and `stdlib/tls.mink` already use, so
+/// hostname-based plain TCP and HTTP work — not just dotted quads. A
+/// resolver failure is explicit: the call returns -1 and reports the
+/// `getaddrinfo` code through `net_last_error()` via `WSASetLastError`,
+/// rather than connecting to a bogus address. Returns 0 on success and -1
+/// on any failure.
 fn emit_net_connect(code: &mut Code) {
     prologue(code);
     let ninit = code.label();
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
-    code.sub_rsp(64); // [rbp-16]=sock, [rbp-24]=addr ptr, [rbp-40..56]=sockaddr_in, [rbp-56]=port
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
-    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
-    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
-    // Store port at [rbp-56] (outside sockaddr_in to avoid overwrite)
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32);
-    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax);
-    // Zero-init sockaddr_in (16 bytes at [rbp-40])
-    code.xor_rr32(Reg::Rax, Reg::Rax);
-    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+    // Frame (112 bytes): [rbp-8]=cstr, [rbp-16]=addrinfo list,
+    // [rbp-24]=addr Str ptr, [rbp-32]=sock, [rbp-40]=port (then the
+    // connect result), [rbp-48]=getaddrinfo code,
+    // [rbp-64..-49]=sockaddr_in, [rbp-112..-65]=ADDRINFOA hints.
+    code.sub_rsp(112);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // sock
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
-    // AF_INET = 2
-    code.mov_r32_imm32(Reg::Rax, 2);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // addr Str ptr
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32); // port
     code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
-    // Parse IP: build sin_addr as single 32-bit value in R8
-    code.xor_rr32(Reg::R8, Reg::R8); // accumulator = 0
-    code.mov_r_mem(Reg::R10, Reg::Rbp, -24);
-    code.add_r_imm8(Reg::R10, 8); // skip len prefix
-    // Compute end-of-string pointer for bounds checking.
-    // MINK strings are length-prefixed, NOT NUL-terminated.
-    // end_ptr = addr_ptr + 8 (skip length prefix) + length
-    code.mov_r_mem(Reg::R12, Reg::Rbp, -24); // R12 = addr ptr
-    code.mov_r_mem(Reg::R11, Reg::R12, 0); // R11 = string length
-    code.add_r_imm8(Reg::R12, 8); // R12 = data start
-    code.add_rr(Reg::R12, Reg::R11); // R12 = end_ptr
-    for octet in 0..4u32 {
-        let done_label = code.label();
-        code.xor_rr32(Reg::R9, Reg::R9); // octet value = 0
-        // Bounds check: if current pos >= end_ptr, treat octet as 0
-        code.cmp_rr(Reg::R10, Reg::R12);
-        code.jcc_label(0x83, done_label); // jae: jump if R10 >= end_ptr
-        let digit_loop = code.label();
-        code.bind_label(digit_loop);
-        code.movzx_byte(Reg::R11, Reg::R10, 0); // R11 = byte
-        code.test_rr(Reg::R11, Reg::R11);
-        code.jcc_label(0x84, done_label);
-        code.cmp_r_imm8(Reg::R11, 0x2E);
-        code.jcc_label(0x84, done_label);
-        code.sub_r_imm32(Reg::R11, '0' as u32); // R11 = digit
-        // R9 = R9 * 10 + R11
-        code.mov_r32_imm32(Reg::Rax, 10);
-        code.mul_r(Reg::R9); // RAX = 10 * R9
-        code.mov_rr(Reg::R9, Reg::Rax);
-        code.add_rr(Reg::R9, Reg::R11);
-        code.add_r_imm8(Reg::R10, 1);
-        // Bounds check after advancing: if past end, stop
-        code.cmp_rr(Reg::R10, Reg::R12);
-        code.jcc_label(0x83, done_label); // jae
-        code.jmp_label(digit_loop);
-        code.bind_label(done_label);
-        code.add_r_imm8(Reg::R10, 1);
-        // Shift octet into correct position for network byte order
-        // (little-endian store: low byte = first octet)
-        if octet > 0 {
-            code.shl_r_imm8(Reg::R9, (octet * 8) as u8);
-        }
-        code.add_rr(Reg::R8, Reg::R9);
+
+    // cstr = rt_to_cstr(addr) — getaddrinfo needs a NUL-terminated name.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ToCstr));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    // Hints: ai_flags 0, ai_family AF_INET, ai_socktype SOCK_STREAM,
+    // ai_protocol IPPROTO_TCP, ai_addrlen 0 (same shape as the
+    // rt_net_getaddrinfo intrinsic builds).
+    code.xor_rr32(Reg::R10, Reg::R10);
+    for off in 0..6 {
+        code.mov_mem_r(Reg::Rbp, -112 + off * 8, Reg::R10);
     }
-    // Save sin_addr before htons (R8 is volatile, clobbered by call)
-    code.mov_mem_r(Reg::Rbp, -8, Reg::R8);
-    // htons(port) — port stored at [rbp-56]
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56);
+    code.movabs(Reg::R10, (1u64 << 32) | 2); // ai_socktype | ai_family
+    code.mov_mem_r(Reg::Rbp, -108, Reg::R10);
+    code.movabs(Reg::R10, 6); // ai_protocol | a zero ai_addrlen
+    code.mov_mem_r(Reg::Rbp, -100, Reg::R10);
+
+    // getaddrinfo(cstr, NULL, &hints, &result)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -112);
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -16);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 96));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // getaddrinfo code
+    let resolver_failed = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, resolver_failed); // jnz — resolution failed
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -16);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, resolver_failed); // jz — no result
+    code.mov_r_mem(Reg::R9, Reg::R9, 32); // -> ai_addr
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, resolver_failed);
+
+    // Copy the resolved sockaddr_in (16 bytes) into the frame.
+    code.mov_r_mem(Reg::R10, Reg::R9, 0);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::R10);
+    code.mov_r_mem(Reg::R10, Reg::R9, 8);
+    code.mov_mem_r(Reg::Rbp, -56, Reg::R10);
+
+    // sin_port = htons(port) (sockaddr_in offset 2). The resolved
+    // sockaddr already carries the family and address; merge the port into
+    // bits 16..31 of the first word without disturbing the rest (a plain
+    // 8-byte store at offset 2 would clobber the address bytes).
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 15 * 8));
     code.sub_rsp(32);
     code.call_rax();
     code.add_rsp(32);
-    // RAX = htons result. Restore sin_addr from spill slot.
-    code.mov_r_mem(Reg::R8, Reg::Rbp, -8);
-    // Store sin_port then sin_addr
-    code.mov_mem_r(Reg::Rbp, -38, Reg::Rax); // sin_port
-    code.mov_mem_r(Reg::Rbp, -36, Reg::R8); // sin_addr
-    // connect(sock, &addr, 16)
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
-    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -40);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -64); // first sockaddr word
+    code.movabs(Reg::R11, 0xFFFF_FFFF_0000_FFFFu64); // keep family + addr
+    code.and_rr(Reg::R10, Reg::R11);
+    code.movabs(Reg::R11, 0xFFFFu64);
+    code.and_rr(Reg::Rax, Reg::R11); // port only
+    code.shl_r_imm8(Reg::Rax, 16);
+    code.or_rr(Reg::R10, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -64, Reg::R10);
+
+    // connect(sock, &sockaddr_in, 16)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -64);
     code.movabs(Reg::R8, 16);
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 32));
     code.sub_rsp(32);
     code.call_rax();
     code.add_rsp(32);
-    code.test_rr(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax); // connect result (port is spent)
+
+    // freeaddrinfo(result); rt_free_cstr(cstr)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 104));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x51); // push rcx
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+
+    // Return 0 on success, -1 on connect failure.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40);
     let ok = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, ok);
     code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
     code.leave_ret();
     code.bind_label(ok);
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
+
+    // Resolution failed: publish the resolver code through
+    // WSASetLastError so net_last_error() is meaningful, release the
+    // c-string, and return -1.
+    code.bind_label(resolver_failed);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE2));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x51); // push rcx
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+
     // Not initialized: clean -1 instead of faulting.
     code.bind_label(ninit);
     code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
@@ -6653,6 +6905,409 @@ fn emit_net_shutdown(code: &mut Code) {
     code.leave_ret();
 }
 
+/// Decimal-digit count of the byte in R10, accumulated in R11.
+fn ipv4_digits_of(code: &mut Code) {
+    code.add_r_imm8(Reg::R11, 1);
+    let one = code.label();
+    code.cmp_r_imm32(Reg::R10, 10);
+    code.jcc_label(0x82, one); // jb
+    code.add_r_imm8(Reg::R11, 1);
+    code.cmp_r_imm32(Reg::R10, 100);
+    code.jcc_label(0x82, one);
+    code.add_r_imm8(Reg::R11, 1);
+    code.bind_label(one);
+}
+
+/// Write the decimal form of the byte in R10 (no leading zeros) at R8 and
+/// advance R8 over the digits written.
+fn ipv4_write_digits(code: &mut Code) {
+    code.xor_rr32(Reg::Rcx, Reg::Rcx); // hundreds
+    let h_loop = code.label();
+    let h_done = code.label();
+    code.bind_label(h_loop);
+    code.cmp_r_imm32(Reg::R10, 100);
+    code.jcc_label(0x82, h_done); // jb
+    code.sub_r_imm32(Reg::R10, 100);
+    code.add_r_imm8(Reg::Rcx, 1);
+    code.jmp_label(h_loop);
+    code.bind_label(h_done);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx); // tens
+    let t_loop = code.label();
+    let t_done = code.label();
+    code.bind_label(t_loop);
+    code.cmp_r_imm32(Reg::R10, 10);
+    code.jcc_label(0x82, t_done); // jb
+    code.sub_r_imm32(Reg::R10, 10);
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.jmp_label(t_loop);
+    code.bind_label(t_done);
+    // A leading digit forces the next one out, so 105 keeps its zero.
+    let no_hundreds = code.label();
+    let units = code.label();
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, no_hundreds); // jz
+    code.add_r_imm8(Reg::Rcx, b'0');
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rcx);
+    code.add_r_imm8(Reg::R8, 1);
+    code.add_r_imm8(Reg::Rdx, b'0');
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rdx);
+    code.add_r_imm8(Reg::R8, 1);
+    code.jmp_label(units);
+    code.bind_label(no_hundreds);
+    let no_tens = code.label();
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, no_tens); // jz
+    code.add_r_imm8(Reg::Rdx, b'0');
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rdx);
+    code.add_r_imm8(Reg::R8, 1);
+    code.bind_label(no_tens);
+    code.bind_label(units);
+    code.add_r_imm8(Reg::R10, b'0');
+    code.mov_mem_r8(Reg::R8, 0, Reg::R10);
+    code.add_r_imm8(Reg::R8, 1);
+}
+
+/// `rt_net_sendto(sock, data, addr, port) -> Int`: send one datagram to
+/// `addr`:`port` without connecting the socket first.
+///
+/// `addr` may be an IPv4 literal or a host name: the resolution runs through
+/// Winsock's `getaddrinfo` with UDP hints, exactly like `rt_net_connect`. The
+/// result is the number of bytes sent, or -1; a failure reason is always
+/// visible through `net_last_error` (the resolver code is republished through
+/// `WSASetLastError`, so a bad name is never mistaken for a send failure on a
+/// valid socket).
+///
+/// Frame (192 bytes): [rbp-8] cstr, [rbp-16] addrinfo list, [rbp-24] addr Str
+/// pointer, [rbp-32] sock, [rbp-40] port, [rbp-48] getaddrinfo code,
+/// [rbp-56] data Str pointer, [rbp-64] data length, [rbp-72] sendto result,
+/// [rbp-128..-113] the resolved sockaddr_in, [rbp-176..-129] the ADDRINFOA
+/// hints.
+fn emit_net_sendto(code: &mut Code) {
+    prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
+    code.sub_rsp(192);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // sock
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // data Str pointer
+    code.mov_mem_r(Reg::Rbp, -56, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // data length
+    code.mov_mem_r(Reg::Rbp, -64, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 32); // addr Str pointer
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 40); // port
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
+
+    // cstr = rt_to_cstr(addr) — getaddrinfo needs a NUL-terminated name.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ToCstr));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+
+    // Hints: ai_flags 0, ai_family AF_INET, ai_socktype SOCK_DGRAM,
+    // ai_protocol IPPROTO_UDP, ai_addrlen 0.
+    code.xor_rr32(Reg::R10, Reg::R10);
+    for off in 0..6 {
+        code.mov_mem_r(Reg::Rbp, -176 + off * 8, Reg::R10);
+    }
+    code.movabs(Reg::R10, (2u64 << 32) | 2); // ai_socktype | ai_family
+    code.mov_mem_r(Reg::Rbp, -172, Reg::R10); // offsets 4..11
+    code.movabs(Reg::R10, 17); // ai_protocol | a zero ai_addrlen
+    code.mov_mem_r(Reg::Rbp, -164, Reg::R10); // offsets 12..19
+
+    // getaddrinfo(cstr, NULL, &hints, &result)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.xor_rr32(Reg::Rdx, Reg::Rdx);
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -176);
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -16);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 96));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_mem_r(Reg::Rbp, -48, Reg::Rax); // getaddrinfo code
+    let resolver_failed = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, resolver_failed); // jnz — resolution failed
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -16);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, resolver_failed); // jz — no result
+    code.mov_r_mem(Reg::R9, Reg::R9, 32); // -> ai_addr
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, resolver_failed);
+
+    // Copy the resolved sockaddr_in (16 bytes) into the frame.
+    code.mov_r_mem(Reg::R10, Reg::R9, 0);
+    code.mov_mem_r(Reg::Rbp, -128, Reg::R10);
+    code.mov_r_mem(Reg::R10, Reg::R9, 8);
+    code.mov_mem_r(Reg::Rbp, -120, Reg::R10);
+
+    // sin_port = htons(port), merged into bits 16..31 of the first word so
+    // the family and address bytes survive.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -40);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 15 * 8));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -128); // first sockaddr word
+    code.movabs(Reg::R11, 0xFFFF_FFFF_0000_FFFFu64); // keep family + addr
+    code.and_rr(Reg::R10, Reg::R11);
+    code.movabs(Reg::R11, 0xFFFFu64);
+    code.and_rr(Reg::Rax, Reg::R11); // port only
+    code.shl_r_imm8(Reg::Rax, 16);
+    code.or_rr(Reg::R10, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -128, Reg::R10);
+
+    // sendto(sock, data + 8, data_len, 0, &sockaddr_in, 16)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32); // sock
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -56); // data Str pointer
+    code.add_r_imm8(Reg::Rdx, 8); // byte array past the length prefix
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -64); // length
+    code.xor_rr32(Reg::R9, Reg::R9); // flags = 0
+    code.sub_rsp(48); // 32 shadow + 16 for the two stack arguments
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, -128);
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax); // to
+    code.mov_mem_imm32(Reg::Rsp, 40, 16); // tolen
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE2 + 16)); // sendto
+    code.call_rax();
+    code.add_rsp(48);
+    code.cdqe(); // sign-extend EAX to RAX (sendto returns int)
+    code.mov_mem_r(Reg::Rbp, -72, Reg::Rax);
+
+    // freeaddrinfo(result); rt_free_cstr(cstr)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 104));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x51); // push rcx
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+
+    // sendto returns bytes sent, or SOCKET_ERROR (-1) — already sign
+    // extended, so the value passes through unchanged.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -72);
+    code.leave_ret();
+
+    // Resolution failed: publish the resolver code through WSASetLastError,
+    // release the c-string, and return -1.
+    code.bind_label(resolver_failed);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE2));
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.sub_rsp(8);
+    code.u8(0x51); // push rcx
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::FreeCstr));
+    code.add_rsp(16);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+
+    // Not initialized: clean -1 instead of faulting.
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_net_recvfrom(sock, maxlen) -> Str`: receive one datagram on a socket
+/// that was never connected, and record its sender in
+/// [`NET_SENDER_SOCKADDR`] for `rt_net_sender_ip` / `rt_net_sender_port`.
+///
+/// `maxlen` is clamped to the runtime receive buffer (4088 bytes), so a larger
+/// request is a bounded read rather than a buffer overrun. An error, a closed
+/// peer or a timeout returns an owned empty Str — the documented failure value
+/// of every string-returning network intrinsic — with `net_last_error` still
+/// holding the reason.
+///
+/// Frame (48 bytes): [rbp-8] bytes received, [rbp-16] the returned Str,
+/// [rbp-24] the 4-byte `fromlen` written by `recvfrom`, [rbp-32] the clamped
+/// `maxlen`.
+fn emit_net_recvfrom(code: &mut Code) {
+    prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> empty Str
+    code.sub_rsp(48);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // maxlen
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    // Clamp maxlen into [1, NET_RECV_DATA].
+    code.cmp_r_imm32(Reg::Rax, NET_RECV_DATA);
+    let fits = code.label();
+    code.jcc_label(0x86, fits); // jbe
+    code.mov_r32_imm32(Reg::Rax, NET_RECV_DATA);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    code.bind_label(fits);
+    code.cmp_r_imm32(Reg::Rax, 0);
+    let positive = code.label();
+    code.jcc_label(0x87, positive); // jg
+    code.mov_r32_imm32(Reg::Rax, NET_RECV_DATA);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    code.bind_label(positive);
+
+    // fromlen = 16 (a 4-byte field the callee updates).
+    code.mov_mem_imm32(Reg::Rbp, -24, 16);
+
+    // recvfrom(sock, recv_buf + 8, maxlen, 0, &sender, &fromlen)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(NET_RECV_BUF + 8));
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // maxlen
+    code.xor_rr32(Reg::R9, Reg::R9); // flags = 0
+    code.sub_rsp(48); // 32 shadow + 16 for the two stack arguments
+    code.lea_r_rip(Reg::Rax, PatchKind::Bss(NET_SENDER_SOCKADDR));
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax); // from (the address, not its contents)
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.mov_mem_r(Reg::Rsp, 40, Reg::Rax); // fromlen
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE2 + 24)); // recvfrom
+    code.call_rax();
+    code.add_rsp(48);
+    code.cdqe(); // sign-extend EAX to RAX (recvfrom returns int)
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    // SOCKET_ERROR is reported as an empty Str, never as garbage bytes.
+    code.cmp_r_imm32(Reg::Rax, 0xFFFF_FFFFu32);
+    let got_data = code.label();
+    let empty = code.label();
+    code.jcc_label(0x85, got_data); // jne: not SOCKET_ERROR
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.bind_label(got_data);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x8E, empty); // jle — zero bytes: empty Str
+
+    // Positive length: allocate the exact Str and copy the datagram in.
+    code.sub_rsp(8); // alignment padding
+    code.u8(0x50); // push rax (= length) as the stack argument
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF + 8)); // source
+    code.add_r_imm8(Reg::Rax, 8); // skip the length prefix
+    code.mov_rr(Reg::R8, Reg::Rax); // destination
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // count
+    let copy_loop = code.label();
+    let copy_done = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::R9, Reg::R9);
+    code.jcc_label(0x84, copy_done); // jz
+    code.movzx_byte(Reg::Rax, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R10, 1);
+    code.add_r_imm8(Reg::R8, 1);
+    code.sub_r_imm32(Reg::R9, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copy_done);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.leave_ret();
+
+    // Empty / error: an owned empty Str.
+    code.bind_label(empty);
+    code.sub_rsp(8); // alignment padding
+    code.xor_rr32(Reg::Rax, Reg::Rax); // length = 0
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+
+    // Not initialized: an owned empty Str instead of a fault.
+    code.bind_label(ninit);
+    code.sub_rsp(8); // alignment padding
+    code.xor_rr32(Reg::Rax, Reg::Rax); // length = 0
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
+/// `rt_net_sender_port() -> Int`: host-order port of the last datagram sender,
+/// or -1 when `rt_net_recvfrom` has not received one yet.
+///
+/// `recvfrom` writes `sin_port` in network order, so bits 16..31 of the cell's
+/// first word are the port as stored; `ntohs` converts it exactly like every
+/// other network-order value in this file.
+fn emit_net_sender_port(code: &mut Code) {
+    prologue(code);
+    // The first eight bytes of the cell ARE the sin_family/sin_port word —
+    // loading it needs no second indirection.
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_SENDER_SOCKADDR));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let none = code.label();
+    code.jcc_label(0x84, none); // jz — zeroed cell: no datagram yet
+    code.shr_r_imm8(Reg::Rax, 16);
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 16 * 8)); // ntohs
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.leave_ret();
+    code.bind_label(none);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64);
+    code.leave_ret();
+}
+
+/// `rt_net_sender_ip() -> Str`: dotted-quad address of the last datagram
+/// sender, or an owned empty Str when none was received. IPv4 only, matching
+/// the AF_INET-only socket API.
+///
+/// Frame (16 bytes): [rbp-8] the allocated Str base, kept across the digit
+/// writes that advance RAX into the data area.
+fn emit_net_sender_ip(code: &mut Code) {
+    prologue(code);
+    code.sub_rsp(16);
+    let none = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_SENDER_SOCKADDR));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, none); // jz — zeroed cell: no datagram yet
+
+    // Length: the four octets' decimal forms plus three dots. The address
+    // bytes start after sin_family and sin_port.
+    code.xor_rr32(Reg::R11, Reg::R11);
+    for i in 0..4 {
+        code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_SENDER_SOCKADDR));
+        code.movzx_byte(Reg::R10, Reg::R10, 4 + i);
+        ipv4_digits_of(code);
+    }
+    code.mov_rr(Reg::R8, Reg::R11);
+    code.add_r_imm8(Reg::R8, 3);
+    code.sub_rsp(8); // alignment padding
+    code.mov_rr(Reg::Rax, Reg::R8); // length is the last pushed slot
+    code.u8(0x50); // push rax (= length) as the stack argument
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // the Str base outlives the writes
+    code.add_r_imm8(Reg::Rax, 8); // data area
+    code.mov_rr(Reg::R8, Reg::Rax);
+
+    for i in 0..4 {
+        if i > 0 {
+            code.mov_r32_imm32(Reg::R10, b'.' as u32);
+            code.mov_mem_r8(Reg::R8, 0, Reg::R10);
+            code.add_r_imm8(Reg::R8, 1);
+        }
+        code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_SENDER_SOCKADDR));
+        code.movzx_byte(Reg::R10, Reg::R10, 4 + i);
+        ipv4_write_digits(code);
+    }
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // return the base, not the cursor
+    code.leave_ret();
+
+    code.bind_label(none);
+    code.sub_rsp(8); // alignment padding
+    code.xor_rr32(Reg::Rax, Reg::Rax); // length = 0
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+}
+
 /// `rt_net_getaddrinfo(host, port) -> Str`: resolve `host` to IPv4 text with
 /// Winsock's `getaddrinfo`.
 ///
@@ -6662,68 +7317,6 @@ fn emit_net_shutdown(code: &mut Code) {
 /// Str: on any failure an empty Str is returned, never the borrowed host
 /// pointer, which the caller also releases.
 fn emit_net_get_addr_info(code: &mut Code) {
-    // Decimal-digit count of the byte in R10, accumulated in R11.
-    fn digits_of(code: &mut Code) {
-        code.add_r_imm8(Reg::R11, 1);
-        let one = code.label();
-        code.cmp_r_imm32(Reg::R10, 10);
-        code.jcc_label(0x82, one); // jb
-        code.add_r_imm8(Reg::R11, 1);
-        code.cmp_r_imm32(Reg::R10, 100);
-        code.jcc_label(0x82, one);
-        code.add_r_imm8(Reg::R11, 1);
-        code.bind_label(one);
-    }
-
-    // Write the decimal form of the byte in R10 (no leading zeros) at R8 and
-    // advance R8 over the digits written.
-    fn write_digits(code: &mut Code) {
-        code.xor_rr32(Reg::Rcx, Reg::Rcx); // hundreds
-        let h_loop = code.label();
-        let h_done = code.label();
-        code.bind_label(h_loop);
-        code.cmp_r_imm32(Reg::R10, 100);
-        code.jcc_label(0x82, h_done); // jb
-        code.sub_r_imm32(Reg::R10, 100);
-        code.add_r_imm8(Reg::Rcx, 1);
-        code.jmp_label(h_loop);
-        code.bind_label(h_done);
-        code.xor_rr32(Reg::Rdx, Reg::Rdx); // tens
-        let t_loop = code.label();
-        let t_done = code.label();
-        code.bind_label(t_loop);
-        code.cmp_r_imm32(Reg::R10, 10);
-        code.jcc_label(0x82, t_done); // jb
-        code.sub_r_imm32(Reg::R10, 10);
-        code.add_r_imm8(Reg::Rdx, 1);
-        code.jmp_label(t_loop);
-        code.bind_label(t_done);
-        // A leading digit forces the next one out, so 105 keeps its zero.
-        let no_hundreds = code.label();
-        let units = code.label();
-        code.test_rr(Reg::Rcx, Reg::Rcx);
-        code.jcc_label(0x84, no_hundreds); // jz
-        code.add_r_imm8(Reg::Rcx, b'0');
-        code.mov_mem_r8(Reg::R8, 0, Reg::Rcx);
-        code.add_r_imm8(Reg::R8, 1);
-        code.add_r_imm8(Reg::Rdx, b'0');
-        code.mov_mem_r8(Reg::R8, 0, Reg::Rdx);
-        code.add_r_imm8(Reg::R8, 1);
-        code.jmp_label(units);
-        code.bind_label(no_hundreds);
-        let no_tens = code.label();
-        code.test_rr(Reg::Rdx, Reg::Rdx);
-        code.jcc_label(0x84, no_tens); // jz
-        code.add_r_imm8(Reg::Rdx, b'0');
-        code.mov_mem_r8(Reg::R8, 0, Reg::Rdx);
-        code.add_r_imm8(Reg::R8, 1);
-        code.bind_label(no_tens);
-        code.bind_label(units);
-        code.add_r_imm8(Reg::R10, b'0');
-        code.mov_mem_r8(Reg::R8, 0, Reg::R10);
-        code.add_r_imm8(Reg::R8, 1);
-    }
-
     prologue(code);
     // [rbp-8] c-string, [rbp-16] result list, [rbp-24] ai_addr, [rbp-32] the
     // returned Str; the 48-byte ADDRINFOA hints live at [rbp-96].
@@ -6777,13 +7370,13 @@ fn emit_net_get_addr_info(code: &mut Code) {
     code.xor_rr32(Reg::R11, Reg::R11);
     for i in 0..4 {
         code.movzx_byte(Reg::R10, Reg::R9, 4 + i);
-        digits_of(code);
+        ipv4_digits_of(code);
     }
     code.mov_rr(Reg::R8, Reg::R11);
     code.add_r_imm8(Reg::R8, 3);
-    code.sub_rsp(8);
-    code.u8(0x41); // push r8 (length)
-    code.u8(0x50);
+    code.sub_rsp(8); // alignment padding
+    code.mov_rr(Reg::Rax, Reg::R8); // length is the last pushed slot
+    code.u8(0x50); // push rax (= length) as the stack argument
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
     code.add_rsp(16);
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
@@ -6798,7 +7391,7 @@ fn emit_net_get_addr_info(code: &mut Code) {
         }
         code.mov_r_mem(Reg::R9, Reg::Rbp, -24);
         code.movzx_byte(Reg::R10, Reg::R9, 4 + i);
-        write_digits(code);
+        ipv4_write_digits(code);
     }
 
     // freeaddrinfo(result); rt_free_cstr(cstr); return the Str.
@@ -7010,34 +7603,33 @@ fn emit_process_id(code: &mut Code) {
 ///   [rbp-40]=stderr_read  [rbp-48]=stderr_write  [rbp-52]=exit_code(DWORD)
 ///   [rbp-168..rbp-64]=STARTUPINFOA(104 bytes)
 ///   [rbp-192..rbp-168]=PROCESS_INFORMATION(24 bytes)
-/// Emit a drain block for one pipe: peek the pipe and read/capture (or
-/// discard once the capture cap is reached) all currently available bytes,
+/// Emit a drain block for one pipe: peek the pipe and read all currently
+/// available bytes into the pipe's window of the stdio capture region,
 /// looping until the pipe is momentarily empty.
 ///
 /// This is the core of the Session 97 `process_run` deadlock fix: the parent
 /// keeps draining both pipes while the child runs, so a child producing more
-/// output than the ~4 KB anonymous-pipe buffer can never block forever on a
-/// full pipe while the parent waits for it.
+/// output than the anonymous-pipe buffer can never block forever on a full
+/// pipe while the parent waits for it.
 ///
-/// Capture keeps the first `cap` bytes in the BSS capture buffer; overflow is
-/// read into a scratch area and thrown away, so the child always has room to
-/// write. `PeekNamedPipe` gives an immediate, non-blocking availability count.
+/// Capture grows with demand inside the window (up to [`STDIO_WINDOW_DATA`]
+/// bytes). A child that produces more than that is a structured `E-R02` —
+/// the run fails explicitly instead of silently truncating or discarding
+/// output. `PeekNamedPipe` gives an immediate, non-blocking availability
+/// count.
 #[allow(clippy::too_many_arguments)]
 fn emit_proc_pipe_drain(
     code: &mut Code,
     h_slot: i32,
     avail_slot: i32,
     written_slot: i32,
-    capture: PatchKind,
-    cap: u64,
-    scratch: i32,
+    window_off: u64,
     bytes_read: i32,
 ) {
     let loop_start = code.label();
     let done = code.label();
-    let discard = code.label();
     let use_avail = code.label();
-    let use_avail_d = code.label();
+    let overflow = code.label();
 
     code.bind_label(loop_start);
     // avail = 0 (PeekNamedPipe may leave it untouched on failure)
@@ -7059,21 +7651,24 @@ fn emit_proc_pipe_drain(
     code.mov_r_mem(Reg::Rax, Reg::Rbp, avail_slot);
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, done); // jz
-    // remaining = cap - written (written ≤ cap always)
+    // remaining = STDIO_WINDOW_DATA - written
     code.mov_r_mem(Reg::R10, Reg::Rbp, written_slot);
-    code.movabs(Reg::R11, cap);
+    code.movabs(Reg::R11, STDIO_WINDOW_DATA);
     code.sub_rr(Reg::R11, Reg::R10); // R11 = remaining capture space
     code.test_rr(Reg::R11, Reg::R11);
-    code.jcc_label(0x8E, discard); // jle → capture full, discard
+    code.jcc_label(0x8E, overflow); // jle → window full: explicit E-R02
     // to_read = min(avail, remaining)
     code.cmp_rr(Reg::Rax, Reg::R11);
     code.jcc_label(0x8E, use_avail); // jle: use avail
     code.mov_rr(Reg::Rax, Reg::R11); // else use remaining
     code.bind_label(use_avail);
-    // ReadFile(hPipe, capture + written, to_read, &bytes_read, NULL)
+    // ReadFile(hPipe, capture + window_off + 8 + written, to_read,
+    //          &bytes_read, NULL)
     code.sub_rsp(48); // 4 reg args + 1 stack arg
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, h_slot);
-    code.lea_r_rip(Reg::Rdx, capture);
+    code.mov_r_rip(Reg::Rdx, PatchKind::Bss(STDIO_CAPTURE));
+    code.movabs(Reg::R11, window_off + 8);
+    code.add_rr(Reg::Rdx, Reg::R11);
     code.add_rr(Reg::Rdx, Reg::R10); // + written
     code.mov_rr(Reg::R8, Reg::Rax); // to_read
     code.lea_r_mem(Reg::R9, Reg::Rbp, bytes_read);
@@ -7081,6 +7676,9 @@ fn emit_proc_pipe_drain(
     code.mov_mem_r(Reg::Rsp, 32, Reg::Rax); // lpOverlapped = NULL
     code.call_rip(PatchKind::Iat(IAT_READ_FILE));
     code.add_rsp(48);
+    // The pipe closed under us → nothing more to capture.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, done);
     // written += bytes_read
     code.mov_r_mem(Reg::R10, Reg::Rbp, bytes_read);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, written_slot);
@@ -7088,32 +7686,38 @@ fn emit_proc_pipe_drain(
     code.mov_mem_r(Reg::Rbp, written_slot, Reg::Rax);
     code.jmp_label(loop_start);
 
-    // Discard path: capture cap reached; read into scratch and throw away so
-    // the child can keep writing, then re-peek.
-    code.bind_label(discard);
-    // to_read = min(avail, 2048)
-    code.movabs(Reg::R11, 2048u64);
-    code.cmp_rr(Reg::Rax, Reg::R11);
-    code.jcc_label(0x8E, use_avail_d); // jle: use avail
-    code.mov_rr(Reg::Rax, Reg::R11); // else use 2048
-    code.bind_label(use_avail_d);
-    code.sub_rsp(48);
-    code.mov_r_mem(Reg::Rcx, Reg::Rbp, h_slot);
-    code.lea_r_mem(Reg::Rdx, Reg::Rbp, scratch);
-    code.mov_rr(Reg::R8, Reg::Rax);
-    code.lea_r_mem(Reg::R9, Reg::Rbp, bytes_read);
-    code.xor_rr32(Reg::Rax, Reg::Rax);
-    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax);
-    code.call_rip(PatchKind::Iat(IAT_READ_FILE));
-    code.add_rsp(48);
-    code.jmp_label(loop_start);
+    code.bind_label(overflow);
+    fail(code, 2); // E-R02: captured output exceeded the stream window
 
     code.bind_label(done);
 }
 
+/// `rt_process_run(cmd) -> Int` — run `cmd`, capture stdout/stderr, wait, and
+/// return the child's exit code.
 fn emit_process_run(code: &mut Code) {
+    emit_process_run_common(code, false);
+}
+
+/// `rt_process_run_input(cmd, input) -> Int` — [`emit_process_run`], with
+/// `input` written to the child's standard input first.
+///
+/// The child gets its own stdin pipe; the parent writes `input`, closes the
+/// write end (so the child sees EOF exactly as it would from a redirected
+/// file), and then proceeds with the usual capture-and-wait loop. Writing is
+/// capped at one pipe buffer, because a synchronous write of more than the
+/// buffer holds while a child that does not read stdin would deadlock the
+/// parent before it ever began draining stdout.
+fn emit_process_run_input(code: &mut Code) {
+    emit_process_run_common(code, true);
+}
+
+/// Shared body of the two process-run services. `with_input` adds the stdin
+/// pipe; every other instruction is identical, so the capture window, the
+/// drain loop and the handle cleanup cannot drift between the two.
+fn emit_process_run_common(code: &mut Code, with_input: bool) {
     prologue(code);
-    // [rbp+16] = cmd Str ptr
+    ensure_stdio_capture(code);
+    // [rbp+16] = cmd Str ptr, [rbp+24] = input Str ptr (with_input only)
 
     // Convert cmd to CStr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
@@ -7123,6 +7727,25 @@ fn emit_process_run(code: &mut Code) {
     // buffer (2048 bytes, offsets -2624..-577) below it.
     code.sub_rsp(2624);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // [rbp-8] = original cstr
+
+    // Start from empty capture windows: zero both length prefixes and
+    // publish the (still empty) stdout/stderr views, so a launch failure
+    // still leaves consistent accessors.
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(STDIO_CAPTURE)); // region base
+    // stdout window
+    code.movabs(Reg::R11, STDIO_STDOUT_OFF);
+    code.add_rr(Reg::R11, Reg::R10);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::R11, 0, Reg::Rax); // stdout length prefix = 0
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.proc_stdout_len as u32));
+    code.mov_rip_r(Reg::R11, PatchKind::Bss(BSS.proc_stdout_ptr as u32));
+    // stderr window
+    code.movabs(Reg::R11, STDIO_STDERR_OFF);
+    code.add_rr(Reg::R11, Reg::R10);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::R11, 0, Reg::Rax); // stderr length prefix = 0
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.proc_stderr_len as u32));
+    code.mov_rip_r(Reg::R11, PatchKind::Bss(BSS.proc_stderr_ptr as u32));
 
     // Build "cmd.exe /c " + cmd CStr
     // Get MINK string length
@@ -7187,6 +7810,33 @@ fn emit_process_run(code: &mut Code) {
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rax);
+    if with_input {
+        code.mov_mem_r(Reg::Rbp, -200, Reg::Rax);
+        code.mov_mem_r(Reg::Rbp, -208, Reg::Rax);
+        code.mov_mem_r(Reg::Rbp, -216, Reg::Rax);
+    }
+
+    // Remember the input string while [rbp+24] is still live. Slots
+    // -200/-208/-216 sit below PROCESS_INFORMATION ([rbp-192]) and clear of
+    // every other local in this frame.
+    if with_input {
+        code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+        code.mov_r_mem(Reg::R10, Reg::Rax, 0); // R10 = input length
+        code.mov_mem_r(Reg::Rbp, -208, Reg::R10);
+        // An empty input still needs a non-null pointer; the placeholder is
+        // never dereferenced because the length is zero.
+        let len_is_zero = code.label();
+        let len_known = code.label();
+        code.test_rr(Reg::R10, Reg::R10);
+        code.jcc_label(0x84, len_is_zero);
+        code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+        code.add_r_imm8(Reg::Rax, 8); // RAX = input data (Str: [len][bytes])
+        code.jmp_label(len_known);
+        code.bind_label(len_is_zero);
+        code.movabs(Reg::Rax, 1);
+        code.bind_label(len_known);
+        code.mov_mem_r(Reg::Rbp, -200, Reg::Rax);
+    }
 
     // Build SECURITY_ATTRIBUTES at [rbp-544] with bInheritHandle=TRUE
     // SA layout (x64): nLength(4)+pad(4)+lpSecDesc(8)+bInherit(8) = 24 bytes
@@ -7233,6 +7883,28 @@ fn emit_process_run(code: &mut Code) {
     code.call_rip(PatchKind::Iat(IAT_SET_HANDLE_INFORMATION));
     code.add_rsp(32);
 
+    // CreatePipeA for stdin. Both ends start inheritable, then the inherit
+    // flag is cleared on the parent-side WRITE end: the child must inherit
+    // the read end as its stdin, and it must not inherit the write end, or
+    // it would hold the pipe open after the parent closes its own write
+    // handle and never see EOF.
+    if with_input {
+        code.sub_rsp(32);
+        code.lea_r_mem(Reg::Rcx, Reg::Rbp, -56); // &stdin_read
+        code.lea_r_mem(Reg::Rdx, Reg::Rbp, -64); // &stdin_write
+        code.lea_r_mem(Reg::R8, Reg::Rbp, -544); // &SECURITY_ATTRIBUTES
+        code.xor_rr32(Reg::R9, Reg::R9); // nSize = 0 (default)
+        code.call_rip(PatchKind::Iat(IAT_CREATE_PIPE_A));
+        code.add_rsp(32);
+
+        code.sub_rsp(32);
+        code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64); // hHandle = stdin_write
+        code.movabs(Reg::Rdx, 1u64); // HANDLE_FLAG_INHERIT
+        code.xor_rr32(Reg::R8, Reg::R8); // clear the flag
+        code.call_rip(PatchKind::Iat(IAT_SET_HANDLE_INFORMATION));
+        code.add_rsp(32);
+    }
+
     // Zero STARTUPINFOA (104 bytes at [rbp-168])
     for i in 0..13 {
         code.xor_rr32(Reg::Rax, Reg::Rax);
@@ -7246,6 +7918,17 @@ fn emit_process_run(code: &mut Code) {
     // Set dwFlags = STARTF_USESTDHANDLES (0x100)
     code.movabs(Reg::Rax, 0x100u64);
     code.mov_mem_r(Reg::Rbp, -168 + 60, Reg::Rax);
+
+    // Set hStdInput = stdin_read. STARTUPINFOA puts hStdInput at offset 80
+    // (after the 8-byte lpReserved2 at 72), not at 76: a store at 76 covers
+    // only the low half of the handle and leaves the high half zero, which
+    // happens to work for small handle values but is not the field. Without
+    // a valid hStdInput the child gets an invalid stdin handle, so `input`
+    // would go nowhere.
+    if with_input {
+        code.mov_r_mem(Reg::Rax, Reg::Rbp, -56);
+        code.mov_mem_r(Reg::Rbp, -168 + 80, Reg::Rax);
+    }
 
     // Set hStdOutput = stdout_write (offset 88 in STARTUPINFOA)
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
@@ -7280,6 +7963,60 @@ fn emit_process_run(code: &mut Code) {
     code.call_rip(PatchKind::Iat(IAT_CREATE_PROCESS_A));
     code.add_rsp(80);
 
+    // Feed the child's stdin, then close the write end so the child sees EOF
+    // exactly as it would from a redirected file. The write is capped at one
+    // pipe buffer (4096): a synchronous write of more would block here while
+    // the child is still starting up, deadlocking the parent before the
+    // drain loop below begins.
+    if with_input {
+        // The running "bytes left" count lives in [rbp-208] rather than in a
+        // register: `WriteFile` follows the Windows ABI, so R10/R11 are
+        // volatile across it, and a loop that kept the count in R11 would
+        // resume with a clobbered value and flood the pipe with parent
+        // memory (then block forever once the pipe filled).
+        let write_loop = code.label();
+        let write_done = code.label();
+        code.mov_r_mem(Reg::R10, Reg::Rbp, -208); // total to write
+        code.movabs(Reg::R11, STDIN_PIPE_LIMIT);
+        // R11 = min(total, one pipe buffer).
+        let use_total = code.label();
+        code.cmp_rr(Reg::R10, Reg::R11);
+        code.jcc_label(0x87, use_total); // ja → total > limit, keep the limit
+        code.mov_rr(Reg::R11, Reg::R10);
+        code.bind_label(use_total);
+        code.mov_mem_r(Reg::Rbp, -208, Reg::R11); // bytes left to write
+        code.bind_label(write_loop);
+        code.mov_r_mem(Reg::R11, Reg::Rbp, -208); // reload across the call
+        code.test_rr(Reg::R11, Reg::R11);
+        code.jcc_label(0x84, write_done); // jz
+        // WriteFile(stdin_write, [input], R11, &written[rbp-216], NULL)
+        code.sub_rsp(32);
+        code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64); // hFile = stdin_write
+        code.mov_r_mem(Reg::Rdx, Reg::Rbp, -200); // lpBuffer
+        code.mov_rr(Reg::R8, Reg::R11); // nNumberOfBytesToWrite
+        code.lea_r_mem(Reg::R9, Reg::Rbp, -216); // lpNumberOfBytesWritten
+        code.xor_rr32(Reg::Rax, Reg::Rax); // lpOverlapped = NULL
+        code.mov_mem_r(Reg::Rsp, 32, Reg::Rax);
+        code.call_rip(PatchKind::Iat(IAT_WRITE_FILE));
+        code.add_rsp(32);
+        // A failed or short write stops the loop rather than spinning: the
+        // child may have exited, in which case there is nobody to drain.
+        code.test_rr(Reg::Rax, Reg::Rax);
+        code.jcc_label(0x84, write_done); // jz → WriteFile failed
+        // Advance the buffer by the bytes actually written.
+        code.mov_r_mem(Reg::Rax, Reg::Rbp, -216);
+        code.test_rr(Reg::Rax, Reg::Rax);
+        code.jcc_label(0x84, write_done); // jz → wrote nothing
+        code.mov_r_mem(Reg::R10, Reg::Rbp, -200);
+        code.add_rr(Reg::R10, Reg::Rax);
+        code.mov_mem_r(Reg::Rbp, -200, Reg::R10);
+        code.mov_r_mem(Reg::R11, Reg::Rbp, -208);
+        code.sub_rr(Reg::R11, Reg::Rax);
+        code.mov_mem_r(Reg::Rbp, -208, Reg::R11);
+        code.jmp_label(write_loop);
+        code.bind_label(write_done);
+    }
+
     // Close pipe write ends
     code.sub_rsp(32);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
@@ -7289,6 +8026,16 @@ fn emit_process_run(code: &mut Code) {
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -48);
     code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
     code.add_rsp(32);
+    if with_input {
+        code.sub_rsp(32);
+        code.mov_r_mem(Reg::Rcx, Reg::Rbp, -64); // stdin_write
+        code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+        code.add_rsp(32);
+        code.sub_rsp(32);
+        code.mov_r_mem(Reg::Rcx, Reg::Rbp, -56); // stdin_read (parent copy)
+        code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+        code.add_rsp(32);
+    }
 
     // Zero capture counters, exit-code slot, and bytes-read scratch.
     code.xor_rr32(Reg::Rax, Reg::Rax);
@@ -7303,28 +8050,10 @@ fn emit_process_run(code: &mut Code) {
     // pipe while the parent waits for it, because the parent keeps draining.
     let poll_loop = code.label();
     code.bind_label(poll_loop);
-    // Drain stdout (capture into stdout_buf data, cap 4088 bytes)
-    emit_proc_pipe_drain(
-        code,
-        -24,
-        -64,
-        -80,
-        PatchKind::Bss(BSS.stdout_buf as u32 + 8),
-        4088u64,
-        -2624,
-        -96,
-    );
-    // Drain stderr (capture into stderr_buf data, cap 4088 bytes)
-    emit_proc_pipe_drain(
-        code,
-        -40,
-        -72,
-        -88,
-        PatchKind::Bss(BSS.stderr_buf as u32 + 8),
-        4088u64,
-        -2624,
-        -96,
-    );
+    // Drain stdout into its capture window.
+    emit_proc_pipe_drain(code, -24, -64, -80, STDIO_STDOUT_OFF, -96);
+    // Drain stderr into its capture window.
+    emit_proc_pipe_drain(code, -40, -72, -88, STDIO_STDERR_OFF, -96);
     // WaitForSingleObject(hProcess, 20)
     code.sub_rsp(32);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -192);
@@ -7337,26 +8066,8 @@ fn emit_process_run(code: &mut Code) {
     code.jcc_label(0x84, poll_loop); // jz
 
     // Final drain after the child exited (captures anything still buffered).
-    emit_proc_pipe_drain(
-        code,
-        -24,
-        -64,
-        -80,
-        PatchKind::Bss(BSS.stdout_buf as u32 + 8),
-        4088u64,
-        -2624,
-        -96,
-    );
-    emit_proc_pipe_drain(
-        code,
-        -40,
-        -72,
-        -88,
-        PatchKind::Bss(BSS.stderr_buf as u32 + 8),
-        4088u64,
-        -2624,
-        -96,
-    );
+    emit_proc_pipe_drain(code, -24, -64, -80, STDIO_STDOUT_OFF, -96);
+    emit_proc_pipe_drain(code, -40, -72, -88, STDIO_STDERR_OFF, -96);
 
     // GetExitCodeProcess(hProcess, &exit_code)
     code.sub_rsp(32);
@@ -7365,26 +8076,25 @@ fn emit_process_run(code: &mut Code) {
     code.call_rip(PatchKind::Iat(IAT_GET_EXIT_CODE_PROCESS));
     code.add_rsp(32);
 
-    // Publish captured stdout length and pointer (bounded-capture contract:
-    // at most 4088 bytes per stream; overflow is discarded).
+    // Publish captured stdout: the window's length prefix plus the
+    // proc_stdout_ptr/proc_stdout_len cells the accessors read. The window
+    // base is runtime-owned scratch; accessors hand out a borrowed view.
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(STDIO_CAPTURE));
+    code.movabs(Reg::R11, STDIO_STDOUT_OFF);
+    code.add_rr(Reg::R11, Reg::R10); // stdout window base
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -80);
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.stdout_buf as u32));
-    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stdout_len as u32));
-    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
-    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stdout_buf as u32));
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stdout_ptr as u32));
-    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.mov_mem_r(Reg::R11, 0, Reg::Rax); // [window] = captured length
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.proc_stdout_len as u32));
+    code.mov_rip_r(Reg::R11, PatchKind::Bss(BSS.proc_stdout_ptr as u32));
 
-    // Publish captured stderr length and pointer.
+    // Publish captured stderr (its window sits at STDIO_STDERR_OFF).
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(STDIO_CAPTURE));
+    code.movabs(Reg::R11, STDIO_STDERR_OFF);
+    code.add_rr(Reg::R10, Reg::R11);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -88);
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.stderr_buf as u32));
     code.mov_mem_r(Reg::R10, 0, Reg::Rax);
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stderr_len as u32));
-    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
-    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stderr_buf as u32));
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.proc_stderr_ptr as u32));
-    code.mov_mem_r(Reg::R10, 0, Reg::Rax);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.proc_stderr_len as u32));
+    code.mov_rip_r(Reg::R10, PatchKind::Bss(BSS.proc_stderr_ptr as u32));
 
     // Close handles
     code.sub_rsp(32);
@@ -7416,17 +8126,27 @@ fn emit_process_run(code: &mut Code) {
     code.leave_ret();
 }
 
-/// `rt_process_stdout() -> Str`: Return BSS stdout buffer as Str.
+/// `rt_process_stdout() -> Str`: the captured stdout of the last
+/// `rt_process_run`, as a borrowed view into the runtime-owned capture
+/// window (the caller must not free it; the next run overwrites it).
 fn emit_process_stdout(code: &mut Code) {
     prologue(code);
-    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stdout_buf as u32));
+    ensure_stdio_capture(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(STDIO_CAPTURE));
+    code.movabs(Reg::R11, STDIO_STDOUT_OFF);
+    code.add_rr(Reg::Rax, Reg::R11);
     code.leave_ret();
 }
 
-/// `rt_process_stderr() -> Str`: Return BSS stderr buffer as Str.
+/// `rt_process_stderr() -> Str`: the captured stderr of the last
+/// `rt_process_run`, as a borrowed view into the runtime-owned capture
+/// window (the caller must not free it; the next run overwrites it).
 fn emit_process_stderr(code: &mut Code) {
     prologue(code);
-    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.stderr_buf as u32));
+    ensure_stdio_capture(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(STDIO_CAPTURE));
+    code.movabs(Reg::R11, STDIO_STDERR_OFF);
+    code.add_rr(Reg::Rax, Reg::R11);
     code.leave_ret();
 }
 
@@ -7891,11 +8611,14 @@ fn emit_stderr_write(code: &mut Code) {
 }
 
 /// `rt_stdin_read() -> Str`: read all available standard input to EOF
-/// (chunked `ReadFile` into the fixed stdin buffer, up to 65528 bytes),
-/// returned as an owned exact-length `Str`. EOF and error stop the read;
-/// no input is an owned empty `Str`.
+/// (chunked `ReadFile` into the stdin window of the runtime-owned stdio
+/// capture region, up to [`STDIO_WINDOW_DATA`] bytes), returned as an
+/// owned exact-length `Str`. EOF and error stop the read; no input is an
+/// owned empty `Str`. Input larger than the window is a structured
+/// `E-R02` — never a silent truncation.
 fn emit_stdin_read(code: &mut Code) {
     prologue(code);
+    ensure_stdio_capture(code);
     code.sub_rsp(48); // [rbp-8] total, [rbp-16] handle, [rbp-24] result
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // total = 0
@@ -7911,17 +8634,18 @@ fn emit_stdin_read(code: &mut Code) {
     let loop_start = code.label();
     let loop_done = code.label();
     code.bind_label(loop_start);
-    // remaining = 65528 - total
+    // remaining = STDIO_WINDOW_DATA - total
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
-    code.mov_r32_imm32(Reg::R8, 65528);
+    code.movabs(Reg::R8, STDIO_WINDOW_DATA);
     code.sub_rr(Reg::R8, Reg::Rdx);
     code.test_rr(Reg::R8, Reg::R8);
-    code.jcc_label(0x84, loop_done); // jz — buffer full
-    // ReadFile(handle, buf+8+total, remaining, &bytes_written, NULL)
+    let overflow = code.label();
+    code.jcc_label(0x84, overflow); // jz — window full: explicit E-R02
+    // ReadFile(handle, capture+8+total, remaining, &bytes_written, NULL)
     code.sub_rsp(48); // 32 shadow + 8 (5th arg) + 8 pad
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // total
-    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(STDIN_BUF));
+    code.mov_r_rip(Reg::Rdx, PatchKind::Bss(STDIO_CAPTURE));
     code.add_r_imm8(Reg::Rdx, 8);
     code.add_rr(Reg::Rdx, Reg::Rax);
     code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32));
@@ -7952,7 +8676,7 @@ fn emit_stdin_read(code: &mut Code) {
     code.bind_label(copy_loop);
     code.test_rr(Reg::R9, Reg::R9);
     code.jcc_label(0x84, copy_done); // jz
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(STDIN_BUF));
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(STDIO_CAPTURE));
     code.add_r_imm8(Reg::R10, 8);
     code.mov_r_mem(Reg::R11, Reg::Rbp, -8);
     code.sub_rr(Reg::R11, Reg::R9); // offset
@@ -7967,6 +8691,8 @@ fn emit_stdin_read(code: &mut Code) {
     code.bind_label(copy_done);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
     code.leave_ret();
+    code.bind_label(overflow);
+    fail(code, 2); // E-R02: standard input exceeded the capture window
     code.bind_label(empty);
     // Owned empty Str.
     code.sub_rsp(8);
@@ -8216,7 +8942,11 @@ fn emit_argc(code: &mut Code) {
 /// the returned string is an owned heap `Str` the caller must free.
 fn emit_argv(code: &mut Code) {
     prologue(code);
-    code.sub_rsp(32); // [rbp-8] result
+    // [rbp-8] result, [rbp-16] arg_data offset, [rbp-24] length.
+    // The offset and length live in the frame rather than in R8/R9 because
+    // both registers are volatile across the StrAlloc call below, and the
+    // copy loop that consumes them must see the table's values.
+    code.sub_rsp(32);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::ArgvParse));
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // index
     code.test_rr(Reg::Rax, Reg::Rax);
@@ -8232,6 +8962,8 @@ fn emit_argv(code: &mut Code) {
     code.add_rr(Reg::Rdx, Reg::Rcx);
     code.mov_r_mem(Reg::R8, Reg::Rdx, 0); // offset
     code.mov_r_mem(Reg::R9, Reg::Rdx, 8); // length
+    code.mov_mem_r(Reg::Rbp, -16, Reg::R8); // spill offset
+    code.mov_mem_r(Reg::Rbp, -24, Reg::R9); // spill length
     // StrAlloc(length)
     code.mov_rr(Reg::Rax, Reg::R9);
     code.sub_rsp(8);
@@ -8240,9 +8972,11 @@ fn emit_argv(code: &mut Code) {
     code.add_rsp(16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
     // Copy loop with advancing cursors: src = arg_data+offset, dst = result+8.
-    // R9 holds the length (from the table entry); R8 the offset.
+    // R9 holds the length (from the frame); R8 the offset.
     code.mov_r_mem(Reg::R10, Reg::Rbp, -8); // result ptr
     code.add_r_imm8(Reg::R10, 8); // dst cursor
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -16); // offset
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -24); // length
     code.lea_r_rip(Reg::R11, PatchKind::Bss(ARG_DATA));
     code.add_rr(Reg::R11, Reg::R8); // src cursor
     let copy_loop = code.label();
@@ -8822,6 +9556,8 @@ const IAT_GET_COMMAND_LINE_A: u32 = 36;
 const IAT_CREATE_THREAD: u32 = 37;
 const IAT_EXIT_THREAD: u32 = 38;
 const IAT_GET_CURRENT_THREAD_ID: u32 = 39;
+// --- Session 125: growable heap ---
+const IAT_VIRTUAL_ALLOC: u32 = 40;
 
 const IAT_STD_INPUT_HANDLE: i32 = -10;
 
@@ -9545,6 +10281,17 @@ fn emit_fs_set_cwd(code: &mut Code) {
     code.mov_rr(Reg::Rcx, Reg::Rax);
     code.call_rip(PatchKind::Iat(IAT_SET_CURRENT_DIRECTORY_A));
     code.add_rsp(32);
+    // SetCurrentDirectoryA returns BOOL (nonzero = success). Invert to the
+    // runtime convention shared by the other fs mutators: 0=ok, 1=error.
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let is_ok = code.label();
+    code.jcc_label(0x85, is_ok); // jnz: nonzero = Win32 success
+    code.mov_r32_imm32(Reg::Rax, 1); // error = 1
+    let end = code.label();
+    code.jmp_label(end);
+    code.bind_label(is_ok);
+    code.xor_rr32(Reg::Rax, Reg::Rax); // success = 0
+    code.bind_label(end);
     // Save return value before free_cstr clobbers RAX
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);

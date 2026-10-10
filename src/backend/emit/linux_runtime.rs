@@ -26,7 +26,11 @@ use std::collections::HashMap;
 
 use super::super::ir::RuntimeService;
 use super::x86_64::{Code, PatchKind, Reg};
-use crate::runtime::abi::{BSS, HEAP_SIZE, MAX_LIVE_ALLOCS};
+// The Linux target is frozen: its heap remains the fixed `.bss` arena
+// (`HEAP_BSS_BYTES`), i.e. exactly the pre-Session-125 behavior. The
+// Windows-only growth region (`heap_base`/`heap_committed`) is unused
+// here.
+use crate::runtime::abi::{BSS, HEAP_BSS_BYTES, MAX_LIVE_ALLOCS};
 use crate::runtime::error::RuntimeErrorKind;
 
 // ===========================================================================
@@ -293,7 +297,7 @@ fn emit_alloc(code: &mut Code) {
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
     code.mov_rr(Reg::Rax, Reg::Rcx);
     code.add_rr(Reg::Rax, Reg::Rdx); // new offset
-    code.cmp_r_imm32(Reg::Rax, HEAP_SIZE as u32);
+    code.cmp_r_imm32(Reg::Rax, HEAP_BSS_BYTES as u32);
     let oom = code.label();
     code.jcc_label(0x87, oom); // ja
     code.mov_rr(Reg::Rax, Reg::Rcx); // block offset
@@ -3252,6 +3256,10 @@ pub(crate) fn emit_services(
     // --- Process services ---
     emit!(RuntimeService::ProcessId, emit_process_id);
     emit!(RuntimeService::ProcessRun, emit_process_run);
+    // Session 125: feeding a child's stdin is Windows-only so far; Linux
+    // keeps the service table complete with the shared -1 stub, which the
+    // process library reports as a failed launch.
+    emit!(RuntimeService::ProcessRunInput, emit_linux_stub_minus_one);
     emit!(RuntimeService::ProcessStdout, emit_process_stdout);
     emit!(RuntimeService::ProcessStderr, emit_process_stderr);
     emit!(RuntimeService::ProcessStdoutLen, emit_process_stdout_len);
@@ -3315,6 +3323,23 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::NetRecv, emit_net_recv);
     emit!(RuntimeService::NetClose, emit_net_close);
     emit!(RuntimeService::NetShutdown, emit_net_shutdown);
+    // Session 125 UDP datagram services. The Windows runtime implements these
+    // against ws2_32's sendto/recvfrom; the Linux socket set is frozen, so they
+    // resolve to the established stubs — an Int service answers -1 and a Str
+    // service an owned empty Str — instead of leaving the service table
+    // incomplete (a missing entry is a hard lookup failure at patch time).
+    emit!(RuntimeService::NetSendTo, |code: &mut Code| {
+        emit_linux_stub_minus_one(code)
+    });
+    emit!(RuntimeService::NetRecvFrom, |code: &mut Code| {
+        emit_linux_stub_empty_str(code)
+    });
+    emit!(RuntimeService::NetSenderPort, |code: &mut Code| {
+        emit_linux_stub_minus_one(code)
+    });
+    emit!(RuntimeService::NetSenderIp, |code: &mut Code| {
+        emit_linux_stub_empty_str(code)
+    });
     emit!(RuntimeService::NetGetAddrInfo, emit_net_get_addr_info);
     emit!(RuntimeService::NetFreeAddrInfo, emit_net_free_addr_info);
     emit!(RuntimeService::NetSetNonblocking, emit_net_set_nonblocking);

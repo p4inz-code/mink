@@ -264,7 +264,10 @@ fn _skip_ws(arena: Ptr<Int>, input_len: Int, pos: Int) -> Int {
     return p;
 }
 
-fn _hex_digit(ch: Int) -> Int {
+// Named `_json_hex_digit` to avoid colliding with the private
+// `_hex_digit` helper in `stdlib/hashing.mink` when both modules are
+// linked into one program.
+fn _json_hex_digit(ch: Int) -> Int {
     if ch >= 48 && ch <= 57 { return ch - 48; }
     if ch >= 65 && ch <= 70 { return ch - 55; }
     if ch >= 97 && ch <= 102 { return ch - 87; }
@@ -296,10 +299,10 @@ fn _parse_string_from_arena(arena: Ptr<Int>, input_len: Int, pos: Int) -> (Str, 
                     else if esc == 114 { rt_str_set_byte(out, j, 13); j = j + 1; }
                     else if esc == 116 { rt_str_set_byte(out, j, 9); j = j + 1; }
                     else if esc == 117 && k + 5 < i {
-                        let hi = _hex_digit(_read(arena, k + 2));
-                        let hi2 = _hex_digit(_read(arena, k + 3));
-                        let lo = _hex_digit(_read(arena, k + 4));
-                        let lo2 = _hex_digit(_read(arena, k + 5));
+                        let hi = _json_hex_digit(_read(arena, k + 2));
+                        let hi2 = _json_hex_digit(_read(arena, k + 3));
+                        let lo = _json_hex_digit(_read(arena, k + 4));
+                        let lo2 = _json_hex_digit(_read(arena, k + 5));
                         let code = hi * 4096 + hi2 * 256 + lo * 16 + lo2;
                         if code <= 127 { rt_str_set_byte(out, j, code); }
                         else { rt_str_set_byte(out, j, 63); }
@@ -428,7 +431,11 @@ fn _parse_object(arena: Ptr<Int>, input_len: Int, pos: Int, wp: Int) -> (Int, In
         entry_wp = val_result.2;
         count = count + 1;
         if p < input_len && _read(arena, p) == 44 {
-            p = p + 1;
+            // JSON allows insignificant whitespace between tokens, so skip
+            // it after the separator too — without this a pretty-printed
+            // object (`{ "a": 1, "b": 2 }`) failed to parse while a compact
+            // one succeeded.
+            p = _skip_ws(arena, input_len, p + 1);
         } else if p < input_len && _read(arena, p) == 125 {
             _write(arena, obj_wp + 1, count);
             return (obj_wp, p + 1, entry_wp);

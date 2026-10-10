@@ -45,7 +45,13 @@ pub(crate) fn build_elf(text: &[u8], data: &[u8], bss_size: u32, entry_offset: u
     // Data segment starts at next page boundary after text
     let data_file_offset = align_up(ENTRY_OFFSET + text_file_size, PAGE_SIZE);
     let data_addr = BASE_ADDR + data_file_offset;
-    let data_file_size = data.len() as u64;
+    // `.data` is padded to a 16-byte multiple so the zero-filled `.bss` that
+    // the loader places right after `p_filesz` keeps its intended alignment.
+    // The runtime BSS layout puts the heap arena at a 16-byte-aligned offset
+    // (BSS.arena), so an unpadded 8-byte `.data` would shift every BSS field
+    // by 8 and hand out misaligned heap blocks — every `rt_str_free` would
+    // then fail the E-R07 misalignment check.
+    let data_file_size = align_up(data.len() as u64, 16);
     let data_mem_size = data_file_size + bss_size as u64;
 
     let total_size = (data_file_offset + data_file_size) as usize;

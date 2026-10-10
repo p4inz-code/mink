@@ -733,18 +733,33 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn walk_block(&mut self, block: &crate::ast::Block) {
+    /// Walks a block. Returns whether control flow **terminates** inside it (a
+/// `return` whose enclosing arms also return): a terminating block's
+/// post-state never reaches the statements after it, so a move performed on
+/// that path is invisible to them.
+    fn walk_block(&mut self, block: &crate::ast::Block) -> bool {
         // A block is a scope: borrows declared inside it are released when
         // it exits, so a reference cannot outlive its declaring block.
         self.scopes.push(Vec::new());
+        // `Some(true)` = ended on a `return` (the path leaves the function,
+        // so its post-state must not reach the statements after it);
+        // `Some(false)` = ended on `break`/`continue` (the path leaves the
+        // block but its moves still reach the enclosing loop's exit state).
+        let mut stop: Option<bool> = None;
         for stmt in &block.stmts {
-            self.walk_stmt(stmt);
+            if stop.is_some() {
+                // Unreachable after `return`/`break`/`continue`; walking it
+                // would poison live bindings with a path that never runs.
+                break;
+            }
+            stop = self.walk_stmt(stmt);
         }
         if let Some(scope) = self.scopes.pop() {
             for symbol in scope {
                 self.release_binding(symbol);
             }
         }
+        matches!(stop, Some(true))
     }
 
     /// Records `symbol` as declared in the current innermost scope, so its
@@ -798,7 +813,7 @@ impl<'a> Analyzer<'a> {
         self.borrows.insert(source, next);
     }
 
-    fn walk_stmt(&mut self, stmt: &Stmt) {
+    fn walk_stmt(&mut self, stmt: &Stmt) -> Option<bool> {
         match &stmt.kind {
             StmtKind::Let(binding) => {
                 let value = self.eval_expr(&binding.init, Mode::Transfer);
@@ -836,14 +851,21 @@ impl<'a> Analyzer<'a> {
             StmtKind::Return(Some(value)) => {
                 let evaluated = self.eval_expr(value, Mode::Transfer);
                 self.merge_result(value, &evaluated);
+                return Some(true);
             }
-            StmtKind::Return(None) | StmtKind::Continue => {}
+            StmtKind::Return(None) => return Some(true),
+            StmtKind::Continue => return Some(false),
             StmtKind::Break(value) => {
                 if let Some(value) = value {
                     self.eval_expr(value, Mode::Transfer);
                 }
+                return Some(false);
             }
-            StmtKind::If(stmt) => self.walk_if(stmt),
+            StmtKind::If(stmt) => {
+                if self.walk_if(stmt) {
+                    return Some(true);
+                }
+            }
             StmtKind::While { cond, body } => {
                 self.eval_expr(cond, Mode::Observe);
                 self.walk_block(body);
@@ -858,12 +880,19 @@ impl<'a> Analyzer<'a> {
                 // type today), so it is never tracked.
                 self.walk_block(body);
             }
-            StmtKind::Loop(body) => self.walk_block(body),
-            StmtKind::Match(stmt) => self.walk_match(stmt),
+            StmtKind::Loop(body) => {
+                self.walk_block(body);
+            }
+            StmtKind::Match(stmt) => {
+                if self.walk_match(stmt) {
+                    return Some(true);
+                }
+            }
             StmtKind::Expr(expr) => {
                 self.eval_expr(expr, Mode::Observe);
             }
         }
+        None
     }
 
     /// Walks a `match` statement: the scrutinee is observed (matchable
@@ -875,10 +904,17 @@ impl<'a> Analyzer<'a> {
     /// binding, leaving the scrutinee's payload consumed on every arm that
     /// binds one. Arms inherit the enclosing loop/function context (their
     /// bodies may `break`, `continue`, or `return`).
-    fn walk_match(&mut self, stmt: &crate::ast::MatchStmt) {
+    fn walk_match(&mut self, stmt: &crate::ast::MatchStmt) -> bool {
         let scrutinee_value = self.eval_expr(&stmt.scrutinee, Mode::Observe);
         let mut moved_payload = false;
+        // Session 126: as for a conditional, each arm is analyzed from the
+        // state at the `match` and the arms converge on a conservative
+        // join, so a move in one arm is invisible to the others.
+        let entry = self.snapshot_flow();
+        let mut arm_states = Vec::new();
+        let mut all_terminated = !stmt.arms.is_empty();
         for arm in &stmt.arms {
+            self.restore_flow(&entry);
             match &arm.pattern {
                 crate::ast::Pattern::Binding(name) => {
                     // A scalar copy: no ownership state is tracked, but the
@@ -933,8 +969,12 @@ impl<'a> Analyzer<'a> {
             if let Some(guard) = &arm.guard {
                 self.eval_expr(guard, Mode::Observe);
             }
-            self.walk_block(&arm.body);
+            if !self.walk_block(&arm.body) {
+                arm_states.push(self.snapshot_flow());
+                all_terminated = false;
+            }
         }
+        self.join_flow(&entry, &arm_states);
         if moved_payload {
             // The payload moved out of the scrutinee on some arm: the
             // enum's payload is consumed (a use of the scrutinee after the
@@ -945,6 +985,7 @@ impl<'a> Analyzer<'a> {
             // identifier root dies whole.
             self.mark_scrutinee_consumed(&stmt.scrutinee);
         }
+        all_terminated
     }
 
     /// Marks the value consumed by an owned-payload match consumed, at
@@ -1030,24 +1071,172 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    fn walk_if(&mut self, stmt: &IfStmt) {
+    fn walk_if(&mut self, stmt: &IfStmt) -> bool {
         self.eval_expr(&stmt.cond, Mode::Observe);
-        self.walk_block(&stmt.then_block);
-        match &stmt.else_branch {
-            Some(ElseBranch::If(nested)) => self.walk_if(nested),
-            Some(ElseBranch::IfExpr(inner)) => self.walk_if_expr(inner),
-            Some(ElseBranch::Block(block)) => self.walk_block(block),
-            None => {}
+        // Session 126 (Windows validation): the arms of a conditional are
+        // mutually exclusive, so each arm is analyzed from the state at the
+        // `if`. A move inside one arm (for example `rt_str_free` on an
+        // early-exit path) is therefore invisible to the other arms, and
+        // the arms converge on a conservative join: a binding moved in ANY
+        // arm is dead after the `if`.
+        let entry = self.snapshot_flow();
+        let mut arms = Vec::new();
+        let then_terminated = self.walk_block(&stmt.then_block);
+        if !then_terminated {
+            arms.push(self.snapshot_flow());
         }
+        self.restore_flow(&entry);
+        // Whether the `else` side leaves the function on every path it can
+        // take; an `else if` chain inherits that from its own arms.
+        let mut else_terminated = true;
+        match &stmt.else_branch {
+            Some(ElseBranch::If(nested)) => else_terminated = self.walk_if(nested),
+            Some(ElseBranch::IfExpr(inner)) => else_terminated = self.walk_if_expr(inner),
+            Some(ElseBranch::Block(block)) => else_terminated = self.walk_block(block),
+            // No `else`: the implicit path carries the entry state.
+            None => else_terminated = false,
+        }
+        if !else_terminated {
+            arms.push(self.snapshot_flow());
+        }
+        self.join_flow(&entry, &arms);
+        then_terminated && else_terminated
     }
 
-    fn walk_if_expr(&mut self, expr: &crate::ast::IfExpr) {
+    fn walk_if_expr(&mut self, expr: &crate::ast::IfExpr) -> bool {
         self.eval_expr(&expr.cond, Mode::Observe);
-        self.walk_block(&expr.then_block);
-        match &expr.else_branch {
+        let entry = self.snapshot_flow();
+        let mut arms = Vec::new();
+        let then_terminated = self.walk_block(&expr.then_block);
+        if !then_terminated {
+            arms.push(self.snapshot_flow());
+        }
+        self.restore_flow(&entry);
+        let else_terminated = match &expr.else_branch {
             ElseBranch::IfExpr(inner) => self.walk_if_expr(inner),
             ElseBranch::Block(block) => self.walk_block(block),
             ElseBranch::If(nested) => self.walk_if(nested),
+        };
+        if !else_terminated {
+            arms.push(self.snapshot_flow());
+        }
+        self.join_flow(&entry, &arms);
+        then_terminated && else_terminated
+    }
+
+    // ------------------------------------------------------------------
+    // Control-flow joins
+    // ------------------------------------------------------------------
+
+    /// The tracked state at a control-flow join point: every binding's
+    /// state plus the borrow counts of every borrowed root.
+    fn snapshot_flow(&self) -> (HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>) {
+        (self.bindings.clone(), self.borrows.clone())
+    }
+
+    /// Restores a [`Analyzer::snapshot_flow`] snapshot wholesale.
+    fn restore_flow(&mut self, snapshot: &(HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>)) {
+        self.bindings = snapshot.0.clone();
+        self.borrows = snapshot.1.clone();
+    }
+
+    /// Joins the mutually exclusive arm states of a conditional back onto
+    /// the state at the join point.
+    ///
+    /// The join is conservative (a "may have moved" join): a binding that
+    /// is dead in any arm — or absent from it because an arm consumed it —
+    /// is dead afterwards, a live binding keeps its state unless some arm
+    /// made it Owned, struct fields join field-wise, and borrows take the
+    /// strongest count observed in any arm. Bindings introduced inside an
+    /// arm are out of scope at the join and do not survive it.
+    fn join_flow(
+        &mut self,
+        entry: &(HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>),
+        arms: &[(HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>)],
+    ) {
+        let mut bindings = entry.0.clone();
+        self.borrows = entry.1.clone();
+        for arm in arms {
+            for (symbol, state) in &arm.0 {
+                let Some(current) = bindings.get(symbol) else {
+                    continue;
+                };
+                let merged = match (current.clone(), state) {
+                    (State::Str(before), State::Str(after)) => {
+                        State::Str(Self::join_binding_state(before, *after))
+                    }
+                    (State::Array(before), State::Array(after)) => {
+                        State::Array(Self::join_binding_state(before, *after))
+                    }
+                    (State::Ref { source, mutable, .. }, State::Ref { source: other, mutable: other_mutable, dead }) => {
+                        State::Ref {
+                            source: source.or(*other),
+                            mutable: mutable || *other_mutable,
+                            dead: *dead,
+                        }
+                    }
+                    (
+                        State::Struct { fields, dead, ref_fields },
+                        State::Struct { fields: arm_fields, dead: arm_dead, ref_fields: arm_refs },
+                    ) => {
+                        let mut fields = fields.clone();
+                        for (name, after) in arm_fields {
+                            let merged = fields
+                                .get(name)
+                                .copied()
+                                .map(|before| Self::join_binding_state(before, *after))
+                                .unwrap_or(*after);
+                            fields.insert(name.clone(), merged);
+                        }
+                        let mut refs = ref_fields.clone();
+                        for (name, view) in arm_refs {
+                            refs.entry(name.clone()).or_insert(*view);
+                        }
+                        State::Struct { fields, dead: dead || *arm_dead, ref_fields: refs }
+                    }
+                    (State::Enum { state, ref_borrows }, State::Enum { state: arm_state, ref_borrows: arm_refs }) => {
+                        let mut refs = ref_borrows.clone();
+                        for (name, view) in arm_refs {
+                            if !refs.iter().any(|(existing, _)| existing == name) {
+                                refs.push((name.clone(), *view));
+                            }
+                        }
+                        State::Enum { state: Self::join_binding_state(state, *arm_state), ref_borrows: refs }
+                    }
+                    // A state shape that cannot be joined (only reachable
+                    // for an unknown/untracked kind): keep the incoming one.
+                    (_, other) => other.clone(),
+                };
+                bindings.insert(*symbol, merged);
+            }
+            for (symbol, borrow) in &arm.1 {
+                let merged = match (self.borrows.get(symbol).copied(), *borrow) {
+                    (None, other) => other,
+                    (Some(previous), other) => match (previous, other) {
+                        (BorrowState::Exclusive, _) | (_, BorrowState::Exclusive) => {
+                            BorrowState::Exclusive
+                        }
+                        (BorrowState::Shared(a), BorrowState::Shared(b)) => {
+                            BorrowState::Shared(a.max(b))
+                        }
+                        (previous, _) => previous,
+                    },
+                };
+                self.borrows.insert(*symbol, merged);
+            }
+        }
+        self.bindings = bindings;
+    }
+
+    /// Joins two liveness states at a control-flow join: dead wins, and a
+    /// live state keeps the stronger (Owned) provenance.
+    fn join_binding_state(before: BindingState, after: BindingState) -> BindingState {
+        match (before, after) {
+            (BindingState::Dead, _) | (_, BindingState::Dead) => BindingState::Dead,
+            (BindingState::Live(a), BindingState::Live(b)) => BindingState::Live(match (a, b) {
+                (Provenance::Owned, _) | (_, Provenance::Owned) => Provenance::Owned,
+                (Provenance::Immutable, Provenance::Immutable) => Provenance::Immutable,
+            }),
         }
     }
 
@@ -1331,9 +1520,15 @@ impl<'a> Analyzer<'a> {
                 self.eval_expr(&inner.cond, Mode::Observe);
                 self.walk_block(&inner.then_block);
                 match &inner.else_branch {
-                    ElseBranch::IfExpr(e) => self.walk_if_expr(e),
-                    ElseBranch::Block(b) => self.walk_block(b),
-                    ElseBranch::If(s) => self.walk_if(s),
+                    ElseBranch::IfExpr(e) => {
+                        self.walk_if_expr(e);
+                    }
+                    ElseBranch::Block(b) => {
+                        self.walk_block(b);
+                    }
+                    ElseBranch::If(s) => {
+                        self.walk_if(s);
+                    }
                 }
                 EvalValue::copy()
             }

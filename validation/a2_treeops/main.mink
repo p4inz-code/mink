@@ -1,0 +1,390 @@
+// ============================================================================
+// treeops — Validation milestone 1 / A2: file automation tool.
+//
+//   treeops <src-dir> <dst-dir> [--ext .log,.txt] [--move] [--dry-run] [--limit N]
+//
+// Recursively discovers files under <src-dir>, filters them by extension,
+// copies (or moves) the matches into <dst-dir> preserving the relative
+// directory structure, and prints a deterministic report: one line per
+// matched file in sorted order, followed by the summary counters.
+//
+// Exercises: recursive directory traversal, path handling, copy/move,
+// extension filtering, a deterministic (sorted) report, and error handling.
+//
+// Exit codes: 0 ok, 1 usage, 2 source missing/not a directory, 3 destination
+// not creatable, 4 nothing matched.
+//
+// Ownership notes (the V1 checker is flow-sensitive but not path-sensitive):
+//   * every binding is released exactly once, at a single site;
+//   * values passed to consuming user functions are intrinsic copies
+//     (`rt_str_concat(x, "")`) unless the transfer is intended;
+//   * matched paths are accumulated in a `Vec<Str>` so the report can be
+//     emitted in sorted order (directory enumeration order is unspecified).
+// ============================================================================
+
+mod filesystem;
+mod strings;
+
+let mut matched_files = 0;
+let mut copied_bytes = 0;
+let mut skipped = 0;
+let mut errors = 0;
+let mut walk_failed = 0;
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("treeops: ", label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(label);
+    rt_str_free(head);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn lower(b: Int) -> Int {
+    if b >= 65 {
+        if b <= 90 { return b + 32; }
+    }
+    return b;
+}
+
+// Case-insensitive equality (consumes both arguments).
+fn eq_ci(a: Str, b: Str) -> Bool {
+    let la = rt_str_len(a);
+    let lb = rt_str_len(b);
+    let mut same = la == lb;
+    if same == true {
+        let mut i = 0;
+        while i < la {
+            if lower(rt_str_byte(a, i)) != lower(rt_str_byte(b, i)) { same = false; }
+            i = i + 1;
+        }
+    }
+    rt_str_free(a);
+    rt_str_free(b);
+    return same;
+}
+
+// True when `path`'s extension is one of the comma-separated `list` entries.
+// Consumes both `path` and `list`.
+fn ext_selected(path: Str, list: Str) -> Bool {
+    let ext = path_extension(path);
+    let ext_len = rt_str_len(ext);
+    let list_len = rt_str_len(list);
+    let mut hit = 0;
+    if ext_len > 0 {
+        let mut start = 0;
+        let mut i = 0;
+        while i < list_len {
+            if rt_str_byte(list, i) == 44 { // ','
+                if i > start {
+                    let part = str_sub(rt_str_concat(list, ""), start, i);
+                    if eq_ci(part, rt_str_concat(ext, "")) { hit = 1; }
+                }
+                start = i + 1;
+            }
+            i = i + 1;
+        }
+        if start < list_len {
+            let part = str_sub(rt_str_concat(list, ""), start, list_len);
+            if eq_ci(part, rt_str_concat(ext, "")) { hit = 1; }
+        }
+    }
+    rt_str_free(ext);
+    rt_str_free(list);
+    return hit == 1;
+}
+
+// Print an owned integer on its own line (rt_print_str appends the CRLF).
+fn print_int(n: Int) -> Int {
+    let s = rt_str_from_int(n);
+    let len = rt_str_len(s);
+    rt_print_str(s);
+    rt_str_free(s);
+    return len;
+}
+
+// Print `<label><n>` on one line. `label` must be a literal.
+fn print_kv(label: Str, n: Int) -> Int {
+    let num = rt_str_from_int(n);
+    let line = rt_str_concat(label, num);
+    rt_str_free(num);
+    let written = rt_print_str(line);
+    rt_str_free(line);
+    return 0;
+}
+
+// Create `dir` and every missing ancestor directory (mkdir -p).
+// Consumes `dir`; returns 0 when the directory exists afterwards.
+fn make_dirs(dir: Str) -> Int {
+    let probe = rt_str_concat(dir, "");
+    let exists = rt_fs_exists(probe);
+    rt_str_free(probe);
+    let mut rc = 0;
+    if exists == false {
+        let parent = path_parent(rt_str_concat(dir, ""));
+        if rt_str_eq(parent, dir) {
+            rt_str_free(parent);
+            rc = 1;
+        } else {
+            rc = make_dirs(parent);
+        }
+        if rc == 0 {
+            rc = fs_create_dir(dir);
+        } else {
+            rt_str_free(dir);
+        }
+    } else {
+        rt_str_free(dir);
+    }
+    return rc;
+}
+
+// Copy (or move) one matching file into the destination tree and report it.
+// Consumes `full`, `rel` and `dst`.
+fn transfer(full: Str, rel: Str, dst: Str, move_it: Int, dry: Int) -> Int {
+    // rt_fs_file_size is a read-borrowing intrinsic: its argument must be
+    // a binding we free ourselves, or the temporary leaks (E-R06).
+    let full_copy = rt_str_concat(full, "");
+    let size = rt_fs_file_size(full_copy);
+    rt_str_free(full_copy);
+    if size < 0 {
+        skipped = skipped + 1;
+    } else {
+        // path_join consumes both arguments, so it gets intrinsic copies.
+        let target = path_join(rt_str_concat(dst, ""), rt_str_concat(rel, ""));
+        // Mirror Python's os.makedirs(parent): nested targets need their
+        // whole ancestor chain (CopyFileA does not create directories).
+        make_dirs(path_parent(rt_str_concat(target, "")));
+        let mut moved = 0;
+        if dry == 0 {
+            if move_it == 1 {
+                moved = fs_move(rt_str_concat(full, ""), rt_str_concat(target, ""));
+            } else {
+                moved = fs_copy_file(rt_str_concat(full, ""), rt_str_concat(target, ""));
+            }
+        }
+        let mut prefix = "processed ";
+        if dry == 1 { prefix = "would process "; }
+        let szs = rt_str_from_int(size);
+        let l1 = rt_str_concat(prefix, rel);
+        let l2 = rt_str_concat(l1, " ");
+        rt_str_free(l1);
+        let l3 = rt_str_concat(l2, szs);
+        rt_str_free(l2);
+        rt_print_str(l3);
+        rt_str_free(l3);
+        rt_str_free(szs);
+        matched_files = matched_files + 1;
+        copied_bytes = copied_bytes + size;
+        if moved != 0 { errors = errors + 1; }
+        rt_str_free(target);
+    }
+    rt_str_free(full);
+    rt_str_free(rel);
+    rt_str_free(dst);
+    return 0;
+}
+
+// Recursively walk `dir`, appending every matching file's full path to
+// `out`. Consumes `dir` and `list`; returns the (chained) vector.
+fn walk(dir: Str, list: Str, out) {
+    let mut cur = out;
+    let handle = fs_dir_open(rt_str_concat(dir, ""));
+    if handle < 0 {
+        fail_msg("cannot open directory");
+        walk_failed = 1;
+        rt_str_free(dir);
+        rt_str_free(list);
+        return cur;
+    }
+
+    let mut keep_going = 1;
+    while keep_going == 1 {
+        let name = fs_dir_next(handle);
+        if rt_str_len(name) == 0 {
+            rt_str_free(name);
+            keep_going = 0;
+        } else {
+            let w = rt_str_concat(name, "");
+            rt_str_free(name);
+            if rt_str_eq(w, ".") {
+                rt_str_free(w);
+            } else {
+                if rt_str_eq(w, "..") {
+                    rt_str_free(w);
+                } else {
+                    let full = path_join(rt_str_concat(dir, ""), rt_str_concat(w, ""));
+                    if fs_is_dir(rt_str_concat(full, "")) {
+                        cur = walk(rt_str_concat(full, ""), rt_str_concat(list, ""), cur);
+                        rt_str_free(full);
+                    } else {
+                        if ext_selected(rt_str_concat(full, ""), rt_str_concat(list, "")) {
+                            cur = rt_vec_push(cur, full);
+                        } else {
+                            skipped = skipped + 1;
+                            rt_str_free(full);
+                        }
+                    }
+                    rt_str_free(w);
+                }
+            }
+        }
+    }
+
+    fs_dir_close(handle);
+    rt_str_free(dir);
+    rt_str_free(list);
+    return cur;
+}
+
+// In-place insertion sort of the path vector (ascending byte order, which
+// for UTF-8 equals Python's `str` ordering). Consumes and returns `v`.
+fn sort_paths(v) {
+    let mut cur = v;
+    let n = rt_vec_len(cur);
+    let mut i = 1;
+    while i < n {
+        let key = rt_str_concat(rt_vec_get(cur, i), "");
+        let mut j = i - 1;
+        let mut done = 0;
+        while done == 0 {
+            if j < 0 {
+                done = 1;
+            } else {
+                let cmp = str_cmp(rt_str_concat(rt_vec_get(cur, j), ""), rt_str_concat(key, ""));
+                if cmp < 0 {
+                    done = 1;
+                } else {
+                    cur = rt_vec_set(cur, j + 1, rt_str_concat(rt_vec_get(cur, j), ""));
+                    j = j - 1;
+                }
+            }
+        }
+        cur = rt_vec_set(cur, j + 1, key);
+        i = i + 1;
+    }
+    return cur;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+
+    let mut src_index = -1;
+    let mut dst_index = -1;
+    let mut ext_list = ".log,.txt,.mink,.json,.csv";
+    let mut owned_ext = 0;
+    let mut move_it = 0;
+    let mut dry = 0;
+    let mut limit = 1000000;
+
+    let mut i = 0;
+    let mut bad = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut next_i = i + 1;
+        if rt_str_eq(arg, "--ext") {
+            if i + 1 >= argc { bad = 1; } else {
+                ext_list = rt_argv(i + 1);
+                owned_ext = 1;
+                next_i = i + 2;
+            }
+        } else {
+            if rt_str_eq(arg, "--move") { move_it = 1; } else {
+                if rt_str_eq(arg, "--dry-run") { dry = 1; } else {
+                    if rt_str_eq(arg, "--limit") {
+                        if i + 1 >= argc {
+                            bad = 1;
+                        } else {
+                            let v = rt_argv(i + 1);
+                            let (value, ok) = str_parse_int(v);
+                            if ok == true { if value > 0 { limit = value; } }
+                            next_i = i + 2;
+                        }
+                    } else {
+                        if src_index < 0 { src_index = i; } else {
+                            if dst_index < 0 { dst_index = i; } else { bad = 2; }
+                        }
+                    }
+                }
+            }
+        }
+        rt_str_free(arg);
+        i = next_i;
+    }
+
+    if bad == 1 { fail_msg("missing value for an option"); return 1; }
+    if bad == 2 { fail_msg("too many positional arguments"); return 1; }
+    if src_index < 0 { fail_msg("usage: treeops <src> <dst> [--ext .a,.b] [--move] [--dry-run] [--limit N]"); return 1; }
+    if dst_index < 0 { fail_msg("usage: treeops <src> <dst> [--ext .a,.b] [--move] [--dry-run] [--limit N]"); return 1; }
+
+    let src = rt_argv(src_index);
+    let dst = rt_argv(dst_index);
+    let mut code = 0;
+    if !rt_fs_exists(src) {
+        fail_msg("source does not exist: ");
+        code = 2;
+    }
+    if code == 0 {
+        if fs_is_dir(rt_str_concat(src, "")) == false {
+            fail_msg("source is not a directory: ");
+            code = 2;
+        }
+    }
+    if code == 0 {
+        // `fs_create_dir` reports 1 when the directory already exists, so
+        // an existing destination is accepted (and must be a directory).
+        let probe = rt_str_concat(dst, "");
+        let exists = rt_fs_exists(probe);
+        rt_str_free(probe);
+        if exists == false {
+            let created = fs_create_dir(rt_str_concat(dst, ""));
+            if created != 0 { code = 3; }
+        } else {
+            if fs_is_dir(rt_str_concat(dst, "")) == false { code = 3; }
+        }
+    }
+
+    if code == 0 {
+        let seed = rt_vec_new(64);
+        let found = walk(rt_str_concat(src, ""), rt_str_concat(ext_list, ""), seed);
+        let sorted = sort_paths(found);
+
+        // rel = full path minus the `src` prefix the caller passed.
+        let mut plen = rt_str_len(src);
+        if plen > 0 {
+            let last = rt_str_byte(src, plen - 1);
+            if last != 47 { plen = plen + 1; }
+        }
+        let n = rt_vec_len(sorted);
+        // `--limit` caps the report after sorting, so the selection is
+        // deterministic (directory enumeration order is unspecified).
+        let mut emit = n;
+        if limit < n { emit = limit; }
+        let mut k = 0;
+        while k < emit {
+            let full = rt_str_concat(rt_vec_get(sorted, k), "");
+            let flen = rt_str_len(full);
+            let rel = str_sub(rt_str_concat(full, ""), plen, flen);
+            transfer(full, rel, rt_str_concat(dst, ""), move_it, dry);
+            k = k + 1;
+        }
+        rt_vec_free(sorted);
+    }
+
+    if code == 0 {
+        if walk_failed == 1 { code = 3; }
+    }
+    if code == 0 {
+        if matched_files == 0 { code = 4; }
+    }
+
+    print_kv("matched: ", matched_files);
+    print_kv("bytes: ", copied_bytes);
+    print_kv("skipped: ", skipped);
+    print_kv("errors: ", errors);
+    rt_str_free(src);
+    rt_str_free(dst);
+    if owned_ext == 1 { rt_str_free(ext_list); }
+    return code;
+}

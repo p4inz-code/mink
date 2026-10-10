@@ -1,0 +1,9 @@
+{
+ "root": "C:\\Users\\Admin\\Desktop\\Mink\\validation\\h_manifest\\fixtures\\src",
+ "out": "@OUT",
+ "extensions": [
+  ".txt",
+  ".log",
+  ".csv"
+ ]
+}

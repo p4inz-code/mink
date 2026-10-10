@@ -1,0 +1,3 @@
+café naïve
+ERROR: ünïcödé
+plain line

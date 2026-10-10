@@ -27,6 +27,9 @@ fn _hex_val(b: Int) -> Int {
     return -1;
 }
 
+// Ownership: the input is consumed (the V1 user-function convention) and
+// released before returning, so encoding a heap string cannot leak it.
+// The returned `Str` is a fresh allocation owned by the caller.
 fn hex_encode(s: Str) -> Str {
     let len = rt_str_len(s);
     let out = rt_str_alloc(len * 2);
@@ -37,6 +40,7 @@ fn hex_encode(s: Str) -> Str {
         rt_str_set_byte(out, i * 2 + 1, _hex_digit_lo(b & 15));
         i = i + 1;
     }
+    rt_str_free(s);
     return out;
 }
 
@@ -50,12 +54,18 @@ fn hex_encode_upper(s: Str) -> Str {
         rt_str_set_byte(out, i * 2 + 1, _hex_digit_up(b & 15));
         i = i + 1;
     }
+    rt_str_free(s);
     return out;
 }
 
+// Ownership: `s` is consumed and released before returning.  The decoded
+// `Str` is a fresh allocation owned by the caller; an invalid input yields
+// the immortal empty literal (no allocation), so ignoring the error status
+// cannot leak.  A single return keeps the V1 ownership checker happy.
 fn hex_decode_alloc(s: Str) -> (Str, Int) {
     let slen = rt_str_len(s);
-    if slen % 2 != 0 { return (rt_str_alloc(0), -1); }
+    let mut status = slen / 2;
+    if slen % 2 != 0 { status = -1; }
     // Validate all hex chars first
     let mut valid = 1;
     let mut vi = 0;
@@ -63,15 +73,19 @@ fn hex_decode_alloc(s: Str) -> (Str, Int) {
         if _hex_val(rt_str_byte(s, vi)) < 0 { valid = 0; }
         vi = vi + 1;
     }
-    if valid == 0 { return (rt_str_alloc(0), -1); }
+    if valid == 0 { status = -1; }
     // All valid — decode
-    let out = rt_str_alloc(slen / 2);
-    let mut i = 0;
-    while i < slen {
-        rt_str_set_byte(out, i / 2, _hex_val(rt_str_byte(s, i)) * 16 + _hex_val(rt_str_byte(s, i + 1)));
-        i = i + 2;
+    let mut out = "";
+    if status > 0 {
+        out = rt_str_alloc(slen / 2);
+        let mut i = 0;
+        while i < slen {
+            rt_str_set_byte(out, i / 2, _hex_val(rt_str_byte(s, i)) * 16 + _hex_val(rt_str_byte(s, i + 1)));
+            i = i + 2;
+        }
     }
-    return (out, slen / 2);
+    rt_str_free(s);
+    return (out, status);
 }
 
 // ============================================================================
@@ -105,9 +119,10 @@ fn _b64_val(c: Int) -> Int {
 
 fn base64_encode(s: Str) -> Str {
     let len = rt_str_len(s);
-    if len == 0 { return rt_str_alloc(0); }
-    let out_len = (len + 2) / 3 * 4;
-    let out = rt_str_alloc(out_len);
+    let mut out_len = (len + 2) / 3 * 4;
+    if len == 0 { out_len = 0; }
+    let mut out = "";
+    if out_len > 0 { out = rt_str_alloc(out_len); }
     let mut i = 0;
     let mut o = 0;
     while i < len {
@@ -126,14 +141,16 @@ fn base64_encode(s: Str) -> Str {
         i = i + 3;
         o = o + 4;
     }
+    rt_str_free(s);
     return out;
 }
 
 fn base64_url_encode(s: Str) -> Str {
     let len = rt_str_len(s);
-    if len == 0 { return rt_str_alloc(0); }
-    let out_len = (len + 2) / 3 * 4;
-    let out = rt_str_alloc(out_len);
+    let mut out_len = (len + 2) / 3 * 4;
+    if len == 0 { out_len = 0; }
+    let mut out = "";
+    if out_len > 0 { out = rt_str_alloc(out_len); }
     let mut i = 0;
     let mut o = 0;
     while i < len {
@@ -152,96 +169,100 @@ fn base64_url_encode(s: Str) -> Str {
         i = i + 3;
         o = o + 4;
     }
+    rt_str_free(s);
     return out;
 }
 
-// Base64 decode: combined length check + decode to avoid consuming s twice
-fn base64_decode_alloc(s: Str) -> (Str, Int) {
+// Maps a URL-safe alphabet byte to the standard alphabet.  `url != 0`
+// selects the URL-safe alphabet (`-`/`_`); otherwise the byte is returned
+// unchanged.
+fn _b64_norm(c: Int, url: Int) -> Int {
+    if url != 0 {
+        if c == 45 { return 43; }
+        if c == 95 { return 47; }
+    }
+    return c;
+}
+
+// Shared Base64 decoder for both alphabets.
+//
+// Owns `s` (consumed and released before returning).  Accepts optional
+// trailing `=` padding in the final quantum (which the encoders emit), so
+// the documented encode/decode round trip works for every input length.
+// Returns the decoded `Str` (owned by the caller) and its length, or the
+// immortal empty literal and `-1` for invalid input — error paths allocate
+// nothing, so ignoring an error result cannot leak.
+fn _b64_decode(s: Str, url: Int) -> (Str, Int) {
     let slen = rt_str_len(s);
-    if slen == 0 { return (rt_str_alloc(0), 0); }
-    if slen % 4 != 0 { return (rt_str_alloc(0), -1); }
-    // Validate all characters first, then allocate and decode
-    let mut valid = 1;
-    let mut vi = 0;
-    while vi < slen && valid == 1 {
-        let c0 = _b64_val(rt_str_byte(s, vi));
-        let c1 = _b64_val(rt_str_byte(s, vi + 1));
-        let c2 = _b64_val(rt_str_byte(s, vi + 2));
-        let c3 = _b64_val(rt_str_byte(s, vi + 3));
-        if c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0 { valid = 0; }
-        vi = vi + 4;
+    let mut status = -1;
+    let mut out = "";
+    if slen == 0 {
+        status = 0;
+    } else if slen % 4 == 0 {
+        // Validate first: data characters everywhere, `=` only at the very
+        // end (one or two), never in an earlier quantum.
+        let mut valid = 1;
+        let mut vi = 0;
+        while vi < slen && valid == 1 {
+            let c0 = _b64_val(_b64_norm(rt_str_byte(s, vi), url));
+            let c1 = _b64_val(_b64_norm(rt_str_byte(s, vi + 1), url));
+            let raw2 = rt_str_byte(s, vi + 2);
+            let raw3 = rt_str_byte(s, vi + 3);
+            if c0 < 0 || c1 < 0 { valid = 0; }
+            if vi + 4 < slen {
+                // Not the final quantum: no padding allowed.
+                if raw2 == 61 || raw3 == 61 { valid = 0; }
+                else if _b64_val(_b64_norm(raw2, url)) < 0 { valid = 0; }
+                else if _b64_val(_b64_norm(raw3, url)) < 0 { valid = 0; }
+            } else {
+                if raw2 == 61 {
+                    // "xx==" is the only form whose second pad is valid.
+                    if raw3 != 61 { valid = 0; }
+                } else if _b64_val(_b64_norm(raw2, url)) < 0 {
+                    valid = 0;
+                } else if raw3 == 61 {
+                    // "xxx=" is valid; nothing more to check.
+                } else if _b64_val(_b64_norm(raw3, url)) < 0 {
+                    valid = 0;
+                }
+            }
+            vi = vi + 4;
+        }
+        if valid == 1 {
+            let mut pad = 0;
+            if rt_str_byte(s, slen - 1) == 61 { pad = pad + 1; }
+            if rt_str_byte(s, slen - 2) == 61 { pad = pad + 1; }
+            let dlen = slen / 4 * 3 - pad;
+            status = dlen;
+            if dlen > 0 {
+                out = rt_str_alloc(dlen);
+                let mut out_idx = 0;
+                let mut i = 0;
+                while i < slen {
+                    let mut v2 = _b64_val(_b64_norm(rt_str_byte(s, i + 2), url));
+                    let mut v3 = _b64_val(_b64_norm(rt_str_byte(s, i + 3), url));
+                    if rt_str_byte(s, i + 2) == 61 { v2 = 0; }
+                    if rt_str_byte(s, i + 3) == 61 { v3 = 0; }
+                    let val = _b64_val(_b64_norm(rt_str_byte(s, i), url)) * 262144 + _b64_val(_b64_norm(rt_str_byte(s, i + 1), url)) * 4096 + v2 * 64 + v3;
+                    if out_idx < dlen { rt_str_set_byte(out, out_idx, (val >> 16) & 255); }
+                    if out_idx + 1 < dlen { rt_str_set_byte(out, out_idx + 1, (val >> 8) & 255); }
+                    if out_idx + 2 < dlen { rt_str_set_byte(out, out_idx + 2, val & 255); }
+                    out_idx = out_idx + 3;
+                    i = i + 4;
+                }
+            }
+        }
     }
-    if valid == 0 { return (rt_str_alloc(0), -1); }
-    // All valid — compute output length and decode
-    let mut pad = 0;
-    if slen >= 2 && rt_str_byte(s, slen - 1) == 61 { pad = pad + 1; }
-    if slen >= 2 && rt_str_byte(s, slen - 2) == 61 { pad = pad + 1; }
-    let dlen = slen / 4 * 3 - pad;
-    let out = rt_str_alloc(dlen);
-    let mut out_idx = 0;
-    let mut i = 0;
-    while i < slen {
-        let val = _b64_val(rt_str_byte(s, i)) * 262144 + _b64_val(rt_str_byte(s, i + 1)) * 4096 + _b64_val(rt_str_byte(s, i + 2)) * 64 + _b64_val(rt_str_byte(s, i + 3));
-        rt_str_set_byte(out, out_idx, (val >> 16) & 255);
-        rt_str_set_byte(out, out_idx + 1, (val >> 8) & 255);
-        rt_str_set_byte(out, out_idx + 2, val & 255);
-        out_idx = out_idx + 3;
-        i = i + 4;
-    }
-    return (out, out_idx);
+    rt_str_free(s);
+    return (out, status);
+}
+
+fn base64_decode_alloc(s: Str) -> (Str, Int) {
+    return _b64_decode(s, 0);
 }
 
 fn base64_url_decode_alloc(s: Str) -> (Str, Int) {
-    let slen = rt_str_len(s);
-    // Validate by converting URL chars and checking validity
-    let mut valid = 1;
-    let mut vi = 0;
-    while vi < slen && valid == 1 {
-        let c = rt_str_byte(s, vi);
-        let mut sc = c;
-        if c == 45 { sc = 43; }
-        if c == 95 { sc = 47; }
-        let cv = _b64_val(sc);
-        if cv < 0 { valid = 0; }
-        vi = vi + 1;
-    }
-    if valid == 0 { return (rt_str_alloc(0), -1); }
-    if slen % 4 != 0 { return (rt_str_alloc(0), -1); }
-    // All valid — decode inline
-    let mut pad = 0;
-    if slen >= 2 && rt_str_byte(s, slen - 1) == 45 { pad = pad + 1; }
-    if slen >= 2 && rt_str_byte(s, slen - 2) == 45 { pad = pad + 1; }
-    if slen >= 2 && rt_str_byte(s, slen - 1) == 61 { pad = pad + 1; }
-    if slen >= 2 && rt_str_byte(s, slen - 2) == 61 { pad = pad + 1; }
-    let dlen = slen / 4 * 3 - pad;
-    let out = rt_str_alloc(dlen);
-    let mut out_idx = 0;
-    let mut j = 0;
-    while j < slen {
-        let c0raw = rt_str_byte(s, j);
-        let c1raw = rt_str_byte(s, j + 1);
-        let c2raw = rt_str_byte(s, j + 2);
-        let c3raw = rt_str_byte(s, j + 3);
-        let mut c0v = c0raw;
-        let mut c1v = c1raw;
-        let mut c2v = c2raw;
-        let mut c3v = c3raw;
-        if c0raw == 45 { c0v = 43; }
-        if c1raw == 45 { c1v = 43; }
-        if c2raw == 45 { c2v = 43; }
-        if c3raw == 45 { c3v = 43; }
-        if c0raw == 95 { c0v = 47; }
-        if c1raw == 95 { c1v = 47; }
-        if c2raw == 95 { c2v = 47; }
-        if c3raw == 95 { c3v = 47; }
-        let val = _b64_val(c0v) * 262144 + _b64_val(c1v) * 4096 + _b64_val(c2v) * 64 + _b64_val(c3v);
-        rt_str_set_byte(out, out_idx, (val >> 16) & 255);
-        rt_str_set_byte(out, out_idx + 1, (val >> 8) & 255);
-        rt_str_set_byte(out, out_idx + 2, val & 255);
-        out_idx = out_idx + 3;
-        j = j + 4;
-    }
-    return (out, out_idx);
+    return _b64_decode(s, 1);
 }
 
 // ============================================================================
@@ -566,6 +587,8 @@ fn byte_is_whitespace(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
+/// Whether every byte of `s` is ASCII.  `s` is consumed and freed, so a
+/// heap input cannot leak.
 fn str_is_ascii(s: Str) -> Bool {
     let len = rt_str_len(s);
     let mut i = 0;
@@ -574,6 +597,7 @@ fn str_is_ascii(s: Str) -> Bool {
         if rt_str_byte(s, i) > 127 { ok = 0; }
         i = i + 1;
     }
+    rt_str_free(s);
     return ok == 1;
 }
 
@@ -599,16 +623,21 @@ fn int_to_hex(n: Int) -> Str {
     return out;
 }
 
+/// Parses a hex string into an integer (0 for invalid input).  `s` is
+/// consumed and freed.
 fn hex_to_int(s: Str) -> Int {
     let len = rt_str_len(s);
     let mut result = 0;
+    let mut invalid = 0;
     let mut i = 0;
-    while i < len {
+    while i < len && invalid == 0 {
         let d = _hex_val(rt_str_byte(s, i));
-        if d < 0 { return 0; }
-        result = result * 16 + d;
+        if d < 0 { invalid = 1; }
+        else { result = result * 16 + d; }
         i = i + 1;
     }
+    rt_str_free(s);
+    if invalid == 1 { result = 0; }
     return result;
 }
 
@@ -649,21 +678,14 @@ fn url_encode(s: Str) -> Str {
         }
         i = i + 1;
     }
+    rt_str_free(s);
     return out;
 }
 
-fn _count_url_decode_len(s: Str) -> Int {
-    let slen = rt_str_len(s);
-    let mut count = 0;
-    let mut i = 0;
-    while i < slen {
-        if rt_str_byte(s, i) == 37 && i + 2 < slen { i = i + 3; }
-        else { i = i + 1; }
-        count = count + 1;
-    }
-    return count;
-}
-
+// Percent-decode: owns `s` (consumed and released).  Invalid input returns
+// the immortal empty literal (-1) instead of an empty allocation, so the
+// result is safe to ignore on error and the caller owns the decoded string
+// on success.
 fn url_decode_alloc(s: Str) -> (Str, Int) {
     let slen = rt_str_len(s);
     // Validate hex sequences first
@@ -679,33 +701,41 @@ fn url_decode_alloc(s: Str) -> (Str, Int) {
             vi = vi + 1;
         }
     }
-    if valid == 0 { return (rt_str_alloc(0), -1); }
-    // All valid — compute length and decode
-    let mut dlen = 0;
-    let mut ti = 0;
-    while ti < slen {
-        if rt_str_byte(s, ti) == 37 && ti + 2 < slen { ti = ti + 3; }
-        else { ti = ti + 1; }
-        dlen = dlen + 1;
-    }
-    let out = rt_str_alloc(dlen);
-    let mut o = 0;
-    let mut i = 0;
-    while i < slen {
-        let b = rt_str_byte(s, i);
-        if b == 37 {
-            let hi = _hex_val(rt_str_byte(s, i + 1));
-            let lo = _hex_val(rt_str_byte(s, i + 2));
-            rt_str_set_byte(out, o, hi * 16 + lo);
-            i = i + 3;
-        } else if b == 43 {
-            rt_str_set_byte(out, o, 32);
-            i = i + 1;
-        } else {
-            rt_str_set_byte(out, o, b);
-            i = i + 1;
+    let mut status = -1;
+    let mut out = "";
+    if valid == 1 {
+        status = 0;
+        // All valid — compute length and decode
+        let mut dlen = 0;
+        let mut ti = 0;
+        while ti < slen {
+            if rt_str_byte(s, ti) == 37 && ti + 2 < slen { ti = ti + 3; }
+            else { ti = ti + 1; }
+            dlen = dlen + 1;
         }
-        o = o + 1;
+        status = dlen;
+        if dlen > 0 {
+            out = rt_str_alloc(dlen);
+            let mut o = 0;
+            let mut i = 0;
+            while i < slen {
+                let b = rt_str_byte(s, i);
+                if b == 37 {
+                    let hi = _hex_val(rt_str_byte(s, i + 1));
+                    let lo = _hex_val(rt_str_byte(s, i + 2));
+                    rt_str_set_byte(out, o, hi * 16 + lo);
+                    i = i + 3;
+                } else if b == 43 {
+                    rt_str_set_byte(out, o, 32);
+                    i = i + 1;
+                } else {
+                    rt_str_set_byte(out, o, b);
+                    i = i + 1;
+                }
+                o = o + 1;
+            }
+        }
     }
-    return (out, o);
+    rt_str_free(s);
+    return (out, status);
 }

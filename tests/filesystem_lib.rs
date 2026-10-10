@@ -581,6 +581,43 @@ fn main() {
     assert!(first_int(&out) > 0, "cwd length > 0: {}", out);
 }
 
+/// Regression (MINK validation A2): every fs mutator reports the shared
+/// `0=ok, 1=error` convention — including `rt_fs_set_cwd`, whose Windows
+/// emitter used to return the raw Win32 BOOL (1=success, 0=failure), i.e.
+/// success and failure swapped relative to its documented contract.
+#[test]
+fn p42b_fs_mutators_return_zero_on_success_one_on_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let ok = rt_fs_set_cwd(".");
+    rt_print_int(ok);
+    let bad = rt_fs_set_cwd("no_such_dir_mink_p42b");
+    rt_print_int(bad);
+    let mkdir_ok = rt_fs_create_dir("test_p42b_dir");
+    rt_print_int(mkdir_ok);
+    let mkdir_again = rt_fs_create_dir("test_p42b_dir");
+    rt_print_int(mkdir_again);
+    let rmdir_ok = rt_fs_remove_dir("test_p42b_dir");
+    rt_print_int(rmdir_ok);
+    let copy_bad = rt_fs_copy("no_such_src_p42b.txt", "no_such_dst_p42b.txt");
+    rt_print_int(copy_bad);
+    let move_bad = rt_fs_move("no_such_src_p42b.txt", "no_such_dst_p42b.txt");
+    rt_print_int(move_bad);
+    let rm_bad = rt_fs_remove_file("no_such_file_p42b.txt");
+    rt_print_int(rm_bad);
+    rt_exit(0);
+}"#,
+    );
+    assert_success(code, &out);
+    assert_eq!(
+        all_ints(&out),
+        vec![0, 1, 0, 1, 0, 1, 1, 1],
+        "fs mutator conventions (0=ok, 1=error): {}",
+        out
+    );
+}
+
 #[test]
 fn p43_fs_write_read_cycles() {
     let (code, out) = build_and_run(
