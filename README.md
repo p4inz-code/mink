@@ -8,7 +8,7 @@
 ![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
-Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by Northbyte Studios.
+Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by P4inz Interactive Labs.
 
 </div>
 

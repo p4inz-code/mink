@@ -6,7 +6,7 @@
 **Source Extension:** `.mink`
 **License:** Apache License 2.0
 **Creator:** Atharva Patil / p4inz-code
-**Steward:** Northbyte Studios
+**Steward:** P4inz Interactive Labs
 
 ---
 

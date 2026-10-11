@@ -11,7 +11,7 @@ Governance must provide a clear process for technical decisions, proposals, expe
 
 ## 2. Stewardship
 
-MINK is created by Atharva Patil / p4inz-code and stewarded under Northbyte Studios.
+MINK is created by Atharva Patil / p4inz-code and stewarded under P4inz Interactive Labs.
 
 The project should remain open to external contributors while preserving clear technical ownership and decision-making responsibilities.
 
