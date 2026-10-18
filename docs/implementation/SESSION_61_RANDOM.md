@@ -76,11 +76,11 @@ All float-related math tests now pass: m46-m49, m54-m59, m66-m67, m69, m71-m74, 
 - 10000 generations without crash
 
 ## Quality gates
-- cargo fmt --check
-- cargo clippy --all-targets (0 new warnings)
-- cargo test: 1491 passing, 21 failing (all pre-existing process_lib)
-- No unsafe Rust
-- v1.0.0 untouched
+- ✅ cargo fmt --check
+- ✅ cargo clippy --all-targets (0 new warnings)
+- ✅ cargo test: 1491 passing, 21 failing (all pre-existing process_lib)
+- ✅ No unsafe Rust
+- ✅ v1.0.0 untouched
 
 ## Ecosystem library status
 | Library | Status | Tests |

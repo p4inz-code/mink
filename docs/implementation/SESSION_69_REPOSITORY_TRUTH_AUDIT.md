@@ -53,12 +53,12 @@ Lexer → Parser/AST → Semantic Analysis → Type Checking/Inference → HIR �
 `x86_64-windows-pe`: self-contained code generator and PE container builder. No external toolchain.
 
 ### CLI
-- `mink build <path> [--target <triple>]`: compile to native executable
-- `mink check <path>`: front-end validation
-- `mink explain <code>`: error code explanation (partial)
+- ✓ `mink build <path> [--target <triple>]`: compile to native executable
+- ✓ `mink check <path>`: front-end validation
+- ✓ `mink explain <code>`: error code explanation (partial)
 - `mink run`: compile and execute (implemented in current checkout, not committed at HEAD)
-- `mink version`
-- `mink help`
+- ✓ `mink version`
+- ✓ `mink help`
 - `mink test`, `mink fmt`: not implemented
 
 ## 3. Committed test count
@@ -195,13 +195,13 @@ Major modifications to: `pe.rs`, `runtime.rs`, `x86_64.rs`, `ir.rs`, `lower.rs`,
 
 ## 10. GO / NO-GO recommendation
 
-**COMMITTED STATE (HEAD aaf8866):** GO for v1.0.0
+✅ **COMMITTED STATE (HEAD aaf8866):** GO for v1.0.0
 - 1942 tests passing, 0 failures
 - Complete pipeline working end-to-end
 - README now accurate (test count, CLI, ecosystem status)
 - No secrets or local paths in documentation
 
-**UNCOMMITTED WORK (Sessions 49-70):** NO-GO for v1.0.1
+❌ **UNCOMMITTED WORK (Sessions 49-70):** NO-GO for v1.0.1
 - 60 test failures across 5 test suites
 - VecRemove segfault blocks collections usage
 - Filesystem library entirely non-functional

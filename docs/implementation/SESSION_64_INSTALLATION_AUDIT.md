@@ -319,20 +319,20 @@ print('PASS: No CRT runtime dependencies')
 4. Optionally add the directory to PATH
 
 **What works:**
-- Direct execution from any directory
-- Absolute path usage
-- Paths with spaces
-- No environment variables required
-- No configuration files required
-- No external dependencies
-- No admin privileges required
-- No installer required
+- ✅ Direct execution from any directory
+- ✅ Absolute path usage
+- ✅ Paths with spaces
+- ✅ No environment variables required
+- ✅ No configuration files required
+- ✅ No external dependencies
+- ✅ No admin privileges required
+- ✅ No installer required
 
 **What doesn't exist (by design):**
-- No system-wide installer
-- No PATH auto-configuration
-- No Start Menu shortcuts
-- No uninstaller
+- ❌ No system-wide installer
+- ❌ No PATH auto-configuration
+- ❌ No Start Menu shortcuts
+- ❌ No uninstaller
 
 These are appropriate for v1.0.x, MINK is a portable compiler, not a system service.
 

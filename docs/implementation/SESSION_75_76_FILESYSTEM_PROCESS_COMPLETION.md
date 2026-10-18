@@ -5,7 +5,7 @@
 
 ---
 
-## SESSION 75: FILESYSTEM COMPLETION
+✅ ## SESSION 75: FILESYSTEM COMPLETION
 
 ### Baseline
 - Filesystem: 24/33 (9 failing)
@@ -44,13 +44,13 @@
 - Impact: `p28_fs_create_remove_dir` failed.
 
 ### Result
-- Filesystem: 33/33 
+- ✅ Filesystem: 33/33 
 
 ### Quality gates
-- cargo fmt:
-- cargo clippy: (0 errors)
-- cargo build:
-- cargo build --release:
+- ✅ cargo fmt:
+- cargo clippy: ✅ (0 errors)
+- ✅ cargo build:
+- ✅ cargo build --release:
 
 ---
 
@@ -96,10 +96,10 @@
 ### Remaining process failures (12)
 
 **Root cause under investigation:** `cmd.exe /c echo hello` returns exit code 1 (instead of 0) when executed through our CreateProcessA with piped stdout. Verified:
-- Python `subprocess.run(["cmd.exe", "/c", "echo", "hello"])` returns exit code 0
-- PowerShell `Start-Process cmd.exe '/c echo hello'` returns exit code 0
-- Our MINK `process_run("echo hello")` returns exit code 1
-- stdout capture reads 0 bytes
+- ✅ Python `subprocess.run(["cmd.exe", "/c", "echo", "hello"])` returns exit code 0
+- ✅ PowerShell `Start-Process cmd.exe '/c echo hello'` returns exit code 0
+- ❌ Our MINK `process_run("echo hello")` returns exit code 1
+- ❌ stdout capture reads 0 bytes
 
 The 12 failing tests are ALL ones that use `echo` or expect stdout content:
 - p02, p05, p06, p08, p12, p13, p14, p18, p19, p21, p22, p23
@@ -129,10 +129,10 @@ The 13 passing tests work correctly:
 | Process | 13 | 25 | PARTIAL |
 
 ### Quality gates
-- cargo fmt:
-- cargo clippy: (0 errors, 39 warnings)
-- cargo build:
-- cargo build --release:
+- ✅ cargo fmt:
+- cargo clippy: ✅ (0 errors, 39 warnings)
+- ✅ cargo build:
+- ✅ cargo build --release:
 
 ### Known limitations
 1. Process stdout capture: ReadFile returns 0 bytes when reading from pipe after WaitForSingleObject. Need to investigate pipe state after child exit.

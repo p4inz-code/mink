@@ -77,11 +77,11 @@ Cargo.toml version bumped from `1.0.0` to `1.0.1`.
 3. Run `mink.exe`: no installation required
 
 **No external dependencies:**
-- No Visual C++ Redistributable
-- No Rust/Cargo
-- No Visual Studio/MSVC
-- No Git
-- No source repository
+- ❌ No Visual C++ Redistributable
+- ❌ No Rust/Cargo
+- ❌ No Visual Studio/MSVC
+- ❌ No Git
+- ❌ No source repository
 
 ---
 

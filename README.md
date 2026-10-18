@@ -18,7 +18,7 @@ Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarde
 
 MINK is a systems-oriented native programming language for **Windows x86_64**. It compiles
 straight to standalone `.exe` files. No interpreter, no virtual machine, no external
-toolchain: and reaches the operating system directly for files, processes, sockets,
+toolchain, and reaches the operating system directly for files, processes, sockets,
 threads and time.
 
 MINK is for programmers writing native Windows tools: utilities that read and write real
@@ -34,7 +34,7 @@ What makes it different:
   checking, over a heap that is tracked and leak-checked at exit.
 - Standalone output. A generated executable imports only Windows system libraries
   no CRT DLL and no third-party runtime. Copy it to any Windows 10+ x86_64 machine.
-- A real standard library. 26 modules bundled beside the compiler, including
+- A bundled standard library. 26 modules bundled beside the compiler, including
   filesystem, process, network, TLS, SQLite, ZIP/DEFLATE, threads and async.
 
 > **Platform:** Windows x86_64 only. Linux and macOS are not supported yet. See

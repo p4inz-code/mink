@@ -106,13 +106,13 @@ Only applied in non-heap-only mode (i.e., `StrValidate`, not `StrValidateHeap`),
 
 ## 7. Quality gates
 
-- `cargo fmt` clean
-- `cargo clippy --all-targets` (0 errors)
-- `cargo build` successful
-- `cargo build --release` successful
-- HEAD == origin/main
-- Working tree clean
-- No regressions
+- ✅ `cargo fmt` clean
+- ✅ `cargo clippy --all-targets` (0 errors)
+- ✅ `cargo build` successful
+- ✅ `cargo build --release` successful
+- ✅ HEAD == origin/main
+- ✅ Working tree clean
+- ✅ No regressions
 
 ## 8. Security / resource audit
 
@@ -129,17 +129,17 @@ Only applied in non-heap-only mode (i.e., `StrValidate`, not `StrValidateHeap`),
 **RELEASE BLOCKER REMOVED**
 
 All ecosystem libraries pass:
-- Strings
-- Math
-- Encoding
-- Hashing
-- JSON
-- Time
-- Random: 15/15
-- Collections: 24/24
-- Crypto: 18/18
-- Environment
-- Networking: 26/26
-- HTTP: 35/35
-- Filesystem: 33/33
-- Process: 25/25
+- ✅ Strings
+- ✅ Math
+- ✅ Encoding
+- ✅ Hashing
+- ✅ JSON
+- ✅ Time
+- ✅ Random: 15/15
+- ✅ Collections: 24/24
+- ✅ Crypto: 18/18
+- ✅ Environment
+- ✅ Networking: 26/26
+- ✅ HTTP: 35/35
+- ✅ Filesystem: 33/33
+- ✅ Process: 25/25

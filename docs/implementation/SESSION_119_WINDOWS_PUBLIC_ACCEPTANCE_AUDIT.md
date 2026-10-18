@@ -52,7 +52,7 @@ Every externally testable claim in the README was executed, not read.
 | Bundled stdlib is imported with `use` and needs no configuration | confirmed through the packaged compiler |
 | Supported platform is Windows x64; Linux/macOS are not supported | accurate as a *support* statement (the CLI additionally exposes a frozen `x86_64-linux-elf` emission target) |
 
-## 4. Claims that were false: and the fix
+## 4. Claims that were false, and the fix
 
 Each stale README claim was resolved against the implementation. The implementation was
 never weakened to satisfy documentation.
