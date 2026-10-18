@@ -1,4 +1,4 @@
-# MINK — Memory and Resource Model
+# MINK: memory and resource model
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -16,13 +16,13 @@ The memory model must optimize for:
 - Interoperability
 - Long-term maintainability
 
-## 2. Primary Direction
+## 2. Primary direction
 
 MINK should use automatic memory management with deterministic resource-management capabilities rather than requiring ordinary developers to manually manage memory.
 
 The exact implementation must be selected during compiler/runtime architecture based on performance, latency, predictability, safety, and implementation complexity.
 
-## 3. Memory Safety
+## 3. Memory safety
 
 Ordinary MINK code must prevent:
 
@@ -36,7 +36,7 @@ Ordinary MINK code must prevent:
 
 Undefined memory behavior should be aggressively minimized.
 
-## 4. Developer Experience
+## 4. Developer experience
 
 Developers should not normally need to manually allocate and release memory for ordinary application code.
 
@@ -44,7 +44,7 @@ The language and runtime should automatically handle ordinary object lifetime.
 
 Advanced developers must still have mechanisms for controlling allocation, layout, lifetime, and interoperability when required.
 
-## 5. Resource Management
+## 5. Resource management
 
 Memory is only one class of resource.
 
@@ -63,7 +63,7 @@ MINK must provide reliable management of:
 
 Resource cleanup must remain deterministic where external resources require prompt release.
 
-## 6. Deterministic Cleanup
+## 6. Deterministic cleanup
 
 MINK should provide a language-level mechanism for deterministic cleanup of resources.
 
@@ -79,7 +79,7 @@ The compiler/runtime should understand which component is responsible for the li
 
 Ownership information should be available to diagnostics and tooling.
 
-## 8. Borrowing and References
+## 8. Borrowing and references
 
 MINK may provide borrowing/reference semantics where they improve safety or performance.
 
@@ -87,7 +87,7 @@ Any borrowing system must remain understandable and must not make ordinary appli
 
 The final model may use compiler-checked ownership, managed references, scoped borrows, or a hybrid strategy.
 
-## 9. Garbage Collection
+## 9. Garbage collection
 
 If garbage collection is used, it must be treated as an implementation mechanism rather than the entirety of MINKs resource-management model.
 
@@ -110,7 +110,7 @@ Potential strategies include:
 
 The standard language experience should not require developers to understand these mechanisms for ordinary programs.
 
-## 11. Stack and Heap
+## 11. Stack and heap
 
 The implementation should distinguish stack-friendly values from dynamically allocated values where beneficial.
 
@@ -118,7 +118,7 @@ The compiler may optimize allocation decisions when semantics remain unchanged.
 
 Developers should not be forced to manually select stack versus heap allocation for ordinary values unless explicit control is required.
 
-## 12. Value Semantics
+## 12. Value semantics
 
 MINK should make value semantics predictable.
 
@@ -128,7 +128,7 @@ Copying a value must have clearly defined semantics.
 
 Large or resource-owning values should be movable or referenceable without unnecessary copying.
 
-## 13. Move Semantics
+## 13. Move semantics
 
 MINK should support efficient transfer of ownership without unnecessary deep copies.
 
@@ -136,7 +136,7 @@ Move operations should preserve safety and should not expose invalid references 
 
 The compiler should provide useful diagnostics when a value is used incorrectly after ownership transfer.
 
-## 14. Shared Ownership
+## 14. Shared ownership
 
 MINK should support shared ownership where required by application architecture.
 
@@ -144,13 +144,13 @@ Shared ownership must be implemented using a clearly defined lifetime mechanism.
 
 Reference cycles must be detectable, preventable, or explicitly manageable depending on the final memory strategy.
 
-## 15. Weak References
+## 15. Weak references
 
 Where shared ownership exists, weak references should be available to break ownership cycles and represent non-owning relationships.
 
 Weak references must never silently become invalid ordinary references.
 
-## 16. Concurrency Interaction
+## 16. Concurrency interaction
 
 The memory model must integrate with MINKs concurrency model.
 
@@ -158,7 +158,7 @@ Shared mutable state must have explicit safety semantics.
 
 The language should prevent common data races where practical through compile-time guarantees or explicit synchronization mechanisms.
 
-## 17. Unsafe Operations
+## 17. Unsafe operations
 
 MINK may provide an explicit unsafe boundary for operations that cannot be proven safe by the compiler.
 
@@ -172,7 +172,7 @@ Unsafe code should be:
 
 Unsafe code must not silently contaminate ordinary code with undefined assumptions.
 
-## 18. FFI and Native Memory
+## 18. FFI and native memory
 
 Foreign-function interfaces may expose manually managed memory and native resources.
 
@@ -180,7 +180,7 @@ The boundary between safe MINK and unsafe native memory must be explicit.
 
 Tooling should identify ownership expectations at FFI boundaries.
 
-## 19. Memory Layout
+## 19. Memory layout
 
 MINK should eventually provide controlled mechanisms for specifying or querying memory layout when required by:
 
@@ -192,7 +192,7 @@ MINK should eventually provide controlled mechanisms for specifying or querying 
 
 Layout guarantees must be explicit rather than accidental.
 
-## 20. Resource Leaks
+## 20. Resource leaks
 
 MINK tooling should detect likely resource leaks where practical.
 
@@ -204,7 +204,7 @@ Diagnostics should identify:
 - The likely control-flow path responsible
 - Recommended remediation
 
-## 21. Out-of-Memory Behavior
+## 21. Out-of-Memory behavior
 
 Out-of-memory conditions must have defined runtime behavior.
 
@@ -241,7 +241,7 @@ The memory model is part of MINKs long-term language contract.
 
 Changes to observable lifetime, ownership, copying, or resource semantics must be treated as compatibility-sensitive changes.
 
-## 25. Open Architecture Decisions
+## 25. Open architecture decisions
 
 The following must be resolved before architecture freeze:
 

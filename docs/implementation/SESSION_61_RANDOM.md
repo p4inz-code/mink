@@ -1,14 +1,14 @@
-# Session 61 — Random Library + Math Regression Fix
+# Session 61: random library + math regression fix
 
-## Executive Summary
+## Executive summary
 
-**Math regression: FIXED.** 22 float test failures caused by swapped `movq` SSE instructions in `emit_int_to_float` and `emit_float_to_int`. Single root cause — both functions had the xmm↔rax direction reversed.
+**Math regression: FIXED.** 22 float test failures caused by swapped `movq` SSE instructions in `emit_int_to_float` and `emit_float_to_int`. Single root cause, both functions had the xmm↔rax direction reversed.
 
 **Random library: IMPLEMENTED.** xorshift64* PRNG with seed, next, bounded int, bool, byte, choice. 15 tests, all passing.
 
 **BSS alignment bug: FIXED.** Arena must be at 16-byte aligned offset. Adding the PRNG state slot required shifting arena from 1472→1488 (skipping 1480 which is not 16-byte aligned).
 
-## Math Regression Root Cause
+## Math regression root cause
 
 ### Bug: Swapped movq directions in float conversion
 
@@ -35,7 +35,7 @@ Should be: `movq xmm0, rax` (load float bits from rax into xmm0 for conversion).
 ### Tests fixed: 22
 All float-related math tests now pass: m46-m49, m54-m59, m66-m67, m69, m71-m74, m76, m78, m80, m85, m90
 
-## Random Library
+## Random library
 
 ### Algorithm: xorshift64*
 - Period: 2^64 - 1
@@ -43,7 +43,7 @@ All float-related math tests now pass: m46-m49, m54-m59, m66-m67, m69, m71-m74, 
 - Steps: state ^= state >> 12; state ^= state << 25; state ^= state >> 27; return state * 0x2545F4914F6CDD1D
 - NOT cryptographically secure (documented)
 
-### BSS Layout Change
+### BSS layout change
 - Added 8-byte PRNG state at offset 1472
 - Arena shifted from 1472 → 1488 (16-byte aligned)
 - Table and size updated accordingly
@@ -75,14 +75,14 @@ All float-related math tests now pass: m46-m49, m54-m59, m66-m67, m69, m71-m74, 
 - Large/negative seeds
 - 10000 generations without crash
 
-## Quality Gates
-- ✅ cargo fmt --check
-- ✅ cargo clippy --all-targets (0 new warnings)
-- ✅ cargo test — 1491 passing, 21 failing (all pre-existing process_lib)
-- ✅ No unsafe Rust
-- ✅ v1.0.0 untouched
+## Quality gates
+- cargo fmt --check
+- cargo clippy --all-targets (0 new warnings)
+- cargo test: 1491 passing, 21 failing (all pre-existing process_lib)
+- No unsafe Rust
+- v1.0.0 untouched
 
-## Ecosystem Library Status
+## Ecosystem library status
 | Library | Status | Tests |
 |---------|--------|-------|
 | JSON | LOCKED | 37 |
@@ -96,7 +96,7 @@ All float-related math tests now pass: m46-m49, m54-m59, m66-m67, m69, m71-m74, 
 | Time/Date | LOCKED | 16 |
 | Random | ECOSYSTEM-READY | 15 |
 
-## Remaining Items
+## Remaining items
 - 21 process_lib failures (Session 59 emit_process_run was never completed)
 - No dynamic allocation (arena sufficient for current libraries)
 - Process output capture stubbed

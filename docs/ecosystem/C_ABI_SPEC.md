@@ -1,27 +1,27 @@
-# MINK C ABI Specification
+# MINK C ABI specification
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY, not implemented
 **Scope:** Stable C ABI as the universal FFI boundary for MINK
 
 ---
 
 ## 1. Goals
 
-1. **Universal interop.** Every major language (Python, C++, C#, Rust, Go, Java) has C FFI support. A stable C ABI is the universal adapter that lets MINK work with all of them without N language-specific bridges.
+1. Universal interop. Every major language (Python, C++, C#, Rust, Go, Java) has C FFI support. A stable C ABI is the universal adapter that lets MINK work with all of them without N language-specific bridges.
 
-2. **Zero assumptions.** The C ABI must work regardless of MINK's internal calling convention, heap model, or ownership semantics. C sees only flat, blittable types and function pointers.
+2. Zero assumptions. The C ABI must work regardless of MINK's internal calling convention, heap model, or ownership semantics. C sees only flat, blittable types and function pointers.
 
-3. **V1.x stability.** Once shipped, the C ABI must not break. New types and calling conventions can be added, but existing signatures must remain valid across compiler versions.
+3. V1.x stability. Once shipped, the C ABI must not break. New types and calling conventions can be added, but existing signatures must remain valid across compiler versions.
 
-4. **Cross-platform.** The ABI maps to the platform's C calling convention (System V AMD64 on Linux/macOS, Microsoft x64 on Windows).
+4. Cross-platform. The ABI maps to the platform's C calling convention (System V AMD64 on Linux/macOS, Microsoft x64 on Windows).
 
-5. **Safety at the boundary.** MINK's ownership model cannot cross the C ABI. The ABI spec explicitly defines ownership transfer rules and safety contracts.
+5. Safety at the boundary. MINK's ownership model cannot cross the C ABI. The ABI spec explicitly defines ownership transfer rules and safety contracts.
 
 ---
 
-## 2. Primitive Type Mapping
+## 2. Primitive type mapping
 
 | MINK Type | C Type | Size | Alignment | Notes |
 |-----------|--------|------|-----------|-------|
@@ -31,19 +31,19 @@
 | `Char` | `uint8_t` | 1 byte | 1 | Single UTF-8 byte (Unicode scalar ≤ 0x7F in V1) |
 | `()` | `void` | 0 | N/A | No return value |
 
-### V1 Limitations
+### V1 limitations
 - `Char` is byte-sized in V1. Unicode support (multi-byte codepoints) is deferred.
 - `Int` is always 64-bit signed. No unsigned integer type in V1.
 - `Float` is always 64-bit double-precision. No 32-bit float in V1.
 
 ### V2+ Extensions (not yet designed)
-- `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32` — sized integers
-- `f32` — single-precision float
-- `char` — 4-byte Unicode codepoint
+- `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, sized integers
+- `f32`: single-precision float
+- `char`: 4-byte Unicode codepoint
 
 ---
 
-## 3. Pointer Types
+## 3. Pointer types
 
 | MINK Type | C Type | Size | Notes |
 |-----------|--------|------|-------|
@@ -55,7 +55,7 @@
 
 ---
 
-## 4. String Representation
+## 4. String representation
 
 MINK strings cross the C ABI as a **fat pointer struct**:
 
@@ -73,9 +73,9 @@ typedef struct {
 - `ptr` points to valid UTF-8 memory for `len` bytes
 
 ### Ownership rules
-- **MINK → C:** The C caller receives a read-only view. The MINK string remains valid until the MINK side releases it. C must NOT free the pointer.
-- **C → MINK:** The C caller must provide a valid `MinkStr`. MINK takes ownership and will free the memory using its allocator.
-- **Shared lifetime:** Both sides agree on a lifetime contract. The C caller must not access the string after the agreed-upon lifetime ends.
+- MINK → C: The C caller receives a read-only view. The MINK string remains valid until the MINK side releases it. C must NOT free the pointer.
+- C → MINK: The C caller must provide a valid `MinkStr`. MINK takes ownership and will free the memory using its allocator.
+- Shared lifetime: Both sides agree on a lifetime contract. The C caller must not access the string after the agreed-upon lifetime ends.
 
 ### V1 string constraints
 - Strings are immutable after creation in V1 (no `rt_str_set_byte` across ABI)
@@ -84,7 +84,7 @@ typedef struct {
 
 ---
 
-## 5. Struct Representation
+## 5. Struct representation
 
 MINK structs cross the C ABI as **C-compatible structs** with the same layout:
 
@@ -108,7 +108,7 @@ typedef struct {
 - Fields are laid out in declaration order
 - Each field is aligned to its natural alignment
 - Structs are padded to the alignment of the largest field
-- **Blittable only:** Structs containing `Str`, `Vec<T>`, or other heap types cannot cross the ABI directly (they require wrapper functions)
+- Blittable only: Structs containing `Str`, `Vec<T>`, or other heap types cannot cross the ABI directly (they require wrapper functions)
 
 ### Alignment table
 
@@ -126,7 +126,7 @@ typedef struct {
 
 ---
 
-## 6. Array Representation
+## 6. Array representation
 
 MINK arrays cross the C ABI as a **fat pointer struct**:
 
@@ -147,13 +147,13 @@ typedef struct {
 ```
 
 ### Ownership rules
-- **MINK → C:** Read-only view. C must not modify or free the data.
-- **C → MINK:** C provides a valid pointer and length. MINK copies the data into its own allocator.
-- **Zero-copy (read-only):** Both sides agree on a lifetime contract. C must not access after the contract ends.
+- MINK → C: Read-only view. C must not modify or free the data.
+- C → MINK: C provides a valid pointer and length. MINK copies the data into its own allocator.
+- Zero-copy (read-only): Both sides agree on a lifetime contract. C must not access after the contract ends.
 
 ---
 
-## 7. Vec<T> Representation
+## 7. Vec<T> representation
 
 MINK `Vec<T>` crosses the C ABI as:
 
@@ -166,13 +166,13 @@ typedef struct {
 ```
 
 ### Ownership rules
-- **MINK → C:** Read-only view. C must not modify or free.
-- **C → MINK:** MINK takes ownership and copies data into its own allocator.
-- **No zero-copy for Vec across ABI** (V1): MINK's Vec uses its own allocator; C cannot free MINK memory.
+- MINK → C: Read-only view. C must not modify or free.
+- C → MINK: MINK takes ownership and copies data into its own allocator.
+- No zero-copy for Vec across ABI (V1): MINK's Vec uses its own allocator; C cannot free MINK memory.
 
 ---
 
-## 8. Enum Representation
+## 8. Enum representation
 
 MINK enums cross the C ABI as `int64_t` discriminants:
 
@@ -201,7 +201,7 @@ typedef struct {
 
 ---
 
-## 9. Result/Error Representation
+## 9. Result/Error representation
 
 ### V1 approach
 - MINK functions that can fail return `Result<T, E>` internally
@@ -223,7 +223,7 @@ int64_t mink_divide(int64_t a, int64_t b, int64_t *result_out) {
 
 ---
 
-## 10. Ownership Across the ABI Boundary
+## 10. Ownership across the ABI boundary
 
 ### Fundamental rule
 **MINK ownership does not cross the C ABI.** C has no concept of ownership. The ABI defines explicit transfer protocols.
@@ -239,15 +239,15 @@ int64_t mink_divide(int64_t a, int64_t b, int64_t *result_out) {
 | C passes `Ptr<T>` to MINK | C | C | Until C releases |
 
 ### Rules
-1. **Value types** (`Int`, `Bool`, `Float`, `Char`) are always copied. No ownership concerns.
-2. **Pointer types** are borrowed across the ABI. The pointer is valid only for the agreed lifetime.
-3. **String types** follow explicit ownership transfer: the allocator side owns and frees.
-4. **C must never call `rt_free`** on MINK-allocated memory. MINK must never free C-allocated memory.
-5. **Shared allocators** are possible in V2+ but not in V1.
+1. Value types (`Int`, `Bool`, `Float`, `Char`) are always copied. No ownership concerns.
+2. Pointer types are borrowed across the ABI. The pointer is valid only for the agreed lifetime.
+3. String types follow explicit ownership transfer: the allocator side owns and frees.
+4. C must never call `rt_free` on MINK-allocated memory. MINK must never free C-allocated memory.
+5. Shared allocators are possible in V2+ but not in V1.
 
 ---
 
-## 11. Borrowing Across the ABI Boundary
+## 11. Borrowing across the ABI boundary
 
 ### V1 contract
 - MINK `&T` → C `const T*`: C receives a read-only pointer. Valid for the agreed lifetime.
@@ -266,14 +266,14 @@ int64_t mink_sum(MinkSliceInt data);
 
 ---
 
-## 12. Allocation/Free Rules
+## 12. Allocation/Free rules
 
 ### V1 rules
-1. **MINK allocates with its own allocator** (`rt_alloc`/`rt_str_alloc`).
-2. **C allocates with its own allocator** (`malloc`/`free`).
-3. **No cross-allocator freeing.** MINK cannot `free()` C memory. C cannot `rt_free()` MINK memory.
-4. **String transfer:** When C passes a `MinkStr` to MINK, MINK copies the bytes into its own allocator and the C caller retains ownership of the original.
-5. **Return values:** MINK functions that return `MinkStr` return a MINK-allocated string. The C caller must call `mink_str_free()` (a C-exported function) to release it.
+1. MINK allocates with its own allocator (`rt_alloc`/`rt_str_alloc`).
+2. C allocates with its own allocator (`malloc`/`free`).
+3. No cross-allocator freeing. MINK cannot `free()` C memory. C cannot `rt_free()` MINK memory.
+4. String transfer: When C passes a `MinkStr` to MINK, MINK copies the bytes into its own allocator and the C caller retains ownership of the original.
+5. Return values: MINK functions that return `MinkStr` return a MINK-allocated string. The C caller must call `mink_str_free()` (a C-exported function) to release it.
 
 ### Exported deallocation functions
 
@@ -289,7 +289,7 @@ These are the ONLY C-callable deallocation functions. C code must use them inste
 
 ---
 
-## 13. Calling Convention
+## 13. Calling convention
 
 ### Platform-specific conventions
 
@@ -318,7 +318,7 @@ For V1, exported functions will use the C calling convention directly (no wrappe
 
 ---
 
-## 14. Symbol Naming
+## 14. Symbol naming
 
 ### Exported functions
 - MINK function `add` → C symbol `mink_add`
@@ -344,7 +344,7 @@ Examples:
 
 ---
 
-## 15. Exported Functions
+## 15. Exported functions
 
 ### MINK source syntax
 
@@ -385,7 +385,7 @@ int64_t mink_main_add(int64_t a, int64_t b);
 
 ---
 
-## 16. Imported Functions
+## 16. Imported functions
 
 ### MINK source syntax
 
@@ -403,7 +403,7 @@ extern "C" fn free(ptr: Ptr<Int>);
 
 ---
 
-## 17. ABI Stability and Versioning
+## 17. ABI stability and versioning
 
 ### Version scheme
 - ABI version is independent of compiler version
@@ -430,7 +430,7 @@ extern "C" fn free(ptr: Ptr<Int>);
 
 ---
 
-## 18. Layout Guarantees
+## 18. Layout guarantees
 
 ### Struct layout
 - Packed structs: NOT supported (alignment must match C rules)
@@ -457,7 +457,7 @@ extern "C" fn free(ptr: Ptr<Int>);
 
 ---
 
-## 19. Platform Differences
+## 19. Platform differences
 
 | Aspect | Windows x86_64 | Linux x86_64 | macOS ARM64 |
 |--------|----------------|--------------|-------------|
@@ -475,7 +475,7 @@ extern "C" fn free(ptr: Ptr<Int>);
 
 ---
 
-## 20. Safety Boundaries
+## 20. Safety boundaries
 
 ### What the ABI guarantees
 1. Type-safe data transfer for primitive types
@@ -484,10 +484,10 @@ extern "C" fn free(ptr: Ptr<Int>);
 4. Lifetime documentation for borrowed data
 
 ### What the ABI does NOT guarantee
-1. **Lifetime safety across the boundary.** C can hold a pointer past its valid lifetime.
-2. **Thread safety.** C and MINK can race on shared data. Synchronization is the caller's responsibility.
-3. **Panic safety.** MINK panics across the ABI boundary are undefined behavior.
-4. **Exception safety.** C exceptions must not cross into MINK. MINK errors must not cross into C as exceptions.
+1. Lifetime safety across the boundary. C can hold a pointer past its valid lifetime.
+2. Thread safety. C and MINK can race on shared data. Synchronization is the caller's responsibility.
+3. Panic safety. MINK panics across the ABI boundary are undefined behavior.
+4. Exception safety. C exceptions must not cross into MINK. MINK errors must not cross into C as exceptions.
 
 ### Safety rules for consumers
 1. C code must not dereference a `MinkStr.ptr` after calling `mink_str_free()`
@@ -497,11 +497,11 @@ extern "C" fn free(ptr: Ptr<Int>);
 
 ---
 
-## 21. Panic/Error Behavior
+## 21. Panic/Error behavior
 
 ### MINK panic across ABI
-- **V1:** Panic across ABI boundary is **undefined behavior** (fatal error, process abort)
-- **V2+:** Panic handler that translates to C error code + error message
+- V1: Panic across ABI boundary is undefined behavior (fatal error, process abort)
+- V2+: Panic handler that translates to C error code + error message
 
 ### MINK error across ABI
 - Functions returning `Result<T, E>` use the out-parameter pattern:
@@ -516,7 +516,7 @@ extern "C" fn free(ptr: Ptr<Int>);
 
 ---
 
-## 22. Thread Assumptions
+## 22. Thread assumptions
 
 ### V1
 - MINK is single-threaded. C code can call MINK functions from a single thread only.
@@ -529,7 +529,7 @@ extern "C" fn free(ptr: Ptr<Int>);
 
 ---
 
-## 23. C Header Generation
+## 23. C header generation
 
 ### Tool: `mink bind`
 
@@ -590,7 +590,7 @@ void mink_str_free(MinkStr s);
 
 ---
 
-## 24. MINK-to-C (Exporting)
+## 24. MINK-to-C (exporting)
 
 ### Flow
 1. MINK developer marks functions with `#[export]`
@@ -605,7 +605,7 @@ void mink_str_free(MinkStr s);
 
 ---
 
-## 25. C-to-MINK (Importing)
+## 25. C-to-MINK (importing)
 
 ### Flow
 1. MINK developer declares external functions with `extern "C"`
@@ -619,7 +619,7 @@ void mink_str_free(MinkStr s);
 
 ---
 
-## 26. Future C++ Compatibility
+## 26. Future C++ compatibility
 
 ### V1
 - C ABI works with C++ through `extern "C"` linkage
@@ -635,7 +635,7 @@ void mink_str_free(MinkStr s);
 
 ---
 
-## 27. V1.x vs V2+ Explicit Boundary
+## 27. V1.x vs V2+ explicit boundary
 
 ### V1.x guarantees (shipped)
 - Primitive type mapping (`Int`, `Bool`, `Float`, `Char`, `()`)
@@ -664,35 +664,35 @@ void mink_str_free(MinkStr s);
 
 ---
 
-## 28. Two-Approach Analysis
+## 28. Two-Approach analysis
 
 ### Approach A: C ABI as primary FFI boundary (CHOSEN)
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Universal support, simple implementation, proven at scale, every language has C FFI |
-| **Cons** | Some overhead for complex types, no type-safe ownership crossing |
-| **Complexity** | Low-Medium |
-| **Performance** | Good for most use cases, slight overhead for complex marshaling |
-| **Security** | Clear boundary, explicit ownership rules |
-| **Compatibility** | Universal — works with all target languages |
-| **Maintainability** | One ABI to maintain, not N |
-| **Ecosystem impact** | Maximum reach — every language can interoperate |
+| Pros | Universal support, simple implementation, proven at scale, every language has C FFI |
+| Cons | Some overhead for complex types, no type-safe ownership crossing |
+| Complexity | Low-Medium |
+| Performance | Good for most use cases, slight overhead for complex marshaling |
+| Security | Clear boundary, explicit ownership rules |
+| Compatibility | Universal, works with all target languages |
+| Maintainability | One ABI to maintain, not N |
+| Ecosystem impact | Maximum reach, every language can interoperate |
 
 ### Approach B: Native ABI with language-specific bridges
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Zero-overhead for specific languages, richer type information |
-| **Cons** | N implementations for N languages, massive maintenance burden, versioning complexity |
-| **Complexity** | High |
-| **Performance** | Optimal for specific pairs, worse overall |
-| **Security** | More attack surface per bridge |
-| **Compatibility** | Good for target languages, poor for others |
-| **Maintainability** | High burden — each bridge needs its own testing and versioning |
-| **Ecosystem impact** | Fragmented — only well-supported languages benefit |
+| Pros | Zero-overhead for specific languages, richer type information |
+| Cons | N implementations for N languages, massive maintenance burden, versioning complexity |
+| Complexity | High |
+| Performance | Optimal for specific pairs, worse overall |
+| Security | More attack surface per bridge |
+| Compatibility | Good for target languages, poor for others |
+| Maintainability | High burden, each bridge needs its own testing and versioning |
+| Ecosystem impact | Fragmented, only well-supported languages benefit |
 
-### Decision: **Approach A**
+### Decision: **approach A**
 
 **Reasoning:** MINK's strategic goal is interoperability with all major languages. C ABI covers 95% of use cases. The 5% overhead for complex types is acceptable. The maintenance burden of N bridges would be catastrophic for a small team. C ABI is the universal adapter.
 

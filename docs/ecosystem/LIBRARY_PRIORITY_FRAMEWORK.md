@@ -1,52 +1,52 @@
-# MINK Library Priority Framework
+# MINK library priority framework
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY, not implemented
 **Scope:** Scoring system and ranked list of candidate ecosystem libraries
 
 ---
 
 ## 1. Goals
 
-1. **One at a time.** We build libraries ONE AT A TIME. Each library is completed, tested, documented, and audited before the next begins.
+1. One at a time. We build libraries ONE AT A TIME. Each library is completed, tested, documented, and audited before the next begins.
 
-2. **Data-driven selection.** Library selection is based on a scoring system, not gut feeling.
+2. Data-driven selection. Library selection is based on a scoring system, not gut feeling.
 
-3. **Maximum impact.** The first library must be the one that provides the most value to the most users.
+3. Maximum impact. The first library must be the one that provides the most value to the most users.
 
-4. **Foundation first.** Libraries that enable other libraries are prioritized.
+4. Foundation first. Libraries that enable other libraries are prioritized.
 
-5. **Interoperability value.** Libraries that work well with Python, C++, C#, and AI agents are prioritized.
+5. Interoperability value. Libraries that work well with Python, C++, C#, and AI agents are prioritized.
 
 ---
 
-## 2. Scoring System
+## 2. Scoring system
 
 ### Scoring criteria
 
 | Criterion | Weight | Description |
 |-----------|--------|-------------|
-| **Developer demand** | 20% | How many developers need this library? |
-| **Python integration value** | 10% | How useful is this for Python interop? |
-| **C/C++ integration value** | 10% | How useful is this for C/C++ interop? |
-| **C# integration value** | 5% | How useful is this for C# interop? |
-| **AI-agent usefulness** | 10% | How useful is this for AI coding agents? |
-| **Performance advantage** | 10% | Does MINK offer a performance advantage here? |
-| **Safety advantage** | 10% | Does MINK offer a safety advantage here? |
-| **Ecosystem leverage** | 15% | Does this enable other libraries? |
-| **Cross-platform importance** | 5% | Is this critical for cross-platform support? |
-| **Implementation feasibility** | 5% | How feasible is this to implement? |
+| Developer demand | 20% | How many developers need this library? |
+| Python integration value | 10% | How useful is this for Python interop? |
+| C/C++ integration value | 10% | How useful is this for C/C++ interop? |
+| C# integration value | 5% | How useful is this for C# interop? |
+| AI-agent usefulness | 10% | How useful is this for AI coding agents? |
+| Performance advantage | 10% | Does MINK offer a performance advantage here? |
+| Safety advantage | 10% | Does MINK offer a safety advantage here? |
+| Ecosystem leverage | 15% | Does this enable other libraries? |
+| Cross-platform importance | 5% | Is this critical for cross-platform support? |
+| Implementation feasibility | 5% | How feasible is this to implement? |
 
 ### Scoring scale
 
 | Score | Meaning |
 |-------|---------|
-| 10 | Critical — must have |
-| 8 | High value — very important |
-| 6 | Medium value — useful |
-| 4 | Low value — nice to have |
-| 2 | Minimal value — rarely needed |
+| 10 | Critical, must have |
+| 8 | High value, very important |
+| 6 | Medium value, useful |
+| 4 | Low value, nice to have |
+| 2 | Minimal value, rarely needed |
 | 0 | Not applicable |
 
 ### Weighted score calculation
@@ -59,34 +59,34 @@ Maximum possible score: 10.0
 
 ---
 
-## 3. Candidate Domains
+## 3. Candidate domains
 
 ### Candidate list
 
 | # | Domain | Description | Status |
 |---|--------|-------------|--------|
-| 1 | **Core primitives** | Option/Result methods, Vec methods, string formatting | V1 partial |
-| 2 | **Filesystem** | File I/O, directory operations, path manipulation | Not started |
-| 3 | **JSON** | JSON parsing and serialization | Not started |
-| 4 | **Math** | Basic math operations (abs, min, max, pow, sqrt) | Not started |
-| 5 | **Time** | Duration, Instant, SystemTime | Not started |
-| 6 | **Process** | Process spawn, environment variables, CLI args | Not started |
-| 7 | **Testing** | Test framework, assertions, test runner | Not started |
-| 8 | **CLI** | Argument parsing, help generation | Not started |
-| 9 | **Strings** | String manipulation (split, trim, contains) | Partial (runtime) |
-| 10 | **Collections** | HashMap, HashSet, BTreeMap | Not started |
-| 11 | **Networking** | TCP/UDP sockets | Not started |
-| 12 | **Encoding** | Base64, hex, TOML, CSV | Not started |
-| 13 | **Crypto** | Hash functions (SHA-256) | Not started |
-| 14 | **Concurrency** | Threads, mutexes, channels | Not started |
-| 15 | **Logging** | Structured logging | Not started |
-| 16 | **Regex** | Regular expressions | Not started |
-| 17 | **Compression** | Gzip, zlib | Not started |
-| 18 | **Serialization** | Generic serialization framework | Not started |
+| 1 | Core primitives | Option/Result methods, Vec methods, string formatting | V1 partial |
+| 2 | Filesystem | File I/O, directory operations, path manipulation | Not started |
+| 3 | JSON | JSON parsing and serialization | Not started |
+| 4 | Math | Basic math operations (abs, min, max, pow, sqrt) | Not started |
+| 5 | Time | Duration, Instant, SystemTime | Not started |
+| 6 | Process | Process spawn, environment variables, CLI args | Not started |
+| 7 | Testing | Test framework, assertions, test runner | Not started |
+| 8 | CLI | Argument parsing, help generation | Not started |
+| 9 | Strings | String manipulation (split, trim, contains) | Partial (runtime) |
+| 10 | Collections | HashMap, HashSet, BTreeMap | Not started |
+| 11 | Networking | TCP/UDP sockets | Not started |
+| 12 | Encoding | Base64, hex, TOML, CSV | Not started |
+| 13 | Crypto | Hash functions (SHA-256) | Not started |
+| 14 | Concurrency | Threads, mutexes, channels | Not started |
+| 15 | Logging | Structured logging | Not started |
+| 16 | Regex | Regular expressions | Not started |
+| 17 | Compression | Gzip, zlib | Not started |
+| 18 | Serialization | Generic serialization framework | Not started |
 
 ---
 
-## 4. Scoring Each Candidate
+## 4. Scoring each candidate
 
 ### 1. Core primitives (Option/Result methods, Vec methods, string formatting)
 
@@ -102,7 +102,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 10 | Every other library depends on these |
 | Cross-platform importance | 8 | Required on all platforms |
 | Implementation feasibility | 10 | Already partially implemented |
-| **Weighted score** | **8.3** | |
+| Weighted score | 8.3 | |
 
 ### 2. Filesystem
 
@@ -118,7 +118,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 8 | Many libraries depend on filesystem |
 | Cross-platform importance | 10 | Critical for cross-platform |
 | Implementation feasibility | 6 | Requires platform abstraction |
-| **Weighted score** | **8.0** | |
+| Weighted score | 8.0 | |
 
 ### 3. JSON
 
@@ -134,7 +134,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 8 | Many libraries depend on JSON |
 | Cross-platform importance | 8 | Required on all platforms |
 | Implementation feasibility | 6 | JSON parsing is well-understood |
-| **Weighted score** | **8.5** | |
+| Weighted score | 8.5 | |
 
 ### 4. Math
 
@@ -150,7 +150,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on math |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 10 | Very simple to implement |
-| **Weighted score** | **6.6** | |
+| Weighted score | 6.6 | |
 
 ### 5. Time
 
@@ -166,7 +166,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on time |
 | Cross-platform importance | 8 | Critical for cross-platform |
 | Implementation feasibility | 6 | Requires platform abstraction |
-| **Weighted score** | **5.8** | |
+| Weighted score | 5.8 | |
 
 ### 6. Process
 
@@ -182,7 +182,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on process |
 | Cross-platform importance | 8 | Critical for cross-platform |
 | Implementation feasibility | 6 | Requires platform abstraction |
-| **Weighted score** | **6.0** | |
+| Weighted score | 6.0 | |
 
 ### 7. Testing
 
@@ -198,7 +198,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 8 | Every library needs tests |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 6 | Requires test runner infrastructure |
-| **Weighted score** | **7.0** | |
+| Weighted score | 7.0 | |
 
 ### 8. CLI
 
@@ -214,7 +214,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries are CLI tools |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 8 | Well-understood problem |
-| **Weighted score** | **6.0** | |
+| Weighted score | 6.0 | |
 
 ### 9. Strings (extended operations)
 
@@ -230,7 +230,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 10 | Every library uses strings |
 | Cross-platform importance | 8 | Required on all platforms |
 | Implementation feasibility | 6 | Unicode is complex |
-| **Weighted score** | **8.0** | |
+| Weighted score | 8.0 | |
 
 ### 10. Collections (HashMap, HashSet)
 
@@ -246,7 +246,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 8 | Many libraries depend on hash maps |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 6 | Hash table implementation is complex |
-| **Weighted score** | **7.6** | |
+| Weighted score | 7.6 | |
 
 ### 11. Networking
 
@@ -262,7 +262,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on networking |
 | Cross-platform importance | 8 | Critical for cross-platform |
 | Implementation feasibility | 4 | Networking is complex |
-| **Weighted score** | **6.6** | |
+| Weighted score | 6.6 | |
 
 ### 12. Encoding (Base64, hex, TOML, CSV)
 
@@ -278,7 +278,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on encoding |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 6 | Encoding is well-understood |
-| **Weighted score** | **6.0** | |
+| Weighted score | 6.0 | |
 
 ### 13. Crypto (SHA-256)
 
@@ -294,7 +294,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on crypto |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 4 | Crypto is complex and security-critical |
-| **Weighted score** | **5.6** | |
+| Weighted score | 5.6 | |
 
 ### 14. Concurrency
 
@@ -310,7 +310,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on concurrency |
 | Cross-platform importance | 8 | Critical for cross-platform |
 | Implementation feasibility | 4 | Concurrency is complex |
-| **Weighted score** | **6.0** | |
+| Weighted score | 6.0 | |
 
 ### 15. Logging
 
@@ -326,7 +326,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on logging |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 8 | Logging is well-understood |
-| **Weighted score** | **5.4** | |
+| Weighted score | 5.4 | |
 
 ### 16. Regex
 
@@ -342,7 +342,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 4 | Few libraries depend on regex |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 4 | Regex is complex |
-| **Weighted score** | **5.8** | |
+| Weighted score | 5.8 | |
 
 ### 17. Compression
 
@@ -358,7 +358,7 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 4 | Few libraries depend on compression |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 4 | Compression is complex |
-| **Weighted score** | **4.8** | |
+| Weighted score | 4.8 | |
 
 ### 18. Serialization
 
@@ -374,49 +374,49 @@ Maximum possible score: 10.0
 | Ecosystem leverage | 6 | Some libraries depend on serialization |
 | Cross-platform importance | 6 | Required on all platforms |
 | Implementation feasibility | 4 | Serialization is complex |
-| **Weighted score** | **6.0** | |
+| Weighted score | 6.0 | |
 
 ---
 
-## 5. Ranked List
+## 5. Ranked list
 
 | Rank | Domain | Weighted Score | Rationale |
 |------|--------|---------------|-----------|
-| **#1** | **JSON** | **8.5** | Highest score. Ubiquitous, AI-friendly, enables many other libraries, high Python/C++/C# interop value. |
-| **#2** | **Core primitives** | **8.3** | Foundation for everything. Already partially implemented. Every other library depends on these. |
-| **#3** | **Filesystem** | **8.0** | Critical for cross-platform, high developer demand, enables process/networking libraries. |
-| **#4** | **Strings (extended)** | **8.0** | High developer demand, high interop value, enables JSON/encoding/regex. |
-| **#5** | **Collections (HashMap)** | **7.6** | High developer demand, high interop value, enables many libraries. |
+| #1 | JSON | 8.5 | Highest score. Ubiquitous, AI-friendly, enables many other libraries, high Python/C++/C# interop value. |
+| #2 | Core primitives | 8.3 | Foundation for everything. Already partially implemented. Every other library depends on these. |
+| #3 | Filesystem | 8.0 | Critical for cross-platform, high developer demand, enables process/networking libraries. |
+| #4 | Strings (extended) | 8.0 | High developer demand, high interop value, enables JSON/encoding/regex. |
+| #5 | Collections (HashMap) | 7.6 | High developer demand, high interop value, enables many libraries. |
 
 ---
 
-## 6. Why #1 is JSON (Not Core Primitives)
+## 6. Why #1 is JSON (not core primitives)
 
 ### The case for JSON as #1
 
-1. **Highest weighted score (8.5).** JSON scores highest across all criteria.
+1. Highest weighted score (8.5). JSON scores highest across all criteria.
 
-2. **Ubiquitous demand.** JSON is the de facto data interchange format. Every modern program uses it.
+2. Ubiquitous demand. JSON is the de facto data interchange format. Every modern program uses it.
 
-3. **Maximum AI-agent value.** AI agents need to parse and generate JSON constantly. A MINK JSON library makes MINK immediately useful for AI-generated code.
+3. Maximum AI-agent value. AI agents need to parse and generate JSON constantly. A MINK JSON library makes MINK immediately useful for AI-generated code.
 
-4. **Maximum interop value.** Python, C++, C#, and Rust all have excellent JSON libraries. MINK needs one to be competitive.
+4. Maximum interop value. Python, C++, C#, and Rust all have excellent JSON libraries. MINK needs one to be competitive.
 
-5. **Enables other libraries.** Many libraries depend on JSON (HTTP, configuration, logging, serialization).
+5. Enables other libraries. Many libraries depend on JSON (HTTP, configuration, logging, serialization).
 
-6. **Performance advantage.** MINK can be faster than Python for JSON parsing, demonstrating MINK's value proposition.
+6. Performance advantage. MINK can be faster than Python for JSON parsing, demonstrating MINK's value proposition.
 
-7. **Safety advantage.** MINK's ownership model prevents buffer overflows in JSON parsing, a common security vulnerability.
+7. Safety advantage. MINK's ownership model prevents buffer overflows in JSON parsing, a common security vulnerability.
 
 ### The case against core primitives as #1
 
-1. **Already partially implemented.** Option<T>, Result<T,E>, and Vec<T> already exist. Methods can be added incrementally.
+1. Already partially implemented. Option<T>, Result<T,E>, and Vec<T> already exist. Methods can be added incrementally.
 
-2. **Lower interop value.** Core primitives are MINK-specific; they don't directly help with Python/C++/C# interop.
+2. Lower interop value. Core primitives are MINK-specific; they don't directly help with Python/C++/C# interop.
 
-3. **Lower AI-agent value.** AI agents can work without Option/Result methods; they cannot work without JSON.
+3. Lower AI-agent value. AI agents can work without Option/Result methods; they cannot work without JSON.
 
-4. **Lower ecosystem leverage.** Core primitives enable MINK-to-MINK libraries; JSON enables MINK-to-world interop.
+4. Lower ecosystem use. Core primitives enable MINK-to-MINK libraries; JSON enables MINK-to-world interop.
 
 ### Resolution
 
@@ -424,7 +424,7 @@ Core primitives (#2) and JSON (#1) are complementary. Core primitive methods (Op
 
 ---
 
-## 7. Implementation Order
+## 7. Implementation order
 
 ### Phase 1: Core primitives + JSON (combined)
 1. Implement Option<T> methods (`.unwrap()`, `.map()`, `.is_some()`)
@@ -436,7 +436,7 @@ Core primitives (#2) and JSON (#1) are complementary. Core primitive methods (Op
 7. Add JSON to the standard library
 8. Document, test, benchmark, security audit
 
-### Phase 2: Filesystem + Strings
+### Phase 2: filesystem + strings
 1. Implement Path type
 2. Implement File operations (open, read, write, delete)
 3. Implement directory operations (create, list, remove)
@@ -444,14 +444,14 @@ Core primitives (#2) and JSON (#1) are complementary. Core primitive methods (Op
 5. Add filesystem and strings to the standard library
 6. Document, test, benchmark, security audit
 
-### Phase 3: Collections + Math
+### Phase 3: collections + math
 1. Implement HashMap<K,V>
 2. Implement HashSet<T>
 3. Implement basic math operations (abs, min, max, pow, sqrt)
 4. Add collections and math to the standard library
 5. Document, test, benchmark, security audit
 
-### Phase 4: Process + CLI + Testing
+### Phase 4: process + CLI + testing
 1. Implement process spawn/wait/kill
 2. Implement environment variable access
 3. Implement CLI argument parsing
@@ -459,7 +459,7 @@ Core primitives (#2) and JSON (#1) are complementary. Core primitive methods (Op
 5. Add process, CLI, and testing to the standard library
 6. Document, test, benchmark, security audit
 
-### Phase 5: Time + Encoding
+### Phase 5: time + encoding
 1. Implement Duration, Instant, SystemTime
 2. Implement Base64 encoding/decoding
 3. Implement hex encoding/decoding
@@ -469,24 +469,24 @@ Core primitives (#2) and JSON (#1) are complementary. Core primitive methods (Op
 
 ---
 
-## 8. Quality Standard for Each Library
+## 8. Quality standard for each library
 
 Every library must satisfy:
 
-1. **Cross-platform.** Works on Windows, Linux, macOS.
-2. **Documentation.** Every public API documented.
-3. **Tests.** ≥90% code coverage.
-4. **Benchmarks.** Performance-critical APIs have benchmarks.
-5. **API stability.** Semantic versioning, deprecation policy.
-6. **Error handling.** All errors use Result<T,E>.
-7. **Ownership correctness.** No memory leaks, no use-after-free.
-8. **Thread safety.** Documented thread safety guarantees.
-9. **Security review.** Security-sensitive APIs reviewed.
-10. **Fuzzing.** Parser/serialization libraries fuzz-tested.
-11. **Examples.** Working examples for major APIs.
-12. **AI discoverability.** Metadata machine-readable.
-13. **Dependency minimization.** Minimal external dependencies.
-14. **Deterministic builds.** Reproducible compilation.
+1. Cross-platform. Works on Windows, Linux, macOS.
+2. Documentation. Every public API documented.
+3. Tests. ≥90% code coverage.
+4. Benchmarks. Performance-critical APIs have benchmarks.
+5. API stability. Semantic versioning, deprecation policy.
+6. Error handling. All errors use Result<T,E>.
+7. Ownership correctness. No memory leaks, no use-after-free.
+8. Thread safety. Documented thread safety guarantees.
+9. Security review. Security-sensitive APIs reviewed.
+10. Fuzzing. Parser/serialization libraries fuzz-tested.
+11. Examples. Working examples for major APIs.
+12. AI discoverability. Metadata machine-readable.
+13. Dependency minimization. Minimal external dependencies.
+14. Deterministic builds. Reproducible compilation.
 
 ---
 

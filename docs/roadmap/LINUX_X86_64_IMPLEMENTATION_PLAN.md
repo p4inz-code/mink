@@ -1,6 +1,6 @@
 # MINK Linux x86_64 Implementation Plan
 
-**Status:** Implementation Blueprint (Session 83) — **INACTIVE: Linux development is FROZEN**
+**Status:** Implementation Blueprint (Session 83), INACTIVE: Linux development is FROZEN
 **Date:** August 31, 2026
 
 ---
@@ -21,7 +21,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase A: Platform Abstraction Layer
+## Phase A: platform abstraction layer
 
 **Prerequisites:** None
 **Affected files:** `src/backend/emit/runtime.rs`, new `src/runtime/posix.rs` (conceptual)
@@ -38,7 +38,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase B: Runtime Portability
+## Phase B: runtime portability
 
 **Prerequisites:** Phase A
 **Affected files:** `src/backend/emit/runtime.rs`, `src/runtime/`
@@ -60,7 +60,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase C: Linux Filesystem
+## Phase C: Linux filesystem
 
 **Prerequisites:** Phase B
 **Affected files:** `src/backend/emit/runtime.rs`
@@ -86,7 +86,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase D: Linux Process
+## Phase D: Linux process
 
 **Prerequisites:** Phase B
 **Affected files:** `src/backend/emit/runtime.rs`
@@ -106,7 +106,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase E: Linux Environment
+## Phase E: Linux environment
 
 **Prerequisites:** Phase B
 **Affected files:** `src/backend/emit/runtime.rs`
@@ -125,7 +125,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase F: Linux Networking
+## Phase F: Linux networking
 
 **Prerequisites:** Phase B
 **Affected files:** `src/backend/emit/runtime.rs`
@@ -150,7 +150,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase G: Linux Time/Random/Crypto
+## Phase G: Linux time/Random/Crypto
 
 **Prerequisites:** Phase B
 **Affected files:** `src/backend/emit/runtime.rs`
@@ -172,7 +172,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase H: ELF Executable Generation
+## Phase H: ELF executable generation
 
 **Prerequisites:** Phases A-G (all runtime services)
 **Affected files:** New `src/backend/emit/elf.rs`, `src/backend/emit/mod.rs`
@@ -196,7 +196,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase I: Linux CLI Validation
+## Phase I: Linux CLI validation
 
 **Prerequisites:** Phase H
 **Affected files:** `src/cli.rs`, `src/backend/target.rs`
@@ -217,7 +217,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Phase J: Cross-Platform Integration Testing
+## Phase J: cross-platform integration testing
 
 **Prerequisites:** Phase I
 **Affected files:** `tests/`, CI configuration
@@ -238,7 +238,7 @@ This plan details the dependency-ordered phases for adding Linux x86_64 support 
 
 ---
 
-## Dependencies Summary
+## Dependencies summary
 
 ```
 Phase A (Abstraction)
@@ -258,7 +258,7 @@ Phase A (Abstraction)
                        └──→ Phase J (Integration Testing)
 ```
 
-## Estimated Effort
+## Estimated effort
 
 | Phase | Effort | Risk |
 |-------|--------|------|
@@ -272,9 +272,9 @@ Phase A (Abstraction)
 | H | 5-10 days | High |
 | I | 1-2 days | Low |
 | J | 2-3 days | Medium |
-| **Total** | **16-31 days** | |
+| Total | 16-31 days | |
 
-## Critical Path
+## Critical path
 
 The critical path is: A → B → H → I → J
 
@@ -286,7 +286,7 @@ Phase H (ELF generation) is the highest-risk and highest-effort phase. It requir
 3. Dynamic linking with libc
 4. Entry point setup
 
-## Success Criteria
+## Success criteria
 
 1. All existing Windows tests pass unchanged
 2. New Linux tests pass on Ubuntu

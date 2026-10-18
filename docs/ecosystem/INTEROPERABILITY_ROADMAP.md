@@ -1,27 +1,27 @@
-# MINK Interoperability Roadmap
+# MINK interoperability roadmap
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY, not implemented
 **Scope:** Long-term interoperability stack for MINK with other languages
 
 ---
 
 ## 1. Goals
 
-1. **Universal interop.** MINK must work alongside Python, C++, C#, Rust, and other languages.
+1. Universal interop. MINK must work alongside Python, C++, C#, Rust, and other languages.
 
-2. **C ABI as the universal bridge.** All language interop goes through the C ABI. No native bridges per language.
+2. C ABI as the universal bridge. All language interop goes through the C ABI. No native bridges per language.
 
-3. **Zero-copy where possible.** Data sharing between languages should avoid unnecessary copies.
+3. Zero-copy where possible. Data sharing between languages should avoid unnecessary copies.
 
-4. **Safety at the boundary.** Ownership and lifetime safety are enforced at the C ABI boundary.
+4. Safety at the boundary. Ownership and lifetime safety are enforced at the C ABI boundary.
 
-5. **AI-friendly.** Binding generation is automated and machine-readable.
+5. AI-friendly. Binding generation is automated and machine-readable.
 
 ---
 
-## 2. Interoperability Stack
+## 2. Interoperability stack
 
 ```
 MINK
@@ -49,7 +49,7 @@ MINK
 
 ---
 
-## 3. Python Integration
+## 3. Python integration
 
 ### Integration model: CPython extension module
 
@@ -126,7 +126,7 @@ result = mink_ml.matrix_multiply(tensor)  # Zero-copy read
 
 ---
 
-## 4. C++ Integration
+## 4. C++ integration
 
 ### Model: C ABI bridge with C++ wrappers
 
@@ -231,7 +231,7 @@ public:
 
 ---
 
-## 5. C# Integration
+## 5. C# integration
 
 ### Model: P/Invoke with generated bindings
 
@@ -329,7 +329,7 @@ public class MinkStringHandle : SafeHandle
 
 ---
 
-## 6. Rust Integration
+## 6. Rust integration
 
 ### Model: C ABI bridge (NOT direct Rust type sharing)
 
@@ -399,7 +399,7 @@ pub fn add(a: i64, b: i64) -> i64 {
 
 ---
 
-## 7. Go Integration
+## 7. Go integration
 
 ### Model: cgo
 
@@ -431,9 +431,9 @@ mink bind --target go src/lib.mink > mink_bindings.go
 
 ---
 
-## 8. Java Integration
+## 8. Java integration
 
-### Model: JNI (Java Native Interface)
+### Model: JNI (Java native interface)
 
 ```java
 public class MinkNative {
@@ -460,7 +460,7 @@ mink bind --target jni src/lib.mink > mink_jni.c
 
 ---
 
-## 9. Cross-Language Data Sharing
+## 9. Cross-Language data sharing
 
 ### Shared data formats
 
@@ -484,14 +484,14 @@ typedef struct {
 ```
 
 ### Ownership rules for shared data
-1. **Read-only sharing:** Both sides can read, neither can write
-2. **Exclusive access:** One side owns the data, the other borrows
-3. **Transfer:** Ownership transfers from one side to the other
-4. **Reference counting:** Both sides share ownership (V3+)
+1. Read-only sharing: Both sides can read, neither can write
+2. Exclusive access: One side owns the data, the other borrows
+3. Transfer: Ownership transfers from one side to the other
+4. Reference counting: Both sides share ownership (V3+)
 
 ---
 
-## 10. Binding Generation Tool
+## 10. Binding generation tool
 
 ### `mink bind` command
 
@@ -520,41 +520,41 @@ mink bind --target <language> <source.mink> > <output>
 
 ---
 
-## 11. Two-Approach Analysis
+## 11. Two-Approach analysis
 
 ### Approach A: C ABI as primary FFI boundary (CHOSEN)
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Universal support, simple implementation, proven at scale |
-| **Cons** | Some overhead for complex types, no type-safe ownership crossing |
-| **Complexity** | Low-Medium |
-| **Performance** | Good for most use cases |
-| **Security** | Clear boundary, explicit ownership rules |
-| **Compatibility** | Universal — works with all target languages |
-| **Maintainability** | One ABI to maintain, not N |
-| **Ecosystem impact** | Maximum — every language can interoperate |
+| Pros | Universal support, simple implementation, proven at scale |
+| Cons | Some overhead for complex types, no type-safe ownership crossing |
+| Complexity | Low-Medium |
+| Performance | Good for most use cases |
+| Security | Clear boundary, explicit ownership rules |
+| Compatibility | Universal, works with all target languages |
+| Maintainability | One ABI to maintain, not N |
+| Ecosystem impact | Maximum, every language can interoperate |
 
 ### Approach B: Native ABI with language-specific bridges
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Zero-overhead for specific languages, richer type information |
-| **Cons** | N implementations for N languages, massive maintenance burden |
-| **Complexity** | High |
-| **Performance** | Optimal for specific pairs, worse overall |
-| **Security** | More attack surface per bridge |
-| **Compatibility** | Good for target languages, poor for others |
-| **Maintainability** | High burden — each bridge needs testing and versioning |
-| **Ecosystem impact** | Fragmented — only well-supported languages benefit |
+| Pros | Zero-overhead for specific languages, richer type information |
+| Cons | N implementations for N languages, massive maintenance burden |
+| Complexity | High |
+| Performance | Optimal for specific pairs, worse overall |
+| Security | More attack surface per bridge |
+| Compatibility | Good for target languages, poor for others |
+| Maintainability | High burden, each bridge needs testing and versioning |
+| Ecosystem impact | Fragmented, only well-supported languages benefit |
 
-### Decision: **Approach A**
+### Decision: **approach A**
 
 **Reasoning:** MINK's strategic goal is interoperability with ALL major languages. C ABI covers 95% of use cases. The 5% overhead for complex types is acceptable. The maintenance burden of N bridges would be catastrophic for a small team. C ABI is the universal adapter.
 
 ---
 
-## 12. Implementation Priority
+## 12. Implementation priority
 
 ### Phase 1: C ABI foundation (V1.x)
 - C header generation (`mink bind --target c`)

@@ -1,8 +1,8 @@
-# MINK — Core Grammar (Frozen)
+# MINK: core grammar (frozen)
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 03 — Parser + AST
+**Session:** 03, Parser + AST
 
 ## 1. Purpose
 
@@ -32,15 +32,15 @@ Constructs the specifications describe but that belong to later milestones
 are **not** part of this grammar and are rejected with parser diagnostics.
 Notable exclusions:
 
-- Type declarations (`type`, `trait`, `impl`) — type-system milestone
+- Type declarations (`type`, `trait`, `impl`), type-system milestone
   (`struct` and `enum` declarations arrived in sessions 14 and 17; see
   §11 and §12)
-- Module system (`mod`, `use`, `pub`) — implemented in session 34 (§28–§30)
-- Closures/lambdas — implemented in session 37 (see §23)
-- Async/await and unsafe — concurrency/unsafe milestones
+- Module system (`mod`, `use`, `pub`), implemented in session 34 (§28–§30)
+- Closures/lambdas: implemented in session 37 (see §23)
+- Async/await and unsafe: concurrency/unsafe milestones
 - Type annotations on bindings (`let x: Type = expr;`) arrived in
-  session 26 — §19 (function parameter and return type annotations
-  arrived in session 25 — §17)
+  session 26, §19 (function parameter and return type annotations
+  arrived in session 25, §17)
 - Tuples (see §21)
 - `?` (optional handling), open-ended ranges (`a..`, `..b`), and bare `..`
   operators
@@ -54,7 +54,7 @@ redesigning the parser structure.
 `x?` optional, `x*` zero or more, `x+` one or more, `(a | b)` choice,
 `x,` a trailing-comma-tolerant separator.
 
-## 4. Lexical Summary
+## 4. Lexical summary
 
 Trivia (whitespace, `//` line comments, `/* ... */` block comments) separates
 tokens and is not part of the grammar. Keywords, literals, and operators are
@@ -66,7 +66,7 @@ Identifiers are ASCII `[A-Za-z_][A-Za-z0-9_]*` (Unicode identifiers remain a
 documented lexer limitation). Keywords are reserved: they cannot be used as
 identifiers.
 
-## 5. Program Structure
+## 5. Program structure
 
 ```
 Program    := Item*
@@ -97,7 +97,7 @@ ConstBinding:= 'const' Ident '=' Expr ';'
 - Parameters are bare identifiers in this grammar; type annotations arrive
   with the type-system milestone.
 
-## 7. Blocks and Statements
+## 7. Blocks and statements
 
 ```
 Block       := '{' Stmt* '}'
@@ -190,24 +190,24 @@ Ranges require both operands: `start..end` (exclusive) and `start..=end`
 (inclusive). Open-ended ranges are deferred until the collection/type
 milestones justify them.
 
-## 9. What Is Not the Grammar
+## 9. What is not the grammar
 
 The following are **not** part of the frozen grammar and produce parser
 errors if used, until their milestones land: `type`/`trait`/`impl`
 declarations (struct and enum declarations arrived in sessions 14 and 17
 — see §11 and §12), `mod`/`use`/`pub`, `async fn`/`await`, `unsafe`
 blocks, and the `?` operator.
-Closures arrived in session 37 — see §23.
+Closures arrived in session 37. See §23.
 Block expressions and `if` as an expression arrived in session 28;
 tuples arrived in session 29 (see §22). (see §21).
 Return-type annotations and parameter type annotations arrived in session 25
 (see §17).
 
-## 10. Grammar-Freeze Changes to the Lexer
+## 10. Grammar-Freeze changes to the lexer
 
 Freezing the grammar required one minimal lexer change:
 
-- **`mut` became a keyword.** `let mut x = 1;` is the frozen mutability
+- `mut` became a keyword. `let mut x = 1;` is the frozen mutability
   syntax. `mut` previously lexed as an identifier; the session 02 keyword set
   was explicitly provisional pending the grammar design, so this is the
   intended freeze point. The change is a one-entry addition to the keyword
@@ -223,9 +223,9 @@ parser rejects them with diagnostics (verified by regression tests in
 `tests/parser_hardening.rs`), as documented in
 `docs/implementation/LEXER_IMPLEMENTATION.md`.
 
-## 11. Session-14 Additions: Structs and Arrays
+## 11. Session-14 additions: structs and arrays
 
-**Session:** 14 — Aggregate types (structs + arrays)
+**Session:** 14, Aggregate types (structs + arrays)
 
 This section extends the frozen grammar additively. The base grammar above
 remains authoritative; the new productions are:
@@ -239,11 +239,11 @@ Field      := Ident ':' Type
 Type       := Ident | '[' Type ';' IntLit ']'
 ```
 
-- **Struct declarations** (`struct P { x: Int, y: Int }`) are top-level
+- Struct declarations (`struct P { x: Int, y: Int }`) are top-level
   items. The field list may be empty syntactically (an empty struct is
   rejected by layout checking, `E-T18`). The `:` after the field name is
   the type-annotation token, used here for the first time.
-- **Type syntax** has exactly two forms today: a struct name (`P`) and a
+- Type syntax has exactly two forms today: a struct name (`P`) and a
   fixed-size array type (`[Int; 3]`). The array length must be an integer
   literal `>= 1` (`E-T16` otherwise). `Type` appears only in struct field
   declarations; parameters and bindings still have no annotations.
@@ -257,13 +257,13 @@ FieldInit   := Ident ':' Expr
 ArrayLit    := '[' ExprList ']'
 ```
 
-- **Struct literals** (`P { x: 1, y: 2 }`) are primary expressions that
+- Struct literals (`P { x: 1, y: 2 }`) are primary expressions that
   resolve `Ident` as a struct type name and require every declared field
   exactly once. Because `Ident '{'` also opens a block, a struct literal
   in a condition/iterable position (`if P { ... }`, `while P { ... }`,
-  `for x in P { ... }`) must be parenthesized — `(P { ... })` — to parse
+  `for x in P { ... }`) must be parenthesized, `(P { ... })` — to parse
   as a literal.
-- **Array literals** (`[1, 2, 3]`, trailing comma allowed) are primary
+- Array literals (`[1, 2, 3]`, trailing comma allowed) are primary
   expressions; their length is the element count. `[...]` in postfix
   position remains indexing, so `a[0]` is unchanged.
 - Member access (`.field`) and indexing (`[i]`) remain postfix operators;
@@ -275,9 +275,9 @@ changes were required. Exclusions from §2 and §9 that remain (enums,
 `type` aliases, generics, parameter/return annotations) are
 unchanged.
 
-## 12. Session-17 Additions: Enums
+## 12. Session-17 additions: enums
 
-**Session:** 17 — Enum types
+**Session:** 17, Enum types
 
 This section extends the frozen grammar additively. The base grammar and
 session-14 additions above remain authoritative; the new productions are:
@@ -292,13 +292,13 @@ Primary    := ... | EnumVariantPath
 EnumVariantPath := Ident '::' Ident
 ```
 
-- **Enum declarations** (`enum E { A, B }`) are top-level items. The
+- Enum declarations (`enum E { A, B }`) are top-level items. The
   variant list may be empty syntactically (an empty enum has no
   constructible values) and a trailing comma is allowed.
-- **Type syntax** now also accepts an enum name (`E`), exactly like a
+- Type syntax now also accepts an enum name (`E`), exactly like a
   struct name; enum names appear in struct field types and resolve to
   the nominal enum type.
-- **Variant paths** (`E::A`) are primary expressions: `Ident '::' Ident`.
+- Variant paths (`E::A`) are primary expressions: `Ident '::' Ident`.
   The `::` token already existed in the lexer. A path with no variant
   name (`E::`) is `E-P22` (expected a variant name). Only enum types
   have variants; `Struct::Field` is rejected by type analysis (`E-T22`),
@@ -308,9 +308,9 @@ The session-17 lexer needed no changes (`::` and `,` already existed).
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 parameter/return annotations, data-carrying variants) are unchanged.
 
-## 13. Session-18 Additions: Pattern Matching
+## 13. Session-18 additions: pattern matching
 
-**Session:** 18 — Pattern matching
+**Session:** 18, Pattern matching
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17 additions above remain authoritative; the new
@@ -323,13 +323,13 @@ MatchArm   := Pattern '=>' Block
 Pattern    := IntLit | '-' IntLit | BoolLit | Ident '::' Ident | Ident
 ```
 
-- **Match statements** (`match e { 1 => { .. } _ => { .. } }`) are
+- Match statements (`match e { 1 => { .. } _ => { .. } }`) are
   statements: they dispatch on the scrutinee `Expr` and run the block of
   the first arm whose pattern matches. `=>` is the match-arm separator,
   used here for the first time. Arms are separated by commas (a trailing
   comma is allowed); the body of each arm is a block, so braces are
   required around it.
-- **Patterns** have four forms this session: an integer literal (`1`,
+- Patterns have four forms this session: an integer literal (`1`,
   and negative literals `-1`), a boolean literal (`true`/`false`), an
   enum variant path (`E::V`), and a bare identifier, which binds the
   scrutinee (a catch-all `_` binds nothing and matches everything).
@@ -345,9 +345,9 @@ The session-18 lexer needed no changes (`=>`, `,`, `{`, `}` already
 existed). Exclusions from §2 and §9 that remain (`type` aliases,
 generics, parameter/return annotations) are unchanged.
 
-## 14. Session-19 Additions: Data-Carrying Variants
+## 14. Session-19 additions: data-carrying variants
 
-**Session:** 19 — Data-carrying enum variants (sum types)
+**Session:** 19, Data-carrying enum variants (sum types)
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18 additions above remain authoritative; the new
@@ -362,17 +362,17 @@ EnumVariantCall := Ident '::' Ident '(' Expr ')'
 Pattern    := ... | Ident '::' Ident '(' Pattern ')'
 ```
 
-- **Variant declarations** may carry exactly one payload type:
+- Variant declarations may carry exactly one payload type:
   `enum Shape { Circle(Int), Nothing }`. `Variant()` with no payload is
   `E-P25` (empty payload); `Variant(A, B)` with more than one payload is
   a parse error (the `,` is `E-P14`, expected `)`). Unit and
   data-carrying variants mix freely, and the trailing-comma rule is
   unchanged.
-- **Construction** is the variant path followed by a parenthesized
+- Construction is the variant path followed by a parenthesized
   payload expression: `E::V(expr)`. `E::V()` is `E-P25`; more than one
   argument is a parse error. The parenthesized form is a construction,
-  not a call — a variant is never callable as a function.
-- **Payload patterns** are the variant path followed by a parenthesized
+  not a call, a variant is never callable as a function.
+- Payload patterns are the variant path followed by a parenthesized
   payload pattern: `E::V(x)`, `E::V(_)`, `E::V(5)`, `E::V(E2::X)`, and
   nested combinations. `E::V()` is `E-P25`.
 
@@ -380,9 +380,9 @@ The session-19 lexer needed no changes (`(`, `)`, `,` already existed).
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 parameter/return annotations) are unchanged.
 
-## 15. Session-20 Additions: Explicit Discriminants
+## 15. Session-20 additions: explicit discriminants
 
-**Session:** 20 — Explicit enum discriminants
+**Session:** 20, Explicit enum discriminants
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19 additions above remain authoritative; the new
@@ -393,15 +393,15 @@ Variant    := Ident ('(' Type ')')? ('=' IntLit)?
 IntLit     := Int | '-' Int
 ```
 
-- **Variant declarations** may declare an explicit discriminant after the
+- Variant declarations may declare an explicit discriminant after the
   variant name and any payload type: `enum E { A = 5, B, C(Int) = 10, D }`.
   The value must be an integer literal in the language's literal forms
   (decimal, `0x`/`0o`/`0b`, `_` separators), optionally negated
   (`A = -1`). A missing, non-integer, or float value is `E-P19` (expected
   an integer literal), with recovery to the next variant boundary.
-- **Discriminants are constants.** There is no `A = 5 + 1` expression
+- Discriminants are constants. There is no `A = 5 + 1` expression
   syntax; the arithmetic operator is a parse error.
-- **Implicit continuation** is not a syntax change: a variant without
+- Implicit continuation is not a syntax change: a variant without
   `= n` gets the previous variant's value plus one (starting at 0), so
   `enum E { A, B }` is unchanged from sessions 17/19.
 
@@ -416,9 +416,9 @@ declarations outside it are rejected by the parser with stable diagnostics
 (see `docs/implementation/PARSER_IMPLEMENTATION.md` for the error codes).
 Future sessions extend this document additively.
 
-## 17. Session-25 Additions: Function Signature Type Annotations
+## 17. Session-25 additions: function signature type annotations
 
-**Session:** 25 — Function signature type annotations
+**Session:** 25, Function signature type annotations
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19/20 additions above remain authoritative; the new
@@ -430,17 +430,17 @@ Param       := Ident (':' Type)?
 GenericParamList := Ident (',' Ident)*
 ```
 
-- **Function declarations** may now carry an optional return-type
+- Function declarations may now carry an optional return-type
   annotation: `fn f() -> Int { ... }`. When present, every `return expr;`
   in the body must produce a value of the annotated type (`E-T01` on
   mismatch). When absent, the return type is inferred from `return`
   expressions (existing behavior).
-- **Parameters** may now carry optional type annotations: `fn f(x: Int)
+- Parameters may now carry optional type annotations: `fn f(x: Int)
   { ... }`. A parameter with a declared type enforces that the
   parameter's usage matches the declared type (`E-T01` on mismatch). A
   parameter without an annotation has its type inferred from usage
   (existing behavior).
-- **Mixed annotations** are supported: `fn f(x: Int, y) -> Int { ... }`
+- Mixed annotations are supported: `fn f(x: Int, y) -> Int { ... }`
   has `x` declared as `Int`, `y` inferred, and the return type declared
   as `Int`.
 - All type forms are accepted in annotations: `Int`, `Float`, `Bool`,
@@ -451,7 +451,7 @@ The session-25 lexer needed no changes (`->`, `:`, and type tokens
 already existed). Exclusions from §2 and §9 that remain (`type`
 aliases, generics) are unchanged.
 
-## 18. Session-25 Additions: `Null` as a Named Type
+## 18. Session-25 additions: `Null` as a named type
 
 **Session:** 25
 
@@ -461,9 +461,9 @@ were recognized as named types in type syntax; `Null` was accessible only
 through the `null` literal. This change is additive and does not break
 existing programs.
 
-## 19. Session-26 Additions: Let-Binding Type Annotations
+## 19. Session-26 additions: let-binding type annotations
 
-**Session:** 26 — Let-binding type annotations
+**Session:** 26, Let-binding type annotations
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19/20/25 additions above remain authoritative; the new
@@ -474,14 +474,14 @@ LetBinding  := 'let' 'mut'? Ident (':' Type)? '=' Expr ';'
 ConstBinding:= 'const' Ident (':' Type)? '=' Expr ';'
 ```
 
-- **Let bindings** may now carry an optional type annotation:
+- Let bindings may now carry an optional type annotation:
   `let x: Int = 1;`. When present, the type checker enforces that the
   initializer expression's type matches the declared type (`E-T01` on
   mismatch). When absent (`None`), the type is inferred from the initializer
   (existing behavior).
-- **Const bindings** may now carry an optional type annotation:
+- Const bindings may now carry an optional type annotation:
   `const X: Int = 42;`. The enforcement is identical to let bindings.
-- **Mixed annotations** are supported: `let x: Int = 1; let y = 2;`
+- Mixed annotations are supported: `let x: Int = 1; let y = 2;`
   has `x` declared as `Int` and `y` inferred.
 - All type forms are accepted in annotations: `Int`, `Float`, `Bool`,
   `Char`, `Str`, `Null`, user-declared struct and enum names, `Ptr<T>`,
@@ -491,9 +491,9 @@ The session-26 lexer needed no changes (`:` and type tokens already
 existed). Exclusions from §2 and §9 that remain (`type`
 aliases, generics) are unchanged.
 
-## 20. Session-27 Additions: Or-Patterns, Range Patterns, and Guards
+## 20. Session-27 additions: or-patterns, range patterns, and guards
 
-**Session:** 27 — Richer match patterns
+**Session:** 27, Richer match patterns
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19/20/25/26 additions above remain authoritative; the
@@ -509,19 +509,19 @@ AltPattern:= IntLit | '-' IntLit | IntLit '..' IntLit | IntLit '..=' IntLit
            | Ident
 ```
 
-- **Or-patterns** combine alternatives with `|`, matching if any
+- Or-patterns combine alternatives with `|`, matching if any
   alternative matches: `1 | 2 | 3`, `E::A(x) | E::B(x)`, `E::A | E::B`,
   and mixed forms. Every alternative must bind the same set of names with
   the same types (`E-T34` on mismatch); the binding is shared across the
   alternatives, so the alternatives' bodies see one binding per name.
-- **Range patterns** match an integer within an inclusive (`1..=5`) or
+- Range patterns match an integer within an inclusive (`1..=5`) or
   exclusive (`1..5`) range: `1..=5`, `-3..=2`, `1..10`, `-10..-1`.
   Endpoints must be integer literals (optionally negated); anything else
   is `E-P19` (expected an integer literal). A range is only well-typed on
   an `Int` scrutinee; an exclusive range whose endpoints are equal
   (`1..1`) or inverted (`5..1`) covers nothing and is reported as
   unreachable (`E-T25`) when it is the only pattern covering its space.
-- **Guards** are an optional `if Expr` after the pattern, before `=>`:
+- Guards are an optional `if Expr` after the pattern, before `=>`:
   `x if x > 3 => { .. }`. The guard is evaluated after the pattern
   matches and before the arm body, with the pattern's bindings in scope.
   The guard must be a `Bool` expression (`E-T09` on mismatch); a guarded
@@ -532,9 +532,9 @@ The session-27 lexer needed no changes (`|`, `..`, `..=`, and `if`
 already existed). Exclusions from §2 and §9 that remain (`type`
 aliases, generics) are unchanged.
 
-## 21. Session-28 Additions: Block Expressions and If-As-Expression
+## 21. Session-28 additions: block expressions and If-As-Expression
 
-**Session:** 28 — Block expressions and if-as-expression
+**Session:** 28, Block expressions and if-as-expression
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19/20/25/26/27 additions above remain authoritative;
@@ -547,19 +547,19 @@ IfExpr      := 'if' Expr BlockExpr 'else' (IfExpr | BlockExpr)
 BlockExpr   := '{' Stmt* Expr? '}'
 ```
 
-- **Block expressions** (`{ stmts; expr }`) evaluate their statements in
+- Block expressions (`{ stmts; expr }`) evaluate their statements in
   order, then evaluate the trailing expression (the last expression not
   followed by `;`) as the block's value. An empty block or a block whose
   last item ends with `;` has no trailing expression and evaluates to
   `Unit`. Block expressions appear in expression position: `let x = { 1 +
   2 };`.
-- **If-as-expression** (`if cond { a } else { b }`) evaluates `cond`,
+- If-as-expression (`if cond { a } else { b }`) evaluates `cond`,
   then evaluates and returns the value of the taken branch. The `else`
   branch is **required** (an if-expression without `else` is `E-P26`).
   Both branches must be expression blocks with trailing expressions of the
   same type (enforced by the type checker). If-expressions nest: `if a { x
   } else if b { y } else { z }`.
-- **Distinguishing group vs tuple vs block**: `(expr)` remains a group
+- Distinguishing group vs tuple vs block: `(expr)` remains a group
   expression (parenthesized); `{ expr }` is a block expression returning
   `expr`. `if expr { a } else { b }` in statement position is an
   if-statement; in expression position it is an if-expression.
@@ -568,9 +568,9 @@ The session-28 lexer needed no changes (`if`, `{`, `}`, `else` already
 existed). Exclusions from §2 and §9 that remain (`type` aliases,
 generics, lambdas/closures) are unchanged.
 
-## 22. Session-29 Additions: Tuple Types and Expressions
+## 22. Session-29 additions: tuple types and expressions
 
-**Session:** 29 — Tuple types, tuple expressions, and tuple field access
+**Session:** 29: Tuple types, tuple expressions, and tuple field access
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19/20/25/26/27/28 additions above remain
@@ -588,20 +588,20 @@ Pattern     := ... | TuplePattern
 TuplePattern:= '(' Pattern (',' Pattern)* ','? ')' | '()'
 ```
 
-- **Tuple types** (`(Int, Bool)`, `(Int,)`, `()`) represent fixed-length
+- Tuple types (`(Int, Bool)`, `(Int,)`, `()`) represent fixed-length
   heterogeneous sequences of types. An empty tuple `()` is the unit type.
   A single-element tuple `(Int,)` is distinct from `Int`. Tuple types
   appear in all type positions: struct fields, let/const bindings,
   function parameters, and return types.
-- **Tuple expressions** (`(1, true)`, `(1,)`, `()`) construct tuple
+- Tuple expressions (`(1, true)`, `(1,)`, `()`) construct tuple
   values. The element types determine the tuple type. `()` produces the
   unit value. A single-element tuple requires a trailing comma `(1,)`.
-- **Tuple field access** (`x.0`, `x.1`) reads the element at the given
+- Tuple field access (`x.0`, `x.1`) reads the element at the given
   non-negative integer index. The index is a literal, not an expression;
   it must be within the tuple's length (`E-T35` out of range).
   Chained access requires grouping: `(x.0).1` because `x.0.1` lexes
   `0.1` as a float literal.
-- **Tuple patterns** (`(a, b)`, `()`) destructure tuple values in match
+- Tuple patterns (`(a, b)`, `()`) destructure tuple values in match
   arms. Each element pattern binds or tests the corresponding tuple
   element. An empty tuple pattern `()` matches only unit values.
 
@@ -609,9 +609,9 @@ The session-29 lexer needed no changes (all tokens already existed).
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
 
-## 23. Session-30 Additions: While/Loop Expressions and Break Values
+## 23. Session-30 additions: while/Loop expressions and break values
 
-**Session:** 30 — while/loop as expressions, break with values
+**Session:** 30, while/loop as expressions, break with values
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19/20/25/26/27/28/29 additions above remain
@@ -624,15 +624,15 @@ WhileExpr   := 'while' Expr Block
 LoopExpr    := 'loop' Block
 ```
 
-- **Break with value** (`break expr;`) carries an optional value out of
+- Break with value (`break expr;`) carries an optional value out of
   a loop. `break;` (no value) is unchanged and evaluates to `Unit`.
   `break expr;` is valid in any loop (statement or expression position).
   The value's type must be compatible with the loop's result type.
-- **While-expression** (`while cond { body }`) in expression position
+- While-expression (`while cond { body }`) in expression position
   evaluates the loop body repeatedly while `cond` is `true`. The
   expression's type is determined by `break` values inside the body. A
   `while` statement (followed by `;`) is unchanged and has type `Unit`.
-- **Loop-expression** (`loop { body }`) in expression position evaluates
+- Loop-expression (`loop { body }`) in expression position evaluates
   the loop body repeatedly. The expression's type is determined by
   `break` values inside the body. A `loop` statement (followed by `;`)
   is unchanged and has type `Unit`.
@@ -646,9 +646,9 @@ The session-30 lexer needed no changes (all tokens already existed).
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
 
-## 24. Session-31 Additions: Tuple Destructuring in Let Bindings
+## 24. Session-31 additions: tuple destructuring in let bindings
 
-**Session:** 31 — tuple destructuring in let bindings
+**Session:** 31, tuple destructuring in let bindings
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19/20/25/26/27/28/29/30 additions above remain
@@ -660,22 +660,22 @@ LetPattern  := Ident | TupleLetPattern
 TupleLetPattern := '(' LetPattern (',' LetPattern)* ','? ')' | '()'
 ```
 
-- **Tuple destructuring** (`let (a, b) = expr;`) extracts each element
+- Tuple destructuring (`let (a, b) = expr;`) extracts each element
   of a tuple value into a separate binding. The initializer must be a
   tuple type with matching arity (`E-T38` on mismatch); a non-tuple
   initializer is `E-T37` (cannot destructure). Each element pattern is
   a simple identifier that binds the corresponding tuple element.
-- **Nested destructuring** (`let (a, (b, c)) = expr;`) recursively
+- Nested destructuring (`let (a, (b, c)) = expr;`) recursively
   destructures nested tuples. Each inner pattern must match the
   corresponding element's tuple type.
-- **Wildcard patterns** (`let (a, _) = expr;`) skip elements. The `_`
+- Wildcard patterns (`let (a, _) = expr;`) skip elements. The `_`
   pattern binds nothing, matching the existing wildcard semantics.
-- **Type annotations** (`let (a, b): (Int, Bool) = expr;`) check the
+- Type annotations (`let (a, b): (Int, Bool) = expr;`) check the
   whole tuple type against the annotation.
-- **Mutability** (`let mut (a, b) = expr;`) makes all destructured
+- Mutability (`let mut (a, b) = expr;`) makes all destructured
   bindings mutable.
-- **Unit destructuring** (`let () = expr;`) matches only unit values.
-- **Single-element tuples** (`let (a,) = expr;`) require a trailing
+- Unit destructuring (`let () = expr;`) matches only unit values.
+- Single-element tuples (`let (a,) = expr;`) require a trailing
   comma, matching the tuple expression convention.
 
 The session-31 lexer needed no changes (all tokens already existed).
@@ -683,9 +683,9 @@ Const destructuring (`const (a, b) = expr;`) remains deferred.
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
 
-## 25. Session-32 Additions: Struct Destructuring in Let Bindings
+## 25. Session-32 additions: struct destructuring in let bindings
 
-**Session:** 32 — struct destructuring in let bindings
+**Session:** 32, struct destructuring in let bindings
 
 This section extends the frozen grammar additively. The base grammar and
 the session-14/17/18/19/20/25/26/27/28/29/30/31 additions above remain
@@ -698,20 +698,20 @@ StructLetPattern := Ident '{' StructPatternField (',' StructPatternField)* ','? 
 StructPatternField := Ident (':' Pattern)?
 ```
 
-- **Struct destructuring** (`let Point { x, y } = expr;`) extracts each
+- Struct destructuring (`let Point { x, y } = expr;`) extracts each
   named field of a struct value into a separate binding. The initializer
   must be a struct type whose name matches the pattern (`E-T41` on
   mismatch); a non-struct initializer is `E-T37` (cannot destructure).
-- **Shorthand bindings** (`x` instead of `x: x`) bind the field to a
+- Shorthand bindings (`x` instead of `x: x`) bind the field to a
   name matching the field name. **Explicit bindings** (`x: renamed`)
   bind the field to a different name or a nested pattern.
-- **All declared fields required** — every declared field must appear in
+- All declared fields required: every declared field must appear in
   the pattern (`E-T40` on omission); unknown fields are `E-T39`.
-- **Nested destructuring** (`let Point { x: Inner { a, b } } = p;`)
+- Nested destructuring (`let Point { x: Inner { a, b } } = p;`)
   recursively destructures nested struct fields.
-- **Type annotations** (`let Point { x, y }: Point = expr;`) check the
+- Type annotations (`let Point { x, y }: Point = expr;`) check the
   whole struct type against the annotation.
-- **Mutability** (`let mut Point { x, y } = expr;`) makes all
+- Mutability (`let mut Point { x, y } = expr;`) makes all
   destructured bindings mutable.
 
 The session-32 lexer needed no changes (all tokens already existed).
@@ -720,9 +720,9 @@ deferred. Match-arm struct patterns are not yet supported.
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
 
-## 26. Session-33 Additions: Match Expressions
+## 26. Session-33 additions: match expressions
 
-**Session:** 33 — match as expression
+**Session:** 33, match as expression
 
 This section extends the frozen grammar additively. The base grammar and
 all prior session additions remain authoritative; the new productions are:
@@ -733,7 +733,7 @@ MatchExpr   := 'match' Expr '{' MatchExprArm* '}'
 MatchExprArm:= Pattern ('if' Expr)? '=>' Expr
 ```
 
-- **Match expressions** (`match scrutinee { pattern => expr, ... }`) in
+- Match expressions (`match scrutinee { pattern => expr, ... }`) in
   expression position evaluate the scrutinee once, then evaluate and
   return the value of the first arm whose pattern matches. Every arm's
   expression must produce a compatible result type (`E-T01` on mismatch).
@@ -741,7 +741,7 @@ MatchExprArm:= Pattern ('if' Expr)? '=>' Expr
   return position (`return match ...`), expression statement position,
   block trailing position, and nested within other expressions.
   They do **not** appear in arbitrary operand position (function
-  arguments, binary operands) — this mirrors the existing `if`-expression
+  arguments, binary operands), this mirrors the existing `if`-expression
   limitation.
 - The scrutinee may be any expression. Its type decides whether the
   match is legal: `Int`, `Bool`, and enums are matchable; every other
@@ -807,9 +807,9 @@ all items from all modules are included in the combined AST, so private
 items are also accessible (true private-vs-public enforcement is a
 later milestone).
 
-## §31  Closures / Lambdas
+## §31  Closures / lambdas
 
-**Session:** 37 — Closure expressions with capture support.
+**Session:** 37, Closure expressions with capture support.
 
 ```EBNF
 ClosureExpr  = "|" [ ClosureParams ] "|" ( BlockExpr | Expression ) ;

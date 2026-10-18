@@ -1,27 +1,27 @@
-# MINK Package Architecture
+# MINK package architecture
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — the V1 subset is implemented (see §26); the rest is design
+**Status:** DESIGN ONLY, the V1 subset is implemented (see §26); the rest is design
 **Scope:** Complete package system design for the MINK ecosystem
 
 ---
 
 ## 1. Goals
 
-1. **Dependency management.** Developers declare dependencies in a manifest file. The package manager resolves versions, downloads packages, and manages the dependency graph.
+1. Dependency management. Developers declare dependencies in a manifest file. The package manager resolves versions, downloads packages, and manages the dependency graph.
 
-2. **Reproducible builds.** The lockfile ensures identical builds across machines and CI environments.
+2. Reproducible builds. The lockfile ensures identical builds across machines and CI environments.
 
-3. **Security.** Package integrity is verified by content hash. Build scripts are sandboxed.
+3. Security. Package integrity is verified by content hash. Build scripts are sandboxed.
 
-4. **Scalability.** The system handles small projects (single file) and large workspaces (hundreds of packages).
+4. Scalability. The system handles small projects (single file) and large workspaces (hundreds of packages).
 
-5. **AI-friendliness.** Machine-readable manifest, structured dependency graph, deterministic resolution.
+5. AI-friendliness. Machine-readable manifest, structured dependency graph, deterministic resolution.
 
 ---
 
-## 2. Package Identity
+## 2. Package identity
 
 ### Package name
 - Format: `lowercase-with-hyphens` (e.g., `mink-json`, `mink-net`)
@@ -101,7 +101,7 @@ async = ["mink-net/async"]
 
 ---
 
-## 4. Dependency Declaration
+## 4. Dependency declaration
 
 ### Version requirements
 
@@ -111,7 +111,7 @@ async = ["mink-net/async"]
 | `"^1.0.0"` | Compatible (default) | `>=1.0.0, <2.0.0` |
 | `"~1.2.3"` | Patch-level | `>=1.2.3, <1.3.0` |
 | `">=1.0, <2.0"` | Range | Any version in range |
-| `"*"` | Any version | **Not recommended** |
+| `"*"` | Any version | Not recommended |
 
 ### Default behavior
 - `version = "1.0.0"` is equivalent to `version = "^1.0.0"`
@@ -183,7 +183,7 @@ dependencies = ["mink-std", "mink-json"]
 
 ---
 
-## 6. Source vs Binary Packages
+## 6. Source vs binary packages
 
 ### Source packages
 - Contain `.mink` source files
@@ -203,7 +203,7 @@ dependencies = ["mink-std", "mink-json"]
 
 ---
 
-## 7. Build Dependencies
+## 7. Build dependencies
 
 ### Purpose
 - Code generation tools
@@ -227,7 +227,7 @@ fn build() {
 
 ---
 
-## 8. Target-Specific Dependencies
+## 8. Target-Specific dependencies
 
 ```toml
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -247,7 +247,7 @@ mink-arm = "1.0.0"
 
 ---
 
-## 9. Optional Dependencies and Features
+## 9. Optional dependencies and features
 
 ### Optional dependencies
 
@@ -273,7 +273,7 @@ my-lib = { version = "1.0.0", default-features = false, features = ["basic"] }
 
 ---
 
-## 10. Workspace Support
+## 10. Workspace support
 
 ### Workspace manifest
 
@@ -307,7 +307,7 @@ mink-std.workspace = true
 
 ---
 
-## 11. Module Layout
+## 11. Module layout
 
 ### Standard layout
 
@@ -345,14 +345,14 @@ pub use module1::Item; // re-export
 ```
 
 ### Module visibility
-- `pub` — visible everywhere
-- `pub(crate)` — visible within the package
-- `pub(super)` — visible in the parent module
+- `pub`: visible everywhere
+- `pub(crate)`: visible within the package
+- `pub(super)`: visible in the parent module
 - Private by default
 
 ---
 
-## 12. Imports and Exports
+## 12. Imports and exports
 
 ### Import syntax
 
@@ -376,7 +376,7 @@ use my_utils::{helper1, helper2};
 
 ---
 
-## 13. Package Boundaries
+## 13. Package boundaries
 
 ### Each package is a compilation unit
 - Packages are compiled independently
@@ -390,7 +390,7 @@ use my_utils::{helper1, helper2};
 
 ---
 
-## 14. Reproducible Builds
+## 14. Reproducible builds
 
 ### Guarantees
 1. Same `mink.lock` → same dependency versions
@@ -410,7 +410,7 @@ mink audit   # Check for known vulnerabilities
 
 ---
 
-## 15. Package Caching
+## 15. Package caching
 
 ### Cache location
 - `~/.mink/cache/` (user cache)
@@ -444,7 +444,7 @@ mink audit   # Check for known vulnerabilities
 
 ---
 
-## 16. Package Verification
+## 16. Package verification
 
 ### Verification steps
 1. Download package archive
@@ -460,7 +460,7 @@ mink audit   # Check for known vulnerabilities
 
 ---
 
-## 17. Package Signing (V2+)
+## 17. Package signing (V2+)
 
 ### Signing model
 - Packages can be signed by the publisher
@@ -475,7 +475,7 @@ mink audit   # Check for known vulnerabilities
 
 ---
 
-## 18. Registry Interaction
+## 18. Registry interaction
 
 ### Registry URL
 - Default: `https://mink.pkg.dev`
@@ -543,7 +543,7 @@ mink publish --token <api-token>
 
 ---
 
-## 21. Dependency Resolution
+## 21. Dependency resolution
 
 ### Resolution algorithm
 1. Read `mink.toml` for direct dependencies
@@ -564,7 +564,7 @@ mink publish --token <api-token>
 
 ---
 
-## 22. Dependency Conflicts
+## 22. Dependency conflicts
 
 ### Diamond problem
 ```
@@ -582,7 +582,7 @@ A → B ^1.0.0
 C → B ^2.0.0
 ```
 
-**Resolution:** Error — cannot satisfy both constraints.
+**Resolution:** Error, cannot satisfy both constraints.
 
 ### Conflict reporting
 ```
@@ -594,7 +594,7 @@ error: version conflict for package `b`
 
 ---
 
-## 23. Transitive Dependencies
+## 23. Transitive dependencies
 
 ### Rules
 1. All transitive dependencies are resolved and locked
@@ -619,17 +619,17 @@ my-project 0.1.0
 
 ---
 
-## 24. Malicious Package Protection
+## 24. Malicious package protection
 
 ### Measures
-1. **Content hashing.** Every package is verified by SHA-256 hash.
-2. **Lockfile integrity.** The lockfile records hashes; tampering is detected.
-3. **Build script sandboxing.** Build scripts run with restricted permissions.
-4. **No automatic network access.** Build scripts must opt-in to network.
-5. **Dependency auditing.** `mink audit` checks for known vulnerabilities.
-6. **Trusted publishers.** Package signing identifies the publisher.
-7. **Typosquatting detection.** Registry warns on suspiciously similar package names.
-8. **Dependency confusion protection.** Namespace isolation prevents shadowing.
+1. Content hashing. Every package is verified by SHA-256 hash.
+2. Lockfile integrity. The lockfile records hashes; tampering is detected.
+3. Build script sandboxing. Build scripts run with restricted permissions.
+4. No automatic network access. Build scripts must opt-in to network.
+5. Dependency auditing. `mink audit` checks for known vulnerabilities.
+6. Trusted publishers. Package signing identifies the publisher.
+7. Typosquatting detection. Registry warns on suspiciously similar package names.
+8. Dependency confusion protection. Namespace isolation prevents shadowing.
 
 ### Audit command
 
@@ -647,35 +647,35 @@ warning: advisory for mink-crypto 0.1.0
 
 ---
 
-## 25. Two-Approach Analysis
+## 25. Two-Approach analysis
 
 ### Approach A: Cargo-inspired package model (CHOSEN)
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Mature, handles features/platforms/workspaces, proven at scale, familiar to Rust developers |
-| **Cons** | Complex feature resolution, more configuration |
-| **Complexity** | High (but well-understood) |
-| **Performance** | Good with caching |
-| **Security** | Strong (content hashing, lockfile integrity, build sandboxing) |
-| **Compatibility** | Excellent for a systems language |
-| **Maintainability** | Well-documented model, large reference implementation |
-| **Ecosystem impact** | Maximum — Cargo is the gold standard for systems-language package managers |
+| Pros | Mature, handles features/platforms/workspaces, proven at scale, familiar to Rust developers |
+| Cons | Complex feature resolution, more configuration |
+| Complexity | High (but well-understood) |
+| Performance | Good with caching |
+| Security | Strong (content hashing, lockfile integrity, build sandboxing) |
+| Compatibility | Excellent for a systems language |
+| Maintainability | Well-documented model, large reference implementation |
+| Ecosystem impact | Maximum — Cargo is the gold standard for systems-language package managers |
 
 ### Approach B: Go-module-inspired package model
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Simple, fast builds, minimal configuration |
-| **Cons** | Less flexible, no features, no workspaces, limited ecosystem tooling |
-| **Complexity** | Low-Medium |
-| **Performance** | Excellent (simpler resolution) |
-| **Security** | Good (module proxy, checksums) |
-| **Compatibility** | Limited for a systems language |
-| **Maintainability** | Simple to maintain |
-| **Ecosystem impact** | Moderate — good for simple projects, insufficient for complex ecosystems |
+| Pros | Simple, fast builds, minimal configuration |
+| Cons | Less flexible, no features, no workspaces, limited ecosystem tooling |
+| Complexity | Low-Medium |
+| Performance | Excellent (simpler resolution) |
+| Security | Good (module proxy, checksums) |
+| Compatibility | Limited for a systems language |
+| Maintainability | Simple to maintain |
+| Ecosystem impact | Moderate, good for simple projects, insufficient for complex ecosystems |
 
-### Decision: **Approach A**
+### Decision: **approach A**
 
 **Reasoning:** MINK is a systems language that needs features, platform-specific dependencies, workspaces, and a rich ecosystem. Cargo's model handles all of this. The complexity is justified by the ecosystem's needs. Go's module model is excellent for Go but insufficient for MINK's requirements.
 
@@ -683,7 +683,7 @@ warning: advisory for mink-crypto 0.1.0
 
 ---
 
-## 26. V1 Implementation Status (Session 116)
+## 26. V1 implementation status (session 116)
 
 This section records exactly what the shipped package manager implements, so
 this specification and `src/package/` cannot drift apart silently. Everything
@@ -708,8 +708,8 @@ not listed here is still design.
   inline table) and `[sources]` (`name = "directory"`). Every other section
   (`[features]`, `[target.*]`, `[dev-dependencies]`, …) is preserved and
   ignored.
-- A **source** is a local directory of `<name>/<version>/` package
-directories — the V1 replacement for the registry in §18. A network registry,
+- A source is a local directory of `<name>/<version>/` package
+directories, the V1 replacement for the registry in §18. A network registry,
   publishing, signing and the download cache (§15–§20, §24) remain design.
 - A package directory holds `mink.toml` and its `.mink` sources.
 
@@ -723,7 +723,7 @@ comma-separated conjunctions all work. Two-component bounds mean a zero patch
 
 ### Installed packages (site-packages)
 
-- The **packages directory** is `<project>/.mink/packages`, or
+- The packages directory is `<project>/.mink/packages`, or
   `<project>/.mink/envs/<name>/packages` when an environment is active.
 - `mink install` copies each resolved package to
   `<packages>/<name>/` and records `name`, `version`, `source` and the

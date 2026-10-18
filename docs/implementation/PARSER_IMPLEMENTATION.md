@@ -1,8 +1,8 @@
-# MINK — Parser and AST Implementation
+# MINK: parser and AST implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 03 — Parser + AST; 04 — Parser hardening + grammar consistency
+**Session:** 03, Parser + AST; 04, Parser hardening + grammar consistency
 
 ## 1. Objective
 
@@ -38,7 +38,7 @@ The grammar implemented by this parser is frozen in
 - One lexer change was required by the freeze: `mut` joined the keyword set
   (see `docs/language/CORE_GRAMMAR.md` §10).
 
-## 3. Parser Architecture
+## 3. Parser architecture
 
 The parser lives in `src/parser/` and is a hand-written recursive-descent
 parser over the pull-based lexer API (`Lexer::new` + `Lexer::next_token`);
@@ -75,7 +75,7 @@ distinguish written parentheses from parser-imposed association.
 ### 3.2 Spans
 
 Every AST node carries the exact `Span` (half-open byte range) it was parsed
-from, using the shared source span type — no second span system. Literal
+from, using the shared source span type. No second span system. Literal
 nodes store no decoded value or copied text: the raw source spelling is
 recovered through `SourceFile::span_text`. Identifiers store their name text
 (small, and the currency of name resolution) plus their span. This avoids
@@ -89,11 +89,11 @@ The AST lives in `src/ast/` and mirrors the frozen grammar:
 - `Item` / `ItemKind::Fn(FnItem) | Let(LetItem) | Const(ConstItem)`
 - `FnItem { name, params: Vec<Param>, body: Block }`
 - `Block { stmts: Vec<Stmt> }`
-- `Stmt` / `StmtKind` — bindings, `Return(Option<Expr>)`, `Break`,
+- `Stmt` / `StmtKind`: bindings, `Return(Option<Expr>)`, `Break`,
   `Continue`, `If(IfStmt)`, `While`, `For`, `Loop(Block)`, `Expr(Expr)`
 - `IfStmt { cond, then_block, else_branch: Option<ElseBranch> }` with
   `ElseBranch::If(Box<IfStmt>) | Block(Block)` for else-if chains
-- `Expr` / `ExprKind` — literals (unit variants), `Ident(Ident)`, `Unary`,
+- `Expr` / `ExprKind`: literals (unit variants), `Ident(Ident)`, `Unary`,
   `Binary`, `Assign`, `Range { inclusive }`, `Call`, `Member`, `Index`,
   `Group`
 - Operator enums `UnaryOp`, `BinaryOp`, `AssignOp` with `symbol()` for
@@ -103,16 +103,16 @@ Nodes are plain data structures with public fields (exhaustive
 pattern-matching is the expected consumption style), derive `Debug`, `Clone`,
 `PartialEq`, `Eq`, and the whole tree is arena-free (owned `Box`/`Vec`).
 
-## 5. Error Handling and Recovery
+## 5. Error handling and recovery
 
 Syntax errors live in `src/parser/error.rs`, mirroring the lexer's model:
 
-- `ParseErrorKind` — stable categories with codes `E-P01` … `E-P24`
+- `ParseErrorKind`: stable categories with codes `E-P01` … `E-P24`
   (e.g. `E-P03` expected an expression, `E-P06` expected `;`,
   `E-P14` unclosed `{`, `E-P22` expected a variant name after `::`,
   `E-P23` expected a match pattern, `E-P24` expected `=>` after a
   pattern), each with a human-readable message.
-- `ParseError { kind, span }` — `Copy`, with `kind()`, `span()`, and
+- `ParseError { kind, span }`: `Copy`, with `kind()`, `span()`, and
   `Display`.
 
 The parser never panics on malformed input. Recovery is panic-mode:
@@ -136,7 +136,7 @@ The parser never panics on malformed input. Recovery is panic-mode:
 Assignment-target validation (`E-P04`) is done syntactically: the left side
 must be an identifier, member, or index expression.
 
-## 6. Driver and CLI Integration
+## 6. Driver and CLI integration
 
 `driver::check` now loads the file, runs `parser::parse`, and merges lexical
 and syntax errors into a single source-ordered `Vec<CheckError>` report
@@ -158,61 +158,61 @@ session 11: `mink build` lowers the optimized MIR through the native backend
 into an x86-64 Windows PE executable (see
 `NATIVE_BACKEND_IMPLEMENTATION.md`).
 
-## 7. Design Decisions
+## 7. Design decisions
 
-- **Grammar freeze scope.** Only constructs the session's milestone requires
+- Grammar freeze scope. Only constructs the session's milestone requires
   are implemented; everything else (types, modules, async, unsafe,
   closures, block expressions) is rejected with diagnostics and documented
   as a later milestone in `docs/language/CORE_GRAMMAR.md`. See §8 for the
   full exclusion list.
-- **Recursive descent over a table-driven binary chain.** Simple, auditable,
+- Recursive descent over a table-driven binary chain. Simple, auditable,
   and matches the grammar's fixed operator set; no parser-generator
   dependency (the project remains dependency-free).
-- **Explicit `Group` node.** Tooling (formatter, LSP, diagnostics) can tell
+- Explicit `Group` node. Tooling (formatter, LSP, diagnostics) can tell
   written parentheses from precedence association.
-- **Semicolons are required.** Explicit terminators beat newline-sensitive
+- Semicolons are required. Explicit terminators beat newline-sensitive
   parsing for determinism, tooling, and AI legibility (design rules:
   durability, fewer errors).
-- **Module scope holds declarations only.** Matches `CORE_LANGUAGE.md` §2;
+- Module scope holds declarations only. Matches `CORE_LANGUAGE.md` §2;
   executable statements live in function bodies.
-- **Empty statements are accepted silently** (`;` alone), matching the
+- Empty statements are accepted silently (`;` alone), matching the
   forgiving C/Rust family behavior.
-- **Only the innermost unclosed delimiter is reported at EOF**, to minimize
+- Only the innermost unclosed delimiter is reported at EOF, to minimize
   cascades from one root cause.
-- **Literals keep spans, not values.** Value decoding belongs to the
+- Literals keep spans, not values. Value decoding belongs to the
   semantics/literal-interpretation milestone.
 
-## 8. Known Intentional Limitations
+## 8. Known intentional limitations
 
-- **Recursion depth** is bounded by the call stack (a nested-expression
+- Recursion depth is bounded by the call stack (a nested-expression
   chain costs roughly 30 frames per level). Arbitrarily deep nesting is not
   a goal of this milestone; pathological depth is a future robustness item.
-- **Semantic validation is out of scope for the parser** — for example
+- Semantic validation is out of scope for the parser: for example
   `break` outside a loop, duplicate names, or assignment to immutable
   bindings are not the parser's concern. Semantic analysis landed in session
   05 (see `SEMANTIC_ANALYSIS_IMPLEMENTATION.md`); assignment-target
   validation that *is* syntactically obvious (non-place targets, `E-P04`)
   remains parser-side.
-- **Type annotations, `->` return types, and generics syntax are rejected**
+- Type annotations, `->` return types, and generics syntax are rejected
   as syntax errors until the type-system milestone defines them.
-- **Unicode identifiers** remain a lexer limitation (ASCII only).
-- **Error spans** point at the offending token or the unclosed delimiter's
+- Unicode identifiers remain a lexer limitation (ASCII only).
+- Error spans point at the offending token or the unclosed delimiter's
   opener; explanations and machine-readable output await the diagnostic
   engine.
 
-## 9. Future Extension Points
+## 9. Future extension points
 
 - Adding `name: Type` parameters and `-> Type` return types extends
   `parse_params`/`parse_fn` without restructuring.
 - Adding type/trait/impl, mod/use/pub, async/await, and unsafe extends
-  `parse_item`/`parse_statement` dispatch — the parser was shaped so each
+  `parse_item`/`parse_statement` dispatch, the parser was shaped so each
   construct is one method plus a dispatch arm. (Match statements and
   patterns arrived in session 18 via `parse_match`/`parse_pattern`.)
 - Block/`if` expressions extend `parse_primary`.
 - The delimiter stack and error kinds are ready to feed the structured
   diagnostic engine (severity, related spans, machine-readable output).
 
-## 10. Performance Notes
+## 10. Performance notes
 
 - Single forward pass; every token is pulled exactly once through a
   one-token lookahead window (no token buffer, no re-lexing).
@@ -259,7 +259,7 @@ non-cascades, unicode sources). The lexer keyword-freeze change is covered
 in `tests/lexer.rs`. Total suite: 237 tests (25 CLI + 50 lexer + 88 parser
 + 62 parser hardening + 12 source).
 
-## 12. Quality Gates
+## 12. Quality gates
 
 As before:
 
@@ -269,7 +269,7 @@ As before:
     cargo build
     git diff --check
 
-## 13. Session 04 — Hardening and Grammar-Consistency Audit
+## 13. Session 04: hardening and Grammar-Consistency audit
 
 Session 04 audited the session-03 parser, its tests, and every authoritative
 grammar description against the implementation. Findings and changes:
@@ -285,18 +285,18 @@ grammar description against the implementation. Findings and changes:
 - Every excluded keyword (`type`, `trait`, `impl`, `mod`,
   `use`, `pub`, `async`, `await`, `unsafe`) and every excluded
   token (`:`, `->`, `?`) is now regression-tested to be rejected
-  at both item and statement positions — never silently accepted.
+  at both item and statement positions, never silently accepted.
   (`struct`/`enum` landed in sessions 14/17, and `match`/`=>` in session
   18, so they are no longer in the rejected set.)
 
 ### Parser fixes
 
-- **Trailing comma at end of input in a call** (`g(1,`): the argument list
+- Trailing comma at end of input in a call (`g(1,`): the argument list
   previously fell through to `parse_expression`, reporting a generic
   `UnexpectedEof` plus an `UnclosedBrace` cascade. The argument loop now
   checks for end of input at the top (mirroring `parse_params`), reporting
-  `UnclosedParen` at the call's opener — one error, the useful one.
-- **Comma-recovery cascade** (`f(a b,)` / `g(1 2,)`): a recovered comma
+  `UnclosedParen` at the call's opener, one error, the useful one.
+- Comma-recovery cascade (`f(a b,)` / `g(1 2,)`): a recovered comma
   immediately before `)` no longer triggers a second `ExpectedExpression`
   error; the list terminates cleanly after the one diagnostic.
 
@@ -320,11 +320,11 @@ grammar description against the implementation. Findings and changes:
 
 - Excluded operators such as `?` and `::` are rejected through the
   statement-terminator diagnostics (`E-P06`) pointing at the offending
-  token, rather than dedicated messages — acceptable while they are not
+  token, rather than dedicated messages, acceptable while they are not
   part of any production, and regression-tested.
 - Recursion depth remains call-stack bounded (documented in §8); long
   *chains* of binary operators, postfix operations, and arguments are
-  iterative and scale linearly (tested to 200–500 elements).
+  iterative and scale linearly (tested to 200-500 elements).
 
 No semantic analysis was introduced; assignment-target validation remains
 syntactic only.

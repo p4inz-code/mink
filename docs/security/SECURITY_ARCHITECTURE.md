@@ -1,4 +1,4 @@
-# MINK — Security Architecture
+# MINK: security architecture
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -9,7 +9,7 @@ MINK security must be designed into the language, compiler, runtime, standard li
 
 Security-sensitive behavior must be explicit, analyzable, and difficult to misuse accidentally.
 
-## 2. Security Principles
+## 2. Security principles
 
 MINK prioritizes:
 
@@ -24,7 +24,7 @@ MINK prioritizes:
 - Deterministic behavior
 - Defense in depth
 
-## 3. Memory Safety
+## 3. Memory safety
 
 The default MINK programming model should prevent common memory-safety failures.
 
@@ -38,7 +38,7 @@ The design must address:
 - Data races where preventable
 - Uninitialized memory
 
-## 4. Unsafe Operations
+## 4. Unsafe operations
 
 Low-level capabilities that cannot be proven safe by the language may exist behind explicit unsafe boundaries.
 
@@ -46,25 +46,25 @@ Unsafe code must be visible to developers and analyzable by compiler and tooling
 
 Unsafe boundaries should be minimized rather than allowing unrestricted unsafe behavior throughout normal code.
 
-## 5. Type Safety
+## 5. Type safety
 
 The type system should prevent invalid operations at compile time whenever practical.
 
 Runtime checks should be used where compile-time proof is impossible and where safety requires them.
 
-## 6. Concurrency Safety
+## 6. Concurrency safety
 
 The concurrency model should minimize data races and unsafe shared mutable state.
 
 The compiler and runtime should provide strong guarantees around synchronization, ownership, message passing, and shared resources where the language model permits.
 
-## 7. Resource Safety
+## 7. Resource safety
 
 Files, sockets, locks, memory, processes, database connections, and other resources must have predictable ownership and cleanup behavior.
 
 Resource leaks should be detectable through compiler analysis, tooling, runtime diagnostics, or testing where possible.
 
-## 8. Capability Boundaries
+## 8. Capability boundaries
 
 Security-sensitive operations should have explicit boundaries.
 
@@ -100,7 +100,7 @@ High-level secure APIs should be preferred over raw primitives.
 
 Deprecated or insecure algorithms should produce clear warnings or errors where appropriate.
 
-## 11. Package Security
+## 11. Package security
 
 Package dependencies must support integrity verification.
 
@@ -114,7 +114,7 @@ The ecosystem should support:
 - License metadata
 - Malicious-package reporting
 
-## 12. Build Security
+## 12. Build security
 
 Build inputs must be treated as potentially hostile.
 
@@ -122,7 +122,7 @@ Build scripts and plugins should not automatically receive unrestricted access t
 
 Where possible, builds should support controlled permissions for filesystem, network, process, and environment access.
 
-## 13. Compiler Security
+## 13. Compiler security
 
 The compiler must safely handle malformed, malicious, or adversarial source code.
 
@@ -130,19 +130,19 @@ Compiler failures caused by malformed input should not result in arbitrary code 
 
 The compiler should be fuzz-tested extensively.
 
-## 14. Runtime Security
+## 14. Runtime security
 
 Runtime components must enforce language safety guarantees and securely handle invalid inputs.
 
 Runtime APIs should avoid undefined behavior becoming an ordinary application-level outcome.
 
-## 15. Dependency Confusion Protection
+## 15. Dependency confusion protection
 
 Package resolution must prevent accidental substitution of trusted packages by unrelated packages with matching names.
 
 Registry precedence and source identity must be explicit.
 
-## 16. Supply Chain Security
+## 16. Supply chain security
 
 MINK tooling should eventually support verification of the complete software supply chain.
 
@@ -157,7 +157,7 @@ Relevant information may include:
 - Target platform
 - Signing metadata
 
-## 17. Reproducible Builds
+## 17. Reproducible builds
 
 Security-sensitive releases should support reproducible builds so independent parties can verify generated artifacts.
 
@@ -167,23 +167,23 @@ MINK should support sandbox-compatible execution models where platform capabilit
 
 Applications, plugins, and build tools should be able to operate with restricted permissions when appropriate.
 
-## 19. Plugin Security
+## 19. Plugin security
 
 Plugins must have explicit trust and compatibility models.
 
 Untrusted plugins must not automatically receive unrestricted process privileges.
 
-## 20. Native FFI Security
+## 20. Native FFI security
 
 FFI boundaries must be treated as security-sensitive.
 
 The compiler should clearly identify unsafe native interactions and preserve their boundaries during diagnostics and analysis.
 
-## 21. Web Security
+## 21. Web security
 
 Web frameworks should provide secure defaults for authentication, authorization, TLS, cookies, request validation, output encoding, CSRF protection where applicable, rate limiting, and security headers.
 
-## 22. Data Integrity
+## 22. Data integrity
 
 MINK tooling must prioritize preventing accidental data loss.
 
@@ -191,13 +191,13 @@ Package updates, compiler migrations, formatters, refactoring tools, and automat
 
 Destructive operations should require explicit intent where appropriate.
 
-## 23. Diagnostics Security
+## 23. Diagnostics security
 
 Diagnostics must avoid leaking sensitive information.
 
 Paths, environment variables, credentials, source content, and system information should be exposed only when appropriate.
 
-## 24. AI Security
+## 24. AI security
 
 AI-integrated tooling must treat generated changes as untrusted until validated.
 
@@ -205,13 +205,13 @@ AI tooling should receive structured project information while respecting projec
 
 Automated AI modifications should be reviewable and reversible.
 
-## 25. Update Security
+## 25. Update security
 
 Compiler, package, runtime, and application updates should support integrity and authenticity verification.
 
 Updates should fail safely if verification cannot be completed.
 
-## 26. Security Testing
+## 26. Security testing
 
 Security testing must include:
 
@@ -225,17 +225,17 @@ Security testing must include:
 - Sandbox testing
 - Regression testing
 
-## 27. Vulnerability Response
+## 27. Vulnerability response
 
 MINK should maintain a documented vulnerability response process covering discovery, triage, severity classification, remediation, disclosure, patch release, and affected-version tracking.
 
-## 28. Security Compatibility
+## 28. Security compatibility
 
 Security fixes should take priority over preserving insecure legacy behavior.
 
 Where a security correction creates compatibility concerns, migration tooling and clear diagnostics should be provided.
 
-## 29. Security Documentation
+## 29. Security documentation
 
 Security-sensitive APIs must document:
 
@@ -247,7 +247,7 @@ Security-sensitive APIs must document:
 - Recommended usage
 - Known limitations
 
-## 30. Open Architecture Decisions
+## 30. Open architecture decisions
 
 The following must be finalized before architecture freeze:
 

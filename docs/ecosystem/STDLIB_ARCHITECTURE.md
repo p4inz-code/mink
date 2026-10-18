@@ -1,8 +1,8 @@
-# MINK Standard Library Architecture
+# MINK standard library architecture
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY, not implemented
 **Scope:** Complete standard library design for the MINK ecosystem
 
 > **Note.** This document describes a *future* layered, package-based standard library
@@ -15,19 +15,19 @@
 
 ## 1. Goals
 
-1. **Coherent system.** The standard library is a carefully designed set of modules with clear dependencies and interfaces, not a collection of random convenience functions.
+1. Coherent system. The standard library is a carefully designed set of modules with clear dependencies and interfaces, not a collection of random convenience functions.
 
-2. **Layered architecture.** Modules are organized in layers: core → memory → collections → strings → system → network → dev.
+2. Layered architecture. Modules are organized in layers: core → memory → collections → strings → system → network → dev.
 
-3. **Cross-platform.** Every module works on all supported platforms (Windows, Linux, macOS).
+3. Cross-platform. Every module works on all supported platforms (Windows, Linux, macOS).
 
-4. **Production-ready.** Every module has documentation, tests, benchmarks, and security review.
+4. Production-ready. Every module has documentation, tests, benchmarks, and security review.
 
-5. **AI-friendly.** Machine-readable metadata, deterministic behavior, structured errors.
+5. AI-friendly. Machine-readable metadata, deterministic behavior, structured errors.
 
 ---
 
-## 2. Library Layers
+## 2. Library layers
 
 ### Layer model
 
@@ -68,172 +68,172 @@
 
 ---
 
-## 3. Module Classification
+## 3. Module classification
 
-### Core (L2) — Compiler-provided
+### Core (L2): compiler-provided
 
 These are implemented by the compiler and runtime, not as MINK source:
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `option` | `Option<T>` type and methods | **Core** |
-| `result` | `Result<T,E>` type and methods | **Core** |
-| `primitives` | `Int`, `Bool`, `Float`, `Char`, `Ptr<T>` | **Core** |
-| `unit` | `()` type | **Core** |
+| `option` | `Option<T>` type and methods | Core |
+| `result` | `Result<T,E>` type and methods | Core |
+| `primitives` | `Int`, `Bool`, `Float`, `Char`, `Ptr<T>` | Core |
+| `unit` | `()` type | Core |
 
-### Memory (L1-L2) — Runtime-provided
-
-| Module | Description | Priority |
-|--------|-------------|----------|
-| `alloc` | Heap allocation (`rt_alloc`, `rt_free`) | **Core** |
-| `mem` | Memory operations (`rt_mem_load`, `rt_mem_store`) | **Core** |
-
-### Collections (L3) — Standard Library
+### Memory (L1-L2): runtime-provided
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `vec` | Dynamic array (`Vec<T>`) | **High** |
-| `slice` | Borrowed slice (`Slice<T>`) | **High** |
-| `string` | UTF-8 string (`Str`) | **High** |
-| `hashmap` | Hash map (`HashMap<K,V>`) | **High** |
-| `hashset` | Hash set (`HashSet<T>`) | **Medium** |
-| `btree_map` | B-tree map (`BTreeMap<K,V>`) | **Later** |
-| `btree_set` | B-tree set (`BTreeSet<T>`) | **Later** |
-| `linked_list` | Linked list (`LinkedList<T>`) | **Later** |
-| `deque` | Double-ended queue (`Deque<T>`) | **Later** |
-| `priority_queue` | Priority queue (`PriorityQueue<T>`) | **Later** |
+| `alloc` | Heap allocation (`rt_alloc`, `rt_free`) | Core |
+| `mem` | Memory operations (`rt_mem_load`, `rt_mem_store`) | Core |
 
-### Strings (L3) — Standard Library
+### Collections (L3): standard library
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `str` | String operations (concat, eq, from_int) | **Core** (runtime intrinsics) |
-| `fmt` | String formatting (`format!`, `Display`) | **High** |
-| `unicode` | Unicode support (codepoints, graphs) | **Medium** |
-| `regex` | Regular expressions | **Later** |
+| `vec` | Dynamic array (`Vec<T>`) | High |
+| `slice` | Borrowed slice (`Slice<T>`) | High |
+| `string` | UTF-8 string (`Str`) | High |
+| `hashmap` | Hash map (`HashMap<K,V>`) | High |
+| `hashset` | Hash set (`HashSet<T>`) | Medium |
+| `btree_map` | B-tree map (`BTreeMap<K,V>`) | Later |
+| `btree_set` | B-tree set (`BTreeSet<T>`) | Later |
+| `linked_list` | Linked list (`LinkedList<T>`) | Later |
+| `deque` | Double-ended queue (`Deque<T>`) | Later |
+| `priority_queue` | Priority queue (`PriorityQueue<T>`) | Later |
 
-### Math (L3) — Standard Library
-
-| Module | Description | Priority |
-|--------|-------------|----------|
-| `math` | Basic math (abs, min, max, pow, sqrt) | **High** |
-| `random` | Random number generation | **Medium** |
-| `bigint` | Arbitrary-precision integers | **Later** |
-| `bignum` | Arbitrary-precision floats | **Later** |
-| `statistics` | Statistical functions | **Later** |
-| `complex` | Complex numbers | **Later** |
-
-### Time (L3) — Standard Library
+### Strings (L3): standard library
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `time` | Duration, Instant, SystemTime | **High** |
-| `datetime` | DateTime, timezone support | **Medium** |
-| `chrono` | Calendar operations | **Later** |
+| `str` | String operations (concat, eq, from_int) | Core (runtime intrinsics) |
+| `fmt` | String formatting (`format!`, `Display`) | High |
+| `unicode` | Unicode support (codepoints, graphs) | Medium |
+| `regex` | Regular expressions | Later |
 
-### Filesystem (L4) — System Library
-
-| Module | Description | Priority |
-|--------|-------------|----------|
-| `fs` | File operations (open, read, write, delete) | **High** |
-| `path` | Path manipulation (join, parent, filename) | **High** |
-| `dir` | Directory operations (create, list, remove) | **High** |
-| `fs_watcher` | Filesystem watcher | **Later** |
-| `tempfile` | Temporary files | **Medium** |
-
-### Process (L4) — System Library
+### Math (L3): standard library
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `process` | Process spawn, wait, kill | **High** |
-| `env` | Environment variables | **High** |
-| `args` | Command-line arguments | **High** |
+| `math` | Basic math (abs, min, max, pow, sqrt) | High |
+| `random` | Random number generation | Medium |
+| `bigint` | Arbitrary-precision integers | Later |
+| `bignum` | Arbitrary-precision floats | Later |
+| `statistics` | Statistical functions | Later |
+| `complex` | Complex numbers | Later |
 
-### Networking (L4) — System Library
-
-| Module | Description | Priority |
-|--------|-------------|----------|
-| `net` | TCP/UDP sockets | **Medium** |
-| `http` | HTTP client/server | **Later** |
-| `dns` | DNS resolution | **Later** |
-| `tls` | TLS/SSL support | **Later** |
-
-### Concurrency (L4) — System Library
+### Time (L3): standard library
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `thread` | Thread creation and management | **Medium** |
-| `sync` | Mutex, RwLock, Condvar | **Medium** |
-| `channel` | Message passing channels | **Later** |
-| `async` | Async/await runtime | **Later** (V2 language feature) |
+| `time` | Duration, Instant, SystemTime | High |
+| `datetime` | DateTime, timezone support | Medium |
+| `chrono` | Calendar operations | Later |
 
-### Encoding (L5) — Application Library
-
-| Module | Description | Priority |
-|--------|-------------|----------|
-| `base64` | Base64 encoding/decoding | **Medium** |
-| `hex` | Hex encoding/decoding | **Medium** |
-| `json` | JSON parsing/serialization | **High** |
-| `toml` | TOML parsing/serialization | **Medium** |
-| `csv` | CSV parsing/serialization | **Medium** |
-| `xml` | XML parsing/serialization | **Later** |
-| `yaml` | YAML parsing/serialization | **Later** |
-
-### Compression (L5) — Application Library
+### Filesystem (L4): system library
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `gzip` | Gzip compression | **Later** |
-| `zlib` | Zlib compression | **Later** |
-| `lz4` | LZ4 compression | **Later** |
+| `fs` | File operations (open, read, write, delete) | High |
+| `path` | Path manipulation (join, parent, filename) | High |
+| `dir` | Directory operations (create, list, remove) | High |
+| `fs_watcher` | Filesystem watcher | Later |
+| `tempfile` | Temporary files | Medium |
 
-### Crypto (L5) — Application Library
-
-| Module | Description | Priority |
-|--------|-------------|----------|
-| `hash` | Hash functions (SHA-256, MD5) | **Medium** |
-| `hmac` | HMAC | **Later** |
-| `aes` | AES encryption | **Later** |
-| `rsa` | RSA encryption | **Later** |
-| `ed25519` | Ed25519 signatures | **Later** |
-
-### Serialization (L5) — Application Library
+### Process (L4): system library
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `serde` | Serialization framework | **Later** (V2 language feature: traits) |
-| `bincode` | Binary encoding | **Later** |
-| `protobuf` | Protocol Buffers | **Later** |
+| `process` | Process spawn, wait, kill | High |
+| `env` | Environment variables | High |
+| `args` | Command-line arguments | High |
 
-### Diagnostics (L6) — Developer Tools
-
-| Module | Description | Priority |
-|--------|-------------|----------|
-| `log` | Logging (levels, structured) | **Medium** |
-| `diagnostics` | Machine-readable diagnostics | **High** |
-| `explain` | Error code explanation | **High** |
-
-### Testing (L6) — Developer Tools
+### Networking (L4): system library
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `test` | Test framework (assert, test runner) | **High** |
-| `property` | Property-based testing | **Later** |
-| `mock` | Mocking framework | **Later** |
-| `bench` | Benchmarking framework | **Later** |
+| `net` | TCP/UDP sockets | Medium |
+| `http` | HTTP client/server | Later |
+| `dns` | DNS resolution | Later |
+| `tls` | TLS/SSL support | Later |
 
-### CLI (L6) — Developer Tools
+### Concurrency (L4): system library
 
 | Module | Description | Priority |
 |--------|-------------|----------|
-| `cli` | Argument parsing | **Medium** |
-| `progress` | Progress bars | **Later** |
-| `colors` | Terminal colors | **Later** |
-| `table` | Table formatting | **Later** |
+| `thread` | Thread creation and management | Medium |
+| `sync` | Mutex, RwLock, Condvar | Medium |
+| `channel` | Message passing channels | Later |
+| `async` | Async/await runtime | Later (V2 language feature) |
+
+### Encoding (L5): application library
+
+| Module | Description | Priority |
+|--------|-------------|----------|
+| `base64` | Base64 encoding/decoding | Medium |
+| `hex` | Hex encoding/decoding | Medium |
+| `json` | JSON parsing/serialization | High |
+| `toml` | TOML parsing/serialization | Medium |
+| `csv` | CSV parsing/serialization | Medium |
+| `xml` | XML parsing/serialization | Later |
+| `yaml` | YAML parsing/serialization | Later |
+
+### Compression (L5): application library
+
+| Module | Description | Priority |
+|--------|-------------|----------|
+| `gzip` | Gzip compression | Later |
+| `zlib` | Zlib compression | Later |
+| `lz4` | LZ4 compression | Later |
+
+### Crypto (L5): application library
+
+| Module | Description | Priority |
+|--------|-------------|----------|
+| `hash` | Hash functions (SHA-256, MD5) | Medium |
+| `hmac` | HMAC | Later |
+| `aes` | AES encryption | Later |
+| `rsa` | RSA encryption | Later |
+| `ed25519` | Ed25519 signatures | Later |
+
+### Serialization (L5): application library
+
+| Module | Description | Priority |
+|--------|-------------|----------|
+| `serde` | Serialization framework | Later (V2 language feature: traits) |
+| `bincode` | Binary encoding | Later |
+| `protobuf` | Protocol Buffers | Later |
+
+### Diagnostics (L6): developer tools
+
+| Module | Description | Priority |
+|--------|-------------|----------|
+| `log` | Logging (levels, structured) | Medium |
+| `diagnostics` | Machine-readable diagnostics | High |
+| `explain` | Error code explanation | High |
+
+### Testing (L6): developer tools
+
+| Module | Description | Priority |
+|--------|-------------|----------|
+| `test` | Test framework (assert, test runner) | High |
+| `property` | Property-based testing | Later |
+| `mock` | Mocking framework | Later |
+| `bench` | Benchmarking framework | Later |
+
+### CLI (L6): developer tools
+
+| Module | Description | Priority |
+|--------|-------------|----------|
+| `cli` | Argument parsing | Medium |
+| `progress` | Progress bars | Later |
+| `colors` | Terminal colors | Later |
+| `table` | Table formatting | Later |
 
 ---
 
-## 4. Module Dependencies
+## 4. Module dependencies
 
 ### Dependency graph
 
@@ -315,7 +315,7 @@ cli (cli)
 
 ---
 
-## 5. API Conventions
+## 5. API conventions
 
 ### Naming
 - `snake_case` for functions, methods, and modules
@@ -347,7 +347,7 @@ cli (cli)
 
 ---
 
-## 6. V1 Existing Modules
+## 6. V1 existing modules
 
 ### What exists today
 
@@ -372,7 +372,7 @@ cli (cli)
 
 ---
 
-## 7. V1→V2 Evolution Plan
+## 7. V1→V2 evolution plan
 
 ### Phase 1: Core method implementations (V1.x)
 - Implement `Option<T>` methods (`.unwrap()`, `.map()`, `.is_some()`, `.is_none()`)
@@ -400,7 +400,7 @@ cli (cli)
 
 ---
 
-## 8. Cross-Platform Considerations
+## 8. Cross-Platform considerations
 
 ### Platform-specific implementations
 - Each module may have platform-specific implementations
@@ -433,7 +433,7 @@ mod linux {
 
 ---
 
-## 9. Package System Integration
+## 9. Package system integration
 
 ### Module naming
 - Standard library modules are in the `mink-std` package
@@ -457,7 +457,7 @@ mink-std = { version = "1.0.0", features = ["collections", "strings", "math"] }
 
 ---
 
-## 10. AI-Friendly Design
+## 10. AI-Friendly design
 
 ### Machine-readable metadata
 - Every module has structured metadata (name, version, description, API surface)
@@ -476,35 +476,35 @@ mink-std = { version = "1.0.0", features = ["collections", "strings", "math"] }
 
 ---
 
-## 11. Two-Approach Analysis
+## 11. Two-Approach analysis
 
 ### Approach A: Minimal core + packages (CHOSEN)
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Fast compiler builds, clear boundaries, modular, no bloat |
-| **Cons** | Users must install packages for basics, potential fragmentation |
-| **Complexity** | Low |
-| **Performance** | Good (only linked modules are compiled) |
-| **Security** | Smaller attack surface |
-| **Compatibility** | Excellent — users choose what they need |
-| **Maintainability** | Each module is independently maintained |
-| **Ecosystem impact** | Maximum — encourages package ecosystem growth |
+| Pros | Fast compiler builds, clear boundaries, modular, no bloat |
+| Cons | Users must install packages for basics, potential fragmentation |
+| Complexity | Low |
+| Performance | Good (only linked modules are compiled) |
+| Security | Smaller attack surface |
+| Compatibility | Excellent, users choose what they need |
+| Maintainability | Each module is independently maintained |
+| Ecosystem impact | Maximum, encourages package ecosystem growth |
 
 ### Approach B: Large stdlib
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Everything available immediately, no package hunting |
-| **Cons** | Slow builds, bloat, hard to maintain, stagnation |
-| **Complexity** | High |
-| **Performance** | Poor (large compilation units) |
-| **Security** | Larger attack surface |
-| **Compatibility** | Limited — users get everything whether they need it or not |
-| **Maintainability** | Difficult — monolithic library is hard to evolve |
-| **Ecosystem impact** | Negative — discourages external package development |
+| Pros | Everything available immediately, no package hunting |
+| Cons | Slow builds, bloat, hard to maintain, stagnation |
+| Complexity | High |
+| Performance | Poor (large compilation units) |
+| Security | Larger attack surface |
+| Compatibility | Limited, users get everything whether they need it or not |
+| Maintainability | Difficult, monolithic library is hard to evolve |
+| Ecosystem impact | Negative, discourages external package development |
 
-### Decision: **Approach A**
+### Decision: **approach A**
 
 **Reasoning:** MINK's ecosystem strategy requires a thriving package ecosystem. A minimal core library encourages package development. The standard library provides essential building blocks; external packages provide everything else. This is the Rust model, and it works extremely well.
 

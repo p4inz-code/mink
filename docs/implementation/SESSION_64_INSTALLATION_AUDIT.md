@@ -1,14 +1,14 @@
-# SESSION_64 — MINK 1.0.0 Installation / Distribution Audit
+# SESSION_64: MINK 1.0.0 installation / distribution audit
 
 **Date:** August 27, 2026
-**Priority:** HIGHEST — Production release incident
-**Status:** RESOLVED — Blocker found and fixed
+**Priority:** HIGHEST, Production release incident
+**Status:** RESOLVED, Blocker found and fixed
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
-The MINK 1.0.0 release artifact (`mink.exe`) **cannot run on a clean Windows machine** due to a missing Visual C++ Runtime dependency. The Rust-compiled compiler binary dynamically links to `VCRUNTIME140.dll`, which is NOT part of Windows and must be installed separately via the Visual C++ Redistributable. This is a **severity-A blocker** that prevents any developer from using MINK after downloading it.
+The MINK 1.0.0 release artifact (`mink.exe`) **cannot run on a clean Windows machine** due to a missing Visual C++ Runtime dependency. The Rust-compiled compiler binary dynamically links to `VCRUNTIME140.dll`, which is NOT part of Windows and must be installed separately via the Visual C++ Redistributable. This is a severity-A blocker that prevents any developer from using MINK after downloading it.
 
 **Root cause:** The Rust toolchain defaults to dynamic CRT linking on Windows MSVC targets. No `.cargo/config.toml` was present to enable static linking.
 
@@ -18,7 +18,7 @@ The MINK 1.0.0 release artifact (`mink.exe`) **cannot run on a clean Windows mac
 
 ---
 
-## 2. User-Reported Failure
+## 2. User-Reported failure
 
 **Report:** "The released MINK .exe does not work as a simple one-click installation on another machine. The user tried normal installation/execution and it did not work despite attempting multiple things."
 
@@ -28,7 +28,7 @@ The MINK 1.0.0 release artifact (`mink.exe`) **cannot run on a clean Windows mac
 The code execution cannot proceed because VCRUNTIME140.dll was not found. Reinstalling the program may fix this problem.
 ```
 
-This is a standard Windows DLL-load failure — the process never starts.
+This is a standard Windows DLL-load failure. The process never starts.
 
 ---
 
@@ -47,9 +47,9 @@ This is a standard Windows DLL-load failure — the process never starts.
 
 ---
 
-## 4. Artifact Audit
+## 4. Artifact audit
 
-### 4.1 Compiler Binary (`mink.exe`)
+### 4.1 Compiler binary (`mink.exe`)
 
 **Pre-fix DLL Dependencies:**
 ```
@@ -84,7 +84,7 @@ MINK-generated executables are **fully self-contained PE32+ images** that:
 - Are compiled by MINK's own PE backend (no external linker)
 - Work from any directory on any Windows machine
 
-### 4.3 Release Package Contents
+### 4.3 Release package contents
 
 The release package should contain:
 ```
@@ -104,63 +104,63 @@ mink-1.0.1-x86_64-windows/
 
 ---
 
-## 5. Clean-Machine Results
+## 5. Clean-Machine results
 
 All tests performed with only `mink.exe` + `.mink` source files in a fresh directory (no source repository present):
 
 | # | Test | Result |
 |---|------|--------|
-| 1 | `mink.exe --version` | ✅ `mink 1.0.0` |
-| 2 | `mink.exe version` | ✅ `mink 1.0.0` |
-| 3 | `mink.exe --help` | ✅ Usage information |
-| 4 | `mink.exe check hello.mink` | ✅ Passed all analysis stages |
-| 5 | `mink.exe build hello.mink` | ✅ Generated `hello.exe` |
-| 6 | Run generated `hello.exe` | ✅ Exit code matches program return |
-| 7 | Different working directory | ✅ Absolute paths work |
-| 8 | Paths with spaces | ✅ No path-handling issues |
-| 9 | Deep nested paths | ✅ No path issues |
-| 10 | Multiple programs | ✅ Independent compilations work |
-| 11 | Missing file error | ✅ Clear error message |
-| 12 | No arguments | ✅ Shows help |
-| 13 | Repeated compilation | ✅ Overwrites cleanly |
-| 14 | Unknown command | ✅ Clean error message |
-| 15 | Check with `--json` | ✅ Machine-readable output |
-| 16 | Explain command | ✅ Error documentation works |
-| 17 | Complex programs (loops, functions) | ✅ Compiles and runs |
-| 18 | Module system | ✅ Multi-file compilation works |
+| 1 | `mink.exe --version` | `mink 1.0.0` |
+| 2 | `mink.exe version` | `mink 1.0.0` |
+| 3 | `mink.exe --help` | Usage information |
+| 4 | `mink.exe check hello.mink` | Passed all analysis stages |
+| 5 | `mink.exe build hello.mink` | Generated `hello.exe` |
+| 6 | Run generated `hello.exe` | Exit code matches program return |
+| 7 | Different working directory | Absolute paths work |
+| 8 | Paths with spaces | No path-handling issues |
+| 9 | Deep nested paths | No path issues |
+| 10 | Multiple programs | Independent compilations work |
+| 11 | Missing file error | Clear error message |
+| 12 | No arguments | Shows help |
+| 13 | Repeated compilation | Overwrites cleanly |
+| 14 | Unknown command | Clean error message |
+| 15 | Check with `--json` | Machine-readable output |
+| 16 | Explain command | Error documentation works |
+| 17 | Complex programs (loops, functions) | Compiles and runs |
+| 18 | Module system | Multi-file compilation works |
 
 ---
 
-## 6. Root Causes
+## 6. Root causes
 
-### Finding A-1 (BLOCKER): VCRUNTIME140.dll Dependency
+### Finding A-1 (BLOCKER): VCRUNTIME140.dll dependency
 
-**Severity:** A — Release blocker
+**Severity:** A, Release blocker
 **Category:** Distribution / Runtime dependency
 **Root cause:** Rust toolchain defaults to dynamic CRT linking on `x86_64-pc-windows-msvc`. The MINK project had no `.cargo/config.toml` to override this default.
 **Impact:** `mink.exe` fails to start on any machine without Visual C++ Redistributable installed.
 **Evidence:** PE import table inspection shows `VCRUNTIME140.dll` in the import directory. Windows DLL loader rejects the binary when the DLL is absent.
 **Fix:** Added `.cargo/config.toml` with `[target.x86_64-pc-windows-msvc] rustflags = ["-C", "target-feature=+crt-static"]`
 
-### Finding B-1 (CORRECTNESS): No Release Packaging Script
+### Finding B-1 (CORRECTNESS): no release packaging script
 
-**Severity:** B — Correctness defect
+**Severity:** B, Correctness defect
 **Category:** Release engineering
 **Root cause:** No script or CI workflow to create a release ZIP with the binary, documentation, and examples.
 **Impact:** Users must manually find and download the binary; no structured distribution.
 **Fix:** Documented the exact release packaging procedure below.
 
-### Finding C-1 (QUALITY): No Installation Documentation
+### Finding C-1 (QUALITY): no installation documentation
 
-**Severity:** C — Quality/UX
+**Severity:** C, Quality/UX
 **Category:** Documentation
 **Root cause:** No `INSTALLATION.md` or installation instructions in the repository.
 **Impact:** Users don't know how to install or use MINK after downloading.
 **Fix:** Created comprehensive installation documentation.
 
-### Finding C-2 (QUALITY): Release Metadata Gap
+### Finding C-2 (QUALITY): release metadata gap
 
-**Severity:** C — Quality/UX
+**Severity:** C, Quality/UX
 **Category:** Release engineering
 **Root cause:** v1.0.0 tag exists but no GitHub release with structured artifacts was created.
 **Impact:** Users cannot find the release through standard channels.
@@ -170,7 +170,7 @@ All tests performed with only `mink.exe` + `.mink` source files in a fresh direc
 
 ## 7. Evidence
 
-### PE Import Analysis (Pre-fix)
+### PE import analysis (pre-fix)
 
 ```
 Binary: target/release/mink.exe
@@ -188,7 +188,7 @@ DLL Dependencies:
   api-ms-win-crt-heap-l1-1-0.dll
 ```
 
-### PE Import Analysis (Post-fix)
+### PE import analysis (post-fix)
 
 ```
 Binary: target/release/mink.exe (rebuilt with +crt-static)
@@ -201,20 +201,20 @@ DLL Dependencies:
   (no CRT dependencies)
 ```
 
-### Binary Size Comparison
+### Binary size comparison
 
 | Version | Size | Change |
 |---------|------|--------|
 | Pre-fix (dynamic CRT) | 2,071,040 bytes (2.0 MB) | — |
 | Post-fix (static CRT) | 2,168,320 bytes (2.1 MB) | +97 KB (+4.7%) |
 
-The 4.7% size increase is acceptable and expected — the CRT code is now embedded in the binary rather than loaded from a DLL at runtime.
+The 4.7% size increase is acceptable and expected. The CRT code is now embedded in the binary rather than loaded from a DLL at runtime.
 
 ---
 
-## 8. Two-Approach Analysis
+## 8. Two-Approach analysis
 
-### For Finding A-1 (VCRUNTIME140.dll Dependency)
+### For finding A-1 (VCRUNTIME140.dll dependency)
 
 **Approach A: Static CRT Linking (CHOSEN)**
 - Add `.cargo/config.toml` with `+crt-static`
@@ -235,7 +235,7 @@ The 4.7% size increase is acceptable and expected — the CRT code is now embedd
 
 **Decision:** Approach A is clearly superior for a standalone compiler binary. Static CRT is the standard Rust distribution pattern.
 
-### For Finding B-1 (No Release Packaging)
+### For finding B-1 (no release packaging)
 
 **Approach A: Manual packaging script (CHOSEN)**
 - Simple PowerShell/bash script to create ZIP
@@ -253,19 +253,19 @@ The 4.7% size increase is acceptable and expected — the CRT code is now embedd
 
 ---
 
-## 9. Chosen Fixes
+## 9. Chosen fixes
 
 | Finding | Fix | Risk |
 |---------|-----|------|
-| A-1 | Static CRT via `.cargo/config.toml` | Very low — standard Rust configuration |
-| B-1 | Documented release packaging procedure | None — documentation only |
-| C-1 | Installation documentation | None — documentation only |
+| A-1 | Static CRT via `.cargo/config.toml` | Very low, standard Rust configuration |
+| B-1 | Documented release packaging procedure | None, documentation only |
+| C-1 | Installation documentation | None, documentation only |
 
 No language semantics, compiler behavior, or generated code was changed. The fix is purely a build configuration change.
 
 ---
 
-## 10. Implementation Details
+## 10. Implementation details
 
 ### `.cargo/config.toml`
 
@@ -276,7 +276,7 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 This tells the Rust compiler to statically link the C runtime into the binary instead of dynamically importing `VCRUNTIME140.dll`. The setting is target-specific and only affects Windows MSVC builds.
 
-### Build Verification
+### Build verification
 
 ```bash
 # Rebuild with static CRT
@@ -292,15 +292,15 @@ print('PASS: No CRT runtime dependencies')
 
 ---
 
-## 11. Security Implications
+## 11. Security implications
 
 | Concern | Status |
 |---------|--------|
 | HTTPS for downloads | N/A (local binary distribution) |
 | Checksum/signature | Recommended for GitHub release |
-| DLL search-order hijacking | ELIMINATED — no external DLLs loaded |
-| PATH hijacking | N/A — no PATH installation by default |
-| Privilege escalation | None — user-level execution only |
+| DLL search-order hijacking | ELIMINATED, no external DLLs loaded |
+| PATH hijacking | N/A, no PATH installation by default |
+| Privilege escalation | None, user-level execution only |
 | Binary integrity | Standard PE image, no unusual sections |
 | ASLR | Enabled (DYNAMIC_BASE in DllCharacteristics) |
 | DEP/NX | Enabled (NX_COMPAT in DllCharacteristics) |
@@ -310,35 +310,35 @@ print('PASS: No CRT runtime dependencies')
 
 ## 12. Installation UX
 
-### Current State (Post-fix)
+### Current state (post-fix)
 
 **Installation procedure:**
 1. Download `mink-1.0.1-x86_64-windows.zip`
 2. Extract to any directory
-3. Run `mink.exe` directly — no installation required
+3. Run `mink.exe` directly: no installation required
 4. Optionally add the directory to PATH
 
 **What works:**
-- ✅ Direct execution from any directory
-- ✅ Absolute path usage
-- ✅ Paths with spaces
-- ✅ No environment variables required
-- ✅ No configuration files required
-- ✅ No external dependencies
-- ✅ No admin privileges required
-- ✅ No installer required
+- Direct execution from any directory
+- Absolute path usage
+- Paths with spaces
+- No environment variables required
+- No configuration files required
+- No external dependencies
+- No admin privileges required
+- No installer required
 
 **What doesn't exist (by design):**
-- ❌ No system-wide installer
-- ❌ No PATH auto-configuration
-- ❌ No Start Menu shortcuts
-- ❌ No uninstaller
+- No system-wide installer
+- No PATH auto-configuration
+- No Start Menu shortcuts
+- No uninstaller
 
-These are appropriate for v1.0.x — MINK is a portable compiler, not a system service.
+These are appropriate for v1.0.x, MINK is a portable compiler, not a system service.
 
 ---
 
-## 13. Test Matrix
+## 13. Test matrix
 
 | Category | Tests | Passed | Failed |
 |----------|-------|--------|--------|
@@ -347,55 +347,55 @@ These are appropriate for v1.0.x — MINK is a portable compiler, not a system s
 | Integration tests (backend) | 511 | 511 | 0 |
 | Adversarial (clean env) | 18 | 18 | 0 |
 | Quality gates (fmt/clippy) | 2 | 2 | 0 |
-| **Total** | **2,373** | **2,373** | **0** |
+| Total | 2,373 | 2,373 | 0 |
 
 ---
 
-## 14. 10-Persona Audit
+## 14. 10-Persona audit
 
-### 1. Compiler Engineer
+### 1. Compiler engineer
 **Finding:** Static CRT linking is a build configuration change only. No compiler semantics, code generation, or runtime behavior is affected. The binary is 4.7% larger but functionally identical.
-**Classification:** E (non-issue) — this is the correct approach for distributing Rust binaries.
+**Classification:** E (non-issue), this is the correct approach for distributing Rust binaries.
 
-### 2. Windows Systems Engineer
-**Finding:** The pre-fix binary depended on `VCRUNTIME140.dll`, which requires Visual C++ Redistributable. The post-fix binary depends only on `kernel32.dll`, `ntdll.dll`, and Windows API sets — all present on Windows 10+.
+### 2. Windows systems engineer
+**Finding:** The pre-fix binary depended on `VCRUNTIME140.dll`, which requires Visual C++ Redistributable. The post-fix binary depends only on `kernel32.dll`, `ntdll.dll`, and Windows API sets. All present on Windows 10+.
 **Classification:** A → FIXED
 
-### 3. Release Engineer
+### 3. Release engineer
 **Finding:** No release packaging script exists. The v1.0.0 tag points to the correct commit but no GitHub release with artifacts was created. A v1.0.1 patch release is needed to ship the static CRT fix.
 **Classification:** B → Documented
 
-### 4. Security Engineer
+### 4. Security engineer
 **Finding:** Post-fix binary has minimal attack surface: only kernel32.dll imports. No DLL search-order hijacking possible. ASLR and DEP are enabled. No privilege escalation paths.
-**Classification:** E (non-issue) — improved security posture post-fix.
+**Classification:** E (non-issue), improved security posture post-fix.
 
-### 5. First-Time Developer
+### 5. First-Time developer
 **Finding:** Download ZIP → Extract → Run `mink.exe --version` → Write `hello.mink` → Run `mink.exe build hello.mink` → Run `hello.exe`. No prior setup, no package managers, no configuration. This is the ideal one-click experience.
 **Classification:** C → Improved with documentation
 
-### 6. CI/CD Engineer
+### 6. CI/CD engineer
 **Finding:** The binary can be built reproducibly with `cargo build --release`. The `.cargo/config.toml` ensures static CRT on all builds. No CI-specific configuration needed.
 **Classification:** E (non-issue)
 
-### 7. Package/Distribution Engineer
+### 7. Package/Distribution engineer
 **Finding:** The release package is a simple ZIP with the binary, README, LICENSE, and examples. No complex packaging format needed. The binary is fully self-contained.
 **Classification:** C → Documented
 
-### 8. AI-Agent Developer
+### 8. AI-Agent developer
 **Finding:** An AI agent can download the ZIP, extract it, and use `mink.exe` without any configuration. The binary works from any directory and produces self-contained executables.
 **Classification:** E (non-issue)
 
-### 9. QA Engineer
+### 9. QA engineer
 **Finding:** 2,373 tests pass. 18 adversarial clean-environment tests pass. All quality gates (fmt, clippy) pass. The fix introduces zero regressions.
-**Classification:** E (non-issue) — thorough testing completed.
+**Classification:** E (non-issue), thorough testing completed.
 
-### 10. Hostile/Adversarial User
+### 10. Hostile/Adversarial user
 **Finding:** The binary is a standard PE32+ executable. No unusual sections, no embedded scripts, no privilege escalation. ASLR and DEP are enabled. The only external dependency is kernel32.dll.
 **Classification:** E (non-issue)
 
 ---
 
-## 15. Remaining Limitations
+## 15. Remaining limitations
 
 | # | Limitation | Severity | Notes |
 |---|-----------|----------|-------|
@@ -408,14 +408,14 @@ These are appropriate for v1.0.x — MINK is a portable compiler, not a system s
 
 ---
 
-## 16. Release Recommendation
+## 16. Release recommendation
 
 ### **CONDITIONAL GO**
 
 **Condition:** The static CRT fix MUST be shipped as v1.0.1 before any developer can reliably use MINK.
 
 **Justification:**
-- The v1.0.0 binary **cannot run** on clean Windows machines (severity-A blocker)
+- The v1.0.0 binary cannot run on clean Windows machines (severity-A blocker)
 - The fix is minimal, safe, and well-tested (0 regressions)
 - No language/compiler semantics are changed
 - The fix only affects the build configuration
@@ -431,36 +431,36 @@ These are appropriate for v1.0.x — MINK is a portable compiler, not a system s
 
 ---
 
-## 17. Exact Installation Procedure
+## 17. Exact installation procedure
 
-### For End Users
+### For end users
 
-1. **Download** `mink-1.0.1-x86_64-windows.zip` from GitHub Releases
-2. **Extract** the ZIP to any directory (e.g., `C:\Tools\mink\`)
-3. **Verify** installation:
+1. Download `mink-1.0.1-x86_64-windows.zip` from GitHub Releases
+2. Extract the ZIP to any directory (e.g., `C:\Tools\mink\`)
+3. Verify installation:
    ```
    cd C:\Tools\mink
    mink.exe --version
    ```
    Expected output: `mink 1.0.0`
 
-4. **Write** a MINK program (`hello.mink`):
+4. Write a MINK program (`hello.mink`):
    ```
    fn main() {
        return 42;
    }
    ```
 
-5. **Compile** and run:
+5. Compile and run:
    ```
    mink.exe build hello.mink
    hello.exe
    ```
    Expected exit code: `42`
 
-6. **Optional**: Add `C:\Tools\mink` to your system PATH for global access
+6. Optional: Add `C:\Tools\mink` to your system PATH for global access
 
-### For Developers Building from Source
+### For developers building from source
 
 ```bash
 git clone https://github.com/p4inz-code/mink.git
@@ -471,7 +471,7 @@ cargo build --release
 
 ---
 
-## 18. Exact Verification Procedure
+## 18. Exact verification procedure
 
 ```bash
 # 1. Verify binary is self-contained
@@ -502,7 +502,7 @@ C:\path\to\mink.exe build C:\path\to\test.mink
 
 ---
 
-## 19. New Release Artifact Required
+## 19. New release artifact required
 
 **Yes.** A new release artifact is required because:
 
@@ -522,19 +522,19 @@ C:\path\to\mink.exe build C:\path\to\test.mink
 
 | Gate | Status | Details |
 |------|--------|---------|
-| Root cause identified | ✅ | VCRUNTIME140.dll dependency |
-| Fix implemented | ✅ | `.cargo/config.toml` with +crt-static |
-| Fix verified | ✅ | PE import analysis confirms no CRT deps |
-| All tests pass | ✅ | 2,373 passed, 0 failed |
-| No regressions | ✅ | Same test results before/after fix |
-| Clean environment tested | ✅ | 18 adversarial tests, all pass |
-| Quality gates pass | ✅ | fmt clean, clippy clean |
-| Documentation complete | ✅ | This document |
-| Release decision | ✅ | CONDITIONAL GO |
+| Root cause identified | Yes | VCRUNTIME140.dll dependency |
+| Fix implemented | Yes | `.cargo/config.toml` with +crt-static |
+| Fix verified | Yes | PE import analysis confirms no CRT deps |
+| All tests pass | Yes | 2,373 passed, 0 failed |
+| No regressions | Yes | Same test results before/after fix |
+| Clean environment tested | Yes | 18 adversarial tests, all pass |
+| Quality gates pass | Yes | fmt clean, clippy clean |
+| Documentation complete | Yes | This document |
+| Release decision | Yes | CONDITIONAL GO |
 
 **Final Verdict:** The MINK 1.0.0 installation blocker has been identified, fixed, and verified. A v1.0.1 patch release is required to ship the static CRT configuration. After the patch release, MINK will be fully installable and usable by any developer on Windows 10+ with zero external dependencies.
 
 ---
 
-*Generated with Codebuff 🤖*
+*Generated with Codebuff *
 *Co-Authored-By: Codebuff <noreply@codebuff.com>*

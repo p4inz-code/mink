@@ -1,4 +1,4 @@
-# MINK — Concurrency and Async Model
+# MINK: concurrency and async model
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -23,7 +23,7 @@ Concurrency should be easy to use for normal application development while allow
 
 ---
 
-## 2. Core Model
+## 2. Core model
 
 MINK should distinguish:
 
@@ -36,7 +36,7 @@ These concepts must have precise semantics and must not be treated as interchang
 
 ---
 
-## 3. Async Programming
+## 3. Async programming
 
 MINK should provide first-class asynchronous programming.
 
@@ -68,7 +68,7 @@ The compiler should understand async control flow rather than treating async syn
 
 ---
 
-## 5. Futures / Tasks
+## 5. Futures / tasks
 
 MINK should provide a standard abstraction representing work that may complete later.
 
@@ -86,7 +86,7 @@ The final naming and exact semantics remain architecture decisions.
 
 ---
 
-## 6. Structured Concurrency
+## 6. Structured concurrency
 
 MINK should favor structured concurrency.
 
@@ -96,7 +96,7 @@ The language/runtime should make it difficult to accidentally create background 
 
 ---
 
-## 7. Task Lifetime
+## 7. Task lifetime
 
 Tasks should have clearly defined ownership/lifetime semantics.
 
@@ -193,7 +193,7 @@ Timeout failures should produce structured errors rather than ambiguous generic 
 
 ---
 
-## 13. Shared Mutable State
+## 13. Shared mutable state
 
 MINK should make shared mutable state explicit.
 
@@ -209,7 +209,7 @@ Where shared state is required, synchronization should be explicit and analyzabl
 
 ---
 
-## 14. Data Race Safety
+## 14. Data race safety
 
 The language/runtime should prevent or strongly discourage data races where technically practical.
 
@@ -219,7 +219,7 @@ The exact memory/concurrency type-system integration will be decided during arch
 
 ---
 
-## 15. Message Passing
+## 15. Message passing
 
 MINK should support message-passing concurrency.
 
@@ -293,7 +293,7 @@ Complete dynamic deadlock prevention is not required if it would impose unaccept
 
 ---
 
-## 20. Blocking Operations
+## 20. Blocking operations
 
 Blocking operations should be clearly identifiable.
 
@@ -303,7 +303,7 @@ Tooling should identify potentially blocking operations inside async contexts.
 
 ---
 
-## 21. Async and Error Handling
+## 21. Async and error handling
 
 Async operations must integrate directly with the MINK error system.
 
@@ -319,7 +319,7 @@ Errors must preserve causal context across async boundaries.
 
 ---
 
-## 22. Async and Resource Management
+## 22. Async and resource management
 
 Resource lifetimes must remain correct across suspension points.
 
@@ -329,7 +329,7 @@ Async cleanup must be deterministic where external resources require determinist
 
 ---
 
-## 23. Async and Memory Safety
+## 23. Async and memory safety
 
 Suspending a task must not invalidate references or resources that remain logically active.
 
@@ -339,7 +339,7 @@ Unsafe lifetime assumptions across `await` boundaries should produce diagnostics
 
 ---
 
-## 24. UI Compatibility
+## 24. UI compatibility
 
 The concurrency model must support responsive UI applications.
 
@@ -349,7 +349,7 @@ The language/runtime should make it easy to move expensive work away from UI-cri
 
 ---
 
-## 25. Web and Backend Compatibility
+## 25. Web and backend compatibility
 
 Concurrency is a first-class backend capability.
 
@@ -416,7 +416,7 @@ Testing tools should eventually provide mechanisms for:
 
 ---
 
-## 29. AI Compatibility
+## 29. AI compatibility
 
 The concurrency model must be easy for AI coding systems to understand.
 
@@ -467,7 +467,7 @@ FFI boundaries must clearly document whether external operations are:
 
 ---
 
-## 32. Open Architecture Decisions
+## 32. Open architecture decisions
 
 The following must be resolved before architecture freeze:
 
@@ -488,6 +488,6 @@ The following must be resolved before architecture freeze:
 
 ---
 
-## 33. Core Principle
+## 33. Core principle
 
 > **Concurrency should scale from one simple asynchronous operation to highly parallel production systems without forcing developers to abandon safety or clarity.**

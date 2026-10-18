@@ -1,8 +1,8 @@
-# MINK — Semantic Analysis Implementation
+# MINK: semantic analysis implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 05 — Semantic Analysis Foundation
+**Session:** 05, Semantic Analysis Foundation
 
 ## 1. Objective
 
@@ -17,7 +17,7 @@ At the end of this session the following works end to end:
 `mink check <path>` now performs lexical, syntactic, **and** semantic
 analysis. Name resolution and the semantic result are durable structures
 consumed by the type checker (session 06) and HIR lowering (session 08);
-sessions 09–12 added MIR, optimization, the native backend, and the runtime
+sessions 09-12 added MIR, optimization, the native backend, and the runtime
 foundation on top.
 
 ## 2. Architecture
@@ -55,19 +55,19 @@ are collected in one pre-pass so module scope is order-independent). It never
 mutates the parser AST: all output lives in the [`SemanticResult`], keeping
 the AST/semantic boundary clean.
 
-## 3. Symbol Model
+## 3. Symbol model
 
 Every declaration becomes one [`Symbol`]:
 
-- **`SymbolId`** — stable numeric identity, assigned in deterministic source
+- `SymbolId`: stable numeric identity, assigned in deterministic source
   order; valid for the lifetime of the result.
-- **`name`** — the declared identifier spelling.
-- **`kind`** — [`SymbolKind`]: `Fn`, `Param`, `Let { mutable }` (`let` vs
+- `name`: the declared identifier spelling.
+- `kind`: [`SymbolKind`]: `Fn`, `Param`, `Let { mutable }` (`let` vs
   `let mut`), `Const`, `ForVar`.
-- **`span`** — exact declaration span (the identifier token).
-- **`scope`** — the [`ScopeId`] the symbol is declared in.
+- `span`: exact declaration span (the identifier token).
+- `scope`: the [`ScopeId`] the symbol is declared in.
 
-Symbols store names and spans only — never a clone of an AST node — so the
+Symbols store names and spans only, never a clone of an AST node, so the
 table stays lightweight. The `SymbolTable` owns all symbols; consumers use
 `get(id)`, `iter()`, and `len()`. `SymbolId`s are the currency for the
 resolved-reference map (§8) and for future type checking.
@@ -75,7 +75,7 @@ resolved-reference map (§8) and for future type checking.
 Mutability per kind: only `Let { mutable: true }` is writable. `let`, `const`,
 parameters, `for` variables, and function names are immutable (see §6).
 
-## 4. Scope Model
+## 4. Scope model
 
 Scopes are created from the lexical structure of the program and form a
 forest linked by parent pointers:
@@ -83,7 +83,7 @@ forest linked by parent pointers:
 | Scope kind   | Created for                                                       |
 | ------------ | ----------------------------------------------------------------- |
 | `Module`     | The whole file; holds top-level declarations. No parent.          |
-| `Function`   | Each `fn`; **the function body block is the function's declaration scope** — parameters and the body's own `let`/`const` declarations share it. |
+| `Function`   | Each `fn`; the function body block is the function's declaration scope, parameters and the body's own `let`/`const` declarations share it. |
 | `Block`      | Every other block: `if`/`else` bodies, `while`, `for`, `loop` bodies, and any future nested `{ ... }`. The `for` loop variable is declared in the loop body's scope. |
 
 Each [`Scope`] records its kind, parent, the symbols declared directly inside
@@ -93,11 +93,11 @@ internal index can evolve without breaking consumers.
 
 ### 4.1 Declaration order
 
-- **Module scope is order-independent**: all top-level names are collected
+- Module scope is order-independent: all top-level names are collected
   before any item body is analyzed, so a declaration is visible throughout
-  its module — functions may call each other in any order, and a `let`/`const`
+  its module, functions may call each other in any order, and a `let`/`const`
   initializer may reference a binding declared later.
-- **All other scopes require declaration-before-use**: a name is visible from
+- All other scopes require declaration-before-use: a name is visible from
   its declaration point to the end of its scope. A binding is not visible in
   its own initializer (`let x = x;` refers to an outer `x` or is unresolved),
   and a `for` loop variable is not visible in its own iterable expression.
@@ -110,51 +110,51 @@ internal index can evolve without breaking consumers.
   resolution, which prevents cascading unresolved-name errors.
 - Because parameters share the function scope with body declarations, a
   parameter/local name collision is a duplicate-definition error.
-- A **nested scope may shadow** an enclosing name; references resolve to the
+- A nested scope may shadow an enclosing name; references resolve to the
   innermost declaration. Same-scope shadowing (redeclaration) is not allowed.
 - Functions, bindings, constants, parameters, and loop variables share one
   namespace per scope at this stage (there are no type/value namespaces yet).
 
-## 5. Name Resolution
+## 5. Name resolution
 
 The resolver walks the scope chain outward from the current scope and returns
 the innermost declaration. Lookup is O(1) per scope via the name index, so
 total analysis work is linear in source size.
 
-- **Distinguishes declarations from references**: declarations bind symbols;
+- Distinguishes declarations from references: declarations bind symbols;
   references (identifier expressions, assignment targets, call callees) are
   resolved.
-- **Reports unresolved identifiers** (`E-S01`) with the exact reference span.
+- Reports unresolved identifiers (`E-S01`) with the exact reference span.
   Every unresolved use is an independent diagnostic (not a cascade).
-- **Retains spans and symbol identities** in the resolved-reference map (§8).
-- **Call targets**: a call whose callee is a plain identifier resolves that
+- Retains spans and symbol identities in the resolved-reference map (§8).
+- Call targets: a call whose callee is a plain identifier resolves that
   name. Member names are field selectors and are **not** resolved as scope
   names (they belong to the type system). Whether a resolved symbol is
   callable, and whether argument counts/types match, is deliberately deferred
   to the type-system milestone.
 - No type inference is performed to resolve names.
 
-## 6. Mutability and Assignment
+## 6. Mutability and assignment
 
 `let` bindings are immutable by default (`CORE_LANGUAGE.md` §7). The analyzer
 validates assignment targets semantically (the parser already validates that
 targets are syntactically places, `E-P04`):
 
-- **Identifier targets** are resolved and checked for writability:
+- Identifier targets are resolved and checked for writability:
   - assignment to an immutable `let`, parameter, `for` variable, or function
     name → `E-S03` (assignment to immutable);
   - assignment to a `const` → `E-S04` (assignment to constant);
   - assignment to a `let mut` binding → accepted.
   - Compound assignment operators (`+=` `-=` `*=` `/=` `%=`) follow the same
     writability rule.
-- **Member/index targets**: the base expression is resolved (an unresolved
+- Member/index targets: the base expression is resolved (an unresolved
   base is `E-S01`), but whether the target itself is writable depends on the
-  base's type and is **deferred to the type-system milestone** — no type
+  base's type and is **deferred to the type-system milestone**. No type
   semantics are invented here.
 - An unresolved target reports only `E-S01` (never a second mutability
   error).
 
-## 7. Control-Flow Context
+## 7. Control-Flow context
 
 The analyzer carries a context of `{ scope, in_loop, in_function }` through
 the traversal:
@@ -171,16 +171,16 @@ the traversal:
 No control-flow-graph construction, definite-assignment analysis, or
 unreachable-code analysis is performed (later milestones).
 
-## 8. Semantic Result
+## 8. Semantic result
 
 [`SemanticResult`] is the durable output later compiler stages consume:
 
-- `errors()` — semantic diagnostics in source order; `has_errors()`.
-- `symbols()` — the [`SymbolTable`].
-- `scopes()` — the [`ScopeTable`].
-- `resolutions()` — every resolved reference as `(identifier span, SymbolId)`,
+- `errors()`: semantic diagnostics in source order; `has_errors()`.
+- `symbols()`: the [`SymbolTable`].
+- `scopes()`: the [`ScopeTable`].
+- `resolutions()`: every resolved reference as `(identifier span, SymbolId)`,
   sorted by span start.
-- `resolve(span) -> Option<SymbolId>` — answers *"which symbol does this
+- `resolve(span) -> Option<SymbolId>`: answers *"which symbol does this
   identifier refer to?"* via binary search, without re-running name
   resolution.
 
@@ -211,11 +211,11 @@ human-readable message, exact span) and reserve the `E-S*` range:
 `SemanticError` carries the offending name (for name-related kinds) and, for
 duplicates, the original declaration span, which the CLI renders as a note
 (`note: previous declaration is here`). Existing codes `E-L01`…`E-L08` and
-`E-P01`…`E-P24` are untouched (sessions 17–18 added `E-P22`…`E-P24` in the
+`E-P01`…`E-P24` are untouched (sessions 17-18 added `E-P22`…`E-P24` in the
 parser).
 
 Ownership diagnostics (`E-S10`/`E-S11`) come from the dedicated ownership
-stage (`src/ownership/`, session 15 — see
+stage (`src/ownership/`, session 15, see
 `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`), which runs between type
 analysis and HIR lowering and gates code generation on a clean result.
 
@@ -236,19 +236,19 @@ The analyzer never panics on structurally valid ASTs (all lookups are
 guarded), including unusual shapes the parser would reject (e.g. a literal
 assignment target).
 
-## 10. Driver / CLI Integration
+## 10. Driver / CLI integration
 
 `driver::check` now runs the pipeline:
 
     source → lexer → parser → AST → semantic analysis → diagnostics
 
-- Semantic analysis runs **only** when the source is lexically and
+- Semantic analysis runs only when the source is lexically and
   syntactically valid; otherwise the previous error behavior is preserved.
 - `CheckError` gained a `Semantic(SemanticError)` variant; `code()`, `span()`,
   `Display`, and a new `related_span()` (the original declaration span for
   duplicates) render uniformly in the CLI.
 - `CheckReport` now carries `semantic: Option<SemanticResult>`, present when
-  analysis ran — consumable by tooling and tests without re-parsing.
+  analysis ran, consumable by tooling and tests without re-parsing.
 - Exit codes: valid → `0`; lexical, syntax, or semantic error → `1`;
   unreadable file → `1`. `mink build` compiles the optimized MIR through
   the native backend (since session 11). The CLI success message is now
@@ -259,14 +259,14 @@ assignment target).
 - One forward pass; every node visited exactly once.
 - Per-scope `HashMap` name index: lookup walks only the scope chain
   (O(depth) per reference, constant per scope), never rescanning
-  declarations — linear in ordinary source size.
+  declarations, linear in ordinary source size.
 - No AST cloning; symbols store names and spans only; identifier names are
   cloned once into the symbol table and once into name-related errors (small,
   bounded by error count).
 - Resolved references are stored in a sorted vector with binary-search lookup
   (deterministic iteration order, O(log n) queries).
 
-## 12. Future Type-System Boundary
+## 12. Future Type-System boundary
 
 The analyzer deliberately stops before type checking. Cleanly deferred:
 
@@ -280,7 +280,7 @@ The boundary is explicit: the semantic result already exposes everything the
 type system needs (symbol kinds, spans, scopes, resolved references) so
 session 06 can consume it without re-running name resolution.
 
-## 13. Known Intentional Limitations
+## 13. Known intentional limitations
 
 - Module-scope bindings are visible in their own initializer (`let x = x;`
   at module scope resolves the initializer to the binding itself) as a
@@ -301,7 +301,7 @@ session 06 can consume it without re-running name resolution.
   never resolves as a value. Other advanced types (tuples, data-carrying
   enums, generics) still do not exist.
 - Duplicate triplets (`let x; let x; let x;`) report each redeclaration after
-  the first as a duplicate of the original — deliberate, not a cascade of the
+  the first as a duplicate of the original, deliberate, not a cascade of the
   same root cause.
 
 ## 14. Tests
@@ -309,29 +309,29 @@ session 06 can consume it without re-running name resolution.
 Coverage lives in `tests/semantics.rs` (71 tests) and the semantic CLI smoke
 tests in `tests/cli.rs` (11 new). Categories:
 
-- **Valid**: declarations, resolution, nested/outer lookup, function calls,
+- Valid: declarations, resolution, nested/outer lookup, function calls,
   parameters, for-loop variables, mutable assignment, control-flow context,
   nested shadowing, order-independent module scope, member/index assignment
   through mutable and immutable bases, duplicate struct names (`E-S08`),
   duplicate fields (`E-S09`), and struct literals never resolving their
   name as a value.
-- **Invalid**: unresolved names, duplicate definitions (module, function,
+- Invalid: unresolved names, duplicate definitions (module, function,
   block, parameters, parameter/local collision), immutable/const/param/loop-
   variable/function-name assignment, `break`/`continue` outside loops,
   use-before-declaration, block-scope escapes.
-- **Recovery**: multiple unresolved names, duplicate + unresolved,
+- Recovery: multiple unresolved names, duplicate + unresolved,
   mutability + unresolved, control-flow + resolution, errors in nested
   scopes, analysis continuing after errors.
-- **Resolution identity**: stable/unique symbol ids, exact declaration spans,
+- Resolution identity: stable/unique symbol ids, exact declaration spans,
   scope nesting and kinds, per-scope declarations, innermost-shadow
   resolution, deterministic resolution ordering.
-- **Driver**: semantic result exposure, semantic errors through `check`,
+- Driver: semantic result exposure, semantic errors through `check`,
   semantics skipped on parse/lex errors.
-- **Robustness**: deep nesting, 200-function programs, long expression
+- Robustness: deep nesting, 200-function programs, long expression
   chains, and manually constructed unusual AST shapes (literal/group
   assignment targets) must not panic.
 
-## 15. Quality Gates
+## 15. Quality gates
 
 As before:
 

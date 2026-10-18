@@ -1,8 +1,8 @@
-# Session 95 — Windows Runtime Expansion, Hardening, Ownership, and Multi-Purpose Quality
+# Session 95: Windows runtime expansion, hardening, ownership, and Multi-Purpose quality
 
 - Date: Session 95 (after `7e960d1` = Session 94)
-- Scope: Windows x86_64 only. Linux frozen — no Linux files modified.
-- Verdict: **WINDOWS RUNTIME = STABLE**, **WINDOWS MULTI-PURPOSE EXECUTION = EXECUTION VERIFIED**,
+- Scope: Windows x86_64 only. Linux frozen, no Linux files modified.
+- Verdict: WINDOWS RUNTIME = STABLE, WINDOWS MULTI-PURPOSE EXECUTION = EXECUTION VERIFIED,
   **WINDOWS P0/P1 STATUS = NO P0, P1 OWNERSHIP BUGS FIXED**
 
 ---
@@ -30,7 +30,7 @@ Files: `stdlib/filesystem.mink`, `stdlib/network.mink`, `stdlib/json.mink`.
 Verified on Windows by the multi-purpose programs and the hardening suite below; `stdlib/json.mink` and
 `stdlib/network.mink` changes were cross-checked against the Linux-verified Session 92/93 behavior.
 
-## 2. New durable suite — `tests/windows_hardening.rs` (16 tests, all pass)
+## 2. New durable suite: `tests/windows_hardening.rs` (16 tests, all pass)
 
 | Area | Tests |
 |---|---|
@@ -43,7 +43,7 @@ Verified on Windows by the multi-purpose programs and the hardening suite below;
 All deterministic, localhost-only, no public internet. HTTP/UDP/allocator stress were previously untested
 gaps in the Windows suite.
 
-## 3. Multi-purpose real MINK programs (Phase 10) — all executed through the normal CLI
+## 3. Multi-purpose real MINK programs (Phase 10): all executed through the normal CLI
 
 Six small real programs composed from the stdlib, each built with `mink build` and run directly on Windows:
 
@@ -61,11 +61,11 @@ per-library test harnesses.
 
 ## 4. Findings classified
 
-- **P0: none found or remaining.**
-- **P1 (fixed): stdlib ownership leak family** — any real program doing fs ops with heap strings,
+- P0: none found or remaining.
+- P1 (fixed): stdlib ownership leak family: any real program doing fs ops with heap strings,
   path ops, network sends with heap strings, or JSON parsing of heap docs leaked (E-R06). All fixed above,
   execution-verified, regression-covered.
-- **P2 (documented, not fixed this session):**
+- P2 (documented, not fixed this session):
   - Network calls require `net_init()` (Winsock startup) on Windows; calling socket APIs without it crashes
     instead of returning a clean error. `net_init` is documented at the top of `stdlib/network.mink` and every
     test/program calls it; a clean no-init error is future error-path work.
@@ -73,14 +73,14 @@ per-library test harnesses.
     when the child exits non-zero — exit codes do propagate: rc2=3 verified).
   - V1 ownership model: an owned `Str` may be passed to only one consuming stdlib parse helper; callers use
     inline byte-scanning for multi-field parsing (Session 93 documented limitation, unchanged).
-- **P3:** env_set/env_remove remain stubs on Windows (README already accurate); single-char `push_str` style
+- P3: env_set/env_remove remain stubs on Windows (README already accurate); single-char `push_str` style
   nits fixed in the new test file during review.
 
 ## 5. Quality gates
 
 - `cargo fmt --check`: clean
 - `cargo clippy --all-targets --all-features`: 0 warnings in changed files (pre-existing warnings elsewhere)
-- `cargo test`: **2536 passed / 0 failed** (Session 94 baseline 2520 + 16 new)
+- `cargo test`: 2536 passed / 0 failed (Session 94 baseline 2520 + 16 new)
 - `cargo build`: clean
 - `cargo build --release`: clean
 
@@ -89,7 +89,7 @@ per-library test harnesses.
 Linux was not modified. The Session 92/93 Linux findings (net_recv ownership, exact-length returned strings,
 wrapper consume-and-free) were checked against Windows: Windows runtime services were already consistent on
 the net/HTTP paths (hardening HTTP/UDP tests pass); the gaps were in the shared `stdlib/*.mink` wrappers,
-which both platforms use — those are now fixed once for both.
+which both platforms use, those are now fixed once for both.
 
 ## 7. Known remaining Windows limitations
 

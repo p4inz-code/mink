@@ -1,8 +1,8 @@
-# MINK — Type Inference Implementation
+# MINK: type inference implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 07 — Advanced Type Features / Type Inference
+**Session:** 07, Advanced Type Features / Type Inference
 
 ## 1. Objective
 
@@ -26,7 +26,7 @@ runtime work was introduced. This document records the inference model and
 the decisions actually resolved; the underlying type representation and
 typing rules remain in `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
 
-## 2. Inference Model
+## 2. Inference model
 
 The checker is a **single forward pass** over the AST (it never re-runs
 name resolution or scope construction). Every declared symbol receives a
@@ -53,7 +53,7 @@ places (body, call sites, returns) with all constraints forced to agree.
 | State      | Meaning                                                            |
 | ---------- | ------------------------------------------------------------------ |
 | Concrete   | A known type (`Int`, `Float`, …, `Range<Int>`, `fn(Int) -> Bool`)  |
-| Unresolved | An unconstrained `Infer(None)` — nothing is known yet              |
+| Unresolved | An unconstrained `Infer(None)`, nothing is known yet              |
 | Error      | Something already went wrong; operations on it stay quiet          |
 
 `TypeTable::is_resolved(id)` answers whether a type is fully determined
@@ -61,7 +61,7 @@ places (body, call sites, returns) with all constraints forced to agree.
 type counts as resolved, since it is a known, deliberate outcome. Tests use
 it to assert that no determinable type leaks unresolved.
 
-## 3. Constraint Propagation
+## 3. Constraint propagation
 
 Because all constraints unify against shared variables, propagation is
 order-independent across the module (declaration types are order
@@ -79,7 +79,7 @@ they meet:
 the body pins `p` to `Int`, and the second call site's `Float` argument
 conflicts (`E-T01`, span of `1.5`, expected `Int`, found `Float`).
 
-## 4. Bidirectional Checking
+## 4. Bidirectional checking
 
 The checker types expressions bottom-up (`expr_type`) and, where the
 context determines the type, **top-down**: `check_expr_against(expr,
@@ -101,7 +101,7 @@ determines `f`'s result type as `Bool` (the condition is the only
 constraint and it is unambiguous), and that `let r = f(); for i in r { i +
 1; }` resolves `r` to `Range<Int>` through the pinned element variable.
 
-Genuinely ambiguous positions are **not** pinned — guessing would be
+Genuinely ambiguous positions are **not** pinned, guessing would be
 wrong:
 
 - `-` accepts both `Int` and `Float`;
@@ -111,11 +111,11 @@ wrong:
 
 These stay unresolved until a real constraint decides (see §5).
 
-## 5. Unresolved-Type Behavior
+## 5. Unresolved-Type behavior
 
 An unresolved type is the honest answer when nothing determines the type.
 It is never fabricated into a concrete type, and it never produces an error
-by itself — only a constraint that contradicts a *resolved* requirement
+by itself, only a constraint that contradicts a *resolved* requirement
 errors. This keeps programs that are merely under-constrained valid while
 invalid programs (incompatible constraints) are rejected precisely.
 
@@ -124,25 +124,25 @@ unresolved name, an invalid operator result, or an unknown callee poisons
 everything downstream, and the pinning paths above skip error types, so the
 root semantic/type error is never doubled by secondary inference noise.
 
-## 6. Function and Return Inference
+## 6. Function and return inference
 
-- **Parameter inference.** Parameters are variables shared between the
-  body and call sites; any constraint — an operator in the body
+- Parameter inference. Parameters are variables shared between the
+  body and call sites; any constraint, an operator in the body
   (`p + 1` → `Int`), a condition (`if f(true)` → `Bool`), a call-site
-  argument (`f(1.5)` → `Float`) — pins them, and later conflicting
+  argument (`f(1.5)` → `Float`), pins them, and later conflicting
   constraints are `E-T01`/`E-T02`.
-- **Result inference.** A function's result variable is unified by every
+- Result inference. A function's result variable is unified by every
   typed `return` expression, so `fn f() { return 1; }` is `fn() -> Int`
   and `fn f(c) { if c { return 1; } return 2; }` is `fn(Bool) -> Int`.
   Conflicting returns (`return 1; return 1.5;`) are `E-T01` at the second
   return with the first return's type as expected. Bare `return;` carries
   no value and contributes nothing (session 06 behavior, unchanged).
-- **Recursion.** A function's result variable unifies with the result of
+- Recursion. A function's result variable unifies with the result of
   its own calls (`return f(n - 1);`), which is the identity constraint;
   recursion resolves once a base path pins the result (`return 0;`).
   Parameter inference flows through recursive calls exactly like any other
   call.
-- **Mutual constraints.** `fn f(p) { return g(p); } fn g(q) { return q; }`
+- Mutual constraints. `fn f(p) { return g(p); } fn g(q) { return q; }`
   shares parameter and result variables across both functions, so one
   call-site argument (`f(1)`) resolves both signatures to `fn(Int) -> Int`.
 
@@ -152,33 +152,33 @@ Coverage lives in `tests/typecheck.rs` (122 tests total; 28 added in
 session 07) and four new CLI tests in `tests/cli.rs`. Session-07 inference
 categories:
 
-- **Chains and ordering**: chained declarations resolved through use,
+- Chains and ordering: chained declarations resolved through use,
   mutually constrained declarations, a deep 200-link chain (path
   compression).
-- **Function inference**: parameter inference from body and arguments,
+- Function inference: parameter inference from body and arguments,
   return inference from single paths and across branches, recursion,
   mutual recursion, mutually constrained calls, argument-driven and
   result-driven resolution.
-- **Returns**: conflicting returns across branches (`E-T01` with
+- Returns: conflicting returns across branches (`E-T01` with
   expected/actual types and exact span).
-- **Pins**: unconstrained conditions → `Bool`; pinned conditions
+- Pins: unconstrained conditions → `Bool`; pinned conditions
   conflicting with numeric use (`E-T02`); logical/shift/bitwise operands
   → `Bool`/`Int`; `!` → `Bool`; `~` → `Int`; `-` deferral on ambiguous
   operands; unknown iterables → `Range<T>`; pinned ranges propagating to
   loop variables and back.
-- **Unresolved behavior**: `no_determinable_type_leaks_unresolved`
+- Unresolved behavior: `no_determinable_type_leaks_unresolved`
   (asserts `is_resolved` for every determinable symbol), genuine ambiguity
   staying unresolved, error-type blocking of further constraints,
   independent inference conflicts all reported.
-- **Adversarial**: hand-built ASTs exercising the pin paths with
-  unresolved identifiers — no panics, no type noise.
+- Adversarial: hand-built ASTs exercising the pin paths with
+  unresolved identifiers, no panics, no type noise.
 
 CLI tests verify exit codes and stderr for a recursive well-typed program
 (exit 0), incompatible call constraints (exit 1, `E-T01`), conflicting
 returns (exit 1, `E-T01`), and pinned-condition conflicts (exit 1,
 `E-T02`).
 
-## 8. Known Limitations
+## 8. Known limitations
 
 - Inference is a single forward pass; ordering is only order-independent
   where the language is (module scope, shared variables). A variable that
@@ -195,7 +195,7 @@ returns (exit 1, `E-T01`), and pinned-condition conflicts (exit 1,
 - No implicit conversions: incompatible concrete types always conflict
   (`Int` vs `Float`), matching the no-conversion decision of session 06.
 
-## 9. Quality Gates
+## 9. Quality gates
 
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings

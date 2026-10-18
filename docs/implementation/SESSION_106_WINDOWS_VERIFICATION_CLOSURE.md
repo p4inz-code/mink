@@ -1,4 +1,4 @@
-# Session 106 — Windows Verification Closure
+# Session 106: Windows verification closure
 
 **Date:** September 10, 2026
 **Starting commit:** `f11c80d` (Session 105 end)
@@ -9,7 +9,7 @@
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
 Session 106 closed all remaining Windows verification gaps for the Map, Set, and Vec collection subsystems. **Four real root-cause bugs were discovered and fixed**, seven permanent regression tests were added, 15+ native probes were built and pass, and a full 57-suite Windows regression was executed (2573 passed, 1 flaky TCP timing test).
 
@@ -17,14 +17,14 @@ The Map and Set hash tables were non-functional after growth (rebuild wrote occu
 
 ---
 
-## 2. Starting State
+## 2. Starting state
 
 - Session 105 final commit: `f11c80d`
 - HEAD at session start: `ac67db2` (5 Session 106 checkpoints from prior partial work already pushed)
 - Branch: main
 - Working tree: clean
 
-## 3. Bugs Discovered and Fixed
+## 3. Bugs discovered and fixed
 
 ### Bug 1 (P0): Map/Set rebuild occupied-flag misplacement
 **Root cause:** `emit_set_rebuild` and `emit_map_rebuild` wrote `occupied = 1` into `[rbp-104]` which held the *element data address* (`bucket_base + 8`), not the bucket base itself. The occupied word was written 8 bytes into the element data area. `has()` then saw an empty bucket and returned FALSE.
@@ -48,7 +48,7 @@ The Map and Set hash tables were non-functional after growth (rebuild wrote occu
 
 ---
 
-## 4. Phases Completed
+## 4. Phases completed
 
 | Phase | Status | Notes |
 |---|---|---|
@@ -78,7 +78,7 @@ The Map and Set hash tables were non-functional after growth (rebuild wrote occu
 
 ---
 
-## 5. Native Probe Inventory
+## 5. Native probe inventory
 
 All probes are in `tests/json/` and were built/run as native Windows PE executables:
 
@@ -103,7 +103,7 @@ All probes are in `tests/json/` and were built/run as native Windows PE executab
 
 ---
 
-## 6. Regression Test Inventory
+## 6. Regression test inventory
 
 Permanent tests added to `tests/collections_lib.rs`:
 
@@ -119,7 +119,7 @@ Permanent tests added to `tests/collections_lib.rs`:
 
 ---
 
-## 7. Full Regression Results
+## 7. Full regression results
 
 | Suite | Result |
 |---|---|
@@ -149,11 +149,11 @@ Permanent tests added to `tests/collections_lib.rs`:
 | math_lib | PASS |
 | time_lib | PASS |
 | lib (unit) | PASS |
-| **Total** | **2573 passed, 1 flaky, 1 ignored** |
+| Total | 2573 passed, 1 flaky, 1 ignored |
 
 ---
 
-## 8. Parity Matrix Changes
+## 8. Parity matrix changes
 
 | ID | Capability | Before | After |
 |---|---|---|---|
@@ -167,7 +167,7 @@ Parity-blocking gaps: 44 → 43.
 
 ---
 
-## 9. Documented Limitations (Language Scope)
+## 9. Documented limitations (language scope)
 
 - `Vec<Str>`: not expressible in V1 typing (element inference variable defaults to Int)
 - `Map<Int, Vec<Int>>`: not expressible (E-B07 unresolved)
@@ -176,16 +176,16 @@ Parity-blocking gaps: 44 → 43.
 
 ---
 
-## 10. Clippy / Fmt / Build
+## 10. Clippy / fmt / build
 
-- **Clippy:** 0 errors, 61 pre-existing warnings, 0 new from this session
-- **Fmt:** all deviations pre-existing (4 shared files, `runtime.rs` is clean)
-- **Debug build:** clean
-- **Release build:** clean
+- Clippy: 0 errors, 61 pre-existing warnings, 0 new from this session
+- Fmt: all deviations pre-existing (4 shared files, `runtime.rs` is clean)
+- Debug build: clean
+- Release build: clean
 
 ---
 
-## 11. Remaining Windows Limitations
+## 11. Remaining Windows limitations
 
 All limitations from the parity matrix remain. The Map/Set/Vec collection core is now verified. The next priorities per the parity matrix are:
 
@@ -196,7 +196,7 @@ All limitations from the parity matrix remain. The Map/Set/Vec collection core i
 
 ---
 
-## 12. Linux Status
+## 12. Linux status
 
 **FROZEN.** No Linux files were touched in this session.
 

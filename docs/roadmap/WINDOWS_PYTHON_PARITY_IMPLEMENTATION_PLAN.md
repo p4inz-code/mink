@@ -1,9 +1,9 @@
-# MINK — Windows Official-Python Parity: Implementation Plan
+# MINK: Windows Official-Python parity: implementation plan
 
-**Session:** 98 (with a Session 107 reconciliation note) · **Starting commit:** `a716df4` · **MINK version:** 1.0.1
+**Session:** 98 (with a Session 107 reconciliation note) · Starting commit: `a716df4` · MINK version: 1.0.1
 **Input:** `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md` (the master matrix,
 232 audited capability rows). Session 98 planning baseline: 175 rows requiring work, 44
-parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 rows requiring work, 0 parity-blocking P1 gaps — the parity gate is passed.**
+parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 rows requiring work, 0 parity-blocking P1 gaps. The parity gate is passed.**
 **Date:** September 4, 2026
 
 > **Session 108 note.** This plan is the Session 98 sequencing document. The wave map in
@@ -15,7 +15,7 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 > T07 (test runner). The rows delivered across Sessions 99-108 no longer appear in
 > that list.
 
-> **Session 109 note.** Five more P1 blockers closed — **R01/T04** (interactive `mink repl`
+> **Session 109 note.** Five more P1 blockers closed, R01/T04 (interactive `mink repl`
 > compile-eval session), **S02** (self-contained regex engine in `stdlib/re.mink`),
 > and **L68/P03** (directory packages: `mod name;` → `name/mod.mink`, with nested
 > packages). Closing the packages work also uncovered and fixed a latent multi-module
@@ -25,7 +25,7 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 > D 4 · E 4 · F 4), with Waves A, C and G empty; matrix §10 has been recomputed by a
 > direct scan of the 232 rows.
 
-> **Session 110 note.** One more P1 blocker closed — **S42** (zlib/gzip):
+> **Session 110 note.** One more P1 blocker closed, S42 (zlib/gzip):
 > `stdlib/zlib.mink` is a self-contained DEFLATE codec with raw, zlib and gzip entry
 > points (stored/fixed/dynamic Huffman blocks, CRC-32 and Adler-32), cross-validated
 > bidirectionally against CPython 3.11 `zlib` over 77 vectors and native-PE verified.
@@ -33,12 +33,12 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 > fill that looped forever from every entry point, and a free order that stranded a
 > 128 KiB block per compression call). The parity-blocking set is now **10**
 > (Wave B 0 · C 0 · D 2 · E 4 · F 4). Sessions 110-111: S42 (zlib/gzip) and S44 (zip)
-> closed; L34 (exceptions) reclassified P1→P2 (INTENT. DIFF. — MINK's value-based
+> closed; L34 (exceptions) reclassified P1→P2 (INTENT. DIFF. MINK's value-based
 > error model is the intentional design).
 
-> **Session 116–117 note (final).** The last blockers are closed and this plan's gate is
+> **Session 116-117 note (final).** The last blockers are closed and this plan's gate is
 > passed. Session 116 closed **P04–P09** (site-packages, dependency declaration + install,
-> resolver, lockfile, manifest, virtual environments) — the packaging wave. Session 117
+> resolver, lockfile, manifest, virtual environments). The packaging wave. Session 117
 > closed **S62** (TLS/SSL): a Schannel-backed TLS client and HTTPS client in
 > `stdlib/tls.mink` over a new general FFI layer. The parity-blocking set is now **0**
 > (every wave empty); matrix §10 has been recomputed by a direct scan of the 232 rows
@@ -51,7 +51,7 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 > root-caused and fixed in the harness: `windows_hardening`'s `free_port()` released the
 > port before the test used it, so parallel tests could be paired with each other's sockets
 > and block forever. Ports are now reserved per process, harness listeners are bound before
-> the MINK program starts, and helper threads are joined with a bound — the target passes
+> the MINK program starts, and helper threads are joined with a bound. The target passes
 > 18/18 deterministically in parallel and serial modes with no `--test-threads=1`
 > workaround. See `docs/implementation/SESSION_118_WINDOWS_FINAL_AUDIT.md`.
 
@@ -60,7 +60,7 @@ parity-blocking P1 gaps.**Current, evidence-derived figures (Session 117): 171 r
 > library, install steps and the packaged npm distribution were executed from clean external
 > directories. Four real defects were found and fixed (see
 > `docs/implementation/SESSION_119_WINDOWS_PUBLIC_ACCEPTANCE_AUDIT.md`) and the full regression
-> is now **2 946 passed / 3 ignored / 0 failed** — Session 118's 2 941 plus the 5 regression
+> is now **2 946 passed / 3 ignored / 0 failed**, Session 118's 2 941 plus the 5 regression
 > tests the audit added. The 232 rows still reconcile mechanically with P0 = 0 and P1 = 0.
 
 > **Documentation audit note (refreshed by the systems-readiness audit).** The gate above still
@@ -77,10 +77,10 @@ completion gate; nothing in a later wave may silently redefine an earlier wave's
 > Can a Windows developer accomplish the same important official tasks Python supports,
 > using MINK's own architecture and design?
 
-- Parity = **capability coverage**, not syntax identity. The anti-clone register (matrix
+- Parity = capability coverage, not syntax identity. The anti-clone register (matrix
   §9, X01–X21) is part of this plan's contract.
-- Parity is declared complete only when the matrix shows **zero P1 gaps** (44 at the
-  Session 98 baseline, **26** as of Session 107, **12** as of Session 110, **0** as of
+- Parity is declared complete only when the matrix shows zero P1 gaps (44 at the
+  Session 98 baseline, **26** as of Session 107, 12 as of Session 110, 0 as of
   Session 117) and every status is VERIFIED/IMPLEMENTED/INTENT. DIFF./N/A with an
   execution-verified or test-backed trace, per the proof strategy in §6. The zero-P1
   condition is met as of Session 117.
@@ -104,17 +104,17 @@ completion gate; nothing in a later wave may silently redefine an earlier wave's
 
 ### Sequencing rules
 
-1. **A → C → D is a soft chain** (A unblocks C's env-dependent items and D's quality; C's
+1. A → C → D is a soft chain (A unblocks C's env-dependent items and D's quality; C's
    file streams feed D's archives; D's select feeds E's async).
-2. **B runs in parallel with A/C** for language work not touching the runtime surface;
+2. B runs in parallel with A/C for language work not touching the runtime surface;
    B's Vec/dict work is independent of A's OS wiring. B is the longest single wave and
    should start early.
-3. **E depends on D** (non-blocking I/O) more than it depends on C.
-4. **F depends on A** (include path mechanism) and B (mature module model); it is
+3. E depends on D (non-blocking I/O) more than it depends on C.
+4. F depends on A (include path mechanism) and B (mature module model); it is
    otherwise parallel to D/E/G.
-5. **G depends on A** (R06 error metadata) and B (introspection hooks for the REPL).
-6. **H can be interleaved with B** (Unicode text layer) and A; it is calendar-parallel.
-7. **I and J are gates**, not standalone tracks: each wave must carry its own proof app
+5. G depends on A (R06 error metadata) and B (introspection hooks for the REPL).
+6. H can be interleaved with B (Unicode text layer) and A; it is calendar-parallel.
+7. I and J are gates, not standalone tracks: each wave must carry its own proof app
    (§6), and wave I consolidates + adds cross-cutting apps.
 
 ## 2. Quick wins (≈ one focused session each, low architectural risk)
@@ -165,7 +165,7 @@ no GIL-shaped threading. If a parity gap tempts one of these, re-read the exclus
 register first. The equivalence must be the MINK-native one, or the row stays MISSING and
 is explicitly justified.
 
-## 5. Proof strategy (Phase 14) — parity requires real applications
+## 5. Proof strategy (Phase 14): parity requires real applications
 
 | Category | Proof app (committed under examples/) | Wave |
 |---|---|---|
@@ -186,7 +186,7 @@ Unit tests are evidence, never the final proof for a parity category. Every wave
 land at least one proof app or explain why its categories are already proven by an
 earlier wave.
 
-## 6. Estimates (Phase 15)
+## 6. Estimates (phase 15)
 
 | Wave | Blockers (primary) | All work rows | Session range (min-realis-worst) |
 |---|---|---|---|
@@ -200,21 +200,21 @@ earlier wave.
 | H | 0 | ~10 | 3-4-5 (calendar-parallel) |
 | I | 0 | ~8 apps | 4-5-7 |
 | J | 0 | re-audit | 1-2-2 |
-| **Total** | **44 at the Session 98 baseline · 12 as of Session 110 · 0 as of Session 117** (matrix §10.4; all unique gaps counted once across A–G) | | **≈ 46 min · 58-64 realistic · ≈ 78 worst** (Session 98 estimate) |
+| Total | 44 at the Session 98 baseline · 12 as of Session 110 · 0 as of Session 117 (matrix §10.4; all unique gaps counted once across A–G) | | ≈ 46 min · 58-64 realistic · ≈ 78 worst (Session 98 estimate) |
 
 Interpretation:
 
-- **Minimum (≈ 46 sessions at the Session 98 baseline):** the then-44 blockers only,
+- Minimum (≈ 46 sessions at the Session 98 baseline): the then-44 blockers only,
   tightest sequencing, no P2/P3 items, H fully inside other waves, proofs minimal per
   category.
-- **Realistic (≈ 58-64 sessions):** blockers + important P2 items (process stdin, HTTP
+- Realistic (≈ 58-64 sessions): blockers + important P2 items (process stdin, HTTP
   completion, sockets select, profiler/debugger first pass, long paths, wide APIs) +
   interleaved wave H + one proof app per category.
-- **Worst case (≈ 78 sessions):** P2/P3 breadth (registry, terminal UX, docgen,
+- Worst case (≈ 78 sessions): P2/P3 breadth (registry, terminal UX, docgen,
   formatter, more codecs, decimal/fractions, locale), rework from ownership/runtime
   surprises, plus the two flaky-network-test infra fix.
 
-Parallelization: at most three tracks run at once — (1) language/data B (+ its H Unicode
+Parallelization: at most three tracks run at once, (1) language/data B (+ its H Unicode
 slice), (2) platform A → C → D → E, (3) packaging F → G. Calendar time is therefore
 substantially less than session-sum; a realistic calendar projection is on the order of
 12-20 months at this project's historical session cadence, with the Windows quick wins of
@@ -222,20 +222,20 @@ wave A landing first (Session 99 onward).
 
 Largest risks (ranked):
 
-1. **Concurrency safety**: threading the arena allocator + liveness table without a GC is
+1. Concurrency safety: threading the arena allocator + liveness table without a GC is
    the single most dangerous change to the validated memory model (E).
-2. **Self-contained subsystem sizes**: regex and TLS from scratch without dependencies are
+2. Self-contained subsystem sizes: regex and TLS from scratch without dependencies are
    multi-session efforts that tend to grow; contain them with read-first/ minimal-scope
    milestones.
-3. **Ownership extensions** (Vec of owned Str, Map keys) can ripple through the checker —
+3. Ownership extensions (Vec of owned Str, Map keys) can ripple through the checker
    the classic B-wave surprise.
-4. **Package manager scope creep**: resist registry + publishing in F; those are P2 and
+4. Package manager scope creep: resist registry + publishing in F; those are P2 and
    belong to a later ecosystem phase.
-5. **Wide-API migration** (ANSI → W APIs) touches every fs/process path; schedule as a
+5. Wide-API migration (ANSI → W APIs) touches every fs/process path; schedule as a
    mechanical pass with byte-identical test vectors.
-6. **Linux freeze discipline**: several frozen Linux files contain working env/net code;
+6. Linux freeze discipline: several frozen Linux files contain working env/net code;
    copy, do not share code paths.
-7. **Test-infra flakiness**: loopback network tests are timing-flaky under full parallel
+7. Test-infra flakiness: loopback network tests are timing-flaky under full parallel
    load (Session 106: TCP timing; Session 107: the WSL Linux HTTP client test, 3/3 in
    isolation) and pass individually; fix the harness before concurrency work multiplies
    network tests (P3).
@@ -245,7 +245,7 @@ Largest risks (ranked):
 *Met as of Session 117 for the Windows gate: matrix §10.7, with the P2/P3 rows documented
 as non-blocking. The criteria remain the contract for the later Linux phase.*
 
-1. Matrix scan: **zero rows marked P1**; every row VERIFIED/IMPLEMENTED/INTENT. DIFF./N/A
+1. Matrix scan: zero rows marked P1; every row VERIFIED/IMPLEMENTED/INTENT. DIFF./N/A
    (PARTIAL and MISSING only where explicitly justified as non-blocking and documented).
 2. Every parity category in §5 has a committed, running proof application.
 3. Full native suite green; standalone exe + clean npm install verified.
@@ -255,7 +255,7 @@ as non-blocking. The criteria remain the contract for the later Linux phase.*
 
 ## 8. Session 99 recommendation (exact objective)
 
-Execute **Wave A, first tranche** — make the platform real for programs:
+Execute **Wave A, first tranche**, make the platform real for programs:
 
 - Wire the Windows environment intrinsics (Get/SetEnvironmentVariableA; USERPROFILE home
   discovery) with native tests.
@@ -269,4 +269,4 @@ Execute **Wave A, first tranche** — make the platform real for programs:
 
 Session 99 gate: A-wave rows flipped, suite green, npm artifact re-verified clean.
 
-*End of implementation plan — Session 98, commit a716df4.*
+*End of implementation plan, Session 98, commit a716df4.*

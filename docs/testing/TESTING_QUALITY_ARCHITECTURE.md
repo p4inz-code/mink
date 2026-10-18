@@ -1,4 +1,4 @@
-# MINK — Testing and Quality Architecture
+# MINK: testing and quality architecture
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -9,7 +9,7 @@ MINK must treat correctness, reliability, security, performance, compatibility, 
 
 Testing must cover the language, compiler, runtime, standard library, package manager, tooling, and supported platforms.
 
-## 2. Testing Layers
+## 2. Testing layers
 
 The project should maintain multiple complementary testing layers:
 
@@ -27,41 +27,41 @@ The project should maintain multiple complementary testing layers:
 
 No single testing layer should be treated as sufficient.
 
-## 3. Compiler Tests
+## 3. Compiler tests
 
 Compiler tests must cover lexical analysis, parsing, name resolution, type checking, semantic analysis, HIR, MIR, optimization, code generation, diagnostics, and error recovery.
 
 Every significant compiler bug should receive a regression test.
 
-## 4. Language Conformance
+## 4. Language conformance
 
 MINK should maintain a conformance suite describing expected language behavior.
 
 The suite must cover valid programs, invalid programs, edge cases, diagnostics, and compatibility behavior.
 
-## 5. Runtime Tests
+## 5. Runtime tests
 
 Runtime tests must cover startup, shutdown, memory behavior, concurrency, async execution, scheduling, I/O, cancellation, errors, FFI, and platform-specific behavior.
 
-## 6. Standard Library Tests
+## 6. Standard library tests
 
 Public standard-library APIs must have automated tests covering normal operation, boundary conditions, invalid input, failures, and platform-specific behavior where relevant.
 
-## 7. Package Manager Tests
+## 7. Package manager tests
 
 Package tooling must test dependency resolution, lockfiles, caching, integrity verification, publishing, workspace behavior, offline operation, version conflicts, and failure recovery.
 
-## 8. Tooling Tests
+## 8. Tooling tests
 
 The formatter, linter, language server, diagnostics interface, refactoring engine, debugger integration, and AI tooling interfaces must have automated coverage.
 
-## 9. Golden Tests
+## 9. Golden tests
 
 Golden or snapshot tests may be used for stable compiler output, diagnostics, formatted source, generated metadata, and other deterministic artifacts.
 
 Golden tests must be reviewed when intentionally changed.
 
-## 10. Diagnostics Testing
+## 10. Diagnostics testing
 
 Diagnostics must be tested for:
 
@@ -92,13 +92,13 @@ Priority targets include:
 
 Compiler crashes and memory-safety failures discovered through fuzzing are critical defects.
 
-## 12. Property Testing
+## 12. Property testing
 
 Property-based testing should be used where general invariants can be expressed more effectively than individual examples.
 
 Potential targets include parsers, serializers, collections, arithmetic, transformations, and dependency resolution.
 
-## 13. Cross-Platform Testing
+## 13. Cross-Platform testing
 
 Supported platforms must be tested independently.
 
@@ -106,17 +106,17 @@ Initial priority platforms are Windows, Linux, and macOS.
 
 Platform-specific behavior must not be assumed equivalent without verification.
 
-## 14. Architecture Tests
+## 14. Architecture tests
 
 Tests should verify important architectural invariants such as module boundaries, dependency direction, safety guarantees, deterministic behavior, and forbidden coupling.
 
-## 15. Compatibility Testing
+## 15. Compatibility testing
 
 MINK must maintain compatibility tests across compiler, standard-library, package, and tooling versions where compatibility is promised.
 
 Breaking changes require explicit validation and migration coverage.
 
-## 16. Performance Testing
+## 16. Performance testing
 
 Performance benchmarks must cover:
 
@@ -134,25 +134,25 @@ Performance benchmarks must cover:
 
 Performance regressions must be measurable rather than judged subjectively.
 
-## 17. Benchmark Stability
+## 17. Benchmark stability
 
 Benchmarks should run under controlled conditions where possible.
 
 Noise thresholds must be established before automatically failing builds based on performance.
 
-## 18. Security Testing
+## 18. Security testing
 
 Security testing must include malformed inputs, dependency integrity, sandbox boundaries, unsafe operations, privilege boundaries, secret exposure, FFI boundaries, and supply-chain behavior.
 
-## 19. Reliability Testing
+## 19. Reliability testing
 
 The project should perform stress and long-running tests for compiler processes, package resolution, runtime scheduling, networking, filesystem operations, and large projects.
 
-## 20. Failure Injection
+## 20. Failure injection
 
 Critical infrastructure should be tested under simulated failures including disk errors, network failures, corrupted caches, unavailable dependencies, process termination, cancellation, resource exhaustion, and malformed inputs.
 
-## 21. Determinism Testing
+## 21. Determinism testing
 
 Repeated builds and tool executions with equivalent inputs should be compared for deterministic results.
 
@@ -164,7 +164,7 @@ Continuous integration should automatically execute the appropriate test suites 
 
 CI should include formatting, linting, unit tests, integration tests, compiler tests, security checks, and relevant platform builds.
 
-## 23. Release Gates
+## 23. Release gates
 
 Release candidates must satisfy defined quality gates before publication.
 
@@ -179,25 +179,25 @@ At minimum, release gates should cover:
 - Package integrity
 - Supported-platform builds
 
-## 24. Test Reproducibility
+## 24. Test reproducibility
 
 Tests should minimize dependence on local machine state, network availability, timing, locale, timezone, and unspecified environment behavior.
 
 Tests that intentionally require external resources must declare those requirements explicitly.
 
-## 25. Test Isolation
+## 25. Test isolation
 
 Tests should avoid interfering with one another through shared mutable state, filesystem artifacts, ports, environment variables, or global configuration.
 
 Parallel tests must remain safe and deterministic.
 
-## 26. Test Data
+## 26. Test data
 
 Test fixtures must be deterministic, reviewable, and free of real secrets or sensitive information.
 
 Large fixtures should be minimized where smaller cases provide equivalent coverage.
 
-## 27. AI-Assisted Testing
+## 27. AI-Assisted testing
 
 AI tooling may assist in generating tests, identifying edge cases, and analyzing failures.
 
@@ -219,13 +219,13 @@ Useful quality measurements may include:
 
 Metrics must guide engineering decisions rather than become targets that encourage superficial optimization.
 
-## 29. Defect Classification
+## 29. Defect classification
 
 Defects should be classified by impact and urgency.
 
 Critical defects include security vulnerabilities, compiler crashes, data corruption, memory-safety failures, severe compatibility breakage, and failures that prevent normal development.
 
-## 30. Open Architecture Decisions
+## 30. Open architecture decisions
 
 The following must be finalized before architecture freeze:
 

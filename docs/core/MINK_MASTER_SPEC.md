@@ -1,4 +1,4 @@
-# MINK — Master Language Specification
+# MINK: master language specification
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -18,7 +18,7 @@ MINK aims to become a top-tier programming language capable of remaining relevan
 
 It is intended for systems programming, backend development, web development, desktop applications, UI development, CLI applications, networking, databases, cloud software, developer tooling, automation, AI-assisted development, high-performance applications, large-scale production systems, and future domains not yet anticipated.
 
-## 2. Core Positioning
+## 2. Core positioning
 
 > **Python-like ease with C/C++-class power.**
 
@@ -26,18 +26,18 @@ Simple software should be extremely easy to create without imposing an artificia
 
 MINK follows progressive complexity: simple projects begin with minimal ceremony while growing projects gain structure and control without abandoning clarity.
 
-## 3. Four Permanent Pillars
+## 3. Four permanent pillars
 
 Every major MINK design decision must be evaluated against four pillars:
 
-1. **Speed** — fast execution, compilation, tooling, iteration, startup, and deployment where practical.
-2. **Less Errors** — strong diagnostics, safe defaults, static analysis, testing, debugging, and actionable remediation.
-3. **Durability** — stable semantics, strong backward compatibility, predictable evolution, maintainability, reproducible builds, and migration tooling.
-4. **Flexibility** — substantial developer freedom, multiple programming styles, interoperability, and support for different architectures.
+1. Speed: fast execution, compilation, tooling, iteration, startup, and deployment where practical.
+2. Less Errors: strong diagnostics, safe defaults, static analysis, testing, debugging, and actionable remediation.
+3. Durability: stable semantics, strong backward compatibility, predictable evolution, maintainability, reproducible builds, and migration tooling.
+4. Flexibility: substantial developer freedom, multiple programming styles, interoperability, and support for different architectures.
 
 No single pillar permanently dominates the others. Trade-offs are evaluated contextually.
 
-## 4. Development Experience
+## 4. Development experience
 
 MINK uses progressive complexity.
 
@@ -47,13 +47,13 @@ Advanced developers must be able to access low-level control, performance optimi
 
 The language should remain syntactically coherent even when its compiler and tooling are highly sophisticated.
 
-## 5. Language Complexity Principle
+## 5. Language complexity principle
 
 MINK should keep its core syntax small and coherent.
 
 Whenever possible, complexity should be placed into compiler intelligence, standard libraries, tooling, frameworks, IDE/LSP integration, automated diagnostics, build systems, code generation, and package tooling rather than unnecessary language syntax.
 
-## 6. Safety and Freedom
+## 6. Safety and freedom
 
 MINK should permit multiple legitimate programming styles and avoid unnecessary restrictions.
 
@@ -61,7 +61,7 @@ However, meaningful safety takes priority over unrestricted freedom when securit
 
 Advanced developers should receive controlled escape mechanisms for legitimate low-level work.
 
-## 7. Error-First Design
+## 7. Error-First design
 
 Error handling and diagnostics are strategic differentiators for MINK.
 
@@ -101,7 +101,7 @@ The architecture must support strong interoperability with C, C++, Rust, C#, .NE
 
 A strong C ABI/FFI foundation is a core requirement.
 
-## 11. First-Class Domains
+## 11. First-Class domains
 
 MINK must remain genuinely general-purpose.
 
@@ -109,7 +109,7 @@ Web, backend, desktop, UI, CLI, networking, databases, cloud, developer tooling,
 
 Web and backend development, application development, UI, and diagnostics may be especially strong initial experiences, but no initial domain may prevent future expansion.
 
-## 12. AI-Native Direction
+## 12. AI-Native direction
 
 MINK should be exceptionally suitable for AI-assisted development.
 
@@ -117,7 +117,7 @@ AI systems should be able to understand project structure, consume structured di
 
 AI support complements normal developers and must not make MINK dependent on AI.
 
-## 13. Project Lifecycle
+## 13. Project lifecycle
 
 MINK optimizes for the entire software lifecycle:
 
@@ -125,13 +125,13 @@ MINK optimizes for the entire software lifecycle:
 
 MINK must not optimize only for writing source code.
 
-## 14. Technical Design Rule
+## 14. Technical design rule
 
 Compiler architecture, runtime architecture, memory management, type-system internals, concurrency, package resolution, code generation, optimization, and other implementation details remain technical design decisions.
 
 They must be selected according to Speed, Less Errors, Durability, Flexibility, Security, Maintainability, Ecosystem Viability, and Developer Experience.
 
-## 15. Specification Authority
+## 15. Specification authority
 
 This document is the highest-level MINK specification.
 
@@ -139,7 +139,7 @@ More detailed documents may expand upon it but must not contradict it.
 
 If a conflict exists, this document takes precedence and the conflicting document must be corrected.
 
-## 16. Current Status
+## 16. Current status
 
 MINK is in the **implementation phase**. The architecture and specification
 foundation in this document and the planning documents under `docs/` was
@@ -163,11 +163,11 @@ immutable string literals copy freely, and mutation of an immutable
 string is `E-S11`; invalid ownership programs fail before code generation
 (see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`). Session 17 added
 data-free user enums (`enum D { A, B }`, `D::A` variant paths, nominal
-enum types, single-word discriminants) — see
-`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md` — Session 19 added
+enum types, single-word discriminants), see
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`, Session 19 added
 data-carrying variants (sum types: `enum Shape { Circle(Int), Nothing }`,
 `E::V(expr)` construction, `E::V(x)` payload patterns, tagged-union
-layout) — see `docs/implementation/SUM_TYPES_IMPLEMENTATION.md` — and
+layout), see `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`, and
 Session 20 added explicit enum discriminants (`enum E { A = 5, B }`,
 implicit continuation, duplicate `E-T31` and overflow `E-T32` rejection)
 — see `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`. The Session

@@ -1,9 +1,9 @@
-# MINK — Core Language Specification
+# MINK: core language specification
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
 
-## 1. Source Model
+## 1. Source model
 
 MINK source files use the `.mink` extension.
 
@@ -11,7 +11,7 @@ A MINK program consists of one or more modules. A source file normally represent
 
 The language should support both tiny single-file programs and large multi-module applications without requiring different language modes.
 
-## 2. Program Structure
+## 2. Program structure
 
 A MINK source file may contain:
 
@@ -31,7 +31,7 @@ mut`, `const`), statements, control flow, and expressions. The remaining
 categories above arrive with their dedicated milestones (type system,
 module system, pattern matching, and so on).
 
-## 3. Lexical Model
+## 3. Lexical model
 
 MINK source is Unicode-aware.
 
@@ -90,7 +90,7 @@ Literal syntax must remain readable and predictable.
 
 Numeric literals should support readable separators and explicit bases where useful.
 
-## 7. Variables and Constants
+## 7. Variables and constants
 
 MINK distinguishes mutable variables from immutable bindings.
 
@@ -100,7 +100,7 @@ Mutation must remain straightforward when required.
 
 Constants represent values that can be established at compile time when their expressions are compile-time evaluable.
 
-## 8. Type System
+## 8. Type system
 
 MINK uses a strong, statically checked type system.
 
@@ -120,7 +120,7 @@ The type system must support:
 
 The compiler should infer types whenever the result is unambiguous while allowing explicit annotations whenever developers need clarity or control.
 
-## 9. Type Safety
+## 9. Type safety
 
 Invalid type operations should normally be rejected at compile time.
 
@@ -128,7 +128,7 @@ Implicit conversions should be limited to conversions that are predictable and s
 
 Potentially lossy or ambiguous conversions should require explicit syntax.
 
-## 10. Null and Absence
+## 10. Null and absence
 
 MINK should not rely on an unrestricted nullable value model.
 
@@ -192,7 +192,7 @@ Functions should support:
 
 Functions should remain concise for simple tasks while supporting advanced signatures for complex systems.
 
-## 14. Control Flow
+## 14. Control flow
 
 MINK should provide clear constructs for:
 
@@ -206,7 +206,7 @@ MINK should provide clear constructs for:
 
 Pattern matching should be designed as a major correctness and expressiveness feature rather than merely syntactic sugar.
 
-## 15. Modules and Imports
+## 15. Modules and imports
 
 MINK uses explicit modules.
 
@@ -255,7 +255,7 @@ At minimum, the standard library should eventually provide equivalents for:
 
 Collection APIs should be generic and type-safe.
 
-## 19. Error Model Boundary
+## 19. Error model boundary
 
 Ordinary recoverable failures must be representable as values rather than requiring exceptions for normal control flow.
 
@@ -263,7 +263,7 @@ The exact error/result model will be specified in `ERROR_SYSTEM.md`.
 
 Compiler errors and runtime errors are distinct concepts and must be represented differently.
 
-## 20. Compile-Time Intelligence
+## 20. Compile-Time intelligence
 
 MINK should make substantial use of compile-time analysis to prevent errors before execution.
 
@@ -281,7 +281,7 @@ Potential capabilities include:
 
 The exact compiler architecture is intentionally deferred.
 
-## 21. Runtime Semantics
+## 21. Runtime semantics
 
 Runtime behavior must be deterministic and precisely specified wherever practical.
 
@@ -289,7 +289,7 @@ Undefined behavior should be minimized aggressively.
 
 If an operation cannot safely produce a valid result, MINK should prefer a defined failure mode or compile-time rejection over silent undefined behavior.
 
-## 22. Low-Level Escape Hatches
+## 22. Low-Level escape hatches
 
 MINK must support advanced native/system programming without forcing the entire language into an unsafe programming model.
 
@@ -297,23 +297,23 @@ Controlled unsafe or low-level capabilities may exist behind explicit syntax and
 
 Unsafe operations should be visible to developers and analyzable by tooling.
 
-## 23. Source Compatibility
+## 23. Source compatibility
 
 Valid MINK programs should remain source-compatible across language evolution whenever technically possible.
 
 Compiler migrations, deprecation diagnostics, and automated upgrade tools should be part of the long-term ecosystem.
 
-## 24. Declaration and Name Semantics (Session 05)
+## 24. Declaration and name semantics (session 05)
 
 Resolved in session 05 and authoritative for the implemented milestone; the
 full design record is `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
 
-- **Scopes.** Module scope holds top-level declarations. Every function body
+- Scopes. Module scope holds top-level declarations. Every function body
   is the function's *declaration scope*: parameters and the body's own
   `let`/`const` declarations share one scope. Every other block (`if`/`else`
   bodies, `while`, `for`, `loop` bodies) introduces a nested block scope.
   `for` loop variables are declared in the loop body's scope.
-- **Declaration order.** Module scope is order-independent: a top-level
+- Declaration order. Module scope is order-independent: a top-level
   declaration is visible throughout its module, before and after its own
   position (functions may call each other in any order). A consequence is
   that a module-level binding is visible in its own initializer
@@ -321,35 +321,35 @@ full design record is `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
   itself). All other scopes require declaration-before-use: a name is
   visible from its declaration point to the end of its scope, and a binding
   is not visible in its own initializer.
-- **Duplicates.** A scope may not declare the same name twice. A duplicate
+- Duplicates. A scope may not declare the same name twice. A duplicate
   declaration is an error; the first declaration wins for resolution.
   Because parameters share the function scope with body declarations, a
   parameter/local name collision is a duplicate.
-- **Shadowing.** A nested scope may declare a name that exists in an
+- Shadowing. A nested scope may declare a name that exists in an
   enclosing scope (shadowing); references resolve to the innermost
   declaration. Same-scope shadowing (redeclaration) is not allowed.
-- **Mutability.** `let` bindings are immutable by default; `let mut`
+- Mutability. `let` bindings are immutable by default; `let mut`
   bindings are mutable. Parameters, `for` variables, `const` bindings, and
   function names are immutable. Assignment (including compound assignment)
   to an immutable or constant name is a semantic error. Assignment through
   member/index targets additionally requires the base binding to be
   mutable: writing `p.x = 2` or `a[i] = 2` through a `let` (non-`mut`)
   binding is a semantic error.
-- **Control-flow context.** `break` and `continue` are valid only inside a
+- Control-flow context. `break` and `continue` are valid only inside a
   loop body (`while`, `for`, `loop`); `return` is valid only inside a
   function body. Out-of-context uses are semantic errors (module-level
   `return` is additionally rejected by the grammar, which allows only
   declarations at module scope).
-- **Namespaces.** Functions, bindings, constants, parameters, and loop
+- Namespaces. Functions, bindings, constants, parameters, and loop
   variables share one value namespace per scope; user-declared **struct
   and enum names** live in a shared type namespace (sessions 14/17), so a
   type name and a binding may share a name without collision, while two
   type declarations (struct or enum) with the same name are duplicates.
 
-## 25. Specification Status
+## 25. Specification status
 
 This document establishes the core language direction. The core grammar for
-the implemented milestone — including the keyword list — is frozen in
+the implemented milestone, including the keyword list, is frozen in
 `docs/language/CORE_GRAMMAR.md`; the semantic rules implemented for the
 current milestone are recorded in §24 above, and the type-system decisions
 in §26. The remaining language surface (modules, patterns, async, memory
@@ -357,12 +357,12 @@ semantics, ABI, runtime behavior, compiler architecture) continues to be
 finalized in the dedicated technical specifications before architecture
 freeze.
 
-## 26. Type-System Decisions (Session 06)
+## 26. Type-System decisions (session 06)
 
 Resolved in session 06 and authoritative for the implemented milestone; the
 full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
 
-- **Core types.** The current milestone defines exactly the scalar types
+- Core types. The current milestone defines exactly the scalar types
   `Int`, `Float`, `Bool`, `Char`, `Str`, and `Null`, plus `Range<T>`, the
   pointer type `Ptr<T>`, and function types. `Int` and `Float` are single
   types; exact widths are a runtime/ABI decision. Only `Ptr<Int>` is
@@ -376,42 +376,42 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   below), and Session 19 added **data-carrying variants** (sum types:
   `enum Option { Some(Int), None }`, constructed `Option::Some(5)`,
   matched with payload patterns, and laid out as tagged unions). Still
-  absent: generics, optional/result types, … — they arrive with
+  absent: generics, optional/result types, …. They arrive with
   later milestones. Tuples arrived in session 29 (see
   `docs/implementation/TUPLES_IMPLEMENTATION.md`).
   While/loop as expressions with break values arrived in session 30
   (see `docs/implementation/LOOP_EXPRESSIONS_IMPLEMENTATION.md`).
-  Still absent: optional/result types — they arrive
+  Still absent: optional/result types. They arrive
   with later milestones per `docs/language/TYPE_SYSTEM.md`.
   Closures/lambdas arrived in session 37
   (see `docs/implementation/CLOSURES_IMPLEMENTATION.md`).
-- **Literals.** Integer, floating-point, string, character, boolean, and
+- Literals. Integer, floating-point, string, character, boolean, and
   `null` literals have the corresponding types above.
-- **No implicit conversions.** MINK defines no implicit numeric
+- No implicit conversions. MINK defines no implicit numeric
   conversions at this stage: mixed integer/float operations, comparisons,
   equality, and ranges are rejected rather than silently coerced
   (`1 + 2.5` is an error). Conversions arrive with an explicit design.
-- **Null.** `null` has its own distinct `Null` type; it is not a bottom
+- Null. `null` has its own distinct `Null` type; it is not a bottom
   type and unifies only with itself. The optional/absence mechanism is a
   future milestone.
-- **No truthiness.** `&&`, `||`, and `!` require `Bool` operands; `if` and
+- No truthiness. `&&`, `||`, and `!` require `Bool` operands; `if` and
   `while` conditions must be `Bool`. Non-boolean operands are type errors.
-- **Operators.** Arithmetic (`+ - * / %`) requires the same numeric type;
+- Operators. Arithmetic (`+ - * / %`) requires the same numeric type;
   bitwise and shift (`& ^ | << >>`) require `Int`; comparisons require the
   same numeric type; equality (`== !=`) requires the same scalar type
   (`Int`, `Float`, `Bool`, `Char`, `Str`, `Null`); ranges require the same
   numeric type for both endpoints. Result types are the operand type for
   arithmetic, `Bool` for comparisons/equality/logical, and `Range<T>` for
   ranges.
-- **Declarations.** `let`, `let mut`, and `const` bindings are typed from
+- Declarations. `let`, `let mut`, and `const` bindings are typed from
   their initializers (the grammar has no annotations). Mutability is a
   semantic property and is unchanged by typing. Module-scope declaration
   types are order-independent like their names.
-- **Calls.** Calls check that the callee is callable, that the argument
+- Calls. Calls check that the callee is callable, that the argument
   count matches the declared parameters, and that each argument is
   compatible with its parameter. Function parameter and result types are
   inferred from usage at this stage; there is no signature syntax yet.
-- **Strings and pointers (session 13).** A `Str` value is the address of
+- Strings and pointers (session 13). A `Str` value is the address of
   a length-prefixed UTF-8 byte blob; string literals are immutable blob
   data, and `rt_str_alloc`/`rt_str_free`/`rt_str_len`/`rt_str_byte`/
   `rt_str_set_byte`/`rt_print_str` operate on them (indices are
@@ -420,7 +420,7 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   is byte-addressed (`p + n`, `n + p`, `p - n`); pointer equality is
   `Bool`. Strings and pointers are distinct: neither satisfies the other's
   intrinsic parameters (`E-T01`). The integer literal `0` is the null
-  pointer constant in pointer-typed argument positions only — a computed
+  pointer constant in pointer-typed argument positions only, a computed
   `Int` is never a pointer. Since session 15, move semantics are checked
   at compile time for heap-owning values: an owned `Str` (and any struct
   or array containing one) moves on transfer (use-after-move is `E-S10`),
@@ -429,9 +429,9 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   code generation (see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`).
   No explicit borrow syntax, raw pointer syntax, or string concatenation
   yet.
-- **Iteration.** Only ranges are iterable at this stage; a `for` variable
+- Iteration. Only ranges are iterable at this stage; a `for` variable
   has the range's element type, and iterating a non-range is a type error.
-- **Member/index typing (session 14).** Member access requires a struct
+- Member/index typing (session 14). Member access requires a struct
   base and a declared member (`E-T07`/`E-T08`) and types as the field
   type; indexing requires an array base and an `Int` index
   (`E-T09`/`E-T10`) and types as the element type. A constant index out of
@@ -442,12 +442,12 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   positive integer literal length (`E-T16`). Recursive/empty/oversized
   aggregate layout is rejected (`E-T18`). Member/index assignment requires
   a mutable base and a value matching the field/element type.
-- **Enum types (sessions 17, 19, and 20).** An enum (`enum E { A, B }`)
+- Enum types (sessions 17, 19, and 20). An enum (`enum E { A, B }`)
   is a nominal type whose values are named alternatives constructed with
   variant paths (`E::A`) or, for data-carrying variants, variant calls
   (`E::B(expr)`). Variants may declare an **explicit discriminant**
   (`A = 5`, session 20); otherwise the discriminant is the previous
-  variant's value plus one, starting at 0 — so `enum E { A = 5, B }`
+  variant's value plus one, starting at 0. So `enum E { A = 5, B }`
   gives `A` the tag `5` and `B` the tag `6`. Duplicate tags are `E-T31`;
   implicit continuation past the largest 64-bit value is `E-T32`. A
   **unit-only** enum value occupies one word, copies freely, and is never
@@ -463,7 +463,7 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   are `E-S16`. Enums compose with structs, arrays, parameters, returns,
   and bindings. See
   [`DISCRIMINANTS_IMPLEMENTATION.md`](../implementation/DISCRIMINANTS_IMPLEMENTATION.md).
-- **Data-carrying variants (session 19).** A variant declares exactly one
+- Data-carrying variants (session 19). A variant declares exactly one
   payload type (`enum Shape { Circle(Int), Nothing }`); the payload must
   be a value type with a deterministic layout (pointers, references,
   arrays, and function types are `E-T27` invalid variant payloads).
@@ -476,7 +476,7 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   owned payload moves it out of the scrutinee; constructing with an owned
   payload transfers it (`E-S10` applies to both). See
   [`SUM_TYPES_IMPLEMENTATION.md`](../implementation/SUM_TYPES_IMPLEMENTATION.md).
-- **Pattern matching (session 18).** A `match e { pat => { .. }, .. }`
+- Pattern matching (session 18). A `match e { pat => { .. }, .. }`
   statement dispatches on a scrutinee of `Int`, `Bool`, or enum type.
   Patterns are integer literals (including negatives), boolean literals,
   enum variant paths, identifier bindings, and the `_` wildcard; the
@@ -489,11 +489,11 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   write them). Arms bind patterns: an identifier pattern introduces a
   copy of the scrutinee (`let x = e;` semantics) in its own scope, and
   `_` binds nothing. **Session 27** adds or-patterns (`1 | 2 | 3`,
-  `E::A(x) | E::B(x)` — alternatives bind the same names/types and share
+  `E::A(x) | E::B(x)`, alternatives bind the same names/types and share
   one binding, `E-T34` on mismatch), integer range patterns (`1..=5`
   inclusive, `1..5` exclusive, negated endpoints allowed; interval-based
   exhaustiveness makes uncovered gaps precise `E-T25`s), and guards
-  (`pat if cond =>` — the `Bool` guard runs after the pattern matches,
+  (`pat if cond =>`, the `Bool` guard runs after the pattern matches,
   reads the pattern's bindings, and commits no coverage). See
   [`PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/PATTERN_MATCHING_IMPLEMENTATION.md)
   and
@@ -501,7 +501,7 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   **Session 33** adds match expressions (`let x = match e { pat => expr, ... }`),
   where every arm is an expression and all arm types are unified to produce
   the match result. See [`MATCH_EXPRESSIONS_IMPLEMENTATION.md`](../implementation/MATCH_EXPRESSIONS_IMPLEMENTATION.md).
-- **Type diagnostics.** Type errors use the stable range `E-T01`…`E-T34`
+- Type diagnostics. Type errors use the stable range `E-T01`…`E-T34`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
   count, not iterable, the session-14 aggregate rules, the session-17/19/20
   enum rules, the session-18 match rules, the session-19 sum-type rules,
@@ -510,38 +510,38 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   `E-T33`, and session-27 or-pattern binding consistency is `E-T34`).
   They carry the exact offending span, rendered expected/actual
   types where useful, and a related span for assignments.
-- **Cascade control.** An unknown/error type absorbs failed sub-expressions
+- Cascade control. An unknown/error type absorbs failed sub-expressions
   so one root error (an unresolved name, an invalid operator) never
   cascades into misleading secondary diagnostics; independent errors are
   still all reported.
 
-### 26.1 Inference Decisions (Session 07)
+### 26.1 Inference decisions (session 07)
 
-- **Constraint model.** Inference is constraint-based over the union-find
+- Constraint model. Inference is constraint-based over the union-find
   inference variables of session 06: declaration chains, recursion, and
   mutually constrained calls resolve transitively and deterministically;
   unification path-compresses chains. There is no separate constraint
   solver.
-- **Bidirectional checking.** Where the context determines the type, the
+- Bidirectional checking. Where the context determines the type, the
   expected type flows into the expression: `if`/`while` conditions pin
   their expression to `Bool`; `for` iterables pin to `Range<T>`; `&&` and
   `||` pin both operands to `Bool`; `<<`, `>>`, `&`, `^`, and `|` pin both
   operands to `Int`; `!` pins its operand to `Bool`; `~` pins its operand
   to `Int`.
-- **No guessing.** Positions with several valid types are never guessed:
+- No guessing. Positions with several valid types are never guessed:
   `-`, and arithmetic or comparison/equality on two unconstrained
   operands, stay unresolved until a real constraint decides. An unresolved
   type by itself is never an error; only a constraint that contradicts a
   resolved requirement is.
-- **Return inference.** A function's result type is inferred from its
+- Return inference. A function's result type is inferred from its
   typed `return` expressions; multiple return paths must agree, and
   conflicting returns are `E-T01` at the conflicting return. Bare `return;`
   carries no value and contributes nothing.
-- **Recursion.** Recursive calls unify a function's result with itself
+- Recursion. Recursive calls unify a function's result with itself
   (an identity constraint); a function's type resolves once any path
   provides a concrete constraint. Mutually constrained functions share
   parameter/result variables and resolve together.
-- **Resolution test.** `TypeTable::is_resolved` reports whether a type is
+- Resolution test. `TypeTable::is_resolved` reports whether a type is
   fully determined (not an unresolved variable). The checker is expected
   to leave no determinable type unresolved: every pinned context above
   resolves its variables.

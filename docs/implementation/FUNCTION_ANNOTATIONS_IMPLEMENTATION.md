@@ -1,4 +1,4 @@
-# Session 25: Function Signature Type Annotations
+# Session 25: function signature type annotations
 
 **Status:** complete (session 25 changes).
 
@@ -11,16 +11,16 @@ on parameters and return types were explicitly listed as deferred to a
 
 This session completes the milestone by adding:
 
-- **Parameter type annotations:** `fn f(x: Int, y: Float) { ... }` — each
+- Parameter type annotations: `fn f(x: Int, y: Float) { ... }`: each
   parameter may optionally carry a declared type (`: Type`). When present,
   the type checker enforces that the parameter's usage matches the declared
   type. When absent, the type is inferred from usage (existing behavior).
-- **Return-type annotations:** `fn f() -> Int { ... }` — a function may
+- Return-type annotations: `fn f() -> Int { ... }`: a function may
   declare a return type after its parameter list. When present, every
   `return expr;` in the body must produce a value of the annotated type.
   When absent, the return type is inferred from `return` expressions
   (existing behavior).
-- **`Null` as a named type:** `Null` is now recognized in type annotations
+- `Null` as a named type: `Null` is now recognized in type annotations
   (`fn f() -> Null { ... }`), matching its status as a first-class scalar
   type (session 24).
 
@@ -41,8 +41,8 @@ The existing `Type` production is reused (named types, `Ptr<T>`, `&T`/`&mut T`,
 
 ## 3. AST (`src/ast/mod.rs`)
 
-- `Param` gains `ty: Option<Ty>` — the optional type annotation.
-- `FnItem` gains `return_ty: Option<Ty>` — the optional return-type
+- `Param` gains `ty: Option<Ty>`: the optional type annotation.
+- `FnItem` gains `return_ty: Option<Ty>`: the optional return-type
   annotation.
 - Both fields are `None` for programs written before session 25, preserving
   backward compatibility.
@@ -59,7 +59,7 @@ The existing `Type` production is reused (named types, `Ptr<T>`, `&T`/`&mut T`,
 - Error recovery is unchanged: a malformed annotation produces a parse
   error and the parser continues.
 
-## 5. Type Checker (`src/typecheck/checker.rs`)
+## 5. Type checker (`src/typecheck/checker.rs`)
 
 - `Null` is added to `resolve_type()` as a recognized named type
   (`TypeKind::Null`), alongside `Int`, `Float`, `Bool`, `Char`, and `Str`.
@@ -82,7 +82,7 @@ The existing `Type` production is reused (named types, `Ptr<T>`, `&T`/`&mut T`,
   the existing `E-T01` (TypeMismatch) with the declared type as
   "expected" and the actual type as "found".
 
-## 6. HIR, MIR, Backend
+## 6. HIR, MIR, backend
 
 No changes required in HIR lowering, MIR lowering, or the native backend.
 The type annotations are consumed during type analysis and expressed as
@@ -154,11 +154,11 @@ types; they never see annotations directly.
 
 ## 9. Known limitations
 
-- **Let binding type annotations** (`let x: Type = expr;`) remain deferred
+- Let binding type annotations (`let x: Type = expr;`) remain deferred
   to a future session. Only function parameter and return-type annotations
   are implemented.
-- **Tuples, generics, optional/result types** remain future milestones.
-- **`Null` as a named type** is now accepted in annotations, but `null`
+- Tuples, generics, optional/result types remain future milestones.
+- `Null` as a named type is now accepted in annotations, but `null`
   remains the only way to construct a `Null` value.
 - Existing programs without annotations continue to work unchanged.
 

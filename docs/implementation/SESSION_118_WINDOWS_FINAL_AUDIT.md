@@ -1,8 +1,8 @@
-# Session 118 — Final independent Windows completion audit
+# Session 118: Final independent Windows completion audit
 
 **Starting commit:** `86642b4` (Session 117 close; `HEAD == origin/main`, clean tree)
 **Ending commit:** the commit carrying this report
-**Parity blockers closed:** none needed — P0 = 0 and P1 = 0 were already true; this session
+**Parity blockers closed:** none needed, P0 = 0 and P1 = 0 were already true; this session
 verified them independently and repaired one stale documentation line, plus one harness
 defect found while re-running the native suite.
 **Linux:** frozen and untouched. No ELF/backend source was modified this session.
@@ -22,13 +22,13 @@ Every aggregate in the matrix was recomputed by scanning the 232 capability rows
 
 | Check | Result |
 |---|---|
-| Rows found | **232** (L 73 · R 29 · S 78 · T 16 · W 22 · P 14); no duplicate, missing or extra IDs |
+| Rows found | 232 (L 73 · R 29 · S 78 · T 16 · W 22 · P 14); no duplicate, missing or extra IDs |
 | Column alignment | all 232 rows are 10-cell (the five `\|`-escaped rows parse correctly) |
-| Status | VERIFIED 102 · MISSING 68 · PARTIAL 34 · INTENT. DIFF. 13 · N/A 6 · EXECUTION VERIFIED 2 · PLANNED 2 · N/A (INTENT.) 2 · INTENT. DIFF. + PARTIAL 1 · VERIFIED (INTENT. DIFF.) 1 · VERIFIED (partial) 1 — **sums to 232** |
+| Status | VERIFIED 102 · MISSING 68 · PARTIAL 34 · INTENT. DIFF. 13 · N/A 6 · EXECUTION VERIFIED 2 · PLANNED 2 · N/A (INTENT.) 2 · INTENT. DIFF. + PARTIAL 1 · VERIFIED (INTENT. DIFF.) 1 · VERIFIED (partial) 1 — sums to 232 |
 | §10.1 per-domain breakdown | reproduces exactly (e.g. VERIFIED 30/15/35/8/5/9 = 102) |
-| Priority | P0 0 · P1 0 · P2 88 (23/9/34/2/17/3) · P3 54 (23/8/14/5/3/1) · no-gap 90 — **sums to 232**, matches §10.2 |
-| Difficulty | S-M 6 · S 37 · M 84 · L 30 · XL 14 = **171 work rows** + 61 no-work = 232, matches §10.3 |
-| `Blocks = Y` | **0 rows**; `P1` set equals it exactly |
+| Priority | P0 0 · P1 0 · P2 88 (23/9/34/2/17/3) · P3 54 (23/8/14/5/3/1) · no-gap 90 — sums to 232, matches §10.2 |
+| Difficulty | S-M 6 · S 37 · M 84 · L 30 · XL 14 = 171 work rows + 61 no-work = 232, matches §10.3 |
+| `Blocks = Y` | 0 rows; `P1` set equals it exactly |
 | Wave D/E/F blockers | 0 in every wave |
 
 So the reported "232 rows, P0 = 0, P1 = 0" is confirmed, and §10.1–§10.3 are internally
@@ -40,18 +40,18 @@ consistent and arithmetically correct.
 carried Session 107-era numbers and named L34 and L68 as active parity blockers:
 
 - claimed `VERIFIED 29 … MISSING 19`, `P1 2 · P2 22 · no-gap 26`, and
-  "**Parity blockers (Blocks = Y): 2 — L34 (exceptions), L68 (packages)**";
+  "**Parity blockers (Blocks = Y): 2, L34 (exceptions), L68 (packages)**";
 - the rows actually show `VERIFIED 30 … MISSING 18`, `P1 0 · P2 23 · no-gap 27`, and
-  **0 `Blocks = Y`** — L34 is INTENT. DIFF./P2/N (reclassified Session 111) and L68 is
+  **0 `Blocks = Y`**, L34 is INTENT. DIFF./P2/N (reclassified Session 111) and L68 is
   VERIFIED/`Blocks = N` (delivered Session 109).
 
 §3.10 was corrected from the rows and annotated with the reason. This is the only stale
 parity claim in the live documents; the remaining "18 blockers"/"13 blockers" figures are
-inside dated Session 98–109 notes that are explicitly labelled as historical baselines.
+inside dated Session 98-109 notes that are explicitly labelled as historical baselines.
 The plan's header already carries the "0 parity-blocking P1 gaps" current figure.
 
 Also refreshed to measured values (§2, §11): the npm bundle ships **26** stdlib modules
-(not 22/25 — `tls` was missing from the list), the suite is **72 test units** (71
+(not 22/25, `tls` was missing from the list), the suite is **72 test units** (71
 integration targets + lib) running **2 941 passed / 3 ignored / 0 failed**, and the smoke/
 CLI/release counts are 13/13 · 74/74 (+1 ignored) · 68/68.
 
@@ -66,7 +66,7 @@ Each capability was re-run through the public MINK workflow (compile a real Wind
 | R20 async / event loop | `async_lib` 23/23, deterministic over 5 repeated runs |
 | S71 threads + locks | `threads_lib` `s71_*`: mutual exclusion, 4×5000 locked increments = exactly 20000, unlocked control, 200 lock cycles |
 | S73 async/await | `async_lib` `s73_*`: nesting, control flow, cross-module async, rejected forms |
-| S62 TLS | `tls_lib` 19/19 (+1 ignored) and the opt-in public-endpoint test **passes** |
+| S62 TLS | `tls_lib` 19/19 (+1 ignored) and the opt-in public-endpoint test passes |
 | P04 site-packages | `package_manager` 23/23 |
 | P05 pip-equivalent install | `package_manager` 23/23 |
 | P06 resolver | `package_manager` 23/23 |
@@ -89,7 +89,7 @@ error handling.
 
 ## 6. Clean external user workflows (packaged compiler)
 
-Performed from `…/Temp/mink audit π` — a path containing **spaces and Unicode**, outside
+Performed from `…/Temp/mink audit π`, a path containing **spaces and Unicode**, outside
 the repository, using the tarball produced by `npm pack`:
 
 1. `npm pack` → 28 files (compiler + 26 stdlib modules + manifest); `npm install` into the
@@ -116,11 +116,11 @@ public endpoints to confirm that validation is never weakened in the real world:
 
 | Endpoint | Result |
 |---|---|
-| `https://example.com/` (public CA, system store) | **ACCEPTED** — 200 OK |
-| `https://expired.badssl.com/` | **REJECTED** |
-| `https://wrong.host.badssl.com/` (hostname mismatch) | **REJECTED** |
-| `https://self-signed.badssl.com/` (untrusted root) | **REJECTED** |
-| `https://untrusted-root.badssl.com/` | **REJECTED** |
+| `https://example.com/` (public CA, system store) | ACCEPTED — 200 OK |
+| `https://expired.badssl.com/` | REJECTED |
+| `https://wrong.host.badssl.com/` (hostname mismatch) | REJECTED |
+| `https://self-signed.badssl.com/` (untrusted root) | REJECTED |
+| `https://untrusted-root.badssl.com/` | REJECTED |
 
 Wildcard single-label rules, IPv4-literal SAN matching, wrong EKU, closed/invalid handles,
 partial reads, a 300 KB transfer and repeated no-leak connections are covered by
@@ -136,7 +136,7 @@ repetition.
 
 ## 9. Infrastructure findings
 
-### 9.1 `windows_hardening` port contention — root cause fixed
+### 9.1 `windows_hardening` port contention: root cause fixed
 
 **Reproduction (before the fix):** `cargo test --test windows_hardening` with the default
 parallel harness hung; after an external 150 s timeout the harness reported
@@ -150,7 +150,7 @@ than in the product.
 1. `free_port()` bound `127.0.0.1:0`, read the port and dropped the listener, so the number
    was free again before the test used it. Under a parallel run two tests could be handed
    the same port; one test's server then answered the other test's client, and the client's
-   blocking `read` waited forever — a cross-test socket pairing, not a product fault
+   blocking `read` waited forever, a cross-test socket pairing, not a product fault
    (blocking receives are the documented socket contract, the same as Python's `recv`).
 2. Even with unique ports, the harness-side client raced the MINK server's `bind`/`listen`
    (the client thread was spawned before the server process started), which turned the
@@ -165,7 +165,7 @@ process retries `connect` against a 20 s deadline instead of a single `unwrap`; 
 helper thread is joined through `join_bounded` (30 s) so a future mispairing fails the test
 loudly instead of hanging the target.
 
-**After the fix:** 6/6 consecutive parallel runs pass **18/18** in ~10–13 s (no
+**After the fix:** 6/6 consecutive parallel runs pass 18/18 in ~10-13 s (no
 `--test-threads=1` workaround needed), and the serial mode still passes 18/18. `cargo fmt
 --check` is clean and clippy is back at its documented baseline with **0 new warnings**.
 
@@ -184,11 +184,11 @@ interrupted run).
 
 ## 10. Quality gates
 
-- `cargo fmt --check` — clean.
-- `cargo clippy --all-targets` — exit 0; 82 library warnings + 2 test warnings, all
+- `cargo fmt --check`: clean.
+- `cargo clippy --all-targets`: exit 0; 82 library warnings + 2 test warnings, all
   pre-existing (identical to the pre-audit baseline); **0 new**.
-- Debug and release builds — clean.
-- Package/npm checks — `npm pack --dry-run` 28 files; the bundled `stdlib/` is
+- Debug and release builds: clean.
+- Package/npm checks: `npm pack --dry-run` 28 files; the bundled `stdlib/` is
   byte-identical to `stdlib/` (`diff -r`); the committed `npm/mink/bin/mink.exe` still
   corresponds to the current release source (this session changed only a test file, so the
   distributed binary is unaffected; local `cargo build --release` output is not

@@ -1,18 +1,18 @@
-# SESSION 77 — Process Release Blocker Removal
+# SESSION 77: process release blocker removal
 
 ## 1. Baseline
 
 | Library | Before |
 |---------|--------|
-| Crypto | 18/18 ✅ |
-| Random | 15/15 ✅ |
-| Collections | 24/24 ✅ |
-| Networking | 26/26 ✅ |
-| HTTP | 35/35 ✅ |
-| Filesystem | 33/33 ✅ |
-| **Process** | **13/25** ❌ |
+| Crypto | 18/18 |
+| Random | 15/15 |
+| Collections | 24/24 |
+| Networking | 26/26 |
+| HTTP | 35/35 |
+| Filesystem | 33/33 |
+| Process | 13/25 |
 
-## 2. Failure Matrix
+## 2. Failure matrix
 
 12 failures, all involving echo commands or stdout capture:
 
@@ -31,7 +31,7 @@
 | p22 | many process runs | stdout_len = 0 |
 | p23 | command with arguments | stdout_len = 0 |
 
-## 3. Native Win32 Reference
+## 3. Native Win32 reference
 
 Created minimal C reference implementations:
 - `proc_test2.c`: Tests NULL vs inheritable security on CreatePipe
@@ -39,7 +39,7 @@ Created minimal C reference implementations:
 
 **Key finding**: Native Win32 with identical parameters returns exit code 0 for `cmd.exe /c echo hello`, confirming the bug is in the MINK emitter, not a Windows platform limitation.
 
-## 4. Root Causes
+## 4. Root causes
 
 ### Root Cause 1: Non-inheritable pipe handles
 
@@ -92,54 +92,54 @@ je valid
 
 Only applied in non-heap-only mode (i.e., `StrValidate`, not `StrValidateHeap`), preserving the mutation protection on BSS buffers.
 
-## 6. Results After Fix
+## 6. Results after fix
 
 | Library | After | Status |
 |---------|-------|--------|
-| Crypto | 18/18 | ✅ |
-| Random | 15/15 | ✅ |
-| Collections | 24/24 | ✅ |
-| Networking | 26/26 | ✅ |
-| HTTP | 35/35 | ✅ |
-| Filesystem | 33/33 | ✅ |
-| **Process** | **25/25** | **✅ COMPLETE** |
+| Crypto | 18/18 | Yes |
+| Random | 15/15 | Yes |
+| Collections | 24/24 | Yes |
+| Networking | 26/26 | Yes |
+| HTTP | 35/35 | Yes |
+| Filesystem | 33/33 | Yes |
+| Process | 25/25 | COMPLETE |
 
-## 7. Quality Gates
+## 7. Quality gates
 
-- ✅ `cargo fmt` clean
-- ✅ `cargo clippy --all-targets` (0 errors)
-- ✅ `cargo build` successful
-- ✅ `cargo build --release` successful
-- ✅ HEAD == origin/main
-- ✅ Working tree clean
-- ✅ No regressions
+- `cargo fmt` clean
+- `cargo clippy --all-targets` (0 errors)
+- `cargo build` successful
+- `cargo build --release` successful
+- HEAD == origin/main
+- Working tree clean
+- No regressions
 
-## 8. Security / Resource Audit
+## 8. Security / resource audit
 
 | Concern | Status |
 |---------|--------|
-| Handle leaks | ✅ All handles closed in cleanup path |
-| Pipe handle inheritance | ✅ Write ends inheritable, read ends non-inheritable |
-| Buffer overflow | ✅ ReadFile bounded to 4088 bytes |
-| Stack corruption | ✅ Frame extended for SA, all calls properly aligned |
-| Deadlock | ✅ WaitForSingleObject before ReadFile prevents pipe-fill deadlock |
+| Handle leaks | All handles closed in cleanup path |
+| Pipe handle inheritance | Write ends inheritable, read ends non-inheritable |
+| Buffer overflow | ReadFile bounded to 4088 bytes |
+| Stack corruption | Frame extended for SA, all calls properly aligned |
+| Deadlock | WaitForSingleObject before ReadFile prevents pipe-fill deadlock |
 
-## 9. Release Blocker Classification
+## 9. Release blocker classification
 
 **RELEASE BLOCKER REMOVED**
 
 All ecosystem libraries pass:
-- Strings ✅
-- Math ✅
-- Encoding ✅
-- Hashing ✅
-- JSON ✅
-- Time ✅
-- Random: 15/15 ✅
-- Collections: 24/24 ✅
-- Crypto: 18/18 ✅
-- Environment ✅
-- Networking: 26/26 ✅
-- HTTP: 35/35 ✅
-- Filesystem: 33/33 ✅
-- Process: 25/25 ✅
+- Strings
+- Math
+- Encoding
+- Hashing
+- JSON
+- Time
+- Random: 15/15
+- Collections: 24/24
+- Crypto: 18/18
+- Environment
+- Networking: 26/26
+- HTTP: 35/35
+- Filesystem: 33/33
+- Process: 25/25

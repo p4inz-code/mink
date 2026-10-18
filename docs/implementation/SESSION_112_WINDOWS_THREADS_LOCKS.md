@@ -1,7 +1,7 @@
-# Session 112 — Windows threads + locks (R19, R21, S71)
+# Session 112: Windows threads + locks (R19, R21, S71)
 
 **Parity blockers closed:** R19 `Threads`, R21 `Locks / synchronization
-primitives`, S71 `Threads + locks` — MISSING → **VERIFIED**
+primitives`, S71 `Threads + locks`, MISSING → **VERIFIED**
 **Parity-blocking set:** 9 → 7 (R20, S62, S73, P04, P05, P06, P09 remain)
 **Linux:** frozen. `src/backend/emit/linux_runtime.rs` and the ELF backend were
 not touched; the Windows-only services live in `src/backend/emit/runtime.rs`
@@ -16,18 +16,18 @@ and the shared changes (`src/runtime/error.rs`, `src/runtime/intrinsics.rs`,
   (`CreateThread` / `WaitForSingleObject` / `CloseHandle` /
   `GetCurrentThreadId` / `ExitThread` imports).
 - Locks: `rt_mutex_new() -> Int`, `rt_mutex_lock`, `rt_mutex_unlock`,
-  `rt_mutex_free` — an 8-byte lock word in the MINK heap acquired with an
+  `rt_mutex_free`, an 8-byte lock word in the MINK heap acquired with an
   atomic `xchg`.
 - `rt_ptr_to_int(p) -> Int` / `rt_int_to_ptr(i) -> Ptr<Int>`: a word
   reinterpretation. Without it a `Ptr<Int>` cannot be stored by
   `rt_mem_store` (which takes an `Int` value), so a thread could not be handed
   a pointer to shared state.
-- `stdlib/threads.mink` — `thread_spawn`/`thread_join`/`thread_self` and
+- `stdlib/threads.mink`: `thread_spawn`/`thread_join`/`thread_self` and
   `lock_new`/`lock_acquire`/`lock_release`/`lock_free` (mirrored into the npm
   bundle).
-- `tests/threads_lib.rs` — 17 permanent tests; each compiles a real Windows PE
+- `tests/threads_lib.rs`: 17 permanent tests; each compiles a real Windows PE
   through the `mink build` CLI and executes it.
-- `examples/threaded_work/main.mink` — a small end-to-end proof application.
+- `examples/threaded_work/main.mink`: a small end-to-end proof application.
 - `E-R12` (`ThreadCreateFailed`) added to the runtime error catalog.
 
 ## Architecture
@@ -59,7 +59,7 @@ after `WaitForSingleObject` has observed thread termination.
 **Shared runtime state.** Every thread shares one arena, one free list and one
 liveness table, so the allocator and the raw memory accessors
 (`rt_mem_load`/`rt_mem_store`) take a runtime-wide spin lock. The lock is a
-plain test-and-set — `mov rax, 1; xchg [rt_lock], rax; test rax, rax; jnz` —
+plain test-and-set, `mov rax, 1; xchg [rt_lock], rax; test rax, rax; jnz`
 using a RIP-relative `xchg` so it clobbers only `rax`, and a RIP-relative
 immediate store to release so a live result in `rax` survives. It is
 intentionally **not** reentrant: the allocator, `rt_free` and the accessors
@@ -79,36 +79,36 @@ tests.
 
 ## Defects found and fixed (all by native execution)
 
-1. **Clobbered frame slots.** The first `rt_thread_spawn` wrote its spills to
+1. Clobbered frame slots. The first `rt_thread_spawn` wrote its spills to
    `[rbp-8]`/`[rbp-16]`/`[rbp-24]` without reserving them, so the `rt_alloc`
    call overwrote them (Windows has no red zone). Fixed with an explicit
    `sub rsp, 16` frame.
-2. **`CreateThread` stack arguments.** The first version passed the two stack
+2. `CreateThread` stack arguments. The first version passed the two stack
    arguments at `[rsp+0]`/`[rsp+8]` instead of after the mandatory 32 bytes of
    shadow space, and used the wrong register for the block pointer. Fixed to
    `sub rsp, 48` with the arguments at `[rsp+32]`/`[rsp+40]`.
-3. **Missing shadow space.** `rt_thread_join`, `rt_thread_id` and the
+3. Missing shadow space. `rt_thread_join`, `rt_thread_id` and the
    trampoline's `ExitThread` call had no shadow space, and the trampoline's
    `sub rsp, 40` left `rsp` misaligned for the MINK call.
-4. **Result delivery.** `rt_thread_join` originally returned
+4. Result delivery. `rt_thread_join` originally returned
    `WaitForSingleObject`'s status rather than the thread function's result;
    the control block now carries the result so `join` can return it.
-5. **Kernel-handle leak.** A spawn/join cycle originally never closed the
+5. Kernel-handle leak. A spawn/join cycle originally never closed the
    thread handle.
-6. **Type friction.** A `Ptr<Int>` could not be stored by `rt_mem_store` and
+6. Type friction. A `Ptr<Int>` could not be stored by `rt_mem_store` and
    could not be passed to `rt_thread_spawn`, so a thread could never receive
    shared state. Fixed by adding `rt_ptr_to_int`/`rt_int_to_ptr`.
 
 Two defects were found by running the existing full regression, not by the new
 thread work:
 
-7. **Wrong command name in `mink test` diagnostics.** `mink test` shares
+7. Wrong command name in `mink test` diagnostics. `mink test` shares
    `parse_build`, which hard-coded `build` in every message, so `mink test`
    with no path reported `missing path argument for 'build'`. `parse_build`
    now takes the command name and the message names the command the user
    typed (`src/cli.rs`).
-8. **Stale CLI test.** `tests/release.rs::cli_unknown_commands_rejected`
-   asserted that `mink test` is an unknown command — untrue since the `test`
+8. Stale CLI test. `tests/release.rs::cli_unknown_commands_rejected`
+   asserted that `mink test` is an unknown command, untrue since the `test`
    subcommand landed in Session 108. The test now uses genuinely unknown names
    (`fmt`, `frobnicate`) and a new `cli_test_command_requires_a_path` pins the
    `build`-vs-`test` diagnostic fix. This test had been failing since Session
@@ -146,19 +146,19 @@ workload produced 20000 three times in a row.
 
 ## Documented limits (not defects)
 
-- **Non-reentrant lock.** A second `lock_acquire` from the same thread
+- Non-reentrant lock. A second `lock_acquire` from the same thread
   deadlocks, like Python's `Lock`. There is no owner tracking, so no
   `RuntimeError` is raised as CPython would; MINK has no exceptions.
-- **No thread-local storage.** A thread has one `Ptr<Int>` argument; anything
+- No thread-local storage. A thread has one `Ptr<Int>` argument; anything
   else must be passed through it. `rt_thread_id` is the only per-thread value
   the runtime exposes.
 - **No cancellation, no priorities, no timed join, no condition variables, no
   thread pools.** `rt_thread_join` waits forever (`INFINITE`).
-- **Busy-wait locks.** Both the runtime lock and user locks spin. They are
+- Busy-wait locks. Both the runtime lock and user locks spin. They are
   correct but not fair, and a heavily contended lock burns its slice.
-- **No stack-size control.** `CreateThread` is called with the default stack
+- No stack-size control. `CreateThread` is called with the default stack
   size.
-- **All threads share one arena.** A thread that exhausts the 1 MiB heap makes
+- All threads share one arena. A thread that exhausts the 1 MiB heap makes
   every other thread fail with `E-R02`.
 
 ## Matrix updates
@@ -171,7 +171,7 @@ row scan (232 rows; VERIFIED 92, MISSING 77, PARTIAL 34; P1 7).
 
 ## Final state
 
-- Parity-blocking set: **7** (R20, S62, S73, P04, P05, P06, P09).
+- Parity-blocking set: 7 (R20, S62, S73, P04, P05, P06, P09).
 - `tests/threads_lib.rs` 17/17; regression re-run green for
   `collections_lib` 35, `strings_lib` 85, `encoding_lib` 75, `closures` 26,
   `zlib_lib` 15, `zip_lib` 10, `sqlite_lib` 16, `re_lib` 33, `session99` 13,
@@ -181,7 +181,7 @@ row scan (232 rows; VERIFIED 92, MISSING 77, PARTIAL 34; P1 7).
   `assert_lib` 16, `runtime` 24, `ownership` 43, `backend` 46, `adversarial` 93,
   `packages` 5, `release` 68, `cli` 74 (1 ignored), `smoke` 13,
   `test_runner` 12, plus `cargo test --lib` 62 and the npm-bundle drift guard.
-- `windows_hardening` 15/18 in parallel, **18/18 with `--test-threads=1`** (15s).
+- `windows_hardening` 15/18 in parallel, 18/18 with `--test-threads=1` (15s).
   The three parallel failures (`http_windows_post_exact_body_roundtrip`,
   `http_windows_split_server_multi_recv_and_errors`,
   `tcp_mink_server_echo_repeated_connections`) all pass individually and

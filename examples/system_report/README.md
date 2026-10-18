@@ -4,7 +4,7 @@ A small, self-contained MINK application that gathers basic system
 information and writes it as a JSON report file (`report.json`).
 
 This is the official Windows shipment example: it proves the complete
-user workflow — install MINK, write MINK source, build with the `mink`
+user workflow: install MINK, write MINK source, build with the `mink`
 CLI, and run a standalone executable that needs nothing else.
 
 ## What it demonstrates
@@ -65,7 +65,7 @@ mink build main.mink
 ```
 
 `main.exe` is a single self-contained executable. You can copy it to
-any directory — even a machine without MINK, Rust, Node.js, or npm —
+any directory: even a machine without MINK, Rust, Node.js, or npm
 and run it there. It depends only on the Windows system libraries.
 
 ## Ownership note

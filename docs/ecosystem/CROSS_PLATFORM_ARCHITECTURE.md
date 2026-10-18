@@ -1,27 +1,27 @@
-# MINK Cross-Platform Architecture
+# MINK cross-platform architecture
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY, not implemented
 **Scope:** Cross-platform target model for the MINK ecosystem
 
 ---
 
 ## 1. Goals
 
-1. **Universal deployment.** MINK must compile and run on Windows, Linux, and macOS (x86_64 and ARM64).
+1. Universal deployment. MINK must compile and run on Windows, Linux, and macOS (x86_64 and ARM64).
 
-2. **Zero runtime overhead.** Platform selection happens at compile time, not runtime. No vtable dispatch, no runtime detection.
+2. Zero runtime overhead. Platform selection happens at compile time, not runtime. No vtable dispatch, no runtime detection.
 
-3. **Consistent behavior.** The language semantics are identical across platforms. Platform differences are isolated to the runtime and backend.
+3. Consistent behavior. The language semantics are identical across platforms. Platform differences are isolated to the runtime and backend.
 
-4. **Cross-compilation.** The compiler can target any supported platform from any host platform.
+4. Cross-compilation. The compiler can target any supported platform from any host platform.
 
-5. **Future extensibility.** New platforms (WASM, embedded, RISC-V) can be added without changing the core architecture.
+5. Future extensibility. New platforms (WASM, embedded, RISC-V) can be added without changing the core architecture.
 
 ---
 
-## 2. Target Triple Format
+## 2. Target triple format
 
 ### Standard format
 ```
@@ -32,7 +32,7 @@
 
 | Target Triple | Architecture | OS | ABI | Status |
 |---------------|-------------|-----|-----|--------|
-| `x86_64-pc-windows-msvc` | x86_64 | Windows | MSVC | **Implemented** (as `x86_64-windows-pe`) |
+| `x86_64-pc-windows-msvc` | x86_64 | Windows | MSVC | Implemented (as `x86_64-windows-pe`) |
 | `x86_64-unknown-linux-gnu` | x86_64 | Linux | GNU | Implemented as `x86_64-linux-elf` (FROZEN by policy) |
 | `aarch64-unknown-linux-gnu` | ARM64 | Linux | GNU | Recognized, not implemented |
 | `aarch64-apple-darwin` | ARM64 | macOS | Darwin | Recognized, not implemented |
@@ -59,7 +59,7 @@ Target::parse("aarch64-apple-darwin")
 
 ---
 
-## 3. Target Selection
+## 3. Target selection
 
 ### Default target
 - The host's native target (detected at compiler startup)
@@ -89,7 +89,7 @@ fn arm64_specific() { ... }
 
 ---
 
-## 4. Target Abstraction
+## 4. Target abstraction
 
 ### Current architecture (V1)
 
@@ -145,16 +145,16 @@ trait TargetBackend {
 
 | Layer | Windows | Linux | macOS |
 |-------|---------|-------|-------|
-| **Syscalls** | Win32 API | POSIX syscalls | POSIX syscalls |
-| **File I/O** | CreateFile/ReadFile/WriteFile | open/read/write | open/read/write |
-| **Memory** | VirtualAlloc/VirtualFree | mmap/munmap | mmap/munmap |
-| **Threads** | CreateThread | pthread_create | pthread_create |
-| **Networking** | Winsock2 | BSD sockets | BSD sockets |
-| **Dynamic loading** | LoadLibrary/GetProcAddress | dlopen/dlsym | dlopen/dlsym |
-| **Environment** | GetEnvironmentVariable | getenv | getenv |
-| **Processes** | CreateProcess | fork/exec | fork/exec |
-| **Signals** | SEH/structured exceptions | signals | signals |
-| **Time** | QueryPerformanceCounter | clock_gettime | clock_gettime |
+| Syscalls | Win32 API | POSIX syscalls | POSIX syscalls |
+| File I/O | CreateFile/ReadFile/WriteFile | open/read/write | open/read/write |
+| Memory | VirtualAlloc/VirtualFree | mmap/munmap | mmap/munmap |
+| Threads | CreateThread | pthread_create | pthread_create |
+| Networking | Winsock2 | BSD sockets | BSD sockets |
+| Dynamic loading | LoadLibrary/GetProcAddress | dlopen/dlsym | dlopen/dlsym |
+| Environment | GetEnvironmentVariable | getenv | getenv |
+| Processes | CreateProcess | fork/exec | fork/exec |
+| Signals | SEH/structured exceptions | signals | signals |
+| Time | QueryPerformanceCounter | clock_gettime | clock_gettime |
 
 ### Platform module structure (V2)
 
@@ -183,7 +183,7 @@ src/platform/
 
 ---
 
-## 6. Conditional Compilation
+## 6. Conditional compilation
 
 ### Syntax (V2+)
 
@@ -222,7 +222,7 @@ fn read_input() -> Str {
 
 ---
 
-## 7. OS Abstraction
+## 7. OS abstraction
 
 ### File abstraction
 
@@ -267,7 +267,7 @@ fn env_vars() -> Vec<(Str, Str)>;
 
 ---
 
-## 8. Path Handling
+## 8. Path handling
 
 ### Path representation
 - Paths are strings (UTF-8 on all platforms)
@@ -312,7 +312,7 @@ impl Path {
 
 ---
 
-## 10. Pointer Width
+## 10. Pointer width
 
 ### Platform pointer sizes
 
@@ -329,7 +329,7 @@ impl Path {
 
 ---
 
-## 11. ABI Differences
+## 11. ABI differences
 
 ### Calling conventions per platform
 
@@ -350,17 +350,17 @@ impl Path {
 
 ---
 
-## 12. Runtime Portability
+## 12. Runtime portability
 
 ### Runtime services per platform
 
 | Service | Windows | Linux | macOS |
 |---------|---------|-------|-------|
-| **Heap allocation** | VirtualAlloc | mmap | mmap |
-| **Stdout** | WriteFile(GetStdHandle) | write(1) | write(1) |
-| **Stderr** | WriteFile(GetStdHandle) | write(2) | write(2) |
-| **Exit** | ExitProcess | _exit | _exit |
-| **Thread local** | TlsAlloc | __thread | _Thread_local |
+| Heap allocation | VirtualAlloc | mmap | mmap |
+| Stdout | WriteFile(GetStdHandle) | write(1) | write(1) |
+| Stderr | WriteFile(GetStdHandle) | write(2) | write(2) |
+| Exit | ExitProcess | _exit | _exit |
+| Thread local | TlsAlloc | __thread | _Thread_local |
 
 ### Runtime embedding
 - The runtime is embedded in the executable (no shared library dependency)
@@ -369,7 +369,7 @@ impl Path {
 
 ---
 
-## 13. Backend Portability
+## 13. Backend portability
 
 ### Backend architecture
 
@@ -387,15 +387,15 @@ The Backend IR is target-independent. Each target provides an emitter:
 | aarch64-apple-darwin | `aarch64.rs` + `macho.rs` | Mach-O binary |
 
 ### Emitter components
-1. **Instruction selection.** Backend IR → platform instructions
-2. **Register allocation.** Map virtual registers to physical registers
-3. **Frame layout.** Stack frame sizing and alignment
-4. **Relocation.** Fix up addresses for position-dependent code
-5. **Container.** Assemble into executable format (PE, ELF, Mach-O)
+1. Instruction selection. Backend IR → platform instructions
+2. Register allocation. Map virtual registers to physical registers
+3. Frame layout. Stack frame sizing and alignment
+4. Relocation. Fix up addresses for position-dependent code
+5. Container. Assemble into executable format (PE, ELF, Mach-O)
 
 ---
 
-## 14. Executable Formats
+## 14. Executable formats
 
 ### PE (Windows)
 
@@ -435,7 +435,7 @@ __LINKEDIT segment (symbols)
 
 ---
 
-## 15. Linker Strategy
+## 15. Linker strategy
 
 ### V1: No external linker
 - The backend emits complete executable images directly
@@ -458,7 +458,7 @@ __LINKEDIT segment (symbols)
 
 ---
 
-## 16. Cross-Compilation Strategy
+## 16. Cross-Compilation strategy
 
 ### V1
 - Cross-compilation is NOT supported (only host target)
@@ -489,16 +489,16 @@ mink build main.mink --target x86_64-pc-windows-msvc
 
 ---
 
-## 17. CI Matrix
+## 17. CI matrix
 
 ### Recommended CI matrix
 
 | Host OS | Target | Status |
 |---------|--------|--------|
-| Windows x86_64 | x86_64-pc-windows-msvc | **Priority 1** (current) |
-| Ubuntu x86_64 | x86_64-unknown-linux-gnu | **Priority 2** |
-| macOS ARM64 | aarch64-apple-darwin | **Priority 3** |
-| Ubuntu ARM64 | aarch64-unknown-linux-gnu | **Priority 4** |
+| Windows x86_64 | x86_64-pc-windows-msvc | Priority 1 (current) |
+| Ubuntu x86_64 | x86_64-unknown-linux-gnu | Priority 2 |
+| macOS ARM64 | aarch64-apple-darwin | Priority 3 |
+| Ubuntu ARM64 | aarch64-unknown-linux-gnu | Priority 4 |
 | Ubuntu x86_64 | x86_64-pc-windows-msvc | Cross-compilation test |
 
 ### CI workflow
@@ -527,35 +527,35 @@ steps:
 
 ---
 
-## 18. Two-Approach Analysis
+## 18. Two-Approach analysis
 
 ### Approach A: Runtime-linked platform abstraction (CHOSEN)
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Zero runtime overhead, matches current model, clean separation, compile-time selection |
-| **Cons** | Different binaries per platform, no runtime detection |
-| **Complexity** | Medium |
-| **Performance** | Optimal (no indirection) |
-| **Security** | Clear — no runtime dispatch to exploit |
-| **Compatibility** | Excellent — matches how C/C++ work |
-| **Maintainability** | Each platform is an isolated module |
-| **Ecosystem impact** | Maximum — standard for systems languages |
+| Pros | Zero runtime overhead, matches current model, clean separation, compile-time selection |
+| Cons | Different binaries per platform, no runtime detection |
+| Complexity | Medium |
+| Performance | Optimal (no indirection) |
+| Security | Clear, no runtime dispatch to exploit |
+| Compatibility | Excellent, matches how C/C++ work |
+| Maintainability | Each platform is an isolated module |
+| Ecosystem impact | Maximum, standard for systems languages |
 
 ### Approach B: Runtime-vtable platform abstraction
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Single binary, runtime detection, dynamic dispatch |
-| **Cons** | Indirection overhead, complex init, harder to optimize |
-| **Complexity** | Medium-High |
-| **Performance** | Good but not optimal (vtable indirection) |
-| **Security** | More attack surface (runtime dispatch) |
-| **Compatibility** | Good but unusual for systems languages |
-| **Maintainability** | Single binary to maintain, but complex initialization |
-| **Ecosystem impact** | Moderate — unusual for systems languages |
+| Pros | Single binary, runtime detection, dynamic dispatch |
+| Cons | Indirection overhead, complex init, harder to optimize |
+| Complexity | Medium-High |
+| Performance | Good but not optimal (vtable indirection) |
+| Security | More attack surface (runtime dispatch) |
+| Compatibility | Good but unusual for systems languages |
+| Maintainability | Single binary to maintain, but complex initialization |
+| Ecosystem impact | Moderate, unusual for systems languages |
 
-### Decision: **Approach A**
+### Decision: **approach A**
 
 **Reasoning:** MINK compiles to native code with no external toolchain. Platform selection should happen at compile time, matching the current model. The runtime is embedded in the binary, so platform-specific runtime code is selected during compilation, not at runtime. This is the standard approach for systems languages (C, C++, Rust all use compile-time platform selection).
 

@@ -1,38 +1,38 @@
-# Session 110 — Windows Python Parity: zlib/gzip (DEFLATE)
+# Session 110: Windows Python Parity: zlib/gzip (DEFLATE)
 
-**Date:** September 17, 2026 · **MINK version:** 1.0.1 · **Platform:** Windows x86_64
+**Date:** September 17, 2026 · MINK version: 1.0.1 · Platform: Windows x86_64
 **Starting commit:** `3a825cf` (HEAD == origin/main, clean tree)
-**Branch:** `main` · **Linux:** FROZEN (untouched)
-**P1 blockers:** 13 → **12**
+**Branch:** `main` · Linux: FROZEN (untouched)
+**P1 blockers:** 13 → 12
 
 ## 1. P1 blocker closed this session
 
 | ID | Capability | Status |
 |---|---|---|
-| S42 | zlib/gzip (DEFLATE compress/decompress) | MISSING → **VERIFIED** |
+| S42 | zlib/gzip (DEFLATE compress/decompress) | MISSING → VERIFIED |
 
 S42 was the Wave D dependency for archive work (S44 zip is specified as a "container over
 stored/deflate entries"), so closing it also unblocks the next Wave D unit. It carried the
-stiffest architectural constraint in the matrix — *no external dependencies allowed*, and
-Windows offers no gzip compressor — so the codec is written in MINK itself against the
+stiffest architectural constraint in the matrix. *no external dependencies allowed*, and
+Windows offers no gzip compressor. So the codec is written in MINK itself against the
 existing runtime primitives, with no new intrinsics and no new runtime services.
 
-## 2. Delivered capability — `stdlib/zlib.mink`
+## 2. Delivered capability: `stdlib/zlib.mink`
 
 A self-contained DEFLATE codec (1 385 lines, bundled to `npm/mink/stdlib/zlib.mink` and
 covered by the permanent npm drift guard):
 
-**Inflate** — stored, fixed-Huffman and dynamic-Huffman blocks; 256 KB sliding window;
+**Inflate**, stored, fixed-Huffman and dynamic-Huffman blocks; 256 KB sliding window;
 canonical Huffman table construction from code-length codes with the DEFLATE repeat codes
 (16/17/18); bit-reader with byte alignment; hard errors for invalid block types, bad
 code lengths, truncated input, distance-overrun and checksum mismatch.
 
-**Deflate** — LZ77 with a hash-chain match finder over a 256 KB window, fixed-Huffman and
+**Deflate**, LZ77 with a hash-chain match finder over a 256 KB window, fixed-Huffman and
 stored block selection by measured size, levels 0/1/6/9 (level 0 = stored, 1 = fast,
 6 = default, 9 = deep chain search), Adler-32 and CRC-32 trailers.
 
 **Public API** (all `Str`-in / `Str`-out, `(Str, Int)` on the decode path where the second
-element is a status code — MINK's non-throwing error style):
+element is a status code, MINK's non-throwing error style):
 
 | Function | Purpose |
 |---|---|
@@ -46,7 +46,7 @@ element is a status code — MINK's non-throwing error style):
 Both defects were found by native execution, not by inspection, and both are covered by
 permanent regression tests.
 
-**3.1 `_z_fill` never advanced its scan index after a separator — infinite loop.**
+**3.1 `_z_fill` never advanced its scan index after a separator, infinite loop.**
 The static-table filler (`_z_fill`) walks a compact spec string of `digit-runs` separated
 by `,`. The scan loop advanced only while the current byte was not a separator; on seeing a
 separator it appended the parsed number and fell through without moving the index, so the
@@ -60,7 +60,7 @@ isolation before the fix and re-verified after it.
 `deflate_raw` allocated a match-finder head table, a chain array and a table arena, then
 freed them in an order that did not reverse the allocation order. The runtime allocator is
 a first-fit bump arena that unlinks only the block being freed, so freeing `head` before
-`prev` left the skipped `prev` block unreachable in the free list — 128 KiB lost per
+`prev` left the skipped `prev` block unreachable in the free list: 128 KiB lost per
 compression call. Measured (not inferred): a probe that compresses in a loop grew the heap
 by exactly one block per iteration. Fix: free in exact reverse-of-allocation order, with
 the compression path restructured into a single LIFO scope. After the fix the same probe
@@ -75,7 +75,7 @@ input-sized. The module documents this and the test comments record the measured
 
 ## 4. Test evidence
 
-**Permanent regression suite — `tests/zlib_lib.rs`, 15 tests, all passing:**
+**Permanent regression suite, `tests/zlib_lib.rs`, 15 tests, all passing:**
 
 | Test | Dimension |
 |---|---|
@@ -102,10 +102,10 @@ is leak evidence. All 15 tests pass with clean exits.
 
 **Session-110 native cross-validation (interop, not just round trip):** a probe program
 compiled and run natively exchanged streams with CPython 3.11's `zlib` in **both**
-directions across **77 vectors** — CPython decompressing MINK output and MINK decompressing
+directions across **77 vectors**, CPython decompressing MINK output and MINK decompressing
 CPython output, for raw, zlib and gzip wrappers, across levels and payload classes
 (empty, 1 byte, text, binary, highly repetitive, 2 KB, 1 MB-class rejected as
-out-of-range — see limitations). All 77 cross-checks agree. `zlib.compress(b"hello", 6)`
+out-of-range, see limitations). All 77 cross-checks agree. `zlib.compress(b"hello", 6)`
 is reproduced **byte for byte**. Repetitive data compresses 4 500 → 40 bytes.
 
 **Test-infrastructure note (unchanged, classified):** the full `cargo test` run cannot be
@@ -120,18 +120,18 @@ administrator shell and has not been applied.
 
 ## 5. Verification dimensions (per the MINK Comprehensive Verification Standard)
 
-- **Normal operation** — compress/decompress across three wrappers ✓
-- **Empty / tiny / zero-length** ✓ · **large** ✓ (within heap) · **repetitive** ✓ · **binary** ✓
-- **Malformed / truncated / corrupted / invalid block type / bad checksum** ✓
-- **Round-trip equality** ✓ (all wrappers, multiple payloads)
-- **Ownership** ✓ (mixed-use run; clean exits ⇒ leak check passes)
-- **Repeated execution** ✓ (400+ cycles in the permanent suite; 4 000+ cycles in the
+- Normal operation: compress/decompress across three wrappers
+- Empty / tiny / zero-length · large (within heap) · repetitive · binary
+- Malformed / truncated / corrupted / invalid block type / bad checksum
+- Round-trip equality (all wrappers, multiple payloads)
+- Ownership (mixed-use run; clean exits ⇒ leak check passes)
+- Repeated execution (400+ cycles in the permanent suite; 4 000+ cycles in the
   isolated codec probe with no caller-side temporaries)
-- **Determinism** ✓ (golden encoding pinned)
-- **Cross-implementation interop** ✓ (77 bidirectional vectors against CPython 3.11)
-- **Real user path** ✓ (`examples/compress_util/main.mink`, compiled and run through the
+- Determinism (golden encoding pinned)
+- Cross-implementation interop (77 bidirectional vectors against CPython 3.11)
+- Real user path (`examples/compress_util/main.mink`, compiled and run through the
   CLI: compress a file, decompress it, print sizes)
-- **npm bundle parity** ✓ (`s107_npm_stdlib_bundle_matches_repo_stdlib`)
+- npm bundle parity (`s107_npm_stdlib_bundle_matches_repo_stdlib`)
 
 ## 6. Known limitations (documented, not blockers)
 
@@ -150,9 +150,9 @@ administrator shell and has not been applied.
 
 ## 7. Matrix and plan updates
 
-- Matrix row **S42** → VERIFIED with the evidence anchors above; remaining gaps recorded
+- Matrix row S42 → VERIFIED with the evidence anchors above; remaining gaps recorded
   as P3 (bz2/lzma), streaming API and ratio characteristics.
-- Aggregates recomputed **from the rows** by direct scan (232 rows, escaped pipes
+- Aggregates recomputed from the rows by direct scan (232 rows, escaped pipes
   honoured): **P1 12** · P2 91 · P3 54 · no-gap 75; statuses VERIFIED 87, MISSING 82,
   PARTIAL 34, INTENT. DIFF. 14, N/A 8, PLANNED 3, EXECUTION VERIFIED 2.
   §10.1/§10.2/§10.3/§10.4/§10.6/§10.7, the difficulty table, the wave table, the evidence

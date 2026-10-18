@@ -1,4 +1,4 @@
-# MINK — Runtime Architecture
+# MINK: runtime architecture
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -9,7 +9,7 @@ The MINK runtime provides the execution services required by compiled programs w
 
 The runtime must remain small, predictable, portable, secure, and efficient.
 
-## 2. Runtime Responsibilities
+## 2. Runtime responsibilities
 
 The runtime may provide:
 
@@ -26,7 +26,7 @@ The runtime may provide:
 
 Language semantics that can be implemented entirely by the compiler should not unnecessarily depend on runtime machinery.
 
-## 3. Runtime Modes
+## 3. Runtime modes
 
 MINK should support different runtime configurations where technically appropriate.
 
@@ -68,7 +68,7 @@ The runtime must provide the execution primitives required by the MINK concurren
 
 It should support safe scheduling, synchronization, cancellation, and controlled shared resources.
 
-## 8. Async Execution
+## 8. Async execution
 
 The async runtime should provide efficient task scheduling and asynchronous I/O.
 
@@ -103,19 +103,19 @@ Runtime I/O should integrate with platform-native facilities while presenting co
 
 The architecture should support filesystem, networking, timers, process I/O, and other asynchronous sources.
 
-## 12. Platform Abstraction
+## 12. Platform abstraction
 
 The runtime must isolate operating-system-specific implementation details behind stable internal interfaces.
 
 Initial platforms should include Windows, Linux, and macOS.
 
-## 13. Error Handling
+## 13. Error handling
 
 Runtime failures must integrate with the MINK error model.
 
 Fatal runtime failures should produce useful structured diagnostics without exposing sensitive information.
 
-## 14. Panic and Fatal Errors
+## 14. Panic and fatal errors
 
 The runtime may provide a mechanism for unrecoverable program states.
 
@@ -165,7 +165,7 @@ The runtime should eventually support embedding MINK components inside other app
 
 Embedding must define initialization, shutdown, memory, threading, error, and ABI boundaries.
 
-## 21. Runtime Versioning
+## 21. Runtime versioning
 
 Runtime compatibility must be explicitly defined for compiled MINK programs.
 
@@ -184,7 +184,7 @@ Runtime development must include:
 - Performance benchmarks
 - Failure-injection tests
 
-## 23. Open Architecture Decisions
+## 23. Open architecture decisions
 
 The following must be finalized before architecture freeze:
 

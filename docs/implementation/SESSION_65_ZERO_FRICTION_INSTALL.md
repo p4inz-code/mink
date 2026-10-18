@@ -1,4 +1,4 @@
-# SESSION_65 — Zero-Friction Installation + CLI Improvements
+# SESSION_65: zero-friction installation + CLI improvements
 
 **Date:** August 27, 2026
 **MINK Version:** 1.0.1
@@ -6,21 +6,21 @@
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
 This session delivered MINK 1.0.1 as a genuinely production-ready developer release with zero-friction installation and a complete CLI workflow. The key achievements:
 
-1. **Static CRT linking** — `mink.exe` is fully self-contained with no external DLL dependencies
-2. **`mink run` command** — compile and execute in one step
-3. **Beginner-friendly help** — examples in `--help` output
-4. **Release artifact** — ZIP with binary, README, and examples
-5. **Environment library** — Windows API-backed environment variable access
+1. Static CRT linking: `mink.exe` is fully self-contained with no external DLL dependencies
+2. `mink run` command: compile and execute in one step
+3. Beginner-friendly help: examples in `--help` output
+4. Release artifact: ZIP with binary, README, and examples
+5. Environment library: Windows API-backed environment variable access
 
 ---
 
-## 2. What Changed
+## 2. What changed
 
-### 2.1 Static CRT Linking (`.cargo/config.toml`)
+### 2.1 Static CRT linking (`.cargo/config.toml`)
 
 ```toml
 [target.x86_64-pc-windows-msvc]
@@ -45,9 +45,9 @@ mink run hello.mink
 3. Forwards the child process exit code
 4. Cleans up the generated executable
 
-**Implementation:** `src/cli.rs` — new `Command::Run` variant with `parse_run()` parser and execution logic.
+**Implementation:** `src/cli.rs`, new `Command::Run` variant with `parse_run()` parser and execution logic.
 
-### 2.3 Help Output
+### 2.3 Help output
 
 Updated `--help` to be beginner-friendly with examples:
 
@@ -61,48 +61,48 @@ Examples:
 
 Removed `test` and `fmt` from help (not implemented, would confuse users).
 
-### 2.4 Version Update
+### 2.4 Version update
 
 Cargo.toml version bumped from `1.0.0` to `1.0.1`.
 
 ---
 
-## 3. Installation Model
+## 3. Installation model
 
 **Distribution:** Portable self-contained ZIP
 
 **Installation procedure:**
 1. Download `mink-1.0.1-x86_64-windows.zip`
 2. Extract to any directory
-3. Run `mink.exe` — no installation required
+3. Run `mink.exe`: no installation required
 
 **No external dependencies:**
-- ❌ No Visual C++ Redistributable
-- ❌ No Rust/Cargo
-- ❌ No Visual Studio/MSVC
-- ❌ No Git
-- ❌ No source repository
+- No Visual C++ Redistributable
+- No Rust/Cargo
+- No Visual Studio/MSVC
+- No Git
+- No source repository
 
 ---
 
-## 4. Clean-Machine Test Results
+## 4. Clean-Machine test results
 
 | Test | Result |
 |------|--------|
-| Extract ZIP | ✅ |
-| `mink --version` | ✅ `mink 1.0.1` |
-| `mink --help` | ✅ Shows usage with examples |
-| Create hello.mink | ✅ |
-| `mink check hello.mink` | ✅ |
-| `mink build hello.mink` | ✅ Generates hello.exe |
-| Run generated exe | ✅ Exit code 42 |
-| `mink run hello.mink` | ✅ Exit code 42 |
-| Different working directory | ✅ |
-| Path with spaces | ✅ |
+| Extract ZIP | Yes |
+| `mink --version` | `mink 1.0.1` |
+| `mink --help` | Shows usage with examples |
+| Create hello.mink | Yes |
+| `mink check hello.mink` | Yes |
+| `mink build hello.mink` | Generates hello.exe |
+| Run generated exe | Exit code 42 |
+| `mink run hello.mink` | Exit code 42 |
+| Different working directory | Yes |
+| Path with spaces | Yes |
 
 ---
 
-## 5. Files Changed
+## 5. Files changed
 
 | File | Change |
 |------|--------|
@@ -114,14 +114,14 @@ Cargo.toml version bumped from `1.0.0` to `1.0.1`.
 
 ---
 
-## 6. Test Results
+## 6. Test results
 
-- **Total tests:** 2,352
-- **Passed:** 2,352
-- **Failed:** 0
-- **Ignored:** 1
+- Total tests: 2,352
+- Passed: 2,352
+- Failed: 0
+- Ignored: 1
 
 ---
 
-*Generated with Codebuff 🤖*
+*Generated with Codebuff *
 *Co-Authored-By: Codebuff <noreply@codebuff.com>*

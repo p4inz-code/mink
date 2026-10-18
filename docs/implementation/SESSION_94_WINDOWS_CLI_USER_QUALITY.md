@@ -1,4 +1,4 @@
-# Session 94 — Windows Real-World CLI / User Workflow Quality Audit
+# Session 94: Windows Real-World CLI / user workflow quality audit
 
 Date: 2026-09-04. Branch `main`, starting commit `2d841fd`. MINK v1.0.1.
 
@@ -11,7 +11,7 @@ aliases, error quality, path handling, and the npm package.
 
 ## Final classification
 
-**WINDOWS CLI / USER WORKFLOW = STABLE** — verified end-to-end from a clean
+**WINDOWS CLI / USER WORKFLOW = STABLE**, verified end-to-end from a clean
 directory outside the repository and from a fresh npm install of the packaged
 artifact; all discovered issues fixed or explicitly classified below.
 
@@ -19,7 +19,7 @@ artifact; all discovered issues fixed or explicitly classified below.
 
 | # | Severity | Finding | Fix |
 |---|----------|---------|-----|
-| 1 | P1 | `mink build <directory>` failed **silently** (exit 1, no output): a directory argument made module discovery synthesize a "module file not found" error on a phantom `SourceId` that no `SourceMap` can render | New `BuildError::NotAFile`; `mink check/build/run <dir>` now reports `'<dir>' is a directory, not a MINK source file` |
+| 1 | P1 | `mink build <directory>` failed silently (exit 1, no output): a directory argument made module discovery synthesize a "module file not found" error on a phantom `SourceId` that no `SourceMap` can render | New `BuildError::NotAFile`; `mink check/build/run <dir>` now reports `'<dir>' is a directory, not a MINK source file` |
 | 2 | P2 | `mink check` lacked the per-variant error arms `build`/`run` have, so check-time failures printed only "N front-end error(s)" without the diagnostics | Added `FrontEnd`/`Backend` arms to the `check` command |
 | 3 | P2 | `mink -v` reported "unknown command" (only `-V`/`--version`/`version` worked) | `-v` is now a version alias (node-style); all four forms agree (`mink 1.0.1`) |
 | 4 | P3 | `mink help build` silently ignored its argument and printed generic help; `mink version extra` silently succeeded | Trailing arguments are now rejected for `help`/`version`/`explain` |
@@ -40,7 +40,7 @@ artifact; all discovered issues fixed or explicitly classified below.
   missing args, extra args, unknown target → clear usage errors. All exit
   non-zero; nothing panics, hangs, or prints internal details.
 - Paths: relative, `./`, absolute, `..`, backslash and forward-slash absolute,
-  and a `spaces dir` path — all build and run correctly. Generated `hello.exe`
+  and a `spaces dir` path. All build and run correctly. Generated `hello.exe`
   runs directly and standalone.
 - npm: fresh directory, `npm install <p4inz-code-mink-1.0.1.tgz>`; shims
   (`mink`, `mink.cmd`, `mink.ps1`) created; `mink --version`, check, build,
@@ -59,17 +59,17 @@ artifact; all discovered issues fixed or explicitly classified below.
   sandbox); the local-install + shim + `mink.cmd` paths were, which exercise
   the same wrapper resolution.
 - Windows env_get/env_has confirmed unwired to the Windows API (README's V1
-  stub claim is accurate) — verified by probe.
+  stub claim is accurate), verified by probe.
 - Linux HTTP POST etc. deliberately out of scope (Session 93 follow-ups).
 
 ## Quality gates
 
-- `cargo fmt --check` — clean.
-- `cargo clippy --all-targets --all-features` — no warnings in files touched
+- `cargo fmt --check`: clean.
+- `cargo clippy --all-targets --all-features`: no warnings in files touched
   this session; remaining warnings pre-existing in untouched files.
-- `cargo test` — full suite **2520 passed / 0 failed** (2514 baseline + 6 new:
+- `cargo test`: full suite 2520 passed / 0 failed (2514 baseline + 6 new:
   5 CLI regression tests, 1 fs wrapper-sequence test).
-- `cargo build` / `cargo build --release` — clean.
+- `cargo build` / `cargo build --release`: clean.
 
 ## Files changed
 

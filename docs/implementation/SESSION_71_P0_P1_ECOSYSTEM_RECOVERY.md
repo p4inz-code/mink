@@ -1,4 +1,4 @@
-# SESSION 71 — P0/P1 CRASH AND CORRECTNESS RECOVERY
+# SESSION 71: P0/P1 CRASH AND CORRECTNESS RECOVERY
 
 **Date:** 2026-08-30
 **Branch:** `main`
@@ -6,7 +6,7 @@
 
 ---
 
-## 1. Starting Baseline
+## 1. Starting baseline
 
 | Metric | Value |
 |--------|-------|
@@ -14,9 +14,9 @@
 | Tests | 2394 passed, 37 failed, 1 ignored |
 | Failing suites | collections_lib (2), crypto_lib (8), filesystem_lib (10), process_lib (16), random_lib (1) |
 
-## 2. Session 71 Results
+## 2. Session 71 results
 
-### VecRemove (P0) — FIXED
+### VecRemove (P0): FIXED
 
 **Root cause:** `emit_vec_remove` returned the removed element value instead of the data pointer. The test pattern `v = rt_vec_remove(v, i)` assigns the result back to v, then calls `rt_vec_len(v)` treating the element value as a pointer → ACCESS_VIOLATION.
 
@@ -26,7 +26,7 @@
 
 **Result:** collections_lib 24/24 (was 22/24)
 
-### Crypto Random (P0) — FIXED
+### Crypto random (P0): FIXED
 
 **Root cause:** `emit_crypto_init` loaded `bcryptprimitives.dll` but `BCryptGenRandom` is exported from `bcrypt.dll`. `GetProcAddress("BCryptGenRandom")` returned NULL → crypto_init returned -1 → all random operations crashed when calling through NULL function pointer.
 
@@ -38,7 +38,7 @@
 
 **Result:** crypto_lib random tests now pass (r01-r05 all pass).
 
-### HMAC (P1) — FIXED
+### HMAC (P1): FIXED
 
 **Root cause:** Test h03 called `rt_str_free(key_bytes)` after `_raw_to_hex(key_bytes)` had already consumed (moved) key_bytes, violating MINK ownership rules → E-S10 compiler error → BUILD FAILED.
 
@@ -48,15 +48,15 @@
 
 **Result:** h03 HMAC test now passes.
 
-## 3. Test Matrix
+## 3. Test matrix
 
 | Suite | Before | After | Change |
 |-------|--------|-------|--------|
 | collections_lib | 22/24 | 24/24 | +2 |
 | crypto_lib | 10/18 | 16/18 | +6 |
-| **Total** | **2394 pass, 37 fail** | **2402 pass, 29 fail** | **+8 pass, -8 fail** |
+| Total | 2394 pass, 37 fail | 2402 pass, 29 fail | +8 pass, -8 fail |
 
-## 4. Remaining Failures (29)
+## 4. Remaining failures (29)
 
 | Suite | Failures | Root Cause | Priority |
 |-------|----------|------------|----------|

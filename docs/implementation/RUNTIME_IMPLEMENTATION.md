@@ -1,6 +1,6 @@
-# MINK Runtime Implementation
+# MINK runtime implementation
 
-**Status:** Implemented (Sessions 12–13)
+**Status:** Implemented (Sessions 12-13)
 **Version:** 0.1.0
 
 This document describes the first real MINK runtime and memory-model
@@ -14,18 +14,18 @@ have a stable foundation.
 
 ## 1. Design boundaries
 
-- **No garbage collector.** Memory is managed explicitly through the
+- No garbage collector. Memory is managed explicitly through the
   `rt_alloc` / `rt_free` intrinsics.
-- **No unsafe Rust.** The compiler and the runtime emitter are written in
+- No unsafe Rust. The compiler and the runtime emitter are written in
   safe Rust; the runtime itself is emitted machine code (assembled by the
   backend) plus a pure-Rust *reference* implementation used to specify and
   test the semantics.
-- **Deterministic.** The heap is a fixed-size arena in the image's `.bss`
+- Deterministic. The heap is a fixed-size arena in the image's `.bss`
   (zero-filled by the loader), allocation is a validated bump allocator
   with LIFO free-list reuse, and every runtime error terminates with a
   stable exit code. Identical sources produce byte-identical images and
   identical runtime behavior.
-- **No silent invalid memory operations.** Every access is validated
+- No silent invalid memory operations. Every access is validated
   against a bounded liveness table; violations are structured runtime
   errors (`E-R01+`), never silent corruption.
 
@@ -34,7 +34,7 @@ have a stable foundation.
 - The heap is a fixed arena of [`HEAP_SIZE`] (1 MiB) inside `.bss`
   (`src/runtime/abi.rs` is the single source of truth for the layout).
 - Blocks are 16-byte aligned; sizes are rounded up to 16.
-- The bump cursor is an **offset from the arena base** (a block lives at
+- The bump cursor is an offset from the arena base (a block lives at
   `arena + offset`). `rt_init` resets the cursor and the free list.
 - Every live allocation occupies one slot of a bounded liveness table
   ([`MAX_LIVE_ALLOCS`] = 256 entries of 24 bytes: start, size, live flag).
@@ -58,7 +58,7 @@ Generated code calls runtime services exactly like MINK functions
 - arguments are pushed on the stack rightmost-first, one 64-bit word each;
   the callee reads argument `i` at `[rbp + 16 + 8*i]`;
 - the result is returned in `rax`;
-- the stack stays 16-byte aligned at every call — the **alignment padding
+- the stack stays 16-byte aligned at every call. The **alignment padding
   for an odd number of argument words is pushed before the arguments**, so
   argument 1 is on top of the stack at the call (and thus at `[rbp + 16]`);
 - `rbp`/`rsp` are the only callee-saved registers.
@@ -76,8 +76,8 @@ The `.text` entry-point stub:
 3. calls `main`;
 4. pushes `main`'s result (with alignment padding) and calls `rt_exit`.
 
-`rt_exit` scans the liveness table — a live allocation is a leak
-(`E-R06`) — then restores `entry_rsp` and returns, so the loader turns
+`rt_exit` scans the liveness table, a live allocation is a leak
+(`E-R06`), then restores `entry_rsp` and returns, so the loader turns
 `main`'s result into the process exit code.
 
 ## 5. Runtime services
@@ -168,7 +168,7 @@ which lowers to ordinary branches over word values) it is **963 tests**.
 
 - The runtime supports a single-threaded, single-heap model; no GC. Move
   semantics are a compile-time fiction enforced by the ownership stage
-  (session 15) before code generation — the runtime itself performs no
+  (session 15) before code generation. The runtime itself performs no
   ownership checks (see `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`).
 - Strings are byte sequences without runtime UTF-8 validation; literals are
   immutable (no built-in concatenation). Strings and raw `rt_mem_*`

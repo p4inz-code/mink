@@ -1,10 +1,10 @@
-# MINK — Implementation Roadmap and Architecture Freeze Plan
+# MINK: implementation roadmap and architecture freeze plan
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
 
 > **Current position:** Implementation is underway. The compiler foundation,
-> language prototype, and memory/runtime foundation phases (Phases 2–4) are
+> language prototype, and memory/runtime foundation phases (Phases 2-4) are
 > substantially built, and optimization work has begun (Phase 10); see
 > [`README.md`](../../README.md) and `docs/implementation/` for what exists
 > today. The phases below remain the plan for everything not yet
@@ -17,7 +17,7 @@ This document converts the MINK planning foundation into an implementation seque
 
 Implementation must follow the specifications rather than silently redefining them.
 
-## 2. Phase 0 — Specification Completion
+## 2. Phase 0: specification completion
 
 Before implementation begins:
 
@@ -30,7 +30,7 @@ Before implementation begins:
 - Verify implementation dependencies.
 - Perform a repository-wide documentation audit.
 
-## 3. Phase 1 — Technical Decision Resolution
+## 3. Phase 1: technical decision resolution
 
 Only decisions that materially affect implementation must be resolved before coding.
 
@@ -51,7 +51,7 @@ Priority decisions include:
 
 Minor implementation details should not block progress unnecessarily.
 
-## 4. Phase 2 — Language Prototype
+## 4. Phase 2: language prototype
 
 Build the smallest useful compiler pipeline:
 
@@ -59,7 +59,7 @@ Source → Lexer → Parser → AST → Basic Semantic Analysis → Code Generat
 
 The prototype should establish the core language semantics before optimization or ecosystem complexity is introduced.
 
-## 5. Phase 3 — Compiler Foundation
+## 5. Phase 3: compiler foundation
 
 Implement:
 
@@ -74,7 +74,7 @@ Implement:
 - Basic code generation
 - Compiler testing infrastructure
 
-## 6. Phase 4 — Memory and Runtime Foundation
+## 6. Phase 4: memory and runtime foundation
 
 Implement the final core memory model and runtime boundaries.
 
@@ -89,7 +89,7 @@ This phase must establish the foundations for:
 - Platform abstraction
 - FFI
 
-## 7. Phase 5 — Standard Library
+## 7. Phase 5: standard library
 
 Implement the minimum coherent standard library required for useful programs.
 
@@ -107,7 +107,7 @@ Priority areas:
 - Serialization
 - Testing
 
-## 8. Phase 6 — Package and Build System
+## 8. Phase 6: package and build system
 
 Implement:
 
@@ -122,7 +122,7 @@ Implement:
 - Testing integration
 - Publishing foundations
 
-## 9. Phase 7 — Developer Tooling
+## 9. Phase 7: developer tooling
 
 Implement:
 
@@ -135,7 +135,7 @@ Implement:
 - Documentation tooling
 - AI tooling interfaces
 
-## 10. Phase 8 — Web and Backend Ecosystem
+## 10. Phase 8: web and backend ecosystem
 
 After the language, runtime, standard library, and package system are sufficiently stable, build the web ecosystem.
 
@@ -150,7 +150,7 @@ Priority areas:
 - Observability
 - Deployment tooling
 
-## 11. Phase 9 — Desktop Ecosystem
+## 11. Phase 9: desktop ecosystem
 
 Build desktop capabilities after the runtime and platform abstractions are mature.
 
@@ -164,7 +164,7 @@ Priority areas:
 - Packaging
 - Updates
 
-## 12. Phase 10 — Optimization
+## 12. Phase 10: optimization
 
 Optimization should follow measurement rather than assumptions.
 
@@ -178,7 +178,7 @@ Priorities include:
 - Generated-code quality
 - Standard-library hot paths
 
-## 13. Phase 11 — Security Hardening
+## 13. Phase 11: security hardening
 
 Perform dedicated security review across:
 
@@ -195,7 +195,7 @@ Perform dedicated security review across:
 
 Perform fuzzing, dependency auditing, malformed-input testing, sandbox testing, and supply-chain validation.
 
-## 14. Phase 12 — Compatibility and Release Engineering
+## 14. Phase 12: compatibility and release engineering
 
 Before stable release:
 
@@ -207,13 +207,13 @@ Before stable release:
 - Establish reproducible-build process.
 - Establish release quality gates.
 
-## 15. Implementation Rule
+## 15. Implementation rule
 
 Implementation must proceed from foundations toward dependent systems.
 
 No higher-level subsystem should force premature redesign of a lower-level subsystem unless the underlying specification is demonstrably incorrect.
 
-## 16. Anti-Overengineering Rule
+## 16. Anti-Overengineering rule
 
 MINK should not implement every planned capability immediately.
 
@@ -221,7 +221,7 @@ The first implementation should prove the language model with the smallest archi
 
 Future capabilities must be added when their value and requirements are sufficiently understood.
 
-## 17. Quality Gate
+## 17. Quality gate
 
 Before moving from planning to implementation, the repository must pass:
 
@@ -234,7 +234,7 @@ Before moving from planning to implementation, the repository must pass:
 - Repository structure audit
 - Git cleanliness check
 
-## 18. Architecture Freeze
+## 18. Architecture freeze
 
 Architecture freeze occurs only after the final audit confirms that all implementation-blocking decisions have been resolved.
 
@@ -242,7 +242,7 @@ After freeze, implementation becomes the primary activity.
 
 Changes to frozen architecture require explicit justification and documented review.
 
-## 19. Implementation Start Condition
+## 19. Implementation start condition
 
 Implementation begins only when:
 
@@ -255,7 +255,7 @@ Implementation begins only when:
 7. Required security boundaries are defined.
 8. Remaining decisions do not block the first compiler milestone.
 
-## 20. First Implementation Milestone
+## 20. First implementation milestone
 
 The first milestone should produce a real MINK program compiled and executed successfully.
 
@@ -272,13 +272,13 @@ The milestone should demonstrate:
 
 The implementation must be small enough to debug and validate thoroughly.
 
-## 21. Long-Term Direction
+## 21. Long-Term direction
 
 MINK should grow from a validated language core into a complete programming ecosystem without sacrificing the principles established in the Master Specification.
 
 The project should optimize for durable technical foundations rather than rapid feature accumulation.
 
-## 22. Planning Exit
+## 22. Planning exit
 
 Once this roadmap and all preceding specifications pass the final repository audit, MINK exits the primary planning phase.
 

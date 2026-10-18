@@ -1,8 +1,8 @@
-# MINK — HIR Implementation
+# MINK: HIR implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 08 — HIR / Compiler IR Foundation
+**Session:** 08, HIR / Compiler IR Foundation
 
 ## 1. Purpose
 
@@ -24,7 +24,7 @@ own cloned type table, so it remains valid after the AST and the analysis
 results are dropped. Tooling (MIR lowering, diagnostics, a future
 formatter/LSP) can rely on it without borrowing the front end.
 
-## 2. AST-to-HIR Boundary
+## 2. AST-to-HIR boundary
 
 Lowering consumes three inputs and produces one output:
 
@@ -38,10 +38,10 @@ Lowering consumes three inputs and produces one output:
 
 The boundary is strict and one-directional:
 
-- **no re-analysis** — lowering never re-runs name resolution or type
+- no re-analysis: lowering never re-runs name resolution or type
   checking; it only *looks up* the answers the front end already computed;
-- **no AST mutation** — the AST is read-only input;
-- **no duplicated systems** — HIR references [`SymbolId`] and [`TypeId`]
+- no AST mutation: the AST is read-only input;
+- no duplicated systems: HIR references [`SymbolId`] and [`TypeId`]
   rather than redefining symbols or types; the only data it copies is the
   interned [`TypeTable`] (so the program is self-contained) and identifier
   name text (so the tree owns its strings).
@@ -55,7 +55,7 @@ it visits. Because one expression can be a prefix of another (`1` and
 full span to match, so every lowered expression node receives the precise
 type the checker gave it.
 
-## 3. Node Design
+## 3. Node design
 
 HIR mirrors the AST shape so lowering is direct and control flow is
 explicit. Every expression carries `span` **and** `ty`:
@@ -75,49 +75,49 @@ explicit. Every expression carries `span` **and** `ty`:
 eliminated (see §4). It re-exports the operator enums (`UnaryOp`,
 `BinaryOp`, `AssignOp`) from the AST so the HIR API is self-sufficient.
 
-## 4. Lowering Invariants
+## 4. Lowering invariants
 
 For a program that passed semantic and type analysis, lowering always
 succeeds and preserves:
 
-1. **Source order** — items, statements, and expressions lower in source
+1. Source order: items, statements, and expressions lower in source
    order; the program is deterministic for identical input.
-2. **Exact spans** — every node carries the span of the source text it was
+2. Exact spans: every node carries the span of the source text it was
    parsed from. A parenthesized expression keeps the parentheses' span, so
    a lowered node covers the text *as written* (see Group elimination).
-3. **Symbol resolution** — `HirIdent` (declaration names, references,
+3. Symbol resolution: `HirIdent` (declaration names, references,
    parameters, loop variables) carries the exact `SymbolId` the semantic
    analyzer resolved, looked up through `SemanticResult::resolve` for
    references and a span→symbol index built from the symbol table for
    declaration names. `HirName` (member names) carries no symbol: members
    are not declarations until user-defined types exist.
-4. **Canonical types** — every expression and binding carries the
+4. Canonical types: every expression and binding carries the
    canonical `TypeId` the checker recorded: inference variables are
    resolved to the type they denote (`Int`, `Range<Int>`,
    `fn(Int) -> Int`), so the HIR is immediately readable without
    canonicalization.
-5. **Group elimination** — `(expr)` lowers to the inner node with the
+5. Group elimination: `(expr)` lowers to the inner node with the
    parentheses' span. The inner expression's type is the group's type, so
    no information is lost.
-6. **No hidden work** — no name resolution, no scope construction, no type
+6. No hidden work: no name resolution, no scope construction, no type
    unification is performed during lowering.
 
-## 5. Control-Flow Representation
+## 5. Control-Flow representation
 
 Control flow is represented structurally, exactly as written, in the shape
 MIR lowering consumes (session 09):
 
-- nested **blocks** (`HirBlock`) with statements in order;
-- **branches** — `HirIf` with an optional `HirElseBranch` (`If` for
+- nested blocks (`HirBlock`) with statements in order;
+- branches: `HirIf` with an optional `HirElseBranch` (`If` for
   `else if` chains, `Block` for `else { ... }`);
-- **loops** — `HirStmtKind::While { cond, body }`,
+- loops: `HirStmtKind::While { cond, body }`,
   `HirStmtKind::For { var, iterable, body }` (the loop variable resolved to
   its `ForVar` symbol), and `HirStmtKind::Loop(body)`;
-- **match** (session 18) — `HirStmtKind::Match(HirMatch)` with
+- match (session 18): `HirStmtKind::Match(HirMatch)` with
   `HirPattern` arms (literal/variant/binding/wildcard), lowered to a
   chain of equality branches by MIR lowering (see
   `PATTERN_MATCHING_IMPLEMENTATION.md` §1.4);
-- **jumps** — `Break`, `Continue`, and `Return(Option<HirExpr>)` (the
+- jumps: `Break`, `Continue`, and `Return(Option<HirExpr>)` (the
   value is `None` for a bare `return;`).
 
 MIR lowering (session 09) consumes this structure to linearize it into
@@ -128,7 +128,7 @@ machines with explicit break/continue targets, and `break`/`continue`/
 blocks, explicit branches, loops, jumps) that the HIR → MIR boundary needs
 no re-analysis.
 
-## 6. Error Handling
+## 6. Error handling
 
 Lowering failures are **structured, not panics**. For a clean front end
 they cannot occur; they defend against malformed or tooling-produced ASTs
@@ -145,7 +145,7 @@ traversal continues with fallback nodes) and returned in source order:
 offending type. `CheckError::Hir` renders them uniformly with the other
 stages' diagnostics.
 
-## 7. Driver and CLI Integration
+## 7. Driver and CLI integration
 
 `driver::check` now runs HIR lowering when semantic and type analysis
 reported no errors:
@@ -154,7 +154,7 @@ reported no errors:
   [`HirProgram`];
 - a lowering failure on a clean front end is an internal compiler error
   and is reported as `E-H01`…`E-H03` (exit 1);
-- a front end with semantic or type errors is **not** lowered — lowering an
+- a front end with semantic or type errors is not lowered, lowering an
   inconsistent front end would only add misleading diagnostics;
 - `mink check` therefore validates through HIR (and, since session 09,
   through MIR): valid programs report `passed parsing, semantic analysis,
@@ -162,10 +162,10 @@ reported no errors:
   every error class exits 1;
 - `mink build` compiles the optimized MIR through the native backend
   (session 11) and links the generated image against the embedded runtime
-  (session 12) — see `NATIVE_BACKEND_IMPLEMENTATION.md` and
+  (session 12), see `NATIVE_BACKEND_IMPLEMENTATION.md` and
   `RUNTIME_IMPLEMENTATION.md`.
 
-## 8. MIR Boundary
+## 8. MIR boundary
 
 HIR is the *last high-level* IR: it still matches the source's structural
 shape (one node per source construct, no flattening, no temporaries, no
@@ -177,7 +177,7 @@ lowered into explicit jumps, branches, and returns. The explicit
 control-flow nodes and canonical types in HIR are the seam MIR lowering
 consumes; nothing in HIR pre-commits to a particular MIR design beyond it.
 
-## 9. Known Limitations
+## 9. Known limitations
 
 - Literal values are not decoded into the IR (matching the AST): the raw
   text is recovered from the node's span via the source map. Decoding
@@ -200,28 +200,28 @@ Coverage lives in `tests/hir.rs` (25 tests) plus the internal-failure unit
 tests in `src/hir/lower.rs` (2) and the CLI tests in `tests/cli.rs` (58
 total):
 
-- **Literals**: every literal kind lowers with its type.
-- **Identifiers/declarations**: references preserve `SymbolId` and type;
+- Literals: every literal kind lowers with its type.
+- Identifiers/declarations: references preserve `SymbolId` and type;
   `let`/`let mut`/`const` mutability; module items in source order.
-- **Operators**: unary/binary operators and assignment operators lower
+- Operators: unary/binary operators and assignment operators lower
   with their operands and targets.
-- **Calls**: callee symbol, argument list, result type propagation.
-- **Functions**: name/parameter symbols, parameter types, `Fn` type.
-- **Control flow**: returns (with/without value), if/else and else-if
+- Calls: callee symbol, argument list, result type propagation.
+- Functions: name/parameter symbols, parameter types, `Fn` type.
+- Control flow: returns (with/without value), if/else and else-if
   chains, while, for (loop-variable symbol + `ForVar` kind), loop,
   break/continue, nested control flow.
-- **Ranges**: inclusive flag and element type.
-- **Spans**: exact expression/statement/block/function spans; group
+- Ranges: inclusive flag and element type.
+- Spans: exact expression/statement/block/function spans; group
   elimination keeps the parentheses' span and removes the group node.
-- **Types**: HIR types match the type checker's recorded types; the
+- Types: HIR types match the type checker's recorded types; the
   cloned table is usable standalone.
-- **Member/index**: nodes lower with names and base/index expressions.
-- **Robustness**: empty programs, 200-function scale.
-- **Malformed input**: a hand-built AST with an unresolved identifier
+- Member/index: nodes lower with names and base/index expressions.
+- Robustness: empty programs, 200-function scale.
+- Malformed input: a hand-built AST with an unresolved identifier
   produces exactly one `E-H01` at the identifier span; fabricated
-  inconsistent type results produce `E-H02`/`E-H03` — never a panic.
+  inconsistent type results produce `E-H02`/`E-H03`, never a panic.
 
-## 11. Quality Gates
+## 11. Quality gates
 
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
@@ -248,4 +248,4 @@ session 19 (data-carrying variants, with payloads carried through the
 `EnumVariant` expression and pattern forms) it is **1007 tests** (see
 `SUM_TYPES_IMPLEMENTATION.md` §5), and after session 20 (explicit enum
 discriminants, resolved at type analysis and carried through MIR) it is
-**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5), and after the Session 21 deep audit it is **1048 tests** (see `REFERENCES_BORROWING_IMPLEMENTATION.md` §1.6/§1.8 and `OWNERSHIP_IMPLEMENTATION.md`).
+**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5), and after the Session 21 deep audit it is 1048 tests (see `REFERENCES_BORROWING_IMPLEMENTATION.md` §1.6/§1.8 and `OWNERSHIP_IMPLEMENTATION.md`).

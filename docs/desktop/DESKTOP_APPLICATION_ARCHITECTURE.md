@@ -1,4 +1,4 @@
-# MINK — Desktop and Application Architecture
+# MINK: desktop and application architecture
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -9,7 +9,7 @@ MINK must be capable of building modern desktop applications with native-level p
 
 The language must support both simple utilities and large production desktop applications.
 
-## 2. Platform Strategy
+## 2. Platform strategy
 
 The desktop ecosystem should initially prioritize:
 
@@ -19,7 +19,7 @@ The desktop ecosystem should initially prioritize:
 
 The architecture must avoid making one operating system the fundamental assumption of the application model.
 
-## 3. Application Model
+## 3. Application model
 
 Applications should have a clear lifecycle covering:
 
@@ -32,7 +32,7 @@ Applications should have a clear lifecycle covering:
 
 Lifecycle behavior must integrate with the concurrency and resource-management models.
 
-## 4. GUI Architecture
+## 4. GUI architecture
 
 MINK should support modern GUI development without forcing developers to build interfaces through raw platform APIs.
 
@@ -61,7 +61,7 @@ It should provide a clean abstraction over platform graphics APIs while allowing
 
 Potential backends may include platform-native or cross-platform graphics technologies.
 
-## 6. UI State
+## 6. UI state
 
 UI state should remain explicit and predictable.
 
@@ -76,7 +76,7 @@ Frameworks should provide structured approaches for:
 
 The architecture should discourage uncontrolled global mutable state.
 
-## 7. Event System
+## 7. Event system
 
 Desktop applications require an event model for:
 
@@ -104,7 +104,7 @@ Frameworks may require UI operations to execute on a specific UI thread or execu
 
 The language and tooling should make invalid cross-thread UI access easy to detect.
 
-## 10. Native Integration
+## 10. Native integration
 
 Desktop applications must be able to access platform functionality when required.
 
@@ -122,7 +122,7 @@ Capabilities may include:
 
 Platform-specific functionality should be isolated behind explicit APIs.
 
-## 11. Application Packaging
+## 11. Application packaging
 
 MINK tooling should support production packaging for target platforms.
 
@@ -134,7 +134,7 @@ Packaging should be capable of producing appropriate platform artifacts such as:
 
 The exact packaging formats should be platform-appropriate rather than forcing one universal format.
 
-## 12. Application Distribution
+## 12. Application distribution
 
 Applications should be distributable through:
 
@@ -160,7 +160,7 @@ Update systems should support:
 
 Updates must not corrupt or silently destroy user data.
 
-## 14. Configuration and User Data
+## 14. Configuration and user data
 
 Applications should have clear conventions for separating:
 
@@ -193,7 +193,7 @@ MINK should support sandbox-compatible application architectures where the targe
 
 Applications should be able to declare required capabilities rather than automatically receiving unrestricted system access.
 
-## 17. Inter-Process Communication
+## 17. Inter-Process communication
 
 The ecosystem should support secure IPC mechanisms for desktop applications.
 
@@ -241,13 +241,13 @@ UI frameworks should support consistent application theming.
 
 The system should provide accessible defaults while allowing applications to define their visual identity.
 
-## 21. Web Content
+## 21. Web content
 
 Applications may embed web content where appropriate.
 
 Web embedding must use controlled APIs and must not require the entire application to become a web application.
 
-## 22. Plugin Architecture
+## 22. Plugin architecture
 
 Desktop applications may support plugins or extensions.
 
@@ -255,7 +255,7 @@ Plugin systems must define explicit compatibility and security boundaries.
 
 Untrusted plugins should not automatically receive unrestricted process access.
 
-## 23. Crash Recovery
+## 23. Crash recovery
 
 Applications should be able to recover safely from crashes or unexpected termination.
 
@@ -290,13 +290,13 @@ Desktop applications should target:
 - Hardware-accelerated rendering where appropriate
 - Efficient background work
 
-## 26. AI Development Integration
+## 26. AI development integration
 
 Desktop frameworks should expose structured information about UI components, events, state, resources, accessibility properties, and platform capabilities.
 
 AI tooling should be able to reason about UI structure without relying solely on screenshots or textual searches.
 
-## 27. Recommended Application Stack
+## 27. Recommended application stack
 
 MINK should eventually provide a recommended desktop stack consisting of:
 
@@ -309,7 +309,7 @@ MINK should eventually provide a recommended desktop stack consisting of:
 
 The recommended stack should provide a coherent experience while alternative UI frameworks remain possible.
 
-## 28. Open Architecture Decisions
+## 28. Open architecture decisions
 
 The following must be finalized before architecture freeze:
 

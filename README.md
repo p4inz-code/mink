@@ -17,8 +17,8 @@ Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarde
 ## What is MINK?
 
 MINK is a systems-oriented native programming language for **Windows x86_64**. It compiles
-straight to standalone `.exe` files — no interpreter, no virtual machine, no external
-toolchain — and reaches the operating system directly for files, processes, sockets,
+straight to standalone `.exe` files. No interpreter, no virtual machine, no external
+toolchain: and reaches the operating system directly for files, processes, sockets,
 threads and time.
 
 MINK is for programmers writing native Windows tools: utilities that read and write real
@@ -27,27 +27,27 @@ ship as a single executable with no runtime to install on the target machine.
 
 What makes it different:
 
-- **Natively compiled, end to end.** Its own lexer, parser, type system, HIR, MIR,
+- Natively compiled, end to end. Its own lexer, parser, type system, HIR, MIR,
   optimizer, x86-64 code generator and runtime. The compiler has zero Rust crate
   dependencies.
-- **Explicit ownership.** Move semantics, `&`/`&mut` borrows and compile-time borrow
+- Explicit ownership. Move semantics, `&`/`&mut` borrows and compile-time borrow
   checking, over a heap that is tracked and leak-checked at exit.
-- **Standalone output.** A generated executable imports only Windows system libraries —
+- Standalone output. A generated executable imports only Windows system libraries
   no CRT DLL and no third-party runtime. Copy it to any Windows 10+ x86_64 machine.
-- **A real standard library.** 26 modules bundled beside the compiler, including
+- A real standard library. 26 modules bundled beside the compiler, including
   filesystem, process, network, TLS, SQLite, ZIP/DEFLATE, threads and async.
 
-> **Platform:** Windows x86_64 only. Linux and macOS are not supported yet — see
+> **Platform:** Windows x86_64 only. Linux and macOS are not supported yet. See
 > [Limitations](#limitations).
 
 ## Install MINK
 
-**Requires Windows x64** and **Node.js 18 or newer** (which includes npm). MINK is
+**Requires Windows x64** and Node.js 18 or newer (which includes npm). MINK is
 distributed through npm.
 
-> **Published package state.** The registry serves **1.0.3** (`npm view
+> **Published package state.** The registry serves 1.0.3 (`npm view
 > @p4inz-code/mink version` → `1.0.3`, `latest: 1.0.3`). The prepared current release is
-> **1.0.4** — the defect closure for the `mod collections;` build failure reported against
+> **1.0.4**, the defect closure for the `mod collections;` build failure reported against
 > 1.0.3, listed in [What's New](#whats-new). Its tarball is built and verified (`npm pack`
 > → 28 files, 26 `stdlib/` modules, corrected `bin/mink.exe`, packaged `stdlib/`
 > byte-identical to the repository copy) and proven by a fresh isolated install of exactly
@@ -56,8 +56,8 @@ distributed through npm.
 > output identical to its 1.0.3 build). Publishing it to the registry is pending: the
 > stored npm token is rejected by the registry (E401/E404), the same condition recorded for
 > 1.0.3. Until a maintainer runs `npm publish ./npm/mink --access public` with a valid
-> token, the registry still serves 1.0.3 — which ships the `mod collections;` `E-B07` build
-> failure — and the corrected 1.0.4 compiler is prepared in this repository as the local
+> token, the registry still serves 1.0.3. Which ships the `mod collections;` `E-B07` build
+> failure, and the corrected 1.0.4 compiler is prepared in this repository as the local
 > tag `v1.0.4` (push it together with the publish).
 
 ### Already have Node.js / npm?
@@ -80,8 +80,8 @@ mink 1.0.4
 
 ### Don't have Node.js / npm?
 
-1. Install Node.js 18+ from the [official Node.js website](https://nodejs.org/). npm is included — no separate install needed.
-2. Open a **new terminal** (or restart your current one).
+1. Install Node.js 18+ from the [official Node.js website](https://nodejs.org/). npm is included, no separate install needed.
+2. Open a new terminal (or restart your current one).
 3. Verify:
 
 ```bash
@@ -105,9 +105,9 @@ mink --version
 >
 > **Do I need to download `mink.exe` manually?** No. `npm install` handles everything.
 
-## Quick Start
+## Quick start
 
-### First Program
+### First program
 
 Create a file called `hello.mink`:
 
@@ -130,9 +130,9 @@ Expected output:
 42
 ```
 
-That's it — no build step, no configuration, no runtime installation on the target machine.
+That's it: no build step, no configuration, no runtime installation on the target machine.
 
-### Build and Run
+### Build and run
 
 ```bat
 mink build hello.mink    :: creates hello.exe
@@ -147,9 +147,9 @@ mink build program.mink    :: creates program.exe
 .\program.exe input.txt    :: rt_argc() == 1, rt_argv(0) == "input.txt"
 ```
 
-The generated `.exe` is a standalone Windows executable. Copy it to any Windows 10+ x86_64 machine and run it — no MINK compiler needed on the target. Its only imports are Windows system libraries (kernel32, ws2_32 and bcrypt families); it inherits no C-runtime DLL dependency.
+The generated `.exe` is a standalone Windows executable. Copy it to any Windows 10+ x86_64 machine and run it. No MINK compiler needed on the target. Its only imports are Windows system libraries (kernel32, ws2_32 and bcrypt families); it inherits no C-runtime DLL dependency.
 
-## Systems Proof
+## Systems proof
 
 [`examples/sysinfo/main.mink`](examples/sysinfo/main.mink) is a ~500-line native Windows
 utility written in MINK and built with the public CLI into a standalone `.exe`. In a single
@@ -170,7 +170,7 @@ process it exercises:
 
 The compiled image is a PE32+ x86-64 console executable whose **only import is
 `kernel32.dll`**. Copied into an unrelated directory and run with `PATH` restricted to
-`C:\Windows\System32` — no compiler, no Rust, no repository files on the path — it prints
+`C:\Windows\System32`, no compiler, no Rust, no repository files on the path, it prints
 the full report and exits 0.
 
 Build it yourself:
@@ -179,11 +179,11 @@ Build it yourself:
 mink build examples\sysinfo\main.mink
 ```
 
-More complete programs live in [`examples/`](examples/) — a TCP client, an HTTP client, a
+More complete programs live in [`examples/`](examples/): a TCP client, an HTTP client, a
 compression utility, a threaded-work demo, an async-task demo, a SQLite inventory app and
 a regex tool, among others.
 
-## Capability Snapshot
+## Capability snapshot
 
 | Area | Capability |
 | --- | --- |
@@ -216,7 +216,7 @@ executed evidence and the exact claim boundary.
 | `mink build <file>` | Compile to a native Windows executable |
 | `mink check <file>` | Analyze source for errors without producing output |
 | `mink test <file>` | Discover and run `fn test_*` functions in a source file |
-| `mink repl [file]` | Start an interactive compile-eval session (ends at EOF — the end of piped input, or `Ctrl-Z` then `Enter` at a Windows console — or with `:quit`) |
+| `mink repl [file]` | Start an interactive compile-eval session (ends at EOF, the end of piped input, or `Ctrl-Z` then `Enter` at a Windows console, or with `:quit`) |
 | `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
 | `mink version` | Print the compiler version |
 | `mink help` | Show usage information |
@@ -243,7 +243,7 @@ Version and help are also available as global flags anywhere the command
 name would go: `mink --version`, `mink -V`, and `mink -v` all print the
 version; `mink --help` and `mink -h` print usage. Options such as `--help`
 are not accepted after a subcommand name (for example, `mink build --help`
-reports an unknown option — use `mink help`).
+reports an unknown option, use `mink help`).
 
 ### Examples
 
@@ -254,11 +254,11 @@ mink run hello.mink            # compile and run
 mink explain E-T01             # explain a type mismatch error
 ```
 
-## What's New
+## What's new
 
 ### MINK 1.0.4
 
-**Current release — prepared and independently verified; the registry publish is pending a
+**Current release, prepared and independently verified; the registry publish is pending a
 valid token (see the note in [Install MINK](#install-mink)).** This is a defect-closure
 release: it fixes the public `mod collections;` build failure reported against 1.0.3. A
 program that imported the bundled `collections` module but never called `vec_min` or
@@ -269,7 +269,7 @@ program that imported the bundled `collections` module but never called `vec_min
 Root cause: an untyped function parameter is an inference variable, and the checker's
 comparison rule left two unconstrained operands linked but unpinned. With no call site to
 unify them, the operands stayed unresolved; the backend classified the unresolved type as
-`unit`; and the backend verifier — which requires `Int` operands for `<`, `<=`, `>`, `>=`
+`unit`; and the backend verifier. Which requires `Int` operands for `<`, `<=`, `>`, `>=`
 — rejected a function the program never called. The fix pins operator operands that the
 whole program left unconstrained to `Int` at the end of type checking, so unresolved
 operands can no longer reach the backend as `unit`. The standard library is unchanged; the
@@ -277,21 +277,21 @@ monomorphizer and the backend are untouched.
 
 Changed in this release (a defect closure; no new features):
 
-- **`mod collections;` builds again** — importing the module is enough; its aggregate
+- `mod collections;` builds again: importing the module is enough; its aggregate
   functions no longer depend on a call site to resolve their comparison operands
-- **Runtime values verified, not just exit codes** — permanent native-executing regressions
+- Runtime values verified, not just exit codes: permanent native-executing regressions
   in `tests/collections_lib.rs` assert `vec_max`/`vec_min` on `[5,2,9]` → `9, 2`, `vec_sum`
   → `60`, and an untyped `smaller(a, b)` helper → `2, -7`
-- **No behaviour change elsewhere** — `tests/typecheck.rs`'s contract test was updated to
+- No behaviour change elsewhere: `tests/typecheck.rs`'s contract test was updated to
   the corrected rule (`arithmetic_on_unconstrained_operands_resolves_to_int`), and the full
   sweep is green: **2973 passed · 0 failed · 1 ignored** (2852 integration passes across all
   71 test targets, plus the 121 unit tests; the single ignored test needs public internet
   access). On this machine `tests/process_lib.rs` additionally requires
-  `NoDefaultCurrentDirectoryInExePath` to be unset — an environment property, not compiler
+  `NoDefaultCurrentDirectoryInExePath` to be unset, an environment property, not compiler
   behaviour: the same 8 tests fail identically under the shipped 1.0.3 binary
-- **Bundled compiler refreshed** — `npm/mink/bin/mink.exe` is rebuilt from this source and
+- Bundled compiler refreshed: `npm/mink/bin/mink.exe` is rebuilt from this source and
   reports `mink 1.0.4`; the packaged `stdlib/` is byte-identical to the repository copy
-- **Verified from the exact tarball** — a fresh isolated `npm install` of
+- Verified from the exact tarball: a fresh isolated `npm install` of
   `p4inz-code-mink-1.0.4.tgz` (28 files, 26 `stdlib/` modules) builds and runs the original
   repro correctly and passes the CLI workflow (`init`, `check`, `test`, `build`, `run`,
   `repl`); the mink-scout showcase rebuilds from that install and its fixture verifier
@@ -301,74 +301,74 @@ Changed in this release (a defect closure; no new features):
 
 **Previous release (superseded by 1.0.4).** Built, packaged, and verified; the registry copy follows the
 maintainer's `npm publish ./npm/mink --access public` (the stored token was rejected,
-E401 — see the note in [Install MINK](#install-mink)). 1.0.2 remains published but
+E401, see the note in [Install MINK](#install-mink)). 1.0.2 remains published but
 superseded: it was cut from an earlier commit, so its compiler binary predates the
 monomorphization and capture fixes below.
 
 Changed in this release (a release-distribution correction; no new features):
 
-- **Corrected compiler ready for the registry** — the four monomorphization and capture
+- Corrected compiler ready for the registry: the four monomorphization and capture
   fixes below are what an installed user receives once 1.0.3 is published. The 1.0.2
   registry package was published from the pre-fix commit and did not contain them; do
   not pin 1.0.2.
-- **Corrected runtime ownership** — a map replace or set insert that discards an existing
+- Corrected runtime ownership: a map replace or set insert that discards an existing
   key or element now releases the replaced value instead of leaking it
-- **Hashing on owned buffers fixed** — `stdlib/hashing.mink` no longer overruns its
+- Hashing on owned buffers fixed: `stdlib/hashing.mink` no longer overruns its
   workspace for inputs of 256 bytes or more, and no longer leaks when hashing an owned
   buffer
-- **Refreshed bundled compiler** — `npm/mink/bin/mink.exe` is rebuilt from this source and
+- Refreshed bundled compiler: `npm/mink/bin/mink.exe` is rebuilt from this source and
   reports `mink 1.0.3`; the published tarball's standard library is byte-identical to the
   copy in `npm/mink/stdlib/`
-- **Monomorphization and capture repairs (maintenance pass)** — synthetic spans no longer
+- Monomorphization and capture repairs (maintenance pass): synthetic spans no longer
   collide with real declaration spans, so a capturing closure compiles regardless of the
   file's leading blank lines; literal spans survive monomorphization, so integer and
   string literals inside a generic function's body keep their values; capture order is
   preserved, so multi-capture closures receive the right values; a call whose callee is
   an `rt_*` intrinsic no longer captures the intrinsic's name
-- **26 standard-library modules** — `tls`, `sqlite`, `zip`, `zlib`, `re`, `threads`,
+- 26 standard-library modules: `tls`, `sqlite`, `zip`, `zlib`, `re`, `threads`,
   `tasks`, `csv`, `logging`, `assert` and the rest, all bundled beside the compiler
-- **Windows x86_64** — self-contained compiler, standalone PE output, no external toolchain
+- Windows x86_64: self-contained compiler, standalone PE output, no external toolchain
 
 Capabilities:
 
-- **npm distribution** — install with `npm install -g @p4inz-code/mink`, no manual download needed
-- **`mink run`** — compile and execute in one step
-- **Static CRT** — generated executables link the C runtime statically: no external CRT DLL, only Windows system libraries
-- **Filesystem library** — path operations, file read/write/copy/move, directory operations
-- **Process execution** — spawn and manage external processes
-- **Networking** — TCP/UDP sockets via Winsock2
-- **HTTP client** — HTTP/1.1 request/response, GET/POST, header parsing
-- **Crypto** — HMAC-SHA256, HKDF-SHA256, secure random via Windows BCrypt
-- **Hashing** — FNV-1a, DJB2, SHA-256, hex encoding
-- **JSON** — parse and serialize JSON data
-- **Collections** — dynamic vectors with push/pop/search/transform
-- **Strings** — concatenation, comparison, integer/boolean conversion
-- **Math** — abs, min, max, clamp, pow, sqrt, div/mod, sign
-- **Encoding** — Base64, hex, URL encoding/decoding
-- **Time** — current time, epoch, calendar fields, `strftime`/`strptime` formatting and parsing, monotonic ticks/frequency for durations
-- **Environment** — get/set/has/remove environment variables, wired to the Windows API
+- npm distribution: install with `npm install -g @p4inz-code/mink`, no manual download needed
+- `mink run`: compile and execute in one step
+- Static CRT: generated executables link the C runtime statically: no external CRT DLL, only Windows system libraries
+- Filesystem library: path operations, file read/write/copy/move, directory operations
+- Process execution: spawn and manage external processes
+- Networking: TCP/UDP sockets via Winsock2
+- HTTP client: HTTP/1.1 request/response, GET/POST, header parsing
+- Crypto: HMAC-SHA256, HKDF-SHA256, secure random via Windows BCrypt
+- Hashing: FNV-1a, DJB2, SHA-256, hex encoding
+- JSON: parse and serialize JSON data
+- Collections: dynamic vectors with push/pop/search/transform
+- Strings: concatenation, comparison, integer/boolean conversion
+- Math: abs, min, max, clamp, pow, sqrt, div/mod, sign
+- Encoding: Base64, hex, URL encoding/decoding
+- Time: current time, epoch, calendar fields, `strftime`/`strptime` formatting and parsing, monotonic ticks/frequency for durations
+- Environment: get/set/has/remove environment variables, wired to the Windows API
 
 ## Limitations
 
 MINK 1.0.4 is explicit about its edges:
 
-- **Windows x86_64 is the only supported platform.** A native ELF backend exists in source
+- Windows x86_64 is the only supported platform. A native ELF backend exists in source
   for Linux, but Linux is frozen and unsupported; macOS is not supported.
-- **Unicode is partial.** `Str` is a byte buffer with a UTF-8 code-point layer, but there
-  is no Unicode database — no non-ASCII case operations, categories, normalization or
+- Unicode is partial. `Str` is a byte buffer with a UTF-8 code-point layer, but there
+  is no Unicode database. No non-ASCII case operations, categories, normalization or
   collation. Command-line arguments and filesystem entries use the ANSI Windows APIs, so
   non-ASCII arguments and paths are limited.
-- **Ownership coverage is incomplete in parts of the standard library.** A few functions
-  that consume an owned heap `Str` — in `encoding` and `strings`, beyond the fixed
-  `hashing` path — do not release it.
-- **Tooling is CLI-only.** There is no integrated debugger or profiler.
-- **Some ecosystem capabilities remain partial.** There is no package registry or
+- Ownership coverage is incomplete in parts of the standard library. A few functions
+  that consume an owned heap `Str`, in `encoding` and `strings`, beyond the fixed
+  `hashing` path, do not release it.
+- Tooling is CLI-only. There is no integrated debugger or profiler.
+- Some ecosystem capabilities remain partial. There is no package registry or
   publishing workflow (dependencies are declared requirements or local paths), no
   library-version model, and stdin is read-all rather than line-streamed. No long-running
   soak testing has been done.
-- **No performance claims.** MINK has not been benchmarked against any other language.
+- No performance claims. MINK has not been benchmarked against any other language.
 
-## What's Next
+## What's next
 
 MINK targets **Windows x64**, which is the completed, frozen baseline. Linux is frozen:
 a native ELF backend exists in source, but Linux development is paused and Linux is not
@@ -380,12 +380,12 @@ a supported platform.
 | npm distribution | Available |
 | Package manager | Available (manifest, resolver, lockfile, environments) |
 | Concurrency / threading | Available (threads, locks, async/await) |
-| Linux | Frozen — native ELF backend exists in source, development paused |
+| Linux | Frozen, native ELF backend exists in source, development paused |
 | macOS | Future / TBD |
 
 The project will continue expanding platform support, ecosystem libraries, and production capabilities. See the [Implementation Roadmap](docs/roadmap/IMPLEMENTATION_ROADMAP.md) for the full plan.
 
-## Standard Library
+## Standard library
 
 MINK ships with a growing standard library covering common development needs:
 
@@ -414,33 +414,33 @@ MINK ships with a growing standard library covering common development needs:
 | `re` | Regular expressions |
 | `csv` | RFC 4180 CSV reading and writing |
 | `logging` | Leveled logging to stderr |
-| `option` | `Option<T>` — a value that may be absent |
-| `result` | `Result<T, E>` — a value or an error |
+| `option` | `Option<T>`, a value that may be absent |
+| `result` | `Result<T, E>`, a value or an error |
 | `assert` | Test assertions: `assert_true`, `assert_false`, and typed `assert_eq_*` / `assert_ne_*` helpers (`_int`, `_str`, `_float`) |
 
 Standard library files live in the `stdlib/` directory and are imported with `use`.
 They are also bundled next to the compiler in the npm package, so `mod`/`use` of
 a standard-library module works in any project without configuration.
 
-## Language Features
+## Language features
 
 MINK supports a rich feature set for a language built from scratch:
 
-- **Types** — `Int`, `Bool`, `Str`, `Float`, `Char`, `Null`, `Ptr<T>`
-- **Structs** — `struct Point { x: Int, y: Int }` with field access and destructuring
-- **Enums** — unit variants, data-carrying variants, sum types, explicit discriminants
-- **Generics** — `fn id<T>(x: T) -> T` with monomorphization
-- **Pattern matching** — `match` with literals, variants, bindings, wildcards, or-patterns, range patterns, guards
-- **Control flow** — `if`/`else`, `while`, `for` ranges, `loop` with `break`
-- **Closures** — `|x: Int| x + 1` with capture semantics
-- **Ownership** — move semantics, `&`/`&mut` borrows, compile-time borrow checking
-- **Modules** — `mod`/`use`/`pub` with multi-file compilation
-- **Tuples** — `(Int, Bool)`, field access, destructuring
-- **Arrays** — fixed-size with bounds checking
+- Types: `Int`, `Bool`, `Str`, `Float`, `Char`, `Null`, `Ptr<T>`
+- Structs: `struct Point { x: Int, y: Int }` with field access and destructuring
+- Enums: unit variants, data-carrying variants, sum types, explicit discriminants
+- Generics: `fn id<T>(x: T) -> T` with monomorphization
+- Pattern matching: `match` with literals, variants, bindings, wildcards, or-patterns, range patterns, guards
+- Control flow: `if`/`else`, `while`, `for` ranges, `loop` with `break`
+- Closures: `|x: Int| x + 1` with capture semantics
+- Ownership: move semantics, `&`/`&mut` borrows, compile-time borrow checking
+- Modules: `mod`/`use`/`pub` with multi-file compilation
+- Tuples: `(Int, Bool)`, field access, destructuring
+- Arrays: fixed-size with bounds checking
 
 ## Examples
 
-### Hello World
+### Hello world
 
 ```mink
 fn main() {
@@ -474,7 +474,7 @@ $ echo $?
 1
 ```
 
-### Strings and Heap
+### Strings and heap
 
 ```mink
 fn main() {
@@ -489,7 +489,7 @@ fn main() {
 }
 ```
 
-### Structs and Enums
+### Structs and enums
 
 ```mink
 struct Point { x: Int, y: Int }
@@ -516,13 +516,13 @@ fn main() {
 
 ## Documentation
 
-- [`docs/implementation/`](docs/implementation/) — implementation records for every compiler stage
-- [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md) — compiler architecture and pipeline
-- [`docs/language/`](docs/language/) — language specifications
-- [`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md) — core grammar
-- [`docs/core/`](docs/core/) — master specification and design rules
-- [`docs/runtime/`](docs/runtime/) — runtime, memory, and concurrency model
-- [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md) — implementation roadmap
+- [`docs/implementation/`](docs/implementation/): implementation records for every compiler stage
+- [`docs/compiler/COMPILER_ARCHITECTURE.md`](docs/compiler/COMPILER_ARCHITECTURE.md): compiler architecture and pipeline
+- [`docs/language/`](docs/language/): language specifications
+- [`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md): core grammar
+- [`docs/core/`](docs/core/): master specification and design rules
+- [`docs/runtime/`](docs/runtime/): runtime, memory, and concurrency model
+- [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md): implementation roadmap
 
 ## Development
 
@@ -547,7 +547,7 @@ cargo build
 baseline (dead code and missing documentation in the native backend), so it does not yet
 pass `-D warnings`; the gate is that no change adds a new warning.
 
-## Repository Layout
+## Repository layout
 
 ```
 ├── docs/       Language & architecture specifications + implementation records
@@ -562,7 +562,7 @@ pass `-D warnings`; the gate is that no change adds a new warning.
 
 ## License
 
-Apache License 2.0 — see [`LICENSE`](LICENSE).
+Apache License 2.0, see [`LICENSE`](LICENSE).
 
 Copyright (c) 2026 Atharva Patil.
 

@@ -1,11 +1,11 @@
-# SESSION 97 — Windows Ship Validation + Final Completion Gate
+# SESSION 97: Windows ship validation + final completion gate
 
 ## Summary
 
 - Starting commit: `e08458a` (clean tree)
 - Final commit: *(see git log)*
-- Rust: 1.97.1 · MINK version: **1.0.1** (consistent across `mink --version`, `-v`, `-V`, `version`, and `npm` package.json)
-- Test count: **2547 passed / 0 failed** (Session 96 baseline 2538 → +9 new process tests; no unexplained change; no panics)
+- Rust: 1.97.1 · MINK version: 1.0.1 (consistent across `mink --version`, `-v`, `-V`, `version`, and `npm` package.json)
+- Test count: 2547 passed / 0 failed (Session 96 baseline 2538 → +9 new process tests; no unexplained change; no panics)
 
 ## 1. process_run root cause (P1, fixed)
 
@@ -13,7 +13,7 @@
 `WaitForSingleObject(hProcess, INFINITE)` *before* reading the child's stdout/stderr
 pipes. A child that writes more than the ~4 KiB anonymous-pipe buffer blocks forever
 in `WriteFile`; the parent is stuck in the infinite wait, so neither side ever
-progresses — a classic pipe-buffer deadlock.
+progresses, a classic pipe-buffer deadlock.
 
 **Independent reproduction (current checkout):** a MINK child printing ~5000 bytes
 hung the parent (`process_run` never returned; the child PID stayed alive,
@@ -33,7 +33,7 @@ The wait-then-read tail of `emit_process_run` was replaced with a
      output buffers, accumulating stdout/stderr separately up to the documented
      cap; anything beyond the cap is drained and discarded into stack scratch so
      the child can never block on a full pipe.
-   - `WaitForSingleObject(hProcess, 20)` — a 20 ms bounded poll, *not* an
+   - `WaitForSingleObject(hProcess, 20)`: a 20 ms bounded poll, *not* an
      infinite wait and *not* a busy spin.
 2. After the child exits, one final drain pass picks up any remaining bytes,
    then `GetExitCodeProcess` returns the real exit code.
@@ -84,7 +84,7 @@ checker remains enabled in all tests; no process test reports leaks.
 
 ## 5. Shipped artifact validation
 
-**Clean npm install #1 (dir A)** — fresh temp dir, `npm install` of the tarball
+**Clean npm install #1 (dir A)**, fresh temp dir, `npm install` of the tarball
 packed from this checkout:
 - `added 1 package`; shims created (`mink`, `mink.cmd`, `mink.ps1`)
 - `--version` / `-v` / `-V` / `mink.cmd --version` → all `mink 1.0.1`
@@ -94,19 +94,19 @@ packed from this checkout:
   from an empty directory (exit 0, correct output) with no MINK/Rust/Node/npm
   present.
 
-**Clean npm install #2 (dir B)** — independent second environment reproduced
+**Clean npm install #2 (dir B)**, independent second environment reproduced
 the full workflow: install → version → build → run → standalone .exe → exit 0.
 
 **Artifact truth:** the packed tarball's embedded `bin/mink.exe` SHA-256
 (`813520f027a35c2bd8e5a8461f950ceadb880a085d12437234c6f87c8e99f43f`) exactly
 matches the release-built `target/release/mink.exe` and `npm/mink/bin/mink.exe`.
 Package version 1.0.1 matches the CLI. The package ships only the self-contained
-compiler executable (no stdlib files needed — the compiler embeds its runtime
+compiler executable (no stdlib files needed. The compiler embeds its runtime
 and the shipped example uses only runtime intrinsics).
 
 ## 6. Example application (committed)
 
-`examples/system_report/` — a self-contained Windows utility that gathers the
+`examples/system_report/`, a self-contained Windows utility that gathers the
 process ID, boot-relative time, current working directory length, and its own
 executable's existence/size, builds a JSON document with string intrinsics, and
 writes `report.json`. Uses only runtime intrinsics (no stdlib modules), so it
@@ -134,15 +134,15 @@ HTTP GET · HTTP POST (Session 96, byte-exact echo) · crypto (bcrypt-backed
 random, SHA-256/HMAC/HKDF vectors) · time · CLI · npm distribution. All green
 in the 2547-test suite plus this session's real-execution evidence.
 
-**Environment: STUB (documented P2)** — Windows `rt_env_*` remain Session-73
+**Environment: STUB (documented P2)**, Windows `rt_env_*` remain Session-73
 V1 stubs returning empty/-1 (deterministic, leak-clean owned empty Str). The
 shipped CLI/README make no environment claim. `env_get`/`env_has` are
 execution-verified only on the Linux target (frozen).
 
 ## 9. P0/P1 audit
 
-- P0 remaining: **0**
-- P1 remaining: **0** (the process_run deadlock — the only open P1 — is fixed
+- P0 remaining: 0
+- P1 remaining: 0 (the process_run deadlock, the only open P1, is fixed
   and covered by the regression suite)
 - P2 remaining (documented): Windows environment stubs; process output cap
   4088 bytes/stream; no user-facing stderr-write intrinsic (P3-class, capture
@@ -155,16 +155,16 @@ execution-verified only on the Linux target (frozen).
 - `cargo fmt --check`: clean
 - `cargo clippy --all-targets`: no warnings in changed files (63 pre-existing
   warnings, all in frozen Linux code or pre-existing style items)
-- `cargo test`: **2547 passed / 0 failed** (57 binaries, exit 0)
+- `cargo test`: 2547 passed / 0 failed (57 binaries, exit 0)
 - `cargo build`: clean · `cargo build --release`: clean
 
 ## 11. Files changed
 
-- `src/backend/emit/pe.rs` — add `PeekNamedPipe` IAT import
-- `src/backend/emit/runtime.rs` — poll-and-drain rewrite of `emit_process_run`
-- `tests/process_lib.rs` — 9 large-output regression tests
-- `examples/system_report/main.mink` + `README.md` — new shipment example
-- `docs/implementation/SESSION_97_WINDOWS_SHIPMENT_AND_COMPLETION.md` — this file
+- `src/backend/emit/pe.rs`: add `PeekNamedPipe` IAT import
+- `src/backend/emit/runtime.rs`: poll-and-drain rewrite of `emit_process_run`
+- `tests/process_lib.rs`: 9 large-output regression tests
+- `examples/system_report/main.mink` + `README.md`: new shipment example
+- `docs/implementation/SESSION_97_WINDOWS_SHIPMENT_AND_COMPLETION.md`: this file
 
 Linux implementation: **untouched** (frozen). The deadlock fix is in the
 Windows-only emitter; Linux `process_run` drains concurrently by design and was
@@ -172,11 +172,11 @@ not modified.
 
 ## 12. Final status
 
-- **WINDOWS RUNTIME = STABLE**
-- **WINDOWS SHIPMENT = EXECUTION VERIFIED** (clean npm install ×2, remove
+- WINDOWS RUNTIME = STABLE
+- WINDOWS SHIPMENT = EXECUTION VERIFIED (clean npm install ×2, remove
   install, standalone .exe works)
-- **WINDOWS P0 = 0, P1 = 0**
-- **WINDOWS COMPLETION GATE = PASSED** (per the Session 97 criteria:
+- WINDOWS P0 = 0, P1 = 0
+- WINDOWS COMPLETION GATE = PASSED (per the Session 97 criteria:
   process fix verified, tests green, CLI clean, npm clean ×2, shipped artifact
   hash-verified, example committed, standalone .exe proven outside the repo and
   after installation removal)

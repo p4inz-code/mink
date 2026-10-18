@@ -1,4 +1,4 @@
-# MINK — Official Python Capability Parity Audit
+# MINK: official Python capability parity audit
 
 **Audit Session:** 82
 **Audited Commit:** `c329968`
@@ -8,10 +8,10 @@
 
 ---
 
-> **SUPERSEDED — historical Session 82 baseline (audited commit `c329968`).** For every
+> **SUPERSEDED, historical Session 82 baseline (audited commit `c329968`).** For every
 > *current* capability claim the authoritative document is
 > [`docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md`](../roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md)
-> (232 rows, recomputed through Sessions 118–119), which explicitly supersedes this audit
+> (232 rows, recomputed through Sessions 118-119), which explicitly supersedes this audit
 > where the two disagree. The classifications below predate most of the Windows completion
 > program and are retained only as the historical baseline. Statements below that are **no
 > longer current** include: "no interactive interpreter / no REPL" (R01/T04 delivered
@@ -25,9 +25,9 @@
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
-This audit establishes an evidence-based capability baseline comparing MINK 1.0.1 against Python's official language, runtime, standard library, tooling, packaging, and platform capabilities. Every classification is backed by direct code inspection — no assumptions from file names, documentation claims, or session reports were used.
+This audit establishes an evidence-based capability baseline comparing MINK 1.0.1 against Python's official language, runtime, standard library, tooling, packaging, and platform capabilities. Every classification is backed by direct code inspection. No assumptions from file names, documentation claims, or session reports were used.
 
 **Final Classification: FOUNDATION**
 
@@ -35,7 +35,7 @@ MINK is a young systems programming language with a solid compiler pipeline (lex
 
 ---
 
-## 2. Audit Scope
+## 2. Audit scope
 
 ### Included
 1. Python language capabilities (CPython 3.13+ as reference)
@@ -45,33 +45,33 @@ MINK is a young systems programming language with a solid compiler pipeline (lex
 5. Official packaging/distribution capabilities
 6. Officially supported platform capabilities
 
-### Explicit Exclusions
+### Explicit exclusions
 - Community/ecosystem packages (PyPI)
 - Third-party tools (black, mypy, pytest as third-party, ruff, etc.)
 - Python 2.x features
 - CPython implementation internals not exposed to users
 - Speculative/unreleased Python PEPs
 
-### Authoritative Python Sources Used
+### Authoritative Python sources used
 - Python 3.13 official documentation (docs.python.org)
 - CPython source repository (github.com/python/cpython)
 - PEP index for ratified features
 
 ---
 
-## 3. Definition of Official Python Parity
+## 3. Definition of official Python parity
 
-**Parity** means MINK provides an equivalent official capability — not necessarily the same syntax or architecture. A capability is:
+**Parity** means MINK provides an equivalent official capability. Not necessarily the same syntax or architecture. A capability is:
 
-- **IMPLEMENTED:** Fully functional, usable, verified by code inspection and/or tests
-- **PARTIAL:** Partially functional, some paths work, others are stubs or incomplete
-- **MISSING:** Not present in the codebase or confirmed non-functional
-- **DIFFERENT BY DESIGN:** MINK intentionally provides an equivalent capability through a materially different model (used sparingly)
-- **NOT APPLICABLE:** The concept does not translate meaningfully
+- IMPLEMENTED: Fully functional, usable, verified by code inspection and/or tests
+- PARTIAL: Partially functional, some paths work, others are stubs or incomplete
+- MISSING: Not present in the codebase or confirmed non-functional
+- DIFFERENT BY DESIGN: MINK intentionally provides an equivalent capability through a materially different model (used sparingly)
+- NOT APPLICABLE: The concept does not translate meaningfully
 
 ---
 
-## 4. MINK Repository State
+## 4. MINK repository state
 
 ```
 Branch: main
@@ -87,9 +87,9 @@ Dependencies: zero external Rust crates
 
 ---
 
-## 5. Python Capability Baseline
+## 5. Python capability baseline
 
-### A. Language Capabilities
+### A. language capabilities
 
 | # | Capability | Python Status | Notes |
 |---|-----------|--------------|-------|
@@ -107,13 +107,13 @@ Dependencies: zero external Rust crates
 | A12 | Imports | Available | Module system with packages |
 | A13 | Decorators | Available | @decorator syntax |
 | A14 | Generators | Available | yield keyword |
-| A15 | Iterators | Available | __iter__/__next__ protocol |
+| A15 | Iterators | Available | iter/next protocol |
 | A16 | Comprehensions | Available | list/set/dict/generator comprehensions |
 | A17 | Pattern matching | Available | Structural pattern matching (3.10+) |
 | A18 | async/await | Available | Native async I/O |
 | A19 | Context managers | Available | with statement |
 | A20 | Introspection | Available | dir(), type(), getattr(), etc. |
-| A21 | Metaprogramming/reflection | Available | metaclasses, __new__, etc. |
+| A21 | Metaprogramming/reflection | Available | metaclasses, new, etc. |
 | A22 | Unpacking operators | Available | *args, **kwargs, iterable unpacking |
 | A23 | Walrus operator | Available | := assignment expressions |
 | A24 | Type hints | Available | Gradual typing (PEP 484+) |
@@ -144,14 +144,14 @@ Dependencies: zero external Rust crates
 | A49 | Matrix multiplication | Available | @ operator |
 | A50 | Unicode support | Available | Full Unicode in strings |
 
-### B. Runtime/Execution Capabilities
+### B. runtime/Execution capabilities
 
 | # | Capability | Python Status | Notes |
 |---|-----------|--------------|-------|
 | B1 | Interpreter execution | Available | CPython interpreter |
 | B2 | Garbage collection | Available | Reference counting + generational GC |
 | B3 | Memory management | Available | Automatic allocation/deallocation |
-| B4 | Object lifecycle | Available | __init__, __del__ |
+| B4 | Object lifecycle | Available | init, del |
 | B5 | Error handling | Available | Structured exceptions |
 | B6 | Stack traces | Available | Traceback on unhandled exceptions |
 | B7 | Process exit behavior | Available | sys.exit(), exit codes |
@@ -167,7 +167,7 @@ Dependencies: zero external Rust crates
 | B17 | Just-in-time compilation | Available | 3.13 experimental JIT |
 | B18 | Free-threaded mode | Available | 3.13 experimental (no GIL) |
 
-### C. Standard Library Domains
+### C. standard library domains
 
 | # | Domain | Key Modules | Python Status |
 |---|--------|-------------|--------------|
@@ -211,7 +211,7 @@ Dependencies: zero external Rust crates
 | C38 | Networking protocols | imaplib, poplib, smtplib, nntplib | Available |
 | C39 | Wayland/display | (not in stdlib) | N/A |
 
-### D. Tooling
+### D. tooling
 
 | # | Capability | Python Status | Notes |
 |---|-----------|--------------|-------|
@@ -236,7 +236,7 @@ Dependencies: zero external Rust crates
 | D19 | Remote debugging | Available | remote-pdb, debugpy |
 | D20 | C extension support | Available | C API, setuptools |
 
-### E. Packaging/Distribution
+### E. packaging/Distribution
 
 | # | Capability | Python Status | Notes |
 |---|-----------|--------------|-------|
@@ -253,7 +253,7 @@ Dependencies: zero external Rust crates
 | E11 | Namespace packages | Available | PEP 420 |
 | E12 | Package metadata | Available | importlib.metadata |
 
-### F. Platform Support
+### F. platform support
 
 | Platform | Architecture | Python Status |
 |----------|-------------|--------------|
@@ -274,16 +274,16 @@ Dependencies: zero external Rust crates
 
 ---
 
-## 6. MINK Capability Baseline (Verified)
+## 6. MINK capability baseline (verified)
 
-### A. Language Capabilities
+### A. language capabilities
 
 | # | Capability | MINK Status | Classification | Evidence |
 |---|-----------|-------------|---------------|----------|
-| A1 | Variables/bindings | Implemented | IMPLEMENTED | `let x = 1; let mut y = 2; const Z = 3;` — verified in AST (LetItem, ConstItem), parser, typechecker, backend |
-| A2 | Primitive types | Implemented | IMPLEMENTED | Int, Float, Bool, Char, Str, Null, Unit, Never — verified in TypeKind enum (ty.rs) |
-| A3 | User-defined types (struct/enum) | Implemented | IMPLEMENTED | StructItem, EnumItem in AST; StructId, EnumId in type system — verified in ast/mod.rs, typecheck/ty.rs |
-| A4 | Functions | Implemented | IMPLEMENTED | FnItem with params, return_ty, generic_params — verified in AST, parser, typechecker |
+| A1 | Variables/bindings | Implemented | IMPLEMENTED | `let x = 1; let mut y = 2; const Z = 3;`, verified in AST (LetItem, ConstItem), parser, typechecker, backend |
+| A2 | Primitive types | Implemented | IMPLEMENTED | Int, Float, Bool, Char, Str, Null, Unit, Never, verified in TypeKind enum (ty.rs) |
+| A3 | User-defined types (struct/enum) | Implemented | IMPLEMENTED | StructItem, EnumItem in AST; StructId, EnumId in type system, verified in ast/mod.rs, typecheck/ty.rs |
+| A4 | Functions | Implemented | IMPLEMENTED | FnItem with params, return_ty, generic_params, verified in AST, parser, typechecker |
 | A5 | First-class function values | Partial | PARTIAL | Closures exist as ExprKind::Closure (session 37), Fn type exists. But closures capture by-move only; no closure-as-fn-pointer coercion visible in backend; limited to V1 pattern. Evidence: ast/mod.rs Closure node, tests/closures.rs |
 | A6 | Closures | Partial | PARTIAL | `|params| expr` syntax parsed and type-checked (session 37). Capture by-move for non-Copy, by-copy for Copy. Backend support for closure code generation exists in tests. Evidence: tests/closures.rs, ast/mod.rs ExprKind::Closure |
 | A7 | Classes | Not applicable | DIFFERENT BY DESIGN | MINK uses structs + enums, not classes. No inheritance model. Evidence: ast/mod.rs has StructItem, EnumItem, no ClassItem |
@@ -291,7 +291,7 @@ Dependencies: zero external Rust crates
 | A9 | Protocols/ABCs | Missing | MISSING | No protocol/structural subtyping system. Evidence: TypeKind has no Protocol variant |
 | A10 | Exceptions | Implemented | IMPLEMENTED | Option<T>, Result<T,E>, ? operator (session 40). Pattern matching on enum variants for error handling. Evidence: stdlib/option.mink, stdlib/result.mink, ExprKind::Try |
 | A11 | Modules | Implemented | IMPLEMENTED | `mod name;` loads from file, `mod name { }` inline. `use` imports. `pub` visibility. Evidence: module/mod.rs, driver.rs discover_modules |
-| A12 | Imports | Implemented | IMPLEMENTED | `use path;`, `use path::Item;` — verified in AST (UseDecl), semantic analyzer, driver |
+| A12 | Imports | Implemented | IMPLEMENTED | `use path;`, `use path::Item;`, verified in AST (UseDecl), semantic analyzer, driver |
 | A13 | Decorators | Missing | MISSING | No decorator syntax or mechanism. Evidence: no decorator in AST or parser |
 | A14 | Generators | Missing | MISSING | No yield keyword or generator protocol. Evidence: no Yield in StmtKind or ExprKind |
 | A15 | Iterators | Missing | MISSING | No Iterator trait/protocol. For-in loops exist but only over ranges (ExprKind::For). Evidence: StmtKind::For takes iterable Expr, but no Iterator protocol |
@@ -306,7 +306,7 @@ Dependencies: zero external Rust crates
 | A24 | Type hints | Different by design | DIFFERENT BY DESIGN | MINK is statically typed with explicit type annotations. Python's gradual typing is unnecessary for MINK. Evidence: type annotations in FnItem params, LetItem |
 | A25 | f-strings | Missing | MISSING | No f-string interpolation syntax. Evidence: no FString in ExprKind |
 | A26 | Multiple assignment | Partial | PARTIAL | Tuple destructuring: `let (a, b) = (1, 2);` works. But not `a = b = 1` (chained assignment). Evidence: LetItem has pattern field, tuple_destructure.rs test |
-| A27 | Augmented assignment | Implemented | IMPLEMENTED | +=, -=, *=, /=, %= — verified in AssignOp enum (ast/mod.rs) |
+| A27 | Augmented assignment | Implemented | IMPLEMENTED | +=, -=, *=, /=, %=, verified in AssignOp enum (ast/mod.rs) |
 | A28 | Boolean short-circuit | Missing | MISSING | `&&` and `||` evaluate both sides (no short-circuit). Evidence: stdlib comments explicitly state "NO short-circuit evaluation"; BinaryOp::And/Or in AST are not short-circuit |
 | A29 | Ternary expression | Implemented | IMPLEMENTED | `if expr { then } else { else }` as expression (session 28). Evidence: ExprKind::IfExpr |
 | A30 | Global/nonlocal | Missing | MISSING | No global/nonlocal keywords. Evidence: no Global in StmtKind |
@@ -331,14 +331,14 @@ Dependencies: zero external Rust crates
 | A49 | Matrix multiplication | Missing | MISSING | No @ operator. Evidence: no MatMul in BinaryOp |
 | A50 | Unicode support | Partial | PARTIAL | Str is byte-oriented; UTF-8 validation in encoding library. No native Unicode scalar type. Evidence: encoding.mink utf8_validate, rt_str_byte returns Int |
 
-### B. Runtime/Execution Capabilities
+### B. runtime/Execution capabilities
 
 | # | Capability | MINK Status | Classification | Evidence |
 |---|-----------|-------------|---------------|----------|
 | B1 | Interpreter execution | Missing | MISSING | MINK is compiled only. No REPL, no interpreter. Evidence: CLI has build/run/check only |
 | B2 | Garbage collection | Missing | MISSING | No GC. Manual allocation via rt_alloc/rt_free, arena allocator. Evidence: runtime/allocator.rs, runtime/mod.rs explicitly states no GC |
 | B3 | Memory management | Implemented | IMPLEMENTED | Arena allocator with rt_alloc/rt_free, leak detection at exit. Evidence: runtime/allocator.rs, runtime/verify.rs |
-| B4 | Object lifecycle | Different by design | DIFFERENT BY DESIGN | Ownership-based: values owned by bindings, freed at scope exit or explicit rt_free. No __init__/__del__. Evidence: ownership/mod.rs |
+| B4 | Object lifecycle | Different by design | DIFFERENT BY DESIGN | Ownership-based: values owned by bindings, freed at scope exit or explicit rt_free. No init/del. Evidence: ownership/mod.rs |
 | B5 | Error handling | Implemented | IMPLEMENTED | Option/Result + ? operator + structured error codes. Evidence: ExprKind::Try, option.mink, result.mink |
 | B6 | Stack traces | Missing | MISSING | No stack traces on runtime error. Runtime errors print code + message but no call stack. Evidence: runtime/error.rs |
 | B7 | Process exit behavior | Implemented | IMPLEMENTED | rt_exit(code), main returns exit code. Evidence: runtime intrinsics, cli.rs |
@@ -354,7 +354,7 @@ Dependencies: zero external Rust crates
 | B17 | JIT compilation | Not applicable | N/A | MINK is AOT compiled |
 | B18 | Free-threaded mode | Not applicable | N/A | MINK has no threading |
 
-### C. Standard Library Domains
+### C. standard library domains
 
 | # | Domain | MINK Status | Classification | Evidence |
 |---|--------|-------------|---------------|----------|
@@ -398,7 +398,7 @@ Dependencies: zero external Rust crates
 | C38 | Networking protocols | Partial | PARTIAL | TCP/UDP sockets. Missing: SMTP, IMAP, POP3, FTP. Evidence: network.mink |
 | C39 | Wayland/display | Not applicable | N/A | Not in Python stdlib |
 
-### D. Tooling
+### D. tooling
 
 | # | Capability | MINK Status | Classification | Evidence |
 |---|-----------|-------------|---------------|----------|
@@ -417,7 +417,7 @@ Dependencies: zero external Rust crates
 | D13 | JSON check output | Implemented | IMPLEMENTED | `mink check --json` for machine-readable output. Evidence: cli.rs |
 | D14 | Cross-compilation targets | Partial | PARTIAL | Target abstraction exists (x86_64-windows-pe implemented, x86_64-linux-elf and aarch64-linux-elf recognized but not implemented). Evidence: backend/target.rs |
 
-### E. Packaging/Distribution
+### E. packaging/Distribution
 
 | # | Capability | MINK Status | Classification | Evidence |
 |---|-----------|-------------|---------------|----------|
@@ -428,9 +428,9 @@ Dependencies: zero external Rust crates
 | E5 | Environment isolation | Missing | MISSING | No virtual environments. Evidence: no venv |
 | E6 | Version resolution | Missing | MISSING | No dependency resolver. Evidence: no resolver |
 | E7 | Locking/reproducibility | Missing | MISSING | No lock files. Evidence: no lock mechanism |
-| E8 | Module system | Partial | PARTIAL | File-based modules (mod/use/pub) but no packages, no __init__, no namespace packages. Evidence: module/mod.rs, driver.rs |
+| E8 | Module system | Partial | PARTIAL | File-based modules (mod/use/pub) but no packages, no init, no namespace packages. Evidence: module/mod.rs, driver.rs |
 
-### F. Platform Support
+### F. platform support
 
 | Platform | Architecture | MINK Status | Classification | Evidence |
 |----------|-------------|-------------|---------------|----------|
@@ -442,7 +442,7 @@ Dependencies: zero external Rust crates
 
 ---
 
-## 7. Full Parity Matrix Summary
+## 7. Full parity matrix summary
 
 | Category | Implemented | Partial | Missing | Different by Design | Not Applicable |
 |----------|------------|---------|---------|---------------------|---------------|
@@ -452,105 +452,105 @@ Dependencies: zero external Rust crates
 | Tooling (D) | 3 | 1 | 10 | 0 | 0 |
 | Packaging (E) | 1 | 1 | 5 | 0 | 0 |
 | Platform (F) | 1 | 0 | 4 | 0 | 0 |
-| **TOTAL** | **28** | **19** | **68** | **10** | **6** |
+| TOTAL | 28 | 19 | 68 | 10 | 6 |
 
 ---
 
 ## 8. Scorecards
 
-### 8.1 Language Parity Scorecard
-- **Implemented:** 16
-- **Partial:** 6
-- **Missing:** 21
-- **Different by Design:** 7
-- **Not Applicable:** 1
-- **Total capabilities audited:** 51
-- **Confidence:** High — every classification backed by code inspection
-- **Assessment:** Early-stage language parity. Core language constructs (types, functions, control flow, pattern matching, modules, generics, ownership) are present. Missing most high-level language features (decorators, generators, comprehensions, async, metaprogramming).
+### 8.1 Language parity Scorecard
+- Implemented: 16
+- Partial: 6
+- Missing: 21
+- Different by Design: 7
+- Not Applicable: 1
+- Total capabilities audited: 51
+- Confidence: High: every classification backed by code inspection
+- Assessment: Early-stage language parity. Core language constructs (types, functions, control flow, pattern matching, modules, generics, ownership) are present. Missing most high-level language features (decorators, generators, comprehensions, async, metaprogramming).
 
-### 8.2 Runtime Parity Scorecard
-- **Implemented:** 4
-- **Partial:** 0
-- **Missing:** 10
-- **Different by Design:** 3
-- **Not Applicable:** 2
-- **Total capabilities audited:** 19
-- **Confidence:** High
-- **Assessment:** Foundational runtime with memory management and error handling. Missing interpreter, GC, signals, profiling, debugging.
+### 8.2 Runtime parity Scorecard
+- Implemented: 4
+- Partial: 0
+- Missing: 10
+- Different by Design: 3
+- Not Applicable: 2
+- Total capabilities audited: 19
+- Confidence: High
+- Assessment: Foundational runtime with memory management and error handling. Missing interpreter, GC, signals, profiling, debugging.
 
-### 8.3 Standard Library Parity Scorecard
-- **Implemented:** 3
-- **Partial:** 11
-- **Missing:** 18
-- **Different by Design:** 0
-- **Not Applicable:** 3
-- **Total capabilities audited:** 35
-- **Confidence:** High
-- **Assessment:** Growing ecosystem library with good coverage of basic operations (strings, math, filesystem, networking, HTTP, crypto). Missing most domains (regex, logging, databases, compression, async, concurrency, testing framework, XML, configuration, internationalization).
+### 8.3 Standard library parity Scorecard
+- Implemented: 3
+- Partial: 11
+- Missing: 18
+- Different by Design: 0
+- Not Applicable: 3
+- Total capabilities audited: 35
+- Confidence: High
+- Assessment: Growing ecosystem library with good coverage of basic operations (strings, math, filesystem, networking, HTTP, crypto). Missing most domains (regex, logging, databases, compression, async, concurrency, testing framework, XML, configuration, internationalization).
 
-### 8.4 Tooling Parity Scorecard
-- **Implemented:** 3
-- **Partial:** 1
-- **Missing:** 10
-- **Different by Design:** 0
-- **Not Applicable:** 0
-- **Total capabilities audited:** 14
-- **Confidence:** High
-- **Assessment:** Basic compiler toolchain (build, run, check, explain). Missing REPL, testing, debugging, profiling, formatting, documentation generation, virtual environments, dependency management.
+### 8.4 Tooling parity Scorecard
+- Implemented: 3
+- Partial: 1
+- Missing: 10
+- Different by Design: 0
+- Not Applicable: 0
+- Total capabilities audited: 14
+- Confidence: High
+- Assessment: Basic compiler toolchain (build, run, check, explain). Missing REPL, testing, debugging, profiling, formatting, documentation generation, virtual environments, dependency management.
 
-### 8.5 Packaging Parity Scorecard
-- **Implemented:** 1
-- **Partial:** 1
-- **Missing:** 5
-- **Different by Design:** 0
-- **Not Applicable:** 0
-- **Total capabilities audited:** 7
-- **Confidence:** High
-- **Assessment:** npm-based installation works. No package manager, no registry, no dependency resolution, no lock files, no virtual environments.
+### 8.5 Packaging parity Scorecard
+- Implemented: 1
+- Partial: 1
+- Missing: 5
+- Different by Design: 0
+- Not Applicable: 0
+- Total capabilities audited: 7
+- Confidence: High
+- Assessment: npm-based installation works. No package manager, no registry, no dependency resolution, no lock files, no virtual environments.
 
-### 8.6 Platform Parity Scorecard
-- **Implemented:** 1
-- **Partial:** 0
-- **Missing:** 4
-- **Different by Design:** 0
-- **Not Applicable:** 0
-- **Total capabilities audited:** 5
-- **Confidence:** High
-- **Assessment:** Windows x64 only. Linux and macOS not supported. All stdlib libraries are Windows-specific (kernel32, Winsock2, BCrypt).
-
----
-
-## 9. Major Strengths
-
-1. **Complete compiler pipeline** — Lexer → Parser → AST → Semantic Analysis → Type Checking → Ownership Analysis → HIR → MIR → Optimization → Native Code Generation. All stages implemented and tested.
-2. **Static type system** with type inference, generics, nominal structs/enums, pattern matching with exhaustiveness checking.
-3. **Ownership and borrowing** — compile-time ownership analysis with move semantics, borrow checking for references (&T, &mut T).
-4. **Rich pattern matching** — wildcard, binding, enum variant (with payload), bool, int literal, range, or-pattern, tuple, struct patterns. Both statement and expression forms.
-5. **Generics with monomorphization** — generic functions, structs, enums with type parameters.
-6. **Working stdlib ecosystem** — 16 library files covering strings, math, collections, encoding, hashing, JSON, filesystem, process, time, environment, networking, HTTP, crypto, random, option, result.
-7. **Full HTTP client** — HTTP/1.1 GET/POST with header parsing, body extraction, URL parsing.
-8. **Networking stack** — TCP/UDP sockets via Winsock2 with connect, bind, listen, accept, send, recv.
-9. **Cryptographic primitives** — HMAC-SHA256, HKDF-SHA256, secure random via BCryptGenRandom.
-10. **Zero external dependencies** — the compiler itself has no Rust crate dependencies.
+### 8.6 Platform parity Scorecard
+- Implemented: 1
+- Partial: 0
+- Missing: 4
+- Different by Design: 0
+- Not Applicable: 0
+- Total capabilities audited: 5
+- Confidence: High
+- Assessment: Windows x64 only. Linux and macOS not supported. All stdlib libraries are Windows-specific (kernel32, Winsock2, BCrypt).
 
 ---
 
-## 10. Major Gaps
+## 9. Major strengths
 
-1. **No REPL/interactive execution** — fundamental barrier to exploration and education
-2. **No garbage collector** — manual allocation only; memory leaks are runtime errors
-3. **No async/await** — no non-blocking I/O model
-4. **No concurrency** — no threads, no multiprocessing, no async
-5. **No package manager** — no way to discover, install, or distribute MINK packages
-6. **No cross-platform support** — Windows x64 only; all stdlib libraries are Windows-specific
-7. **No testing framework** — no way to write tests in MINK
-8. **No debugger** — no breakpoints, step-through, variable inspection
-9. **No regex** — no pattern matching for text processing
-10. **No dictionary/set types** — fundamental data structures missing
+1. Complete compiler pipeline: Lexer → Parser → AST → Semantic Analysis → Type Checking → Ownership Analysis → HIR → MIR → Optimization → Native Code Generation. All stages implemented and tested.
+2. Static type system with type inference, generics, nominal structs/enums, pattern matching with exhaustiveness checking.
+3. Ownership and borrowing: compile-time ownership analysis with move semantics, borrow checking for references (&T, &mut T).
+4. Rich pattern matching: wildcard, binding, enum variant (with payload), bool, int literal, range, or-pattern, tuple, struct patterns. Both statement and expression forms.
+5. Generics with monomorphization: generic functions, structs, enums with type parameters.
+6. Working stdlib ecosystem: 16 library files covering strings, math, collections, encoding, hashing, JSON, filesystem, process, time, environment, networking, HTTP, crypto, random, option, result.
+7. Full HTTP client: HTTP/1.1 GET/POST with header parsing, body extraction, URL parsing.
+8. Networking stack: TCP/UDP sockets via Winsock2 with connect, bind, listen, accept, send, recv.
+9. Cryptographic primitives: HMAC-SHA256, HKDF-SHA256, secure random via BCryptGenRandom.
+10. Zero external dependencies: the compiler itself has no Rust crate dependencies.
 
 ---
 
-## 11. Cross-Platform Findings
+## 10. Major gaps
+
+1. No REPL/interactive execution: fundamental barrier to exploration and education
+2. No garbage collector: manual allocation only; memory leaks are runtime errors
+3. No async/await: no non-blocking I/O model
+4. No concurrency: no threads, no multiprocessing, no async
+5. No package manager: no way to discover, install, or distribute MINK packages
+6. No cross-platform support: Windows x64 only; all stdlib libraries are Windows-specific
+7. No testing framework: no way to write tests in MINK
+8. No debugger: no breakpoints, step-through, variable inspection
+9. No regex: no pattern matching for text processing
+10. No dictionary/set types: fundamental data structures missing
+
+---
+
+## 11. Cross-Platform findings
 
 | Component | Platform Status | Abstraction Required for Linux |
 |-----------|----------------|-------------------------------|
@@ -588,7 +588,7 @@ Dependencies: zero external Rust crates
 
 ---
 
-## 12. Dependency Relationships
+## 12. Dependency relationships
 
 ```
 Cross-platform runtime
@@ -634,9 +634,9 @@ Debugging (breakpoints, step-through)
 
 ---
 
-## 13. P0-P3 Gap Classification
+## 13. P0-P3 gap classification
 
-### P0 — Fundamental Blockers to Serious General-Purpose Language Use
+### P0: fundamental blockers to serious general-purpose language use
 
 | Gap | Reason | Impact |
 |-----|--------|--------|
@@ -646,7 +646,7 @@ Debugging (breakpoints, step-through)
 | No package manager | Cannot distribute or share code as packages | Blocks ecosystem growth |
 | No REPL/interactive mode | Cannot explore, prototype, or teach interactively | Blocks education and exploration |
 
-### P1 — Major Official Capability Gaps
+### P1: major official capability gaps
 
 | Gap | Reason | Impact |
 |-----|--------|--------|
@@ -658,7 +658,7 @@ Debugging (breakpoints, step-through)
 | No iterators/generators | Cannot iterate efficiently or lazily | Blocks functional patterns |
 | No comprehensions | Cannot express collection transformations concisely | Blocks idiomatic code |
 
-### P2 — Important Ecosystem/Runtime Gaps
+### P2: important ecosystem/Runtime gaps
 
 | Gap | Reason | Impact |
 |-----|--------|--------|
@@ -673,7 +673,7 @@ Debugging (breakpoints, step-through)
 | No virtual environments | Cannot isolate project dependencies | Blocks multi-project work |
 | No internationalization | Cannot localize applications | Blocks global use |
 
-### P3 — Secondary or Specialized Gaps
+### P3: secondary or specialized gaps
 
 | Gap | Reason | Impact |
 |-----|--------|--------|
@@ -690,18 +690,18 @@ Debugging (breakpoints, step-through)
 
 ---
 
-## 14. Evidence Limitations
+## 14. Evidence limitations
 
-1. **Backend verification:** The PE emitter and x86-64 code generation were not runtime-tested in this audit. Code inspection confirms the implementation exists and is tested via the test suite, but actual executable output was not inspected.
-2. **Closures end-to-end:** Closures are parsed and type-checked (session 37, tests/closures.rs exists). The backend generates code for them. However, complex closure patterns (nested closures, closures as function arguments) were not exhaustively tested.
-3. **Environment library:** Declared as `extern fn` in environment.mink. The runtime intrinsics (rt_env_get, etc.) are declared but I did not verify the Windows kernel32 implementations in the embedded runtime. The stdlib tests (tests/*_lib.rs) may not cover environment functions.
-4. **JSON library:** Existence confirmed (stdlib/json.mink, tests/json.rs), but full functionality was not traced end-to-end.
-5. **Networking/HTTP:** Implemented in stdlib files, but actual network I/O was not tested. The runtime intrinsics for Winsock2 are declared.
-6. **Crypto:** HMAC-SHA256 and HKDF-SHA256 are implemented in stdlib/crypto.mink, depending on SHA-256 from hashing.mink. The BCryptGenRandom runtime intrinsic was not verified at the Windows API level.
+1. Backend verification: The PE emitter and x86-64 code generation were not runtime-tested in this audit. Code inspection confirms the implementation exists and is tested via the test suite, but actual executable output was not inspected.
+2. Closures end-to-end: Closures are parsed and type-checked (session 37, tests/closures.rs exists). The backend generates code for them. However, complex closure patterns (nested closures, closures as function arguments) were not exhaustively tested.
+3. Environment library: Declared as `extern fn` in environment.mink. The runtime intrinsics (rt_env_get, etc.) are declared but I did not verify the Windows kernel32 implementations in the embedded runtime. The stdlib tests (tests/*_lib.rs) may not cover environment functions.
+4. JSON library: Existence confirmed (stdlib/json.mink, tests/json.rs), but full functionality was not traced end-to-end.
+5. Networking/HTTP: Implemented in stdlib files, but actual network I/O was not tested. The runtime intrinsics for Winsock2 are declared.
+6. Crypto: HMAC-SHA256 and HKDF-SHA256 are implemented in stdlib/crypto.mink, depending on SHA-256 from hashing.mink. The BCryptGenRandom runtime intrinsic was not verified at the Windows API level.
 
 ---
 
-## 15. Final Classification
+## 15. Final classification
 
 ### **FOUNDATION**
 
@@ -719,24 +719,24 @@ MINK is at the **FOUNDATION** stage of Python official capability parity.
 - Missing fundamental capabilities (regex, testing, debugging, profiling)
 
 **Classification reasoning:**
-- **FOUNDATION** = The compiler infrastructure and core language are solid, but the language cannot yet serve as a general-purpose tool. Missing cross-platform support, automatic memory management, concurrency, a package manager, and most standard library domains.
-- **EARLY GENERAL PURPOSE** would require: cross-platform support, GC or automatic memory management, at least basic concurrency, a dictionary type, a testing framework, and a REPL.
-- **DEVELOPING GENERAL PURPOSE** would require: all of the above plus a package manager, regex, async, and most standard library domains.
-- **BROAD GENERAL PURPOSE** would require: parity with Python's standard library breadth and tooling.
-- **PYTHON-LEVEL OFFICIAL PARITY** would require: full parity across all domains.
+- FOUNDATION = The compiler infrastructure and core language are solid, but the language cannot yet serve as a general-purpose tool. Missing cross-platform support, automatic memory management, concurrency, a package manager, and most standard library domains.
+- EARLY GENERAL PURPOSE would require: cross-platform support, GC or automatic memory management, at least basic concurrency, a dictionary type, a testing framework, and a REPL.
+- DEVELOPING GENERAL PURPOSE would require: all of the above plus a package manager, regex, async, and most standard library domains.
+- BROAD GENERAL PURPOSE would require: parity with Python's standard library breadth and tooling.
+- PYTHON-LEVEL OFFICIAL PARITY would require: full parity across all domains.
 
 ---
 
-## 16. Appendix: MINK Language Features Verified
+## 16. Appendix: MINK language features verified
 
 ### Verified Working (by code inspection + tests)
 1. Let bindings (immutable by default, `let mut` for mutable)
 2. Const bindings
-3. Integer type (Int — 64-bit)
-4. Float type (Float — 64-bit IEEE 754)
+3. Integer type (Int: 64-bit)
+4. Float type (Float: 64-bit IEEE 754)
 5. Boolean type (Bool)
-6. Character type (Char — byte-sized)
-7. String type (Str — heap-allocated, byte-oriented)
+6. Character type (Char: byte-sized)
+7. String type (Str: heap-allocated, byte-oriented)
 8. Null type
 9. Unit type
 10. Never/bottom type
@@ -783,6 +783,6 @@ MINK is at the **FOUNDATION** stage of Python official capability parity.
 
 ---
 
-*Generated by MINK Official Python Capability Parity Audit — Session 82*
+*Generated by MINK Official Python Capability Parity Audit, Session 82*
 *Audited commit: c329968*
 *Auditor: Buffy (Codebuff)*

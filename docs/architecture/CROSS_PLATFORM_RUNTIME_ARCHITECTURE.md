@@ -1,4 +1,4 @@
-# MINK Cross-Platform Runtime Architecture
+# MINK cross-platform runtime architecture
 
 **Status:** Design Document (Session 83)
 **Date:** August 31, 2026
@@ -21,7 +21,7 @@
 4. Runtime compatibility between Windows and Linux executables
 5. Changing the MINK language syntax or semantics for cross-platform support
 
-## 3. Current Windows Architecture
+## 3. Current Windows architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -59,7 +59,7 @@
 └─────────────────────────────────────────────────────┘
 ```
 
-### Key Windows-Specific Components
+### Key Windows-Specific components
 
 | Component | File | Windows API |
 |-----------|------|-------------|
@@ -75,28 +75,28 @@
 | Networking | `backend/emit/runtime.rs` | ws2_32.dll (dynamic load) |
 | Crypto/Random | `backend/emit/runtime.rs` | bcryptprimitives.dll (dynamic load) |
 
-## 4. Platform-Neutral Compiler Boundary
+## 4. Platform-Neutral compiler boundary
 
 The following components are already platform-neutral and require NO changes for Linux support:
 
-- **Lexer** (`src/lexer/`) — tokenizes source text
-- **Parser** (`src/parser/`) — produces AST
-- **AST** (`src/ast/`) — abstract syntax tree
-- **Semantic Analysis** (`src/semantics/`) — name resolution, scope analysis
-- **Type Checking** (`src/typecheck/`) — type inference, unification
-- **Ownership Analysis** (`src/ownership/`) — move/borrow checking
-- **HIR** (`src/hir/`) — high-level IR
-- **MIR** (`src/mir/`) — mid-level IR + optimization
-- **Monomorphization** (`src/monomorphize/`) — generic instantiation
-- **Module System** (`src/module/`) — multi-file compilation
-- **Diagnostics** (`src/diagnostics/`) — error reporting
-- **Source Infrastructure** (`src/source/`) — file loading, spans
+- Lexer (`src/lexer/`): tokenizes source text
+- Parser (`src/parser/`): produces AST
+- AST (`src/ast/`): abstract syntax tree
+- Semantic Analysis (`src/semantics/`): name resolution, scope analysis
+- Type Checking (`src/typecheck/`): type inference, unification
+- Ownership Analysis (`src/ownership/`): move/borrow checking
+- HIR (`src/hir/`): high-level IR
+- MIR (`src/mir/`): mid-level IR + optimization
+- Monomorphization (`src/monomorphize/`): generic instantiation
+- Module System (`src/module/`): multi-file compilation
+- Diagnostics (`src/diagnostics/`): error reporting
+- Source Infrastructure (`src/source/`): file loading, spans
 
-## 5. Runtime Boundary
+## 5. Runtime boundary
 
 The runtime boundary is the set of intrinsic functions (`rt_*`) that the compiler emits calls to. These are the ONLY interface between generated code and the OS.
 
-### Current Runtime Intrinsics
+### Current runtime intrinsics
 
 | Category | Intrinsics | Windows Implementation |
 |----------|-----------|----------------------|
@@ -115,7 +115,7 @@ The runtime boundary is the set of intrinsic functions (`rt_*`) that the compile
 | Crypto | rt_crypto_init, rt_crypto_random_bytes, rt_crypto_random_int, rt_crypto_secure_zero | bcryptprimitives.dll (BCryptGenRandom) |
 | C FFI | rt_to_cstr, rt_free_cstr | N/A (conversion helpers) |
 
-## 6. Platform Abstraction Boundary
+## 6. Platform abstraction boundary
 
 For Linux support, the following abstraction is required:
 
@@ -141,7 +141,7 @@ For Linux support, the following abstraction is required:
 └─────────────────────────────────────────────────────┘
 ```
 
-## 7. Windows Backend (Existing)
+## 7. Windows backend (existing)
 
 The Windows backend generates PE (Portable Executable) images with:
 - DOS header + PE signature
@@ -153,11 +153,11 @@ The Windows backend generates PE (Portable Executable) images with:
 - Runtime service implementations (embedded in .text)
 
 **Key files:**
-- `src/backend/emit/pe.rs` — PE image format
-- `src/backend/emit/x86_64.rs` — x86-64 code generation
-- `src/backend/emit/runtime.rs` — Windows runtime services
+- `src/backend/emit/pe.rs`: PE image format
+- `src/backend/emit/x86_64.rs`: x86-64 code generation
+- `src/backend/emit/runtime.rs`: Windows runtime services
 
-## 8. POSIX/Linux Backend (Planned)
+## 8. POSIX/Linux backend (planned)
 
 The Linux backend will generate ELF (Executable and Linkable Format) images with:
 - ELF header (x86-64, ET_EXEC)
@@ -189,18 +189,18 @@ The Linux backend will generate ELF (Executable and Linkable Format) images with
 
 **Recommendation:** Start with Option A (libc-linked) for rapid Linux support. Option B can be added later as an optimization.
 
-## 10. ELF Requirements
+## 10. ELF requirements
 
 For libc-linked ELF executables:
 
-1. **ELF Header:** 64 bytes, identifies x86-64, ET_EXEC, entry point
-2. **Program Headers:** LOAD segments for code (.text) and data (.data, .bss)
-3. **Section Headers:** For debugging/symbol resolution
-4. **Dynamic Section:** libc/libpthread dependency declarations
-5. **PLT/GOT:** For dynamic function resolution
-6. **Entry Point:** _start → __libc_start_main → main
+1. ELF Header: 64 bytes, identifies x86-64, ET_EXEC, entry point
+2. Program Headers: LOAD segments for code (.text) and data (.data, .bss)
+3. Section Headers: For debugging/symbol resolution
+4. Dynamic Section: libc/libpthread dependency declarations
+5. PLT/GOT: For dynamic function resolution
+6. Entry Point: _start → __libc_start_main → main
 
-## 11. Filesystem Abstraction
+## 11. Filesystem abstraction
 
 | Operation | Windows API | Linux Syscall/libc |
 |-----------|------------|-------------------|
@@ -216,7 +216,7 @@ For libc-linked ELF executables:
 | Get CWD | GetCurrentDirectoryA | getcwd() |
 | Set CWD | SetCurrentDirectoryA | chdir() |
 
-## 12. Process Abstraction
+## 12. Process abstraction
 
 | Operation | Windows API | Linux Syscall/libc |
 |-----------|------------|-------------------|
@@ -225,7 +225,7 @@ For libc-linked ELF executables:
 | Get stderr | ReadFile from pipe | read() from pipe |
 | Get PID | GetCurrentProcessId | getpid() |
 
-## 13. Environment Abstraction
+## 13. Environment abstraction
 
 | Operation | Windows API | Linux Syscall/libc |
 |-----------|------------|-------------------|
@@ -234,7 +234,7 @@ For libc-linked ELF executables:
 | Has var | GetEnvironmentVariableA (check len) | getenv() (check NULL) |
 | Remove var | SetEnvironmentVariableA("") | unsetenv() |
 
-## 14. Networking Abstraction
+## 14. Networking abstraction
 
 | Operation | Windows API | Linux API |
 |-----------|------------|-----------|
@@ -254,7 +254,7 @@ For libc-linked ELF executables:
 
 **Note:** Linux sockets are always available (no WSAStartup needed). The networking abstraction can be simplified significantly on Linux.
 
-## 15. Time Abstraction
+## 15. Time abstraction
 
 | Operation | Windows API | Linux API |
 |-----------|------------|-----------|
@@ -262,7 +262,7 @@ For libc-linked ELF executables:
 | Monotonic | QueryPerformanceCounter | clock_gettime(CLOCK_MONOTONIC) |
 | Frequency | QueryPerformanceFrequency | clock_getres() |
 
-## 16. Random Abstraction
+## 16. Random abstraction
 
 | Operation | Windows API | Linux API |
 |-----------|------------|-----------|
@@ -270,7 +270,7 @@ For libc-linked ELF executables:
 | PRNG seed | xorshift64* state | Same (pure algorithm) |
 | PRNG next | xorshift64* | Same (pure algorithm) |
 
-## 17. Crypto Abstraction
+## 17. Crypto abstraction
 
 | Operation | Windows API | Linux API |
 |-----------|------------|-----------|
@@ -278,7 +278,7 @@ For libc-linked ELF executables:
 | Secure random | BCryptGenRandom | getrandom() |
 | Secure zero | SecureZeroMemory | explicit_bzero() |
 
-## 18. Error Model
+## 18. Error model
 
 The error model is platform-neutral:
 - Runtime errors use structured codes (E-R01 through E-R10)
@@ -286,45 +286,45 @@ The error model is platform-neutral:
 - Exit codes are standardized (0=success, non-zero=error)
 - No platform-specific error reporting required
 
-## 19. ABI Compatibility
+## 19. ABI compatibility
 
-- **x86-64 calling convention:** Windows uses Microsoft x64 (RCX, RDX, R8, R9); Linux uses System V AMD64 (RDI, RSI, RDX, RCX, R8, R9)
-- **Stack alignment:** Both require 16-byte alignment before CALL
-- **Red zone:** Linux has 128-byte red zone; Windows does not
-- **Return value:** Both use RAX for integer returns
+- x86-64 calling convention: Windows uses Microsoft x64 (RCX, RDX, R8, R9); Linux uses System V AMD64 (RDI, RSI, RDX, RCX, R8, R9)
+- Stack alignment: Both require 16-byte alignment before CALL
+- Red zone: Linux has 128-byte red zone; Windows does not
+- Return value: Both use RAX for integer returns
 
-## 20. Testing Strategy
+## 20. Testing strategy
 
-1. **Unit tests:** Existing Rust test suite (62 unit tests + integration tests)
-2. **Cross-platform tests:** Run same .mink source on both Windows and Linux
-3. **Runtime tests:** Verify all intrinsics produce identical results
-4. **Binary tests:** Verify ELF format correctness with readelf/objdump
-5. **Integration tests:** Build and run demo projects on both platforms
+1. Unit tests: Existing Rust test suite (62 unit tests + integration tests)
+2. Cross-platform tests: Run same .mink source on both Windows and Linux
+3. Runtime tests: Verify all intrinsics produce identical results
+4. Binary tests: Verify ELF format correctness with readelf/objdump
+5. Integration tests: Build and run demo projects on both platforms
 
-## 21. CI Strategy
+## 21. CI strategy
 
-1. **Windows CI:** Existing GitHub Actions on Windows runners
-2. **Linux CI:** Add Ubuntu runners for Linux builds
-3. **Cross-validation:** Run same test suite on both platforms
-4. **Release builds:** Produce both .exe (Windows) and ELF (Linux) artifacts
+1. Windows CI: Existing GitHub Actions on Windows runners
+2. Linux CI: Add Ubuntu runners for Linux builds
+3. Cross-validation: Run same test suite on both platforms
+4. Release builds: Produce both .exe (Windows) and ELF (Linux) artifacts
 
-## 22. Migration Strategy
+## 22. Migration strategy
 
-1. **Phase 1:** Abstract runtime services behind a trait/interface
-2. **Phase 2:** Implement Linux runtime services using POSIX/libc
-3. **Phase 3:** Implement ELF image generation
-4. **Phase 4:** Cross-platform integration testing
-5. **Phase 5:** Release Linux binary alongside Windows binary
+1. Phase 1: Abstract runtime services behind a trait/interface
+2. Phase 2: Implement Linux runtime services using POSIX/libc
+3. Phase 3: Implement ELF image generation
+4. Phase 4: Cross-platform integration testing
+5. Phase 5: Release Linux binary alongside Windows binary
 
 ## 23. Risks
 
-1. **ABI differences:** Calling convention changes require careful code generation
-2. **libc dependency:** Linux executables will depend on libc (acceptable for V1)
-3. **Testing complexity:** Need CI runners for both platforms
-4. **Feature parity:** Some Windows features may not have direct Linux equivalents
-5. **Performance:** libc calls may be slightly slower than raw syscalls
+1. ABI differences: Calling convention changes require careful code generation
+2. libc dependency: Linux executables will depend on libc (acceptable for V1)
+3. Testing complexity: Need CI runners for both platforms
+4. Feature parity: Some Windows features may not have direct Linux equivalents
+5. Performance: libc calls may be slightly slower than raw syscalls
 
-## 24. Explicit Unresolved Questions
+## 24. Explicit unresolved questions
 
 1. Should Linux support static linking (musl) or dynamic linking (glibc)?
 2. Should the ELF backend support both static and dynamic linking?

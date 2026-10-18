@@ -1,4 +1,4 @@
-# MINK — Error System and Diagnostics Specification
+# MINK: error system and diagnostics specification
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -11,7 +11,7 @@ The goal is not merely to report failure. MINK should help developers understand
 
 The system must serve humans, IDEs, CI systems, automated tooling, and AI coding agents.
 
-## 2. Error Categories
+## 2. Error categories
 
 MINK distinguishes at least four major categories:
 
@@ -22,13 +22,13 @@ MINK distinguishes at least four major categories:
 
 These categories must not be unnecessarily conflated.
 
-## 3. Compile-Time Errors
+## 3. Compile-Time errors
 
 Compile-time errors include invalid syntax, type mismatches, invalid imports, unresolved names, invalid generic constraints, exhaustiveness failures, invalid ownership operations, and other statically detectable violations.
 
 The compiler should reject invalid programs before execution whenever the problem can be proven statically.
 
-## 4. Recoverable Errors
+## 4. Recoverable errors
 
 Expected application failures should normally be represented explicitly through result/error values rather than exceptions.
 
@@ -44,7 +44,7 @@ Examples include:
 
 The standard error model must make these failures easy to propagate and handle.
 
-## 5. Result-Based Error Handling
+## 5. Result-Based error handling
 
 MINK should provide a standard Result abstraction representing either success or failure.
 
@@ -57,7 +57,7 @@ Result values must integrate with:
 - Standard-library APIs
 - Compiler diagnostics
 
-## 6. Error Propagation
+## 6. Error propagation
 
 MINK should provide concise syntax for propagating recoverable errors through call chains.
 
@@ -65,7 +65,7 @@ Error-aware code should remain readable without requiring repetitive boilerplate
 
 The propagation mechanism must preserve the original error context.
 
-## 7. Error Context
+## 7. Error context
 
 Errors should support structured context.
 
@@ -81,7 +81,7 @@ Context may include:
 - Additional metadata
 - Suggested remediation
 
-## 8. Error Chains
+## 8. Error chains
 
 Errors should be able to preserve causal chains.
 
@@ -94,7 +94,7 @@ Application failure
 
 The developer should be able to inspect the root cause without losing higher-level context.
 
-## 9. Error Codes
+## 9. Error codes
 
 Stable machine-readable error identifiers should be supported.
 
@@ -117,7 +117,7 @@ An exception mechanism may exist for genuinely exceptional conditions, runtime b
 
 The final exception model is an architecture decision.
 
-## 11. Panic/Fatal Conditions
+## 11. Panic/Fatal conditions
 
 MINK may provide an explicit mechanism for unrecoverable programmer or runtime conditions.
 
@@ -125,7 +125,7 @@ Such failures must produce structured diagnostics rather than silent termination
 
 Fatal conditions should be distinguishable from ordinary recoverable errors.
 
-## 12. Diagnostic Structure
+## 12. Diagnostic structure
 
 Every compiler diagnostic should have structured information internally, including:
 
@@ -141,7 +141,7 @@ Every compiler diagnostic should have structured information internally, includi
 
 Human-readable output is one presentation of this structured diagnostic model.
 
-## 13. Severity Levels
+## 13. Severity levels
 
 MINK tooling should support at least:
 
@@ -152,13 +152,13 @@ MINK tooling should support at least:
 
 Additional internal categories may exist without becoming public language concepts.
 
-## 14. Source Locations
+## 14. Source locations
 
 Diagnostics should identify precise source locations.
 
 Where possible, diagnostics should highlight the smallest meaningful span rather than an entire line or file.
 
-## 15. Related Locations
+## 15. Related locations
 
 Complex diagnostics should be able to reference multiple related source locations.
 
@@ -170,7 +170,7 @@ Important errors should explain why the compiler rejected the program rather tha
 
 Explanations should remain concise by default while allowing developers to expand deeper context.
 
-## 17. Suggested Fixes
+## 17. Suggested fixes
 
 Where a safe correction can be inferred, diagnostics should provide machine-applicable fixes.
 
@@ -185,13 +185,13 @@ Examples include:
 
 Automatic fixes must never silently alter program semantics when the compiler cannot establish safety.
 
-## 18. Error Cascades
+## 18. Error cascades
 
 MINK should minimize misleading cascading diagnostics.
 
 When many errors originate from one root mistake, the compiler should identify the probable root cause and group or suppress dependent diagnostics when doing so improves clarity.
 
-## 19. Runtime Diagnostics
+## 19. Runtime diagnostics
 
 Runtime failures should provide structured information comparable to compile-time diagnostics where practical.
 
@@ -206,7 +206,7 @@ Runtime diagnostics should include:
 - Context
 - Suggested remediation where possible
 
-## 20. Stack Traces
+## 20. Stack traces
 
 Runtime stack traces should be readable by humans and consumable by tools.
 
@@ -214,7 +214,7 @@ They should preserve meaningful function, module, source-file, and line informat
 
 Production builds may use optimized representations while retaining useful debugging information when configured.
 
-## 21. Debug and Release Diagnostics
+## 21. Debug and release diagnostics
 
 MINK should support configurable diagnostic detail.
 
@@ -222,7 +222,7 @@ Development builds should favor maximum actionable information.
 
 Production builds should balance diagnostics, performance, privacy, binary size, and security.
 
-## 22. Privacy and Security
+## 22. Privacy and security
 
 Error reporting must avoid exposing secrets by default.
 
@@ -230,13 +230,13 @@ Passwords, tokens, cryptographic keys, authentication credentials, and sensitive
 
 Developers should have explicit mechanisms to mark sensitive values.
 
-## 23. Logging Integration
+## 23. Logging integration
 
 The standard error model should integrate cleanly with structured logging.
 
 Errors should be representable as structured records without requiring fragile string parsing.
 
-## 24. IDE/LSP Integration
+## 24. IDE/LSP integration
 
 Compiler diagnostics must be directly consumable by IDEs and language servers.
 
@@ -250,7 +250,7 @@ Tooling should support:
 - Documentation lookup
 - Automated fixes
 
-## 25. Machine-Readable Diagnostics
+## 25. Machine-Readable diagnostics
 
 MINK tooling must provide a stable machine-readable diagnostic format.
 
@@ -258,7 +258,7 @@ The format should support JSON or another structured representation suitable for
 
 Human-readable terminal output and machine-readable output must originate from the same underlying diagnostic model.
 
-## 26. AI-Native Diagnostics
+## 26. AI-Native diagnostics
 
 MINK diagnostics should be exceptionally useful to AI coding agents.
 
@@ -276,7 +276,7 @@ An AI-readable diagnostic should expose:
 
 The goal is to allow an AI agent to diagnose and repair a failure without scraping human-oriented terminal text.
 
-## 27. AI Error Resolution Workflow
+## 27. AI error resolution workflow
 
 MINK tooling should eventually support a workflow similar to:
 
@@ -293,7 +293,7 @@ MINK tooling should eventually support a workflow similar to:
 
 AI assistance must remain optional and must never be required to compile or execute MINK programs.
 
-## 28. Web and Application Development
+## 28. Web and application development
 
 MINK diagnostics should be particularly strong for backend and web application development.
 
@@ -311,23 +311,23 @@ Tooling should eventually help diagnose:
 
 Frameworks may extend the diagnostic model while preserving the core structure.
 
-## 29. Error Documentation
+## 29. Error documentation
 
 Public error codes and major compiler diagnostics should have searchable documentation.
 
 Documentation should explain the cause, common triggers, fixes, prevention, and relevant language concepts.
 
-## 30. Testing Error Paths
+## 30. Testing error paths
 
 MINK tooling should make error-path testing straightforward.
 
 Applications should be able to assert error categories, codes, causes, and structured metadata without depending on fragile human-readable messages.
 
-## 31. Error Handling Principle
+## 31. Error handling principle
 
 > **An error should tell the developer what happened, why it happened, where it happened, how to fix it, and how to prevent it.**
 
-## 32. Open Technical Decisions
+## 32. Open technical decisions
 
 The following must be finalized before architecture freeze:
 

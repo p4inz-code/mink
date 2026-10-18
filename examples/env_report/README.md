@@ -84,7 +84,7 @@ mink build main.mink
 ```
 
 `main.exe` is a single self-contained executable. Copy it to any
-directory — even without MINK, Rust, Node.js, or npm — and run it there.
+directory, even without MINK, Rust, Node.js, or npm, and run it there.
 
 ## Ownership note
 

@@ -1,4 +1,4 @@
-# MINK — Compiler Architecture
+# MINK: compiler architecture
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -9,7 +9,7 @@ The MINK compiler transforms valid MINK source into efficient executable output 
 
 The compiler must support correctness, performance, incremental compilation, cross-platform targets, strong diagnostics, IDE/LSP integration, AI-readable diagnostics, optimization, debugging, native interoperability, and long-term language evolution.
 
-## 2. High-Level Pipeline
+## 2. High-Level pipeline
 
 Source → Lexer → Parser → AST → Semantic Analysis → Type Analysis → Ownership Analysis → HIR → MIR → Optimization → Backend / Code Generation → Executable (linked against the MINK runtime)
 
@@ -31,13 +31,13 @@ Name resolution must handle variables, functions, types, modules, imports, gener
 
 Type checking must support primitive types, composite types, functions, generics, optional types, Result types, traits/interfaces, inference, conversions, pattern matching, async types, and FFI types.
 
-## 4. Semantic Analysis
+## 4. Semantic analysis
 
 Semantic analysis must validate rules beyond syntax and basic typing.
 
 It may include exhaustiveness, unreachable code, invalid control flow, ownership/lifetime rules, async restrictions, concurrency rules, visibility, constant evaluation, API compatibility, and security-sensitive patterns.
 
-## 5. Intermediate Representations
+## 5. Intermediate representations
 
 MINK uses HIR after semantic analysis and MIR for lower-level optimization and code generation.
 
@@ -47,7 +47,7 @@ MIR makes control flow, values, calls, memory operations, and resource operation
 
 ## 6. Optimization
 
-An optimization stage is implemented (`src/mir/optimize.rs`, `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`): a composable pipeline of passes — boolean constant folding, copy propagation (redundant move elimination), CFG simplification, unreachable-block elimination, and dead-code elimination — runs to a fixpoint over validated MIR, with structural validation before the first pass and after every pass. Folding is deliberately limited to the boolean algebra because MIR constants carry no decoded literal values (`Bool(bool)` is the only value-carrying constant); see the optimization doc §2.
+An optimization stage is implemented (`src/mir/optimize.rs`, `docs/implementation/OPTIMIZATION_IMPLEMENTATION.md`): a composable pipeline of passes, boolean constant folding, copy propagation (redundant move elimination), CFG simplification, unreachable-block elimination, and dead-code elimination, runs to a fixpoint over validated MIR, with structural validation before the first pass and after every pass. Folding is deliberately limited to the boolean algebra because MIR constants carry no decoded literal values (`Bool(bool)` is the only value-carrying constant); see the optimization doc §2.
 
 Potential future optimizations include constant propagation, common-subexpression elimination, inlining, devirtualization, escape analysis, allocation elimination, loop optimization, vectorization, and link-time optimization.
 
@@ -59,13 +59,13 @@ Standard profiles should include development, debug, release, size-optimized, an
 
 The backend (`src/backend/`) is implemented as a target-independent core plus a target-specific emission layer, so additional architectures can be added without touching lowering or verification:
 
-- **Lowering** (`src/backend/lower.rs`) walks the optimized MIR once and produces a portable instruction representation (`src/backend/ir.rs`) — functions, typed locals, instructions, terminators, statics, a string table (`BString`: decoded bytes + exact span), and the aggregate layout tables — preserving deterministic source order and exact source spans. Since session 13 the native subset includes typed pointers (`BType::Ptr`, byte-addressed `p ± n`) and strings (`BType::Str`, `LoadStr` loading an immutable length-prefixed blob's image address). Since session 14 it includes user-declared structs and arrays (`BType::Struct`/`BType::Array`): struct/array literals, member/index loads and stores (`FieldLoad`/`FieldStore`, `IndexLoad`/`IndexStore`), deep place stores (`PlaceStore`), runtime bounds checks on every index step (`E-R10`), and aggregate argument passing, with all offsets resolved through the same `struct_layout`/`array_layout` engine the type checker uses. Everything outside the supported native subset (floating point, characters, `null`, function values, aggregate returns/statics, module bindings needing runtime initialization) is rejected with a structured `E-B01+` diagnostic instead of being miscompiled; lowering reports every independent problem in deterministic order.
-- **Verification** (`src/backend/verify.rs`) defensively checks the lowered program's structural integrity (local and block references, operand types, terminator shape), so malformed or mutated instructions fail cleanly (`E-B07`) instead of panicking.
-- **Emission** (`src/backend/emit/`) turns verified instructions into a machine image for a selected `Target`. The first milestone implements `x86_64-windows-pe`: a self-contained x86-64 code generator (`src/backend/emit/x86_64.rs`) plus a PE container builder (`src/backend/emit/pe.rs`) that assemble a complete Windows executable with no external toolchain. The code generator also assembles the runtime services it references — a machine-code runtime (`src/backend/emit/runtime.rs`) implementing process initialization, the deterministic bump/free-list heap, the string intrinsics (allocate, free, length, byte access, print), and the intrinsic services behind a fixed calling convention (`src/runtime/abi.rs`). String literals are emitted into an immutable string-data region of `.text` whose bounds `rt_init` records into `.bss` so the string intrinsics can validate literal addresses. The `x86_64-linux-elf` target now has an ELF emitter (`src/backend/emit/elf.rs`, `src/backend/emit/linux_runtime.rs`) and is selected as the host target on Linux, but Linux development is **FROZEN** by policy and Linux is not a supported platform; `aarch64-linux-elf` remains recognized-but-unimplemented and is rejected with `E-B11`.
+- Lowering (`src/backend/lower.rs`) walks the optimized MIR once and produces a portable instruction representation (`src/backend/ir.rs`), functions, typed locals, instructions, terminators, statics, a string table (`BString`: decoded bytes + exact span), and the aggregate layout tables, preserving deterministic source order and exact source spans. Since session 13 the native subset includes typed pointers (`BType::Ptr`, byte-addressed `p ± n`) and strings (`BType::Str`, `LoadStr` loading an immutable length-prefixed blob's image address). Since session 14 it includes user-declared structs and arrays (`BType::Struct`/`BType::Array`): struct/array literals, member/index loads and stores (`FieldLoad`/`FieldStore`, `IndexLoad`/`IndexStore`), deep place stores (`PlaceStore`), runtime bounds checks on every index step (`E-R10`), and aggregate argument passing, with all offsets resolved through the same `struct_layout`/`array_layout` engine the type checker uses. Everything outside the supported native subset (floating point, characters, `null`, function values, aggregate returns/statics, module bindings needing runtime initialization) is rejected with a structured `E-B01+` diagnostic instead of being miscompiled; lowering reports every independent problem in deterministic order.
+- Verification (`src/backend/verify.rs`) defensively checks the lowered program's structural integrity (local and block references, operand types, terminator shape), so malformed or mutated instructions fail cleanly (`E-B07`) instead of panicking.
+- Emission (`src/backend/emit/`) turns verified instructions into a machine image for a selected `Target`. The first milestone implements `x86_64-windows-pe`: a self-contained x86-64 code generator (`src/backend/emit/x86_64.rs`) plus a PE container builder (`src/backend/emit/pe.rs`) that assemble a complete Windows executable with no external toolchain. The code generator also assembles the runtime services it references: a machine-code runtime (`src/backend/emit/runtime.rs`) implementing process initialization, the deterministic bump/free-list heap, the string intrinsics (allocate, free, length, byte access, print), and the intrinsic services behind a fixed calling convention (`src/runtime/abi.rs`). String literals are emitted into an immutable string-data region of `.text` whose bounds `rt_init` records into `.bss` so the string intrinsics can validate literal addresses. The `x86_64-linux-elf` target now has an ELF emitter (`src/backend/emit/elf.rs`, `src/backend/emit/linux_runtime.rs`) and is selected as the host target on Linux, but Linux development is FROZEN by policy and Linux is not a supported platform; `aarch64-linux-elf` remains recognized-but-unimplemented and is rejected with `E-B11`.
 
 `mink build` validates the entry function (`fn main()` with no parameters; its integer/boolean result becomes the process exit code), lowers, verifies, and emits. Diagnostics carry stable codes `E-B01`…`E-B12`; see `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` for the design and the supported subset.
 
-## 8. Incremental Compilation
+## 8. Incremental compilation
 
 Incremental compilation is a major requirement.
 
@@ -75,7 +75,7 @@ Caching may operate across modules, dependencies, generic instantiations, IR sta
 
 Cache invalidation must be correct and deterministic.
 
-## 9. Parallel Compilation
+## 9. Parallel compilation
 
 Independent parsing, analysis, type checking, dependency analysis, and code generation work should execute concurrently where safe.
 
@@ -93,7 +93,7 @@ The compiler should minimize cascading errors and identify probable root causes.
 
 Machine-applicable fixes should be supported where safety can be established.
 
-## 11. AI Compiler Interface
+## 11. AI compiler interface
 
 The compiler must expose machine-readable diagnostics for AI coding systems.
 
@@ -111,7 +111,7 @@ The IDE and compiler must not maintain conflicting language semantics.
 
 The compiler must generate useful debug information when requested, including source locations, function names, variables, types, stack information, and async relationships where practical.
 
-## 14. Testing and Fuzzing
+## 14. Testing and fuzzing
 
 Compiler development must include lexer, parser, type-system, semantic-analysis, diagnostic, IR, optimization, backend, end-to-end, cross-platform, and regression tests.
 
@@ -135,7 +135,7 @@ Compiler performance must be measured across cold builds, incremental builds, la
 
 Quantitative benchmarks must be established before implementation matures.
 
-## 18. Open Architecture Decisions
+## 18. Open architecture decisions
 
 The following must be finalized before architecture freeze:
 

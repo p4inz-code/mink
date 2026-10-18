@@ -1,8 +1,8 @@
-# MINK — While/Loop Expressions and Break Values Implementation
+# MINK: while/Loop expressions and break values implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 30 — while/loop as expressions, break with values
+**Session:** 30, while/loop as expressions, break with values
 
 ## 1. Overview
 
@@ -10,15 +10,15 @@ Session 30 makes `while` and `loop` usable as expressions and allows
 `break` to carry a value. This completes the expression-oriented control
 flow story started in Session 28 (block expressions and if-as-expression):
 
-- `if cond { a } else { b }` as an expression — Session 28
-- `loop { break value; }` as an expression — Session 30
-- `while cond { break value; }` as an expression — Session 30
+- `if cond { a } else { b }` as an expression: Session 28
+- `loop { break value; }` as an expression: Session 30
+- `while cond { break value; }` as an expression: Session 30
 
 The implementation covers the full compiler pipeline: grammar, parser,
 AST, semantic analysis, type checking, HIR, MIR, ownership analysis,
 backend, and runtime.
 
-## 2. Grammar Additions
+## 2. Grammar additions
 
 ```
 Break       := 'break' Expr? ';'
@@ -31,22 +31,22 @@ See `docs/language/CORE_GRAMMAR.md` §23 for the full specification.
 
 ## 3. Semantics
 
-- **`break expr;`** evaluates `expr` and stores the value in the loop's
+- `break expr;` evaluates `expr` and stores the value in the loop's
   break-value slot, then transfers control to the loop's exit block.
   The value's type determines the loop expression's type.
-- **`break;`** (no value) is unchanged and has type `Unit`. Inside a
+- `break;` (no value) is unchanged and has type `Unit`. Inside a
   loop expression, `break;` without a value produces diagnostic `E-T36`.
-- **`loop { body }`** in expression position repeats `body` until `break`
+- `loop { body }` in expression position repeats `body` until `break`
   transfers control to the exit. The expression's type is the type of the
   `break` values; multiple `break` values must agree (`E-T01` on
   mismatch).
-- **`while cond { body }`** in expression position evaluates `cond`,
+- `while cond { body }` in expression position evaluates `cond`,
   then `body` if true, until `break` or condition false. Same typing
   rules as `loop`.
 - Loop expressions appear in binding position (`let x = loop { ... }`),
   return position (`return loop { ... }`), and expression statement
   position. They do not appear in arbitrary operand position (function
-  arguments, binary operands) — this mirrors the existing `if`-expression
+  arguments, binary operands), this mirrors the existing `if`-expression
   limitation (the MIR lowering requires CFG construction that `StmtEval`
   cannot provide).
 - In statement position, `while`/`loop` are unchanged (no break value,
@@ -56,28 +56,28 @@ See `docs/language/CORE_GRAMMAR.md` §23 for the full specification.
 
 New variants in existing enums:
 
-- `StmtKind::Break(Option<Expr>)` — `break;` or `break expr;`
-- `ExprKind::WhileExpr { cond, body, span }` — while-expression
-- `ExprKind::LoopExpr { body, span }` — loop-expression
+- `StmtKind::Break(Option<Expr>)`: `break;` or `break expr;`
+- `ExprKind::WhileExpr { cond, body, span }`: while-expression
+- `ExprKind::LoopExpr { body, span }`: loop-expression
 
 Both expression variants use `Box<Block>` to break the infinite-size
 recursion with `Expr → ExprKind → Block → Stmt → StmtKind → Break(Option<Expr>)`.
 
 ## 5. Parser
 
-- **`parse_break()`** consumes `break`, then checks: if the next token
+- `parse_break()` consumes `break`, then checks: if the next token
   is `;`, `}`, a block-terminating keyword, or `Eof`, it produces
   `Break(None)`. Otherwise, it parses an expression and produces
   `Break(Some(expr))`.
-- **`parse_while_expr()`** and **`parse_loop_expr()`** parse the
+- `parse_while_expr()` and `parse_loop_expr()` parse the
   condition/body and return `ExprKind::WhileExpr` or `ExprKind::LoopExpr`.
 - The block-expression parser (`parse_block_expr`) dispatches `while` and
   `loop` keywords to expression parsing (not statement parsing) when they
   appear in trailing expression position.
 
-## 6. Type System
+## 6. Type system
 
-**New error code:** `E-T36` (`BreakValueExpected`) — `break;` inside a
+**New error code:** `E-T36` (`BreakValueExpected`), `break;` inside a
 loop expression must carry a value.
 
 **Type checking rules:**
@@ -128,14 +128,14 @@ local).
 | ------ | ----------- |
 | E-T36  | `break` inside a loop expression must carry a value |
 
-## 11. Known Limitations
+## 11. Known limitations
 
-- **Loop expressions in arbitrary operand position:** loop expressions
+- Loop expressions in arbitrary operand position: loop expressions
   work in binding, return, and expression-statement positions, but not
   as function arguments or binary operands. This mirrors the existing
-  `if`-expression limitation — the MIR lowering requires CFG construction
+  `if`-expression limitation, the MIR lowering requires CFG construction
   that `StmtEval` cannot provide.
-- **Uninitialized break-value local:** if a while-expression's condition
+- Uninitialized break-value local: if a while-expression's condition
   is false on entry, the break-value local is zero-initialized by the
   native backend. This matches the existing behavior for uninitialized
   locals.

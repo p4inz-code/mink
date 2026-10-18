@@ -1,27 +1,27 @@
-# MINK Security Architecture
+# MINK security architecture
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY, not implemented
 **Scope:** Security and supply chain protection for the MINK package ecosystem
 
 ---
 
 ## 1. Goals
 
-1. **Proactive security.** Security is designed BEFORE the package ecosystem grows, not as an afterthought.
+1. Proactive security. Security is designed BEFORE the package ecosystem grows, not as an afterthought.
 
-2. **Package integrity.** Every package is verified by content hash before use.
+2. Package integrity. Every package is verified by content hash before use.
 
-3. **Supply chain protection.** Malicious packages, dependency confusion, and typosquatting are detected and prevented.
+3. Supply chain protection. Malicious packages, dependency confusion, and typosquatting are detected and prevented.
 
-4. **Build safety.** Build scripts run in sandboxed environments with restricted permissions.
+4. Build safety. Build scripts run in sandboxed environments with restricted permissions.
 
-5. **Transparency.** All security-relevant operations are logged and auditable.
+5. Transparency. All security-relevant operations are logged and auditable.
 
 ---
 
-## 2. Package Integrity
+## 2. Package integrity
 
 ### Content hashing
 - Every package version has a SHA-256 content hash
@@ -48,7 +48,7 @@ sha256:abc123def456...
 
 ---
 
-## 3. Package Signing
+## 3. Package signing
 
 ### Signing model (V2+)
 - Publishers can sign packages with Ed25519 keys
@@ -72,13 +72,13 @@ timestamp: <unix-timestamp>
 ```
 
 ### Trust model
-- **Trusted publishers:** Packages from known publishers are trusted
-- **Untrusted packages:** Packages from unknown publishers require explicit opt-in
-- **Signature verification:** Optional but recommended for all dependencies
+- Trusted publishers: Packages from known publishers are trusted
+- Untrusted packages: Packages from unknown publishers require explicit opt-in
+- Signature verification: Optional but recommended for all dependencies
 
 ---
 
-## 4. Trusted Publishers
+## 4. Trusted publishers
 
 ### Publisher identity
 - Publishers register with the registry
@@ -86,9 +86,9 @@ timestamp: <unix-timestamp>
 - Publisher reputation is tracked (download count, age, audit history)
 
 ### Trust levels
-1. **Verified publisher:** Identity verified, signature valid
-2. **Unverified publisher:** Identity not verified, signature may be valid
-3. **Unknown publisher:** No publisher information
+1. Verified publisher: Identity verified, signature valid
+2. Unverified publisher: Identity not verified, signature may be valid
+3. Unknown publisher: No publisher information
 
 ### Trust configuration
 
@@ -102,16 +102,16 @@ allow_untrusted = false
 
 ---
 
-## 5. Dependency Verification
+## 5. Dependency verification
 
 ### Verification levels
 
 | Level | Description | Default |
 |-------|-------------|---------|
-| **Hash only** | Verify content hash | Yes |
-| **Signature** | Verify publisher signature | No (opt-in) |
-| **Audit** | Check for known vulnerabilities | Yes |
-| **Full** | Hash + signature + audit | No (opt-in) |
+| Hash only | Verify content hash | Yes |
+| Signature | Verify publisher signature | No (opt-in) |
+| Audit | Check for known vulnerabilities | Yes |
+| Full | Hash + signature + audit | No (opt-in) |
 
 ### Verification commands
 
@@ -124,7 +124,7 @@ mink audit --fix         # Suggest fixes
 
 ---
 
-## 6. Lockfile Integrity
+## 6. Lockfile integrity
 
 ### Lockfile as security boundary
 - The lockfile records exact versions and hashes
@@ -144,7 +144,7 @@ mink audit --fix         # Suggest fixes
 
 ---
 
-## 7. Reproducible Builds
+## 7. Reproducible builds
 
 ### Guarantees
 1. Same `mink.lock` → same dependency versions
@@ -166,18 +166,18 @@ mink diff-build <hash>   # Compare two builds
 
 ---
 
-## 8. Malicious Package Detection
+## 8. Malicious package detection
 
 ### Detection methods
 
 | Method | Description | When |
 |--------|-------------|------|
-| **Hash verification** | Verify content hash | Every download |
-| **Signature verification** | Verify publisher signature | When enabled |
-| **Vulnerability scanning** | Check for known CVEs | `mink audit` |
-| **Behavioral analysis** | Detect suspicious build script behavior | V2+ |
-| **Name similarity** | Detect typosquatting | Registry-side |
-| **Dependency confusion** | Detect namespace shadowing | Registry-side |
+| Hash verification | Verify content hash | Every download |
+| Signature verification | Verify publisher signature | When enabled |
+| Vulnerability scanning | Check for known CVEs | `mink audit` |
+| Behavioral analysis | Detect suspicious build script behavior | V2+ |
+| Name similarity | Detect typosquatting | Registry-side |
+| Dependency confusion | Detect namespace shadowing | Registry-side |
 
 ### Suspicious behavior detection
 - Build scripts that access the network without permission
@@ -188,7 +188,7 @@ mink diff-build <hash>   # Compare two builds
 
 ---
 
-## 9. Build Script Restrictions
+## 9. Build script restrictions
 
 ### Sandboxing model (V2+)
 
@@ -221,7 +221,7 @@ allowed_commands = []    # Allowed external commands
 
 ---
 
-## 10. Credential Handling
+## 10. Credential handling
 
 ### API tokens
 - Registry authentication uses API tokens
@@ -246,7 +246,7 @@ password <token>
 
 ---
 
-## 11. Secret Scanning
+## 11. Secret scanning
 
 ### Pre-publish scanning
 - `mink publish` scans for secrets before uploading
@@ -261,7 +261,7 @@ password <token>
 
 ---
 
-## 12. Registry Security
+## 12. Registry security
 
 ### HTTPS only
 - All registry communication uses HTTPS
@@ -280,7 +280,7 @@ password <token>
 
 ---
 
-## 13. Package Takeover Prevention
+## 13. Package Takeover prevention
 
 ### Namespace protection
 - Package names are unique and immutable
@@ -299,7 +299,7 @@ password <token>
 
 ---
 
-## 14. Dependency Confusion Protection
+## 14. Dependency confusion protection
 
 ### Namespace isolation
 - Packages are identified by their full name (including namespace)
@@ -325,7 +325,7 @@ my-lib = { version = "1.0.0", registry = "private" }
 
 ---
 
-## 15. Typosquatting Mitigation
+## 15. Typosquatting mitigation
 
 ### Registry-side detection
 - Similarity scoring between package names
@@ -344,7 +344,7 @@ my-lib = { version = "1.0.0", registry = "private" }
 
 ---
 
-## 16. Audit Workflow
+## 16. Audit workflow
 
 ### Audit command
 
@@ -378,7 +378,7 @@ warning: unpublished dependency my-experimental 0.1.0
 
 ---
 
-## 17. Vulnerability Reporting
+## 17. Vulnerability reporting
 
 ### Reporting process
 1. Discover vulnerability
@@ -410,7 +410,7 @@ warning: unpublished dependency my-experimental 0.1.0
 
 ---
 
-## 18. Security Advisories
+## 18. Security advisories
 
 ### Advisory database
 - Maintained by the MINK security team
@@ -426,35 +426,35 @@ mink audit --subscribe    # Subscribe to security alerts
 
 ---
 
-## 19. Two-Approach Analysis
+## 19. Two-Approach analysis
 
 ### Approach A: Proactive security design (CHOSEN)
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Security from day one, no retrofitting, user trust |
-| **Cons** | Slower initial development, more upfront design |
-| **Complexity** | Medium |
-| **Performance** | Good (verification is fast) |
-| **Security** | Excellent — designed for security |
-| **Compatibility** | Good — security is transparent to users |
-| **Maintainability** | Good — security is part of the architecture |
-| **Ecosystem impact** | Maximum — users trust the ecosystem |
+| Pros | Security from day one, no retrofitting, user trust |
+| Cons | Slower initial development, more upfront design |
+| Complexity | Medium |
+| Performance | Good (verification is fast) |
+| Security | Excellent, designed for security |
+| Compatibility | Good, security is transparent to users |
+| Maintainability | Good, security is part of the architecture |
+| Ecosystem impact | Maximum, users trust the ecosystem |
 
 ### Approach B: Reactive security
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Faster initial development, ship first |
-| **Cons** | Security holes discovered after packages exist, retrofitting is expensive |
-| **Complexity** | High (retrofitting security is harder than designing it) |
-| **Performance** | Good initially, poor after retrofitting |
-| **Security** | Poor — gaps discovered too late |
-| **Compatibility** | Poor — breaking changes needed for security |
-| **Maintainability** | Poor — security debt accumulates |
-| **Ecosystem impact** | Negative — security incidents destroy trust |
+| Pros | Faster initial development, ship first |
+| Cons | Security holes discovered after packages exist, retrofitting is expensive |
+| Complexity | High (retrofitting security is harder than designing it) |
+| Performance | Good initially, poor after retrofitting |
+| Security | Poor, gaps discovered too late |
+| Compatibility | Poor, breaking changes needed for security |
+| Maintainability | Poor, security debt accumulates |
+| Ecosystem impact | Negative, security incidents destroy trust |
 
-### Decision: **Approach A**
+### Decision: **approach A**
 
 **Reasoning:** Security must be designed BEFORE the package ecosystem grows. Retrofitting security after packages exist is expensive and destroys user trust. The proactive approach is slower initially but prevents catastrophic security incidents.
 

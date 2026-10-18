@@ -1,4 +1,4 @@
-# Session 51 — Core Foundation Implementation
+# Session 51: core foundation implementation
 
 **Date:** August 25, 2026
 **Status:** Complete
@@ -6,9 +6,9 @@
 
 ---
 
-## 1. What Was Implemented
+## 1. What was implemented
 
-### `mink check --json` — Machine-readable diagnostic output
+### `mink check --json`: Machine-readable diagnostic output
 
 Adds a `--json` flag to `mink check` that outputs structured JSON diagnostics:
 
@@ -54,7 +54,7 @@ Output schema:
 - Schema is versioned and backward-compatible
 - All fields are structured; no parsing required by consumers
 
-### `mink explain <CODE>` — Error code documentation
+### `mink explain <CODE>`: Error code documentation
 
 Adds an `explain` command that provides human-readable documentation for error codes:
 
@@ -89,7 +89,7 @@ Suggested fixes:
 
 ---
 
-## 2. What Was Intentionally Not Implemented
+## 2. What was intentionally not implemented
 
 ### Option/Result utility functions (unwrap, is_some, map, etc.)
 
@@ -120,7 +120,7 @@ Suggested fixes:
 
 ---
 
-## 3. Foundation Gap Analysis
+## 3. Foundation gap analysis
 
 ### Classification of missing capabilities
 
@@ -151,7 +151,7 @@ The V1 language has all the *semantic* capabilities needed for Option/Result uti
 
 ---
 
-## 4. Two-Approach Analysis
+## 4. Two-Approach analysis
 
 ### Approach for Option/Result utilities
 
@@ -159,13 +159,13 @@ The V1 language has all the *semantic* capabilities needed for Option/Result uti
 - Users define utility functions in each file
 - Functions work with any Option/Result definition
 - Requires copying code between files
-- **Chosen as interim solution** — documents patterns for users
+- Chosen as interim solution: documents patterns for users
 
 **Approach B: Method syntax (V2)**
 - Add `value.method()` syntax to parser
 - Type-checker resolves methods on enum types
 - Requires significant parser/type-checker changes
-- **Deferred to V2** — architectural change
+- Deferred to V2: architectural change
 
 **Decision:** Approach A for V1, Approach B for V2. The module system (designed in Session 50) will make Approach A practical by enabling imports.
 
@@ -186,93 +186,93 @@ The V1 language has all the *semantic* capabilities needed for Option/Result uti
 
 ---
 
-## 5. 10-Persona Adversarial Audit
+## 5. 10-Persona adversarial audit
 
-### 1. Compiler Engineer
-- **Risks:** None. No compiler changes were made.
-- **Missing foundations:** None.
-- **Architectural mistakes:** None.
-- **Future compatibility:** The diagnostics module is designed for extensibility.
+### 1. Compiler engineer
+- Risks: None. No compiler changes were made.
+- Missing foundations: None.
+- Architectural mistakes: None.
+- Future compatibility: The diagnostics module is designed for extensibility.
 
-### 2. Type-System Engineer
-- **Risks:** None. No type system changes.
-- **Missing foundations:** Method syntax for enums (V2).
-- **Architectural mistakes:** None.
+### 2. Type-System engineer
+- Risks: None. No type system changes.
+- Missing foundations: Method syntax for enums (V2).
+- Architectural mistakes: None.
 
-### 3. Ownership/Memory Engineer
-- **Risks:** None. No ownership model changes.
-- **Missing foundations:** None.
-- **Architectural mistakes:** None.
+### 3. Ownership/Memory engineer
+- Risks: None. No ownership model changes.
+- Missing foundations: None.
+- Architectural mistakes: None.
 
-### 4. Runtime Engineer
-- **Risks:** None. No runtime changes.
-- **Missing foundations:** Dynamic heap allocator (designed, not implemented).
-- **Architectural mistakes:** None.
+### 4. Runtime engineer
+- Risks: None. No runtime changes.
+- Missing foundations: Dynamic heap allocator (designed, not implemented).
+- Architectural mistakes: None.
 
-### 5. Backend Engineer
-- **Risks:** None. No backend changes.
-- **Missing foundations:** None.
-- **Architectural mistakes:** None.
+### 5. Backend engineer
+- Risks: None. No backend changes.
+- Missing foundations: None.
+- Architectural mistakes: None.
 
-### 6. Library/API Designer
-- **Risks:** The Option/Result free-function pattern is ergonomically poor.
-- **Missing foundations:** Method syntax, module imports from stdlib.
-- **Architectural mistakes:** None — the decision to defer is correct.
+### 6. Library/API designer
+- Risks: The Option/Result free-function pattern is ergonomically poor.
+- Missing foundations: Method syntax, module imports from stdlib.
+- Architectural mistakes: None: the decision to defer is correct.
 
-### 7. Security Engineer
-- **Risks:** The JSON output could leak sensitive information if error messages contain secrets.
-- **Mitigation:** Error messages are source-code-level, not runtime-level.
-- **Architectural mistakes:** None.
+### 7. Security engineer
+- Risks: The JSON output could leak sensitive information if error messages contain secrets.
+- Mitigation: Error messages are source-code-level, not runtime-level.
+- Architectural mistakes: None.
 
-### 8. Performance Engineer
-- **Risks:** JSON serialization is string-based (not zero-copy).
-- **Mitigation:** Acceptable for diagnostic output; not performance-critical.
-- **Architectural mistakes:** None.
+### 8. Performance engineer
+- Risks: JSON serialization is string-based (not zero-copy).
+- Mitigation: Acceptable for diagnostic output; not performance-critical.
+- Architectural mistakes: None.
 
-### 9. AI/Tooling Engineer
-- **Risks:** The JSON schema needs to be stable for AI agents.
-- **Mitigation:** Schema is documented and versioned.
-- **Missing foundations:** Compiler introspection (AST/HIR/MIR JSON dump).
-- **Architectural mistakes:** None.
+### 9. AI/Tooling engineer
+- Risks: The JSON schema needs to be stable for AI agents.
+- Mitigation: Schema is documented and versioned.
+- Missing foundations: Compiler introspection (AST/HIR/MIR JSON dump).
+- Architectural mistakes: None.
 
-### 10. External Developer/Release Engineer
-- **Risks:** The `--json` flag is a new CLI feature that needs documentation.
-- **Mitigation:** Help text updated, integration tests added.
-- **Missing foundations:** None.
-- **Architectural mistakes:** None.
+### 10. External developer/Release engineer
+- Risks: The `--json` flag is a new CLI feature that needs documentation.
+- Mitigation: Help text updated, integration tests added.
+- Missing foundations: None.
+- Architectural mistakes: None.
 
 ### Consensus
 No genuine defects found. The implementation is sound, minimal, and well-tested.
 
 ---
 
-## 6. Quality Gates
+## 6. Quality gates
 
 | Gate | Result |
 |------|--------|
-| `cargo fmt --check` | ✅ Pass (after running cargo fmt) |
-| `cargo clippy --all-targets` | ✅ Pass (1 pre-existing warning, not from this session) |
-| `cargo test` | ✅ Pass (all tests, 0 failures) |
-| `cargo build` | ✅ Pass |
-| `cargo build --release` | ✅ Pass |
-| Unsafe Rust | ✅ None used |
-| v1.0.0 tag | ✅ Untouched |
+| `cargo fmt --check` | Pass (after running cargo fmt) |
+| `cargo clippy --all-targets` | Pass (1 pre-existing warning, not from this session) |
+| `cargo test` | Pass (all tests, 0 failures) |
+| `cargo build` | Pass |
+| `cargo build --release` | Pass |
+| Unsafe Rust | None used |
+| v1.0.0 tag | Untouched |
 
 ---
 
-## 7. Test Summary
+## 7. Test summary
 
 | Test Suite | Tests Before | Tests After | New Tests |
 |-----------|-------------|-------------|-----------|
 | diagnostics (unit) | 0 | 7 | 7 |
 | cli (integration) | 62 | 69 | 7 (check_json × 4, explain × 3, help_includes × 1) |
-| **Total new** | | | **15** |
+| Total new | | | 15 |
 
 All 15 new tests pass. All existing tests continue to pass (0 regressions).
 
 ---
 
-## 8. Files Modified
+## 8. Files modified
 
 | File | Change |
 |------|--------|
@@ -282,7 +282,7 @@ All 15 new tests pass. All existing tests continue to pass (0 regressions).
 
 ---
 
-## 9. Git Status
+## 9. Git status
 
 ```
 On branch main
@@ -298,7 +298,7 @@ Untracked files:
 
 ---
 
-## 10. Recommendation for Session 52
+## 10. Recommendation for session 52
 
 **If the foundation is ready for JSON:** Begin implementing the JSON library using the current language features (match expressions, if-expressions, string operations, closures).
 

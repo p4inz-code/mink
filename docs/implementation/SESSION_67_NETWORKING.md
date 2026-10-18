@@ -1,12 +1,12 @@
-# SESSION_67 — Networking Library
+# SESSION_67: networking library
 
 **Date:** August 27, 2026
 **MINK Version:** 1.0.1
-**Status:** IN PROGRESS — Core infrastructure complete, some runtime issues remain
+**Status:** IN PROGRESS, Core infrastructure complete, some runtime issues remain
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
 Implemented the MINK Networking library providing TCP/UDP socket networking via Windows Winsock2 API. The library uses dynamic loading (LoadLibraryA/GetProcAddress) to avoid adding ws2_32.dll as a static PE import dependency.
 
@@ -22,7 +22,7 @@ Implemented the MINK Networking library providing TCP/UDP socket networking via 
 
 ## 2. Architecture
 
-### Dynamic Loading Approach
+### Dynamic loading approach
 
 Rather than statically importing ws2_32.dll in the PE import table (which would require the DLL at load time for ALL executables), networking uses dynamic loading:
 
@@ -36,7 +36,7 @@ This approach:
 - Only loads ws2_32.dll when networking is explicitly initialized
 - Supports future extension to other DLLs
 
-### BSS Layout Extension
+### BSS layout extension
 
 Networking state is placed AFTER the stderr buffer, before the BSS size marker:
 
@@ -53,7 +53,7 @@ All existing BSS offsets (arena, liveness table, RNG state) remain unchanged.
 
 ## 3. API
 
-### Core Functions
+### Core functions
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -61,7 +61,7 @@ All existing BSS offsets (arena, liveness table, RNG state) remain unchanged.
 | `net_cleanup()` | `() -> Int` | Clean up Winsock2 |
 | `net_last_error()` | `() -> Int` | Get last Winsock error |
 
-### Socket Operations
+### Socket operations
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -75,14 +75,14 @@ All existing BSS offsets (arena, liveness table, RNG state) remain unchanged.
 | `net_close(sock)` | `(Int) -> Int` | Close socket |
 | `net_shutdown(sock, how)` | `(Int, Int) -> Int` | Shutdown connection |
 
-### Data Transfer
+### Data transfer
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `net_send(sock, data)` | `(Int, Str) -> Int` | Send data |
 | `net_recv(sock, maxlen)` | `(Int, Int) -> Str` | Receive data |
 
-### Address Resolution
+### Address resolution
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -91,7 +91,7 @@ All existing BSS offsets (arena, liveness table, RNG state) remain unchanged.
 | `net_htons(value)` | `(Int) -> Int` | Host-to-network byte order |
 | `net_ntohs(value)` | `(Int) -> Int` | Network-to-host byte order |
 
-### Convenience Helpers
+### Convenience helpers
 
 | Function | Description |
 |----------|-------------|
@@ -115,7 +115,7 @@ All existing BSS offsets (arena, liveness table, RNG state) remain unchanged.
 
 ---
 
-## 4. Windows API Mapping
+## 4. Windows API mapping
 
 | MINK Function | Winsock2 API | IAT Path |
 |---------------|-------------|----------|
@@ -136,9 +136,9 @@ All existing BSS offsets (arena, liveness table, RNG state) remain unchanged.
 
 ---
 
-## 5. Implementation Details
+## 5. Implementation details
 
-### PE Builder Changes
+### PE builder changes
 
 Added two new kernel32.dll imports:
 - `LoadLibraryA` (IAT index 32)
@@ -146,7 +146,7 @@ Added two new kernel32.dll imports:
 
 These are standard Windows API functions available on all Windows versions since XP.
 
-### Runtime Services
+### Runtime services
 
 17 new RuntimeService variants added to `src/backend/ir.rs`:
 - NetWsaStartup, NetWsaCleanup, NetWsaLastError
@@ -154,7 +154,7 @@ These are standard Windows API functions available on all Windows versions since
 - NetSend, NetRecv, NetClose, NetShutdown
 - NetGetAddrInfo, NetFreeAddrInfo, NetGetHostName, NetHtons
 
-### Machine Code Emission
+### Machine code emission
 
 Each networking service:
 1. Prologue (push rbp, mov rbp, rsp)
@@ -167,7 +167,7 @@ Stack alignment follows the same pattern as existing runtime services (fs, env, 
 
 ---
 
-## 6. Ownership Model
+## 6. Ownership model
 
 - `net_init()` must be called before any other networking function
 - Socket handles are Int values (not heap-allocated in MINK's model)
@@ -176,7 +176,7 @@ Stack alignment follows the same pattern as existing runtime services (fs, env, 
 
 ---
 
-## 7. Error Model
+## 7. Error model
 
 | Function | Success | Failure |
 |----------|---------|---------|
@@ -196,7 +196,7 @@ Stack alignment follows the same pattern as existing runtime services (fs, env, 
 
 ---
 
-## 8. Security Considerations
+## 8. Security considerations
 
 - Winsock2 is loaded dynamically, reducing attack surface for non-networking programs
 - Socket handles are validated by the Windows kernel
@@ -206,9 +206,9 @@ Stack alignment follows the same pattern as existing runtime services (fs, env, 
 
 ---
 
-## 9. Platform Limitations
+## 9. Platform limitations
 
-- **Windows-only** (uses Winsock2 API)
+- Windows-only (uses Winsock2 API)
 - V1 networking is blocking only (no async/await)
 - No TLS/SSL support (requires crypto library)
 - No DNS resolution beyond IP address passthrough (getaddrinfo deferred to V2)
@@ -217,9 +217,9 @@ Stack alignment follows the same pattern as existing runtime services (fs, env, 
 
 ---
 
-## 10. Test Results
+## 10. Test results
 
-### Passing Tests (12)
+### Passing tests (12)
 
 | Test | Description |
 |------|-------------|
@@ -248,30 +248,30 @@ The crashes occur in function pointer call paths through `call_rax()`. The issue
 
 ---
 
-## 11. Known Limitations
+## 11. Known limitations
 
-1. **Stack alignment in function pointer calls** — Some `call_rax()` invocations crash due to MINK calling convention not guaranteeing 16-byte alignment
-2. **No async I/O** — All operations are blocking
-3. **No TLS/SSL** — Requires crypto library foundation
-4. **No DNS resolution** — getaddrinfo not fully implemented (returns host as-is)
-5. **Fixed recv buffer** — 4088 bytes, no dynamic allocation
-6. **Windows-only** — Linux/macOS networking deferred
-7. **No socket options** — setsockopt/getsockopt not implemented
-
----
-
-## 12. Quality Gates
-
-- ✅ cargo fmt
-- ✅ cargo clippy (no new warnings beyond pre-existing)
-- ✅ cargo test — all existing tests pass (0 regressions)
-- ✅ No unsafe Rust
-- ✅ v1.0.1 baseline intact
-- ⚠️ 14 network tests ignored (known ACCESS_VIOLATION issues)
+1. Stack alignment in function pointer calls: Some `call_rax()` invocations crash due to MINK calling convention not guaranteeing 16-byte alignment
+2. No async I/O: All operations are blocking
+3. No TLS/SSL: Requires crypto library foundation
+4. No DNS resolution: getaddrinfo not fully implemented (returns host as-is)
+5. Fixed recv buffer: 4088 bytes, no dynamic allocation
+6. Windows-only: Linux/macOS networking deferred
+7. No socket options: setsockopt/getsockopt not implemented
 
 ---
 
-## 13. Files Changed
+## 12. Quality gates
+
+- cargo fmt
+- cargo clippy (no new warnings beyond pre-existing)
+- cargo test: all existing tests pass (0 regressions)
+- No unsafe Rust
+- v1.0.1 baseline intact
+- 14 network tests ignored (known ACCESS_VIOLATION issues)
+
+---
+
+## 13. Files changed
 
 | File | Changes |
 |------|---------|
@@ -286,16 +286,16 @@ The crashes occur in function pointer call paths through `call_rax()`. The issue
 
 ---
 
-## 14. Recommendations for Session 68
+## 14. Recommendations for session 68
 
-1. **Fix stack alignment** — Ensure 16-byte alignment at all `call_rax()` sites in networking runtime services. This is the #1 priority.
-2. **Add `net_setsockopt`** — Allow configuring socket options (SO_REUSEADDR, etc.)
-3. **Implement proper `net_resolve`** — Use getaddrinfo for real DNS resolution
-4. **Add UDP send/recv** — datagram operations
-5. **Integration testing** — Test TCP client-server loopback
-6. **Consider TLS foundation** — Evaluate crypto library as next priority
+1. Fix stack alignment: Ensure 16-byte alignment at all `call_rax()` sites in networking runtime services. This is the #1 priority.
+2. Add `net_setsockopt`: Allow configuring socket options (SO_REUSEADDR, etc.)
+3. Implement proper `net_resolve`: Use getaddrinfo for real DNS resolution
+4. Add UDP send/recv: datagram operations
+5. Integration testing: Test TCP client-server loopback
+6. Consider TLS foundation: Evaluate crypto library as next priority
 
 ---
 
-*Generated with Codebuff 🤖*
+*Generated with Codebuff *
 *Co-Authored-By: Codebuff <noreply@codebuff.com>*

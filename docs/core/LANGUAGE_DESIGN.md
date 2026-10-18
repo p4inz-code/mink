@@ -1,9 +1,9 @@
-# MINK — Language Design Principles
+# MINK: language design principles
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
 
-## 1. Design Objective
+## 1. Design objective
 
 MINK is designed to make serious software development substantially easier without sacrificing the power required for demanding workloads.
 
@@ -11,7 +11,7 @@ MINK is designed to make serious software development substantially easier witho
 
 MINK should take the strongest practical ideas available across programming-language ecosystems and improve upon their weaknesses.
 
-## 2. Four Pillars
+## 2. Four pillars
 
 Every major language design decision must be evaluated through:
 
@@ -30,7 +30,7 @@ The language should avoid unnecessary boilerplate, ceremony, repetition, configu
 
 Simplicity does not mean lack of power.
 
-## 4. Progressive Complexity
+## 4. Progressive complexity
 
 A beginner should be able to start quickly.
 
@@ -60,7 +60,7 @@ Performance must be designed into the language rather than added later.
 
 MINK should support efficient compiled execution, predictable performance, low-overhead abstractions, optimization, concurrency, native interoperability, and resource-conscious applications.
 
-## 8. Error-First Design
+## 8. Error-First design
 
 MINK treats diagnostics as a core language experience.
 
@@ -80,25 +80,25 @@ MINK uses a stable foundation with aggressive innovation above it.
 
 The language should favor additive improvements. Breaking existing valid code should be avoided whenever technically possible.
 
-## 11. Ecosystem Integration
+## 11. Ecosystem integration
 
 MINK should work with existing technology rather than requiring existing technology to work around MINK.
 
 Interoperability is therefore fundamental.
 
-## 12. AI Compatibility
+## 12. AI compatibility
 
 MINK must be highly legible to AI coding systems.
 
 This means predictable syntax, explicit semantics, structured diagnostics, machine-readable compiler output, strong project metadata, reliable tooling, deterministic workflows, and easy automated testing.
 
-## 13. UI and Application Development
+## 13. UI and application development
 
 MINK should make application development a first-class experience.
 
 Web, backend, desktop, and UI development should share coherent language fundamentals.
 
-## 14. Long-Term Test
+## 14. Long-Term test
 
 Every major design choice should be evaluated with:
 
@@ -106,7 +106,7 @@ Every major design choice should be evaluated with:
 
 Short-term convenience must not create long-term architectural debt.
 
-## 15. Design Rule
+## 15. Design rule
 
 MINK should be:
 

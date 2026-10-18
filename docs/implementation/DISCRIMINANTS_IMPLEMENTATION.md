@@ -1,4 +1,4 @@
-# MINK Explicit Enum Discriminants Implementation
+# MINK explicit enum discriminants implementation
 
 **Status:** Implemented (Session 20)
 **Version:** 0.1.0
@@ -23,24 +23,24 @@ tagged-union equality.
 ### 1.1 Explicit discriminant declarations
 
 - A variant may declare an explicit discriminant: `enum E { A = 5, B }`.
-  The value must be an **integer literal** — decimal, `0x`/`0o`/`0b`
-  radix-prefixed, with `_` separators, optionally negated (`A = -1`) —
+  The value must be an **integer literal**, decimal, `0x`/`0o`/`0b`
+  radix-prefixed, with `_` separators, optionally negated (`A = -1`)
   exactly the literal forms a constant array index accepts. A missing,
   non-integer, or float value is the parse error `E-P19` (expected an
   integer literal), with recovery to the next variant.
 - Unit variants (`A = 5`) and data-carrying variants (`B(Int) = 10`) may
   both carry explicit discriminants, and they mix freely with implicit
   variants (`enum E { A = 5, B, C(Int) = 10, D }`).
-- The discriminant is a **compile-time constant**; `A = 5 + 1` has no
+- The discriminant is a compile-time constant; `A = 5 + 1` has no
   syntax (the `+` is a parse error).
 
 ### 1.2 Effective discriminants and implicit continuation
 
-- Every variant's **effective discriminant** is the tag word written by
+- Every variant's effective discriminant is the tag word written by
   construction and tested by pattern matching. An explicit variant's value
   is its literal's wrapping 64-bit value (the language's literal model:
   `0xFFFFFFFFFFFFFFFF` is the same bit pattern as `-1`). An implicit
-  variant's value is the previous variant's value plus one, starting at 0 —
+  variant's value is the previous variant's value plus one, starting at 0
   so `enum E { A, B }` keeps the Session-17 values `0, 1`, and
   `enum E { A = 5, B }` gives `B` the value `6`.
 - Duplicate effective discriminants are rejected: two variants whose tags
@@ -58,7 +58,7 @@ tagged-union equality.
 
 ### 1.3 Semantics are unchanged
 
-- The discriminant changes the value a variant's tag word holds — never
+- The discriminant changes the value a variant's tag word holds, never
   the enum's type, coverage, or ownership. Exhaustiveness (`E-T24`/`E-T25`)
   tracks variants by name; pattern matching tests the explicit tag values.
 - Unit-enum equality compares the (now explicit) tag words; tagged-union
@@ -81,65 +81,65 @@ stable codes, reported before code generation.
 
 ## 2. Design boundaries
 
-- **The discriminant is still a single machine word.** Values are 64-bit
+- The discriminant is still a single machine word. Values are 64-bit
   two's complement, so a unit-only enum stays one word regardless of the
   tag values.
-- **No enum-to-`Int` conversion**, iteration, or deriving. The tag value
+- No enum-to-`Int` conversion, iteration, or deriving. The tag value
   is only observable through construction, pattern matching, and unit-enum
   equality.
-- **No tagged-union equality.** `==`/`!=` on a data-carrying enum remains
+- No tagged-union equality. `==`/`!=` on a data-carrying enum remains
   `E-T30`, explicit tags or not.
-- **No unsafe Rust.** Everything is safe Rust plus emitted machine code.
-- **Deterministic.** Identical sources produce byte-identical images and
+- No unsafe Rust. Everything is safe Rust plus emitted machine code.
+- Deterministic. Identical sources produce byte-identical images and
   identical runtime behavior; duplicate detection is order-based, so
   diagnostics never depend on hash iteration.
 
 ## 3. Implementation architecture
 
-- `src/ast/mod.rs` — `EnumVariant.discriminant: Option<Expr>` (an integer
+- `src/ast/mod.rs`: `EnumVariant.discriminant: Option<Expr>` (an integer
   literal, possibly a unary-minus literal); the variant span grows to cover
   `= literal`.
-- `src/parser/mod.rs` — `parse_variant_discriminant` after the variant
+- `src/parser/mod.rs`: `parse_variant_discriminant` after the variant
   name and optional payload: `=` then an integer literal (optionally
   negated), with `E-P19` and recovery to the next variant boundary.
-- `src/typecheck/error.rs` — `DuplicateDiscriminant` (`E-T31`, with the
+- `src/typecheck/error.rs`: `DuplicateDiscriminant` (`E-T31`, with the
   earlier variant as the related location) and `DiscriminantOverflow`
   (`E-T32`).
-- `src/typecheck/checker.rs` — `resolve_enum_variants` walks the variants
+- `src/typecheck/checker.rs`: `resolve_enum_variants` walks the variants
   in declaration order computing effective discriminants: explicit values
   decode through the same wrapping literal path as constant array indices,
   implicit values continue from `previous + 1` (overflow tracked with
   `checked_add`), duplicates are detected against the running list, and
   `E-T31`/`E-T32` are reported once each. The `PendingVariant` struct
   carries the name, span, payload type, and discriminant expression.
-- `src/typecheck/ty.rs` — `EnumVariantInfo.discriminant` widened from
+- `src/typecheck/ty.rs`: `EnumVariantInfo.discriminant` widened from
   `u32` to `i64` (the tag is a full word).
-- `src/runtime/layout.rs` — `VariantPayloadLayout.discriminant` widened to
+- `src/runtime/layout.rs`: `VariantPayloadLayout.discriminant` widened to
   `i64`; geometry computation is unchanged.
-- `src/mir/mod.rs`, `src/mir/lower.rs` — `EnumInit.discriminant` and
+- `src/mir/mod.rs`, `src/mir/lower.rs`: `EnumInit.discriminant` and
   `MirConstantKind::Enum { variant }` widened to `i64`; construction and
   match tag tests carry the explicit values.
-- `src/backend/ir.rs`, `src/backend/lower.rs` — `EnumInit.discriminant`
+- `src/backend/ir.rs`, `src/backend/lower.rs`: `EnumInit.discriminant`
   widened to `i64`; the payload-geometry lookup finds the variant layout by
   matching the discriminant value; `DecodedConstant::Word` carries the tag
   directly.
-- `src/backend/emit/x86_64.rs` — the tag word is emitted with `movabs`
+- `src/backend/emit/x86_64.rs`: the tag word is emitted with `movabs`
   directly from the `i64` value.
 
 ## 4. Conservative decisions and known limitations
 
-- **Explicit values use the wrapping 64-bit literal model** — a literal
+- Explicit values use the wrapping 64-bit literal model: a literal
   outside `i64` range means the same two's-complement value it means
   anywhere else in the language (documented, tested). Only the implicit
   continuation (which has no literal to wrap) reports an overflow.
-- **No ordering or arithmetic on tags** — the tag value is not `Int`; it
+- No ordering or arithmetic on tags: the tag value is not `Int`; it
   cannot be compared with `<`, added, or converted.
-- **No `A = 5 + 1` expressions** — only literals, exactly like constant
+- No `A = 5 + 1` expressions: only literals, exactly like constant
   array indices.
-- **Discriminants do not affect function-result rules** — tagged unions
+- Discriminants do not affect function-result rules: tagged unions
   still cannot be function results (the calling convention returns one
   word).
-- **No reordering or stable-sorting of variants** — declaration order
+- No reordering or stable-sorting of variants: declaration order
   drives implicit continuation and duplicate reporting.
 
 ## 5. Tests

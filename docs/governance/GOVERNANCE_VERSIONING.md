@@ -1,4 +1,4 @@
-# MINK — Governance, Versioning and Evolution
+# MINK: governance, versioning and evolution
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -15,13 +15,13 @@ MINK is created by Atharva Patil / p4inz-code and stewarded under P4inz Interact
 
 The project should remain open to external contributors while preserving clear technical ownership and decision-making responsibilities.
 
-## 3. Technical Authority
+## 3. Technical authority
 
 Technical decisions must be evaluated against the MINK Design Decision Rules and the authoritative specifications.
 
 No implementation should silently redefine a documented language or architecture decision.
 
-## 4. Specification Authority
+## 4. Specification authority
 
 The Master Specification establishes the highest-level project direction.
 
@@ -29,7 +29,7 @@ Dedicated technical specifications refine that direction without contradicting i
 
 When specifications conflict, the conflict must be identified, resolved, documented, and reflected consistently across the repository.
 
-## 5. Proposal Process
+## 5. Proposal process
 
 Significant language, compiler, runtime, standard-library, tooling, or ecosystem changes should be proposed before implementation.
 
@@ -46,13 +46,13 @@ A proposal should explain:
 - Tooling impact
 - Migration strategy
 
-## 6. Experimental Features
+## 6. Experimental features
 
 Experimental capabilities may be developed without immediately becoming stable language features.
 
 Experimental features must be clearly identified and must not silently acquire stable compatibility commitments.
 
-## 7. Stability Levels
+## 7. Stability levels
 
 MINK should distinguish clearly between:
 
@@ -64,13 +64,13 @@ MINK should distinguish clearly between:
 
 Each stability level must have documented compatibility expectations.
 
-## 8. Semantic Versioning
+## 8. Semantic versioning
 
 Public packages should use a documented semantic versioning policy.
 
 Language and toolchain versioning may require a coordinated model so compiler, standard library, runtime, and package compatibility remain understandable.
 
-## 9. Breaking Changes
+## 9. Breaking changes
 
 Breaking changes should be extraordinarily rare after stabilization.
 
@@ -82,7 +82,7 @@ Deprecated features should receive clear compiler diagnostics and documentation.
 
 Where practical, automated migration tools should assist developers in replacing deprecated functionality.
 
-## 11. Migration Policy
+## 11. Migration policy
 
 Major language or tooling changes should provide a predictable migration path.
 
@@ -90,7 +90,7 @@ Migrations should preserve user code and data whenever possible.
 
 Automated migration must remain reviewable and reversible.
 
-## 12. Release Channels
+## 12. Release channels
 
 The project may provide release channels such as:
 
@@ -100,17 +100,17 @@ The project may provide release channels such as:
 
 Experimental features should not be confused with stable guarantees.
 
-## 13. Release Criteria
+## 13. Release criteria
 
 Stable releases must satisfy documented quality gates covering correctness, security, compatibility, performance, documentation, tooling, and supported platforms.
 
-## 14. Long-Term Support
+## 14. Long-Term support
 
 The project should eventually define support periods for stable releases.
 
 Security fixes and critical corrections should receive priority during supported periods.
 
-## 15. Compatibility Guarantees
+## 15. Compatibility guarantees
 
 Compatibility guarantees must be explicit rather than implied.
 
@@ -123,7 +123,7 @@ Potential compatibility dimensions include:
 - Package compatibility
 - Tooling compatibility
 
-## 16. Repository Integrity
+## 16. Repository integrity
 
 The repository should maintain one authoritative source of truth for each technical decision.
 
@@ -131,13 +131,13 @@ Duplicated specifications should be avoided where possible.
 
 Automated consistency checks should detect contradictory or stale documentation where practical.
 
-## 17. Contribution Standards
+## 17. Contribution standards
 
 Contributions should meet project requirements for correctness, testing, documentation, security, style, and compatibility.
 
 Large changes should be discussed before implementation when they affect architecture or language semantics.
 
-## 18. Code Review
+## 18. Code review
 
 Significant changes should receive review from appropriate technical perspectives.
 
@@ -153,51 +153,51 @@ Review should consider:
 - Documentation
 - Compatibility
 
-## 19. Security Governance
+## 19. Security governance
 
 Security vulnerabilities should follow a dedicated responsible-disclosure and remediation process.
 
 Security fixes may require expedited releases when risk is significant.
 
-## 20. License Governance
+## 20. License governance
 
 MINK source is planned to use the Apache License 2.0.
 
 Third-party dependencies must have compatible licensing and documented provenance.
 
-## 21. Trademark and Branding
+## 21. Trademark and branding
 
 Project branding, names, logos, and trademarks should be governed separately from source-code licensing.
 
 Open-source licensing does not automatically grant trademark rights.
 
-## 22. Ecosystem Governance
+## 22. Ecosystem governance
 
 The package ecosystem should establish clear policies for package ownership, publishing, namespace conflicts, abandoned packages, malicious packages, and security advisories.
 
-## 23. Community Health
+## 23. Community health
 
 The project should maintain contribution guidelines, code of conduct policies, issue-reporting standards, and mechanisms for resolving technical disagreements.
 
-## 24. Decision Records
+## 24. Decision records
 
 Important architectural decisions should be recorded with their rationale, alternatives, consequences, and status.
 
 Decisions should not depend solely on undocumented institutional knowledge.
 
-## 25. Architecture Freeze
+## 25. Architecture freeze
 
 Before implementation of the stable architecture begins, the project should explicitly freeze the core language, memory model, compiler architecture, runtime architecture, package system, standard-library foundations, and compatibility strategy.
 
 After the freeze, changes require explicit justification and review.
 
-## 26. Ten-Year Review
+## 26. Ten-Year review
 
 Major architectural decisions should periodically be evaluated against the long-term goal of keeping MINK viable for at least the next decade.
 
 The review must not become an excuse for unnecessary redesign.
 
-## 27. Open Governance Decisions
+## 27. Open governance decisions
 
 The following must be finalized before architecture freeze:
 

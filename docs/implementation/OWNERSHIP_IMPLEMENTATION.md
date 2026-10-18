@@ -1,4 +1,4 @@
-# MINK Ownership and Borrowing Implementation
+# MINK ownership and borrowing implementation
 
 **Status:** Implemented (Session 15)
 **Version:** 0.1.0
@@ -16,31 +16,31 @@ The following rules are authoritative for this session.
 
 ### 1.1 Value classes
 
-- **Copy types** (always copy, never move): `Int`, `Float`, `Bool`,
+- Copy types (always copy, never move): `Int`, `Float`, `Bool`,
   `Char`, `Range<T>`, `Unit`, and `Ptr<T>`. Raw pointers are Copy by
   design: every access is validated by the runtime (liveness table,
   alignment, bounds), so aliasing a pointer is safe.
-- **`Str` values** are one of two provenances:
-  - **Immutable** — a string literal: immortal image data. Copying is
+- `Str` values are one of two provenances:
+  - Immutable: a string literal: immortal image data. Copying is
     always harmless; copying an Immutable `Str` keeps the source usable.
-  - **Owned** — a heap blob (from `rt_str_alloc`), a function parameter,
+  - Owned: a heap blob (from `rt_str_alloc`), a function parameter,
     or the result of a call whose result provenance is Owned. There is
     exactly one owner; transferring an Owned `Str` **moves** it and the
     source becomes **dead**.
-- **Aggregates** (structs, arrays) are Copy iff they contain no Owned
+- Aggregates (structs, arrays) are Copy iff they contain no Owned
   `Str` transitively; otherwise they move as a whole (see §1.3). Structs
-  track provenance **per `Str`-typed field**; arrays track **whole-array**
+  track provenance **per `Str`-typed field**; arrays track whole-array
   provenance (per-element liveness is out of scope).
 
 ### 1.2 Borrows (implicit, function-local, no syntax)
 
-- **Read borrows**: `rt_str_len`, `rt_str_byte`, `rt_print_str`, and the
+- Read borrows: `rt_str_len`, `rt_str_byte`, `rt_print_str`, and the
   operands of equality/other operators *observe* a value: the binding must
   be live and stays live.
-- **Mutate borrow**: `rt_str_set_byte` observes its `Str` argument and
-  requires it to be **Owned** — mutating an Immutable (literal) string is
+- Mutate borrow: `rt_str_set_byte` observes its `Str` argument and
+  requires it to be **Owned**, mutating an Immutable (literal) string is
   a compile-time error (E-S11). The binding stays live and owned.
-- **Consume**: `rt_str_free` takes the `Str` by value — the binding is
+- Consume: `rt_str_free` takes the `Str` by value. The binding is
   moved (dead after). Freeing an Immutable string compiles (the runtime
   already rejects it, `E-R05`); the binding is still marked dead.
 - Borrows never escape the function; there is no borrow syntax, no
@@ -48,25 +48,25 @@ The following rules are authoritative for this session.
 
 ### 1.3 Transfer positions (MOVE if Owned; COPY if Immutable)
 
-1. `let x = e;` / `let mut x = e;` — the source is dead after if Owned;
+1. `let x = e;` / `let mut x = e;`: the source is dead after if Owned;
    `x` takes `e`'s provenance.
-2. `x = e;` — the source is dead after if Owned; `x`'s old value is
-   dropped (today this leaks, `E-R06` at exit — unchanged); `x` takes
+2. `x = e;`: the source is dead after if Owned; `x`'s old value is
+   dropped (today this leaks, `E-R06` at exit, unchanged); `x` takes
    `e`'s provenance. Assigning to a dead `x` is legal (resurrection).
-3. Struct-literal field initializer `P { f: e }` — `e` is dead after if
+3. Struct-literal field initializer `P { f: e }`: `e` is dead after if
    Owned; the field takes `e`'s provenance.
-4. Array-literal element `[e]` — `e` is dead after if Owned; the array is
+4. Array-literal element `[e]`: `e` is dead after if Owned; the array is
    Owned iff any element is Owned.
-5. `return e;` — `e` is dead after if Owned; contributes to the
+5. `return e;`: `e` is dead after if Owned; contributes to the
    function's **result provenance**.
-6. User-function call argument `f(e)` — `e` is dead after if Owned;
+6. User-function call argument `f(e)`: `e` is dead after if Owned;
    parameters are Owned on entry.
-7. `rt_str_free(e)` — consume (§1.2).
+7. `rt_str_free(e)`: consume (§1.2).
 8. Reading a `Str`-typed field in a transfer position (`let n = p.name;`)
    — if the field is Owned it moves; the **field** becomes dead (partial
    move: other fields remain usable); moving the whole struct then
    errors. If the field is Immutable it copies.
-9. Reading an array element in a transfer position (`let x = a[i];`) — if
+9. Reading an array element in a transfer position (`let x = a[i];`). If
    the array is Owned, the **whole array** moves (conservative; `a`
    becomes dead). Element reads in borrow positions never move.
 
@@ -106,20 +106,20 @@ The following rules are authoritative for this session.
 
 ## 2. Design boundaries
 
-- **One owning type today.** Only `Str` (via `rt_str_alloc`) can own a
+- One owning type today. Only `Str` (via `rt_str_alloc`) can own a
   heap resource, so ownership is a closed, testable model. The runtime
   remains the safety backstop: every access is validated (`E-R04/05/07/08/09/10`),
   so even programs that pass ownership analysis but trip a runtime check
   fail with structured errors, never unsafety.
-- **Conservative where precise tracking is out of scope:** parameters are
+- Conservative where precise tracking is out of scope: parameters are
   assumed Owned; arrays move whole; a struct is Copy iff its *values* are
   Immutable (tracked per field). Conservative decisions are documented in
   §4 and can only reject (never accept) unsafe programs.
-- **No unsafe Rust.** Everything is safe Rust plus emitted machine code.
+- No unsafe Rust. Everything is safe Rust plus emitted machine code.
 
 ## 3. Implementation
 
-- `src/ownership/mod.rs` — the analysis: a deterministic, scope-aware walk
+- `src/ownership/mod.rs`: the analysis: a deterministic, scope-aware walk
   over items, statements, and expressions maintaining a
   `SymbolId → BindingState` map (`Immutable` / `Owned` / `Dead`; struct
   bindings track per-field states for `Str`-typed fields). It consumes the
@@ -129,7 +129,7 @@ The following rules are authoritative for this session.
 - The driver (`src/driver.rs`) runs ownership analysis between type
   checking and HIR lowering; HIR lowering is gated on a clean ownership
   result, so invalid ownership programs fail before code generation.
-- `src/semantics/error.rs` — the two new diagnostic categories
+- `src/semantics/error.rs`: the two new diagnostic categories
   (`UseOfMovedValue` → `E-S10`, `MutatingImmutableString` → `E-S11`),
   rendered through the existing semantic diagnostic machinery.
 
@@ -137,36 +137,36 @@ The following rules are authoritative for this session.
 
 | Intrinsic | `Str` argument mode | Result |
 | --------- | ------------------- | ------ |
-| `rt_str_alloc` | — | `Str` **Owned** |
+| `rt_str_alloc` | — | `Str` Owned |
 | `rt_str_free` | consume (move) | `Unit` |
 | `rt_str_len` | read borrow | `Int` |
 | `rt_str_byte` | read borrow | `Int` |
-| `rt_str_set_byte` | **mutate borrow** (requires Owned) | `Unit` |
+| `rt_str_set_byte` | mutate borrow (requires Owned) | `Unit` |
 | `rt_print_str` | read borrow | `Unit` |
-| `rt_str_concat` | read borrow (both) | `Str` **Owned** |
+| `rt_str_concat` | read borrow (both) | `Str` Owned |
 | `rt_str_eq` | read borrow (both) | `Bool` |
-| `rt_str_from_int` | — | `Str` **Owned** |
-| `rt_str_from_bool` | — | `Str` **Owned** |
+| `rt_str_from_int` | — | `Str` Owned |
+| `rt_str_from_bool` | — | `Str` Owned |
 
 ## 4. Conservative decisions and known limitations
 
-- **Parameters are Owned.** `fn f(s) { ... }` owns `s`; calling `f(s)` with
+- Parameters are Owned. `fn f(s) { ... }` owns `s`; calling `f(s)` with
   an Owned argument moves it (Rust semantics), so the argument is unusable
   afterwards. Passing an Immutable (literal) argument copies it and the
   source stays usable. Programs that want to reuse an owned string across
   calls must pass literals or restructure (borrow syntax is a later
   session).
-- **Arrays move whole.** Reading an element of an Owned array in a
+- Arrays move whole. Reading an element of an Owned array in a
   transfer position moves the entire array; remaining elements leak
-  (`E-R06` at exit — the existing leak check catches it). (Audit
+  (`E-R06` at exit, the existing leak check catches it). (Audit
   hardening, Session 21: the element-read path used to push the E-S10
-  twice — once from evaluating the dead base and once from the index
-  handler's own dead-branch — for a duplicated diagnostic; the redundant
+  twice, once from evaluating the dead base and once from the index
+  handler's own dead-branch, for a duplicated diagnostic; the redundant
   push was removed.)
-- **Struct field moves are partial.** Reading an Owned field moves only
+- Struct field moves are partial. Reading an Owned field moves only
   that field; the struct remains usable for its other fields, but the
   whole struct can no longer be moved until the field is reassigned.
-- **Match scrutinees move at the same granularity as transfers** (audit
+- Match scrutinees move at the same granularity as transfers (audit
   alignment, Session 21): `match s.e { ... }` where the payload is owned
   consumes only the field `s.e` (the rest of `s` stays usable), matching
   the `let e = s.e;` partial-field-move rule; previously the whole root
@@ -179,7 +179,7 @@ The following rules are authoritative for this session.
 
 ## 5. Validation
 
-- `tests/ownership.rs` — valid ownership programs (literals copy freely,
+- `tests/ownership.rs`: valid ownership programs (literals copy freely,
   owned strings move once, borrows leave the source usable, per-field
   moves, resurrection by assignment, result provenance through calls),
   invalid moves (use-after-move in every position, whole-struct move with
@@ -189,7 +189,7 @@ The following rules are authoritative for this session.
   adversarial/deep inputs.
 - Native end-to-end tests in `tests/ownership.rs` build and run valid
   ownership programs and verify the exact output and exit codes.
-- Full suite after session 16: **878 tests** (see
+- Full suite after session 16: 878 tests (see
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the
   per-file breakdown); after session 17 (data-free enums, which own
   nothing and are therefore unaffected by move semantics) the suite is
@@ -198,8 +198,8 @@ The following rules are authoritative for this session.
   **963 tests**; after the Session 21 deep audit (duplicate E-S10 removal
   and match-scrutinee partial-move alignment, +2 in `tests/ownership.rs`)
   the suite is **1048 tests**.
-- **Aggregate copy rule (implemented):** a struct or array is Copy iff it
-  contains no Owned value — `P { name: \"a\", age: 1 }` copies freely
+- Aggregate copy rule (implemented): a struct or array is Copy iff it
+  contains no Owned value, `P { name: \"a\", age: 1 }` copies freely
   (`let q = p; let r = p;` both fine), while `P { name: rt_str_alloc(3) }`
   moves as a whole. A whole-struct move is rejected (E-S10) if any field
   was already moved out, even when the remaining fields are Immutable.
@@ -207,4 +207,4 @@ The following rules are authoritative for this session.
 ## 6. What is deliberately absent
 
 - Borrow syntax, reference types, lifetimes, generics, RAII/drops,
-  shared ownership — see §1.7.
+  shared ownership, see §1.7.

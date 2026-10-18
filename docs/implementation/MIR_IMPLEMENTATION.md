@@ -1,8 +1,8 @@
-# MINK — MIR Implementation
+# MINK: MIR implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 09 — MIR / Control-Flow IR + Compiler Pipeline
+**Session:** 09, MIR / Control-Flow IR + Compiler Pipeline
 
 ## 1. Purpose
 
@@ -16,8 +16,8 @@ Where HIR mirrors the source's structural shape (nested blocks, one node
 per source construct, no flattening), MIR is **linear and
 control-flow-explicit**: every function is a directed graph of *basic
 blocks*, each block is an ordered list of *statements* ending in exactly
-one *terminator*, and every construct — `if`/`else`, `while`, `for`,
-`loop`, `break`, `continue`, `return` — has been lowered into jumps,
+one *terminator*, and every construct: `if`/`else`, `while`, `for`,
+`loop`, `break`, `continue`, `return`, has been lowered into jumps,
 branches, and returns.
 
 MIR is a **durable output**, not a transient view: like the HIR it was
@@ -27,7 +27,7 @@ valid after the HIR and the front end are dropped. Tooling (optimization,
 the native backend, diagnostics) can rely on it without borrowing anything
 upstream.
 
-## 2. HIR-to-MIR Boundary
+## 2. HIR-to-MIR boundary
 
 Lowering consumes one input and produces one output:
 
@@ -39,21 +39,21 @@ Lowering consumes one input and produces one output:
 
 The boundary is strict and one-directional:
 
-- **no re-analysis** — lowering never re-runs name resolution, type
+- no re-analysis: lowering never re-runs name resolution, type
   checking, or HIR lowering; it only *consumes* the answers HIR already
   carries;
-- **no duplicated systems** — MIR references `TypeId`s from the HIR's
+- no duplicated systems: MIR references `TypeId`s from the HIR's
   cloned `TypeTable` (re-cloned here so the program is self-contained) and
   `SymbolId`s where useful (module-item references, locals bound to source
   declarations); it defines its own `LocalId`/`BlockId` identity;
-- **exact spans** — every node preserves the source span of the construct
+- exact spans: every node preserves the source span of the construct
   it was lowered from;
-- **deterministic output** — items, locals, and blocks are produced in
+- deterministic output: items, locals, and blocks are produced in
   source order, so identical input always yields identical MIR;
-- **structured failures** — internal inconsistencies are reported as
+- structured failures: internal inconsistencies are reported as
   `MirError`s (`E-M01`…`E-M11`) instead of panicking.
 
-## 3. Node Design
+## 3. Node design
 
 | MIR node             | Notes                                             |
 | -------------------- | ------------------------------------------------- |
@@ -72,38 +72,38 @@ The boundary is strict and one-directional:
 
 Key points:
 
-- **Blocks are the unit of control flow.** A function's block list is
+- Blocks are the unit of control flow. A function's block list is
   ordered by id: the block at index `i` has id `i`, and the entry block is
   always block `0`. `MirFn::entry()` returns it.
-- **Exactly one terminator per block — by construction.** Blocks are only
+- Exactly one terminator per block, by construction. Blocks are only
   produced by the lowering builder, which ends each block exactly once the
   moment it is terminated. A builder that somehow leaves a block
   unterminated reports `E-M06` (a structured error, never a panic).
-- **Statements have no control flow.** The current language needs exactly
-  one statement form — assignment into a target — which covers `let`/`const`
+- Statements have no control flow. The current language needs exactly
+  one statement form, assignment into a target, which covers `let`/`const`
   bindings, plain and compound assignments, and temporary-producing
   expression evaluation. The enum is kept so later milestones (storage
   markers, debug info) can extend it.
-- **Literals keep their raw text.** Like the AST and HIR, literal *values*
+- Literals keep their raw text. Like the AST and HIR, literal *values*
   are not decoded into the IR: the raw source text is recovered from the
   constant's span via the source map. Decoding belongs to a later
   milestone. The one exception is the session-17 enum-variant constant
   (`MirConstantKind::Enum { variant }`): the discriminant is computed by
   the compiler from the enum's variant table, so it is carried as a value
   and decodes directly to a word.
-- **Member/index nodes are structural.** The memory-model milestone that
+- Member/index nodes are structural. The memory-model milestone that
   defines their place semantics does not exist yet; base (and index) values
   are evaluated to operands and the place is preserved so valid programs
   lower cleanly.
-- **`for` loop variables are mutable in MIR.** The loop machinery writes
+- `for` loop variables are mutable in MIR. The loop machinery writes
   the loop-variable slot each iteration, so MIR marks it mutable even
   though source-level reassignment is still rejected by semantic analysis.
-- **Module `let mut` is assignable.** A module-scope `let mut` binding can
+- Module `let mut` is assignable. A module-scope `let mut` binding can
   be assigned from any function; the `Static` target kind carries the
   declaration's `SymbolId` so references resolve across functions. When
   module-scope initialization runs is a backend concern.
 
-## 4. Control-Flow Lowering
+## 4. Control-Flow lowering
 
 ### 4.1 `if` / `else if` / `else`
 
@@ -183,11 +183,11 @@ A compound assignment (`x += v`) loads the target's current value, applies
 the corresponding binary operator, and stores the result. The value is
 evaluated before the target, deterministically.
 
-## 5. Deterministic Block Ordering
+## 5. Deterministic block ordering
 
 Blocks are *allocated* when their construct is entered but *finalized*
 (pushed into the block list) when they are terminated. A loop's exit block
-— allocated before the body's nested blocks — can therefore be finalized
+— allocated before the body's nested blocks, can therefore be finalized
 *after* them. A final renumbering pass assigns every finalized block its
 final id in list order and rewrites every terminator target, restoring the
 invariant that the block at index `i` has id `i`, with the entry block
@@ -199,14 +199,14 @@ first. The pass is deterministic for identical input, and validation
 `mir::validate(&program) -> Result<(), Vec<MirError>>` checks structural
 integrity before the MIR is trusted by later stages and tooling:
 
-- **valid block references** — every terminator target exists (`E-M07`);
-- **valid local references** — every statement, operand, and parameter
+- valid block references: every terminator target exists (`E-M07`);
+- valid local references: every statement, operand, and parameter
   references an existing local (`E-M08`);
-- **valid type references** — every `TypeId` resolves in the program's
+- valid type references: every `TypeId` resolves in the program's
   type table (`E-M09`);
-- **deterministic block ordering** — the block at index `i` has id `i`, so
+- deterministic block ordering: the block at index `i` has id `i`, so
   the entry block is first (`E-M10`);
-- **valid parameters** — parameters are the first locals, in order
+- valid parameters: parameters are the first locals, in order
   (`E-M11`).
 
 Missing terminators are impossible by construction (see §3); a builder
@@ -215,7 +215,7 @@ produces valid MIR, so validation exists to defend the pipeline and
 tooling against malformed hand-built or mutated programs, and every
 problem found is reported in deterministic order instead of panicking.
 
-## 7. Error Handling
+## 7. Error handling
 
 | Code | Kind                   | Meaning                                        |
 | ---- | ---------------------- | ---------------------------------------------- |
@@ -235,7 +235,7 @@ problem found is reported in deterministic order instead of panicking.
 errors) a rendered detail. `CheckError::Mir` renders them uniformly with
 the other stages' diagnostics.
 
-## 8. Driver and CLI Integration
+## 8. Driver and CLI integration
 
 `driver::check` now runs MIR lowering and validation when HIR lowering
 succeeded:
@@ -244,8 +244,8 @@ succeeded:
   validated; on success `CheckReport.mir` carries the [`MirProgram`];
 - a lowering or validation failure on a clean pipeline is an internal
   compiler error and is reported as `E-M01`…`E-M11` (exit 1);
-- a front end with semantic, type, or HIR errors is **not** lowered to
-  MIR — lowering an inconsistent pipeline would only add misleading
+- a front end with semantic, type, or HIR errors is not lowered to
+  MIR, lowering an inconsistent pipeline would only add misleading
   diagnostics;
 - `mink check` therefore validates through MIR: valid programs report
   `passed parsing, semantic analysis, type checking, HIR lowering, and MIR
@@ -254,7 +254,7 @@ succeeded:
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md`) and writes an
   executable; `mink check` still stops after optimization.
 
-## 9. Backend Boundary
+## 9. Backend boundary
 
 The native backend (`src/backend/`) consumes the **optimized** MIR graph:
 control flow is explicit (basic blocks, terminators), values are
@@ -265,7 +265,7 @@ place and the backend lowers it into a portable instruction representation
 before emission. Nothing in MIR pre-commits to a particular backend; the
 explicit CFG and canonical types are the intended seam.
 
-## 10. Known Limitations
+## 10. Known limitations
 
 - Literal values are not decoded into the IR (matching the AST and HIR):
   the raw text is recovered from the node's span via the source map.
@@ -290,29 +290,29 @@ tests in `src/mir/lower.rs` (5), the validation unit tests in
 `src/mir/validate.rs` (7), and the CLI tests in `tests/cli.rs` (3 new, 61
 total):
 
-- **Functions/locals**: parameter locals come first; bindings, temporaries,
+- Functions/locals: parameter locals come first; bindings, temporaries,
   mutability, and local types.
-- **Assignments**: plain and compound (`+=`) lowering, targets, stores.
-- **Calls and arithmetic**: unary/binary rvalues, call rvalues with
+- Assignments: plain and compound (`+=`) lowering, targets, stores.
+- Calls and arithmetic: unary/binary rvalues, call rvalues with
   callee/argument operands.
-- **Control flow**: if/else, nested branches (else-if chains join at one
+- Control flow: if/else, nested branches (else-if chains join at one
   continuation), while, for (init/header/body/exit blocks, `RangeNext`/
   `RangeFinished`, inclusive ranges), loop, break, continue, returns.
-- **Nested control flow**: loops inside branches, branches inside loops,
+- Nested control flow: loops inside branches, branches inside loops,
   deep control-flow programs.
-- **Block references**: terminator targets exist; block ordering (the block
+- Block references: terminator targets exist; block ordering (the block
   at index `i` has id `i`, entry is block 0).
-- **Terminators**: return/jump/branch shapes, bare vs. valued returns.
-- **Spans and types**: every node preserves the construct's span; all types
+- Terminators: return/jump/branch shapes, bare vs. valued returns.
+- Spans and types: every node preserves the construct's span; all types
   resolve in the cloned table.
-- **Malformed/internal cases**: dangling block references, dangling local
+- Malformed/internal cases: dangling block references, dangling local
   references, unknown type references, unordered block ids, misplaced
-  parameter locals, statics — every structural class produces exactly the
+  parameter locals, statics, every structural class produces exactly the
   expected `E-M07`…`E-M11`, never a panic.
-- **CLI**: valid programs report the message through MIR lowering; MIR
+- CLI: valid programs report the message through MIR lowering; MIR
   errors are not claimed on failing front ends.
 
-## 12. Quality Gates
+## 12. Quality gates
 
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
@@ -339,4 +339,4 @@ branches with binding copies) it is **963 tests** (see
 rvalues and tag-then-payload match lowering) it is **1007 tests** (see
 `SUM_TYPES_IMPLEMENTATION.md` §5), and after session 20 (explicit enum
 discriminants, with the tag constants widened to 64-bit values) it is
-**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5), and after the Session 21 deep audit it is **1048 tests** (see `REFERENCES_BORROWING_IMPLEMENTATION.md` §1.6/§1.8 and `OWNERSHIP_IMPLEMENTATION.md`).
+**1039 tests** (see `DISCRIMINANTS_IMPLEMENTATION.md` §5), and after the Session 21 deep audit it is 1048 tests (see `REFERENCES_BORROWING_IMPLEMENTATION.md` §1.6/§1.8 and `OWNERSHIP_IMPLEMENTATION.md`).

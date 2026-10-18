@@ -1,4 +1,4 @@
-# Session 93 — Linux HTTP Execution Verified
+# Session 93: Linux HTTP execution verified
 
 Date: 2026-09-03. Branch `main`, starting commit `7572a8a`. MINK v1.0.1.
 
@@ -6,7 +6,7 @@ Date: 2026-09-03. Branch `main`, starting commit `7572a8a`. MINK v1.0.1.
 
 No package manager, REPL, debugger, formatter, Git automation, C ABI, DLL/SO,
 Python/C++ interop work. This session's sole objective: **Linux HTTP =
-EXECUTION VERIFIED** — a generated MINK Linux ELF performing real localhost
+EXECUTION VERIFIED**, a generated MINK Linux ELF performing real localhost
 HTTP against a server that deliberately splits responses across many TCP
 sends.
 
@@ -21,15 +21,15 @@ sends.
 | env_get / env_has          | EXECUTION VERIFIED     | unchanged                                  | EXECUTION VERIFIED |
 | env_set / env_remove       | STUB (deferred)        | unchanged                                  | STUB               |
 | Crypto runtime subset      | EXECUTION VERIFIED     | unchanged                                  | EXECUTION VERIFIED |
-| **HTTP (Linux)**           | **BLOCKED**            | request/response round-trip verified       | **EXECUTION VERIFIED** |
+| HTTP (Linux)           | BLOCKED            | request/response round-trip verified       | EXECUTION VERIFIED |
 | Literal-free ownership     | E-R07 crash on free    | freeing image-region literal = safe no-op  | EXECUTION VERIFIED |
 | http_recv_all ownership    | latent per-chunk leak  | exact-length result, single-exit frees     | EXECUTION VERIFIED |
 
 ## Findings and fixes (each root-caused before patching)
 
-1. **Ownership blocker (architectural).** User-function `Str` parameters are
+1. Ownership blocker (architectural). User-function `Str` parameters are
    Owned (callers pass by move, per the frozen model) and callees must free
-   them — but `rt_str_free` on a literal crashed (E-R07 on Windows, silent
+   them, but `rt_str_free` on a literal crashed (E-R07 on Windows, silent
    exit on Linux). No stdlib function could therefore safely consume a heap
    string, and the whole `http_client_get` chain leaked on every platform.
    **Fix:** `rt_str_free`/`Free` of an immutable image-region string is now a
@@ -38,26 +38,26 @@ sends.
    minimal reusable primitive that makes consume-and-free implementable.
    Ownership doc rule updated accordingly.
 
-2. **`http_client_get_with` was never executed.** Session 70 HTTP tests were
-   parse-only, so the client path ran nowhere — not even on Windows. It
+2. `http_client_get_with` was never executed. Session 70 HTTP tests were
+   parse-only, so the client path ran nowhere. Not even on Windows. It
    hardcoded request-part lengths (`sm = 14`, `st = 24`) that do not match the
    actual literals (17 and 22 bytes), so the tail copy read past the literal
    (E-R09 on Linux). **Fix:** derive all lengths with `rt_str_len` from the
    literals (same pattern `http_client_post_with` already used).
 
-3. **`http_recv_all` returned a capacity-sized string.** The accumulation
+3. `http_recv_all` returned a capacity-sized string. The accumulation
    buffer is `MAX_BODY()+8192` bytes, so `rt_str_len(response)` was ~1 MiB no
    matter how many bytes arrived; parsed bodies would have been garbage.
    **Fix:** after the receive loop, copy exactly `total` received bytes into an
-   exact-length result and free the buffer — single textual frees, one exit.
+   exact-length result and free the buffer, single textual frees, one exit.
 
-4. **The 1 MiB receive buffer could not fit the 1 MiB heap arena.** `rt_str_alloc(MAX_BODY()+8192)` alone exceeded `HEAP_SIZE` (1,048,576), and the
+4. The 1 MiB receive buffer could not fit the 1 MiB heap arena. `rt_str_alloc(MAX_BODY()+8192)` alone exceeded `HEAP_SIZE` (1,048,576), and the
    final trim copy needs roughly 2× the body live at once. **Fix:** grow the
    shared arena to 4 MiB (`src/runtime/abi.rs`); BSS layout is computed from
    the constant for both platforms. `heap_exhaustion_is_e_ro2` resized to
    match (2 × 2 MiB then E-R02).
 
-5. **Allocator fragmentation (LIFO-top-only reuse).** The free list reused
+5. Allocator fragmentation (LIFO-top-only reuse). The free list reused
    only the most recently freed block; small blocks freed after a big one
    (per-request request/response strings) permanently hid the big block, so
    each `http_recv_all` bump-allocated a fresh 1 MiB and the arena died after
@@ -113,7 +113,7 @@ server + embedded client, runs through the Rust harness in WSL).
 | TCP connection            | EXECUTION VERIFIED |
 | Request serialization     | EXECUTION VERIFIED |
 | Send / receive            | EXECUTION VERIFIED |
-| Status code / headers / body parsing helpers | WINDOWS VERIFIED (parse tests); helpers are read-only — see ownership note |
+| Status code / headers / body parsing helpers | WINDOWS VERIFIED (parse tests); helpers are read-only, see ownership note |
 | Connection close semantics| EXECUTION VERIFIED (Connection: close) |
 | Error handling (refused, premature close) | EXECUTION VERIFIED |
 | Timeouts                  | MISSING (no socket timeout API) |
@@ -124,12 +124,12 @@ server + embedded client, runs through the Rust harness in WSL).
 
 ## Quality gates
 
-- `cargo fmt --check` — clean
-- `cargo clippy --all-targets --all-features` — only pre-existing warnings in
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets --all-features`: only pre-existing warnings in
   untouched files
-- `cargo test` — full suite 2514 passed / 0 failed (includes 71-process_lib
+- `cargo test`: full suite 2514 passed / 0 failed (includes 71-process_lib
   suite: 46 Linux WSL tests incl. new `linux_h01_http_execution_verified`)
-- `cargo build` / `cargo build --release` — clean
+- `cargo build` / `cargo build --release`: clean
 
 ## Remaining Linux gaps
 
@@ -138,7 +138,7 @@ server + embedded client, runs through the Rust harness in WSL).
 - Parse helpers cannot consume owned heap responses without leaking (V1
   move-model limitation; documented, with the inline-parse pattern as the
   supported usage)
-- Socket timeouts, chunked encoding, TLS, keep-alive — not in the API
+- Socket timeouts, chunked encoding, TLS, keep-alive. Not in the API
 - env_set / env_remove still deferred stubs
 - A real HTTP *project* (health checker over several endpoints) is embodied by
   the verified client; a fuller standalone example program is a natural next

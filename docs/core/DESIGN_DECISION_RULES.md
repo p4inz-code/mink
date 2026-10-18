@@ -1,9 +1,9 @@
-# MINK — Design Decision Rules
+# MINK: design decision rules
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
 
-## 1. Primary Evaluation
+## 1. Primary evaluation
 
 Every major technical decision must be evaluated against:
 
@@ -12,7 +12,7 @@ Every major technical decision must be evaluated against:
 3. Durability
 4. Flexibility
 
-## 2. Secondary Evaluation
+## 2. Secondary evaluation
 
 When multiple solutions satisfy the four pillars, evaluate:
 
@@ -42,7 +42,7 @@ Examples:
 
 The final decision must optimize the overall MINK experience.
 
-## 4. Safety Rule
+## 4. Safety rule
 
 When meaningful safety, correctness, security, or data-integrity risks conflict with unrestricted developer freedom:
 
@@ -50,25 +50,25 @@ When meaningful safety, correctness, security, or data-integrity risks conflict 
 
 Legitimate advanced use cases should receive controlled escape mechanisms where technically appropriate.
 
-## 5. Compatibility Rule
+## 5. Compatibility rule
 
 If a feature can be introduced without breaking valid existing code, the compatible approach should be preferred.
 
 Breaking changes should be extraordinarily rare.
 
-## 6. Complexity Rule
+## 6. Complexity rule
 
 When complexity can be hidden in compiler intelligence or tooling without reducing developer control or understanding:
 
 > **Prefer sophisticated tooling over unnecessary language syntax.**
 
-## 7. Innovation Rule
+## 7. Innovation rule
 
 MINK should maintain a stable core while allowing aggressive innovation around it.
 
 Innovation must not unnecessarily destabilize established projects.
 
-## 8. AI Rule
+## 8. AI rule
 
 When two designs provide comparable human developer experiences, prefer the design that also provides:
 
@@ -78,17 +78,17 @@ When two designs provide comparable human developer experiences, prefer the desi
 - Better deterministic behavior
 - Better automated refactoring
 
-## 9. Domain Rule
+## 9. Domain rule
 
 No architecture should optimize one target domain at the expense of preventing MINK from becoming a genuine general-purpose language.
 
-## 10. Ten-Year Rule
+## 10. Ten-Year rule
 
 Major architectural decisions should be judged against:
 
 > **Will this still be a strong foundation for MINK ten years from now?**
 
-## 11. Decision Quality
+## 11. Decision quality
 
 A technically impressive feature should not automatically be accepted.
 
@@ -96,7 +96,7 @@ A feature should exist only when its total value justifies implementation comple
 
 MINK should prefer high-value capabilities over feature quantity.
 
-## 12. Specification Consistency
+## 12. Specification consistency
 
 No document may contradict the Master Specification.
 
@@ -107,7 +107,7 @@ If a conflict is found:
 3. Correct the affected documents.
 4. Re-run consistency checks.
 
-## 13. Architecture Freeze
+## 13. Architecture freeze
 
 Once the technical architecture is frozen:
 
