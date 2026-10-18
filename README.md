@@ -45,20 +45,10 @@ What makes it different:
 **Requires Windows x64** and Node.js 18 or newer (which includes npm). MINK is
 distributed through npm.
 
-> **Published package state.** The registry serves 1.0.3 (`npm view
-> @p4inz-code/mink version` → `1.0.3`, `latest: 1.0.3`). The prepared current release is
-> **1.0.4**, the defect closure for the `mod collections;` build failure reported against
-> 1.0.3, listed in [What's New](#whats-new). Its tarball is built and verified (`npm pack`
-> → 28 files, 26 `stdlib/` modules, corrected `bin/mink.exe`, packaged `stdlib/`
-> byte-identical to the repository copy) and proven by a fresh isolated install of exactly
-> that tarball: `mink --version` reports `mink 1.0.4`, the original `mod collections;`
-> repro now builds and runs, and the mink-scout fixture is re-verified (`VERIFY: PASS`,
-> output identical to its 1.0.3 build). Publishing it to the registry is pending: the
-> stored npm token is rejected by the registry (E401/E404), the same condition recorded for
-> 1.0.3. Until a maintainer runs `npm publish ./npm/mink --access public` with a valid
-> token, the registry still serves 1.0.3. Which ships the `mod collections;` `E-B07` build
-> failure, and the corrected 1.0.4 compiler is prepared in this repository as the local
-> tag `v1.0.4` (push it together with the publish).
+> **Published package state.** The registry serves 1.0.4 (`npm view
+> @p4inz-code/mink version` → `1.0.4`). 1.0.4 fixes the `mod collections;` build failure
+> that 1.0.3 shipped with; see [What's New](#whats-new). If you installed 1.0.3 and hit
+> that failure, update to 1.0.4.
 
 ### Already have Node.js / npm?
 
@@ -258,8 +248,7 @@ mink explain E-T01             # explain a type mismatch error
 
 ### MINK 1.0.4
 
-**Current release, prepared and independently verified; the registry publish is pending a
-valid token (see the note in [Install MINK](#install-mink)).** This is a defect-closure
+**Current release, independently verified and published to npm.** This is a defect-closure
 release: it fixes the public `mod collections;` build failure reported against 1.0.3. A
 program that imported the bundled `collections` module but never called `vec_min` or
 `vec_max` passed `mink check` and then failed `mink build` with four `E-B07` diagnostics
@@ -299,16 +288,14 @@ Changed in this release (a defect closure; no new features):
 
 ### MINK 1.0.3
 
-**Previous release (superseded by 1.0.4).** Built, packaged, and verified; the registry copy follows the
-maintainer's `npm publish ./npm/mink --access public` (the stored token was rejected,
-E401, see the note in [Install MINK](#install-mink)). 1.0.2 remains published but
-superseded: it was cut from an earlier commit, so its compiler binary predates the
+**Previous release (superseded by 1.0.4).** Built, packaged, verified and published to npm.
+1.0.2 remains published but superseded: it was cut from an earlier commit, so its compiler binary predates the
 monomorphization and capture fixes below.
 
 Changed in this release (a release-distribution correction; no new features):
 
-- Corrected compiler ready for the registry: the four monomorphization and capture
-  fixes below are what an installed user receives once 1.0.3 is published. The 1.0.2
+- Corrected compiler: the four monomorphization and capture
+  fixes below are what an installed user receives with 1.0.3. The 1.0.2
   registry package was published from the pre-fix commit and did not contain them; do
   not pin 1.0.2.
 - Corrected runtime ownership: a map replace or set insert that discards an existing
