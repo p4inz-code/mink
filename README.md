@@ -1,6 +1,9 @@
 <div align="center">
 
-# MINK
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/web/github/mink-readme-header-dark.png">
+  <img alt="MINK" src="assets/brand/web/github/mink-readme-header-light.png" width="640">
+</picture>
 
 **A systems-oriented native programming language for Windows x86_64.**
 
@@ -104,6 +107,26 @@ mink --version
 > **Do I need Rust?** No. The npm package ships a pre-built compiler binary. You do not need Rust, Cargo, or any build tools.
 >
 > **Do I need to download `mink.exe` manually?** No. `npm install` handles everything.
+
+### Optional: give `.mink` files their own Windows identity
+
+The package ships the official MINK source-file icon and a per-user registration script that
+makes `.mink` a real Windows file type — **MINK Source File**, content type `text/x-mink`, with
+the MINK source-file icon. It applies to your account only, needs no administrator rights, and
+double-clicking a `.mink` file never compiles or runs it: Windows asks once which editor to use
+and remembers that answer.
+
+```powershell
+$package = Join-Path (npm root -g) '@p4inz-code\mink'
+powershell -ExecutionPolicy Bypass -File "$package\windowsegister-mink-filetype.ps1"
+# remove it again:
+powershell -ExecutionPolicy Bypass -File "$package\windowsegister-mink-filetype.ps1" -Uninstall
+```
+
+Bind one editor immediately with `-Editor "C:\Program Files\Microsoft VS Code\Code.exe"`, or
+take over an existing `.mink` association with `-Force` (the previous owner is restored by
+`-Uninstall`). Registry layout, open behaviour and limitations:
+[`docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md`](docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md).
 
 ## Quick Start
 
@@ -523,6 +546,8 @@ fn main() {
 - [`docs/core/`](docs/core/) — master specification and design rules
 - [`docs/runtime/`](docs/runtime/) — runtime, memory, and concurrency model
 - [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md) — implementation roadmap
+- [`docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md`](docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md) — brand assets, the `.mink` Windows file type and icon integration
+- [`assets/brand/`](assets/brand/) — official MINK logo, icon and web artwork
 
 ## Development
 

@@ -1,0 +1,15 @@
+// Embed the MINK application icon in mink.exe.
+//
+// Reference resource script only: MINK's compiler is built by cargo with no build
+// script and no external toolchain, so nothing compiles this file automatically. See
+// docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md for why, and for the exact commands.
+//
+// MSVC:  rc /fo mink.res mink.rc        then add mink.res to the linker input
+// MinGW: windres mink.rc -O coff -o mink.res.o
+//
+// Icon resource 1 is the application icon (Explorer, taskbar, file properties);
+// resource 2 is the `.mink` source-file icon for embedding once the file-type
+// registration can reference an embedded resource instead of a loose .ico file.
+// Both ICOs sit next to this file.
+1 ICON "mink-app.ico"
+2 ICON "mink-file.ico"
