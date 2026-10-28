@@ -902,3 +902,48 @@ fn main() -> Int {
 "#;
     assert_eq!(native_exit_code(src), 1);
 }
+
+// ==========================================================================
+// SECTION 13: `net_last_error` before `net_init` (Session 142 regression)
+// ==========================================================================
+//
+// Winsock's function table lives in the runtime's BSS and is resolved by
+// `net_init`. The getter used that table unconditionally, so calling it
+// before initialization dereferenced a null pointer (exit 139). The defined
+// behaviour is 0: the value `WSAGetLastError` itself reports when no error
+// has been recorded, the fixed Linux result, and the runtime's established
+// "not initialized" answer.
+
+#[test]
+fn n107_net_last_error_before_net_init_is_zero_and_does_not_crash() {
+    let src = r#"
+fn main() -> Int {
+    let before = net_last_error();
+    let init = net_init();
+    net_cleanup();
+    let cleaned = net_last_error();
+    if before == 0 && init == 0 && cleaned == 0 { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(native_exit_code(src), 1);
+}
+
+#[test]
+fn n108_net_last_error_still_reports_failures_after_init() {
+    // The initialized path is unchanged: a refused connect still leaves
+    // WSAECONNREFUSED (10061) available to the getter.
+    let src = r#"
+fn main() -> Int {
+    net_init();
+    let sock = net_tcp_socket();
+    let result = net_connect(sock, "127.0.0.1", 19994);
+    let err = net_last_error();
+    net_close(sock);
+    net_cleanup();
+    if sock != -1 && result == -1 && err == 10061 { return 1; }
+    return 0;
+}
+"#;
+    assert_eq!(native_exit_code(src), 1);
+}

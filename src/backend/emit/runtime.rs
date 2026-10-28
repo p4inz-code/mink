@@ -6395,11 +6395,22 @@ fn emit_net_wsa_cleanup(code: &mut Code) {
 /// `rt_net_wsa_last_error() -> Str`: Return WSAGetLastError as a string.
 fn emit_net_wsa_last_error(code: &mut Code) {
     prologue(code);
+    // Before WSAStartup the ws2_32 table is still null, so calling the
+    // WSAGetLastError slot would fault. Report 0 instead: that is what
+    // WSAGetLastError itself returns when no error has been recorded, the
+    // same fixed result the Linux implementation returns, and the value the
+    // surrounding runtime uses for "not initialized" (`net_socket` answers
+    // -1, `net_wsa_cleanup` answers 0).
+    let skip = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, skip); // jz: WSA not initialized -> no error to report
     // WSAGetLastError() -> int (intrinsic returns Int)
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 16)); // slot 2
     code.sub_rsp(32);
     code.call_rax();
     code.add_rsp(32);
+    code.bind_label(skip);
     // Return the integer error code directly
     code.leave_ret();
 }

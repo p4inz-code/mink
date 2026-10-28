@@ -66,7 +66,8 @@ fn net_cleanup() -> Int {
     return rt_net_wsa_cleanup();
 }
 
-// Get the last Winsock error code.
+// Get the last Winsock error code. Safe before net_init(): it reports 0,
+// since no Winsock call can have recorded an error yet.
 fn net_last_error() -> Int {
     return rt_net_wsa_last_error();
 }
