@@ -405,5 +405,13 @@ their outcomes in a single integer rather than loosening the assertion.
 - Linux: not touched; the ELF backend and the Linux plan remain frozen.
 - Working tree: this session's files plus the pre-existing Sessions 128–139 changes listed in
   §1, which were **not** modified, staged or discarded.
-- Git actions performed: one local commit of this session's isolated work. No merge, no rebase,
-  no reset, no clean, no amend, no push, no tag.
+- Git actions performed: one local commit of this session's isolated work —
+  **`6468bdced973579029a04476196b3f545f7134b9`**, *parser: accept an if without else as a
+  statement inside expression blocks* (6 files, +818/−1: `src/parser/mod.rs`,
+  `src/lexer/scanner.rs`, `tests/parser.rs`, `tests/if_expressions.rs`,
+  `docs/language/CORE_GRAMMAR.md`, this record). The commit after it adds only this final-state
+  note, so the work itself stays in `6468bdc`.
+- Branch state after the commit: `main`, HEAD `6468bdc`, `origin/main` `b860837`,
+  **ahead 3, behind 1** (the divergence of §2 is unchanged and still needs the maintainer's
+  merge decision). Working tree: 0 staged, the 46 pre-existing entries of §1 still dirty.
+- No merge, no rebase, no reset, no clean, no amend, no push, no tag.
