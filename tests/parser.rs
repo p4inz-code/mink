@@ -1832,6 +1832,131 @@ fn deeply_nested_parentheses_parse() {
         .expect("test thread did not panic");
 }
 
+// =========================================================================
+// `if` in an expression block (Session 140, M3 P1 — M2 A5 regression)
+//
+// An expression block's last item may be a trailing expression, so an `if`
+// there used to be forced through the if-*expression* grammar, which requires
+// an `else`. A plain statement `if` (and an `else if` chain with no final
+// `else`) therefore failed to parse inside a closure body even though the
+// identical body compiles in a function. The block-expression parser now
+// tries the expression form and falls back to the statement form.
+// =========================================================================
+
+/// Parses `src` as a closure expression, returning its body block.
+fn closure_body(src: &str) -> Block {
+    let closure = expr(src);
+    let ExprKind::Closure { body, .. } = closure.kind else {
+        panic!("expected a closure for {src:?}, found {closure:?}")
+    };
+    let ExprKind::Block(block) = body.kind else {
+        panic!("expected a block body for {src:?}, found {body:?}")
+    };
+    *block
+}
+
+/// A statement `if` with no `else` is a statement — not an if-expression —
+/// inside a closure body's expression block.
+#[test]
+fn closure_block_statement_if_without_else_parses_as_a_statement() {
+    let block = closure_body("|x: Int| { if x > 0 { let y = 1; } return 0; }");
+    assert_eq!(block.stmts.len(), 2, "statements: {:?}", block.stmts);
+    let StmtKind::If(if_stmt) = &block.stmts[0].kind else {
+        panic!("expected an if statement, found {:?}", block.stmts[0].kind)
+    };
+    assert!(
+        if_stmt.else_branch.is_none(),
+        "statement `if` must have no else branch: {if_stmt:?}"
+    );
+    assert!(
+        matches!(&block.stmts[1].kind, StmtKind::Return(_)),
+        "expected a return statement, found {:?}",
+        block.stmts[1].kind
+    );
+    assert!(block.result.is_none(), "block must have no trailing value");
+}
+
+/// An `else if` chain with no final `else` is a statement chain inside a
+/// closure body, exactly as it is in a function body.
+#[test]
+fn closure_block_else_if_chain_without_final_else_parses_as_a_statement() {
+    let block = closure_body(
+        "|x: Int| { if x == 1 { let a = 10; } else if x == 2 { let b = 20; } return 0; }",
+    );
+    let StmtKind::If(if_stmt) = &block.stmts[0].kind else {
+        panic!("expected an if statement, found {:?}", block.stmts[0].kind)
+    };
+    let Some(ElseBranch::If(nested)) = &if_stmt.else_branch else {
+        panic!("expected an `else if` statement branch: {if_stmt:?}")
+    };
+    assert!(
+        nested.else_branch.is_none(),
+        "the chain must end without an else: {nested:?}"
+    );
+}
+
+/// A statement `if` followed by a trailing expression: the `if` is a
+/// statement and the trailing expression is still the block's value.
+#[test]
+fn closure_block_statement_if_before_a_trailing_expression_parses() {
+    let block = closure_body("|x: Int| { if x > 0 { let y = 1; } x }");
+    assert_eq!(block.stmts.len(), 1, "statements: {:?}", block.stmts);
+    assert!(
+        matches!(&block.stmts[0].kind, StmtKind::If(IfStmt { else_branch: None, .. })),
+        "expected a statement `if`, found {:?}",
+        block.stmts[0].kind
+    );
+    let Some(result) = &block.result else {
+        panic!("expected a trailing expression")
+    };
+    assert!(
+        matches!(result.kind, ExprKind::Ident(_)),
+        "expected the trailing identifier, found {result:?}"
+    );
+}
+
+/// A trailing `if`/`else` in a closure body is still an if-expression whose
+/// value is the block's result.
+#[test]
+fn closure_block_trailing_if_expression_parses_as_an_expression() {
+    let block = closure_body("|x: Int| { if x > 0 { 1 } else { 0 } }");
+    assert!(block.stmts.is_empty(), "statements: {:?}", block.stmts);
+    let Some(result) = &block.result else {
+        panic!("expected a trailing if-expression")
+    };
+    assert!(
+        matches!(result.kind, ExprKind::IfExpr(_)),
+        "expected an if-expression, found {result:?}"
+    );
+}
+
+/// A block expression (not only a closure body) accepts a statement `if`
+/// with no `else` before its trailing expression.
+#[test]
+fn block_expression_statement_if_without_else_parses() {
+    let block = expr("{ if 1 == 1 { let y = 1; } 7 }");
+    let ExprKind::Block(block) = block.kind else {
+        panic!("expected a block expression")
+    };
+    assert_eq!(block.stmts.len(), 1, "statements: {:?}", block.stmts);
+    assert!(
+        matches!(&block.stmts[0].kind, StmtKind::If(IfStmt { else_branch: None, .. })),
+        "expected a statement `if`, found {:?}",
+        block.stmts[0].kind
+    );
+    assert!(block.result.is_some(), "expected a trailing expression");
+}
+
+/// The `else` requirement for an if-*expression* in value position is
+/// unchanged: a `let` initializer without `else` still reports `E-P26`.
+#[test]
+fn if_expression_without_else_in_value_position_still_requires_else() {
+    assert_eq!(
+        error_kinds("fn f() { let v = if 1 == 1 { 1 }; }"),
+        vec![ParseErrorKind::ExpectedElse]
+    );
+}
+
 #[test]
 fn long_program_parses() {
     let mut program = String::new();

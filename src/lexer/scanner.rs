@@ -75,6 +75,11 @@ pub fn lex(file: &SourceFile) -> Lexed {
 ///
 /// The lexer scans the source text in a single forward pass using byte
 /// offsets and never allocates per token: `Token` is a `Copy` value.
+///
+/// `Clone` snapshots the scan position (including the recorded errors), which
+/// lets the parser try a grammar alternative without consuming the input. See
+/// the speculative `if`-expression parse in `Parser::parse_block_expr`.
+#[derive(Clone)]
 pub struct Lexer<'a> {
     file: &'a SourceFile,
     pos: u32,

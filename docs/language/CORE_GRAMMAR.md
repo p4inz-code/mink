@@ -563,6 +563,14 @@ BlockExpr   := '{' Stmt* Expr? '}'
   expression (parenthesized); `{ expr }` is a block expression returning
   `expr`. `if expr { a } else { b }` in statement position is an
   if-statement; in expression position it is an if-expression.
+- **`if` inside an expression block (clarified in Session 140).** Because an
+  expression block's last item may be a trailing expression, an `if` there is
+  disambiguated by its own shape, not by the block: a chain that ends in an
+  `else` branch is an if-expression, and a chain that does not is a statement
+  `if`. A statement `if` therefore parses in a closure body or a block
+  expression exactly as it does in a function body, including an `else if`
+  chain with no final `else`. Only an if-*expression* requires `else`
+  (`E-P26`), which is why `let x = if c { 1 };` stays rejected.
 
 The session-28 lexer needed no changes (`if`, `{`, `}`, `else` already
 existed). Exclusions from §2 and §9 that remain (`type` aliases,

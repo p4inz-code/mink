@@ -92,6 +92,11 @@ pub fn parse(file: &SourceFile) -> ParseOutput {
 }
 
 /// A recursive-descent parser over a single source file.
+///
+/// `Clone` snapshots the whole parse state (input position, recorded lexer and
+/// parser errors, delimiter stack, token count), so a grammar alternative can
+/// be attempted and rolled back. See `parse_block_expr`'s `if` handling.
+#[derive(Clone)]
 struct Parser<'a> {
     file: &'a SourceFile,
     lexer: Lexer<'a>,
@@ -2666,7 +2671,33 @@ impl<'a> Parser<'a> {
                             Err(()) => self.recover_statement(),
                         }
                     } else {
-                        let expr = self.parse_expression()?;
+                        // An `if` is an if-expression only when the chain ends
+                        // in an `else` branch; otherwise it is an ordinary
+                        // statement (`if cond { ... }` with no `else`). Attempt
+                        // the expression form first and roll the parse back when
+                        // it does not apply, so a statement `if` — and an
+                        // `else if` chain with no final `else` — parses in an
+                        // expression block exactly as it does in a function
+                        // body. Without this the required `else` was reported
+                        // (E-P26) for a perfectly valid statement.
+                        let expr = if self.current_kind() == TokenKind::If {
+                            let snapshot = self.clone();
+                            match self.parse_expression() {
+                                Ok(expr) => expr,
+                                Err(()) => {
+                                    // Not an if-expression: reparse the same
+                                    // tokens as a statement.
+                                    *self = snapshot;
+                                    match self.parse_statement() {
+                                        Ok(stmt) => stmts.push(stmt),
+                                        Err(()) => self.recover_statement(),
+                                    }
+                                    continue;
+                                }
+                            }
+                        } else {
+                            self.parse_expression()?
+                        };
                         if self.current_kind() == TokenKind::Semi {
                             let semi = self.bump().span();
                             let span = self.join(expr.span, semi);
