@@ -1957,6 +1957,269 @@ fn if_expression_without_else_in_value_position_still_requires_else() {
     );
 }
 
+// =========================================================================
+// `parse_block_expr` trailing-token ownership (Session 148, M3 P8)
+//
+// A trailing expression must be the block's last item. When another token
+// follows it, the expression is an expression statement missing its `;`;
+// the parser reports that error at the following token and must leave the
+// token in place. Consuming it as the block's `}` previously truncated the
+// enclosing block, function, or closure and cascaded into a false E-P01.
+// =========================================================================
+
+/// P1 — the minimal reproducer: the token after a trailing expression is not
+/// consumed as `}`, so the block still owns its real closing brace.
+#[test]
+fn block_expr_missing_semi_keeps_the_next_token() {
+    let output = parse_src("fn f() { let v = { 1 2 }; }");
+    let errors: Vec<_> = output.parse_errors().iter().map(|e| e.kind()).collect();
+    assert_eq!(errors, vec![ParseErrorKind::ExpectedSemicolon]);
+
+    let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
+        panic!("expected a function item")
+    };
+    let StmtKind::Let(binding) = &func.body.stmts[0].kind else {
+        panic!("expected a let statement")
+    };
+    let ExprKind::Block(block) = &binding.init.kind else {
+        panic!("expected a block initializer")
+    };
+    assert_eq!(block.stmts.len(), 1, "statements: {:?}", block.stmts);
+    assert!(matches!(&block.stmts[0].kind, StmtKind::Expr(_)));
+    assert!(matches!(
+        block.result.as_ref().map(|e| &e.kind),
+        Some(ExprKind::Int)
+    ));
+}
+
+/// P2 — the same recovery inside a nested block: the inner block consumes its
+/// own `}`, and the outer block's `let ...;` and trailing expression survive.
+#[test]
+fn nested_block_expr_missing_semi_recovers_inside_the_inner_block() {
+    let output = parse_src("fn f() { let v = { let a = { 1 2 }; a }; }");
+    let errors: Vec<_> = output.parse_errors().iter().map(|e| e.kind()).collect();
+    assert_eq!(errors, vec![ParseErrorKind::ExpectedSemicolon]);
+
+    let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
+        panic!("expected a function item")
+    };
+    let StmtKind::Let(binding) = &func.body.stmts[0].kind else {
+        panic!("expected a let statement")
+    };
+    let ExprKind::Block(outer) = &binding.init.kind else {
+        panic!("expected an outer block")
+    };
+    let StmtKind::Let(inner_binding) = &outer.stmts[0].kind else {
+        panic!("expected the inner let statement")
+    };
+    let ExprKind::Block(inner) = &inner_binding.init.kind else {
+        panic!("expected the inner block")
+    };
+    assert_eq!(inner.stmts.len(), 1, "inner statements: {:?}", inner.stmts);
+    assert!(matches!(
+        inner.result.as_ref().map(|e| &e.kind),
+        Some(ExprKind::Int)
+    ));
+    assert!(matches!(
+        outer.result.as_ref().map(|e| &e.kind),
+        Some(ExprKind::Ident(_))
+    ));
+}
+
+/// P3 — a block expression as the right operand of an operator is unchanged.
+#[test]
+fn block_expr_as_rhs_operand_parses() {
+    let e = expr("2 + { 1 }");
+    let ExprKind::Binary { op, lhs, rhs } = &e.kind else {
+        panic!("expected a binary expression, found {e:?}")
+    };
+    assert_eq!(*op, BinaryOp::Add);
+    assert!(matches!(&lhs.kind, ExprKind::Int));
+    assert!(matches!(&rhs.kind, ExprKind::Block(_)));
+}
+
+/// P4 — a block expression followed by an operator is unchanged.
+#[test]
+fn block_expr_followed_by_operator_parses() {
+    let e = expr("{ 1 } + 2");
+    let ExprKind::Binary { op, lhs, rhs } = &e.kind else {
+        panic!("expected a binary expression, found {e:?}")
+    };
+    assert_eq!(*op, BinaryOp::Add);
+    assert!(matches!(&lhs.kind, ExprKind::Block(_)));
+    assert!(matches!(&rhs.kind, ExprKind::Int));
+}
+
+/// P5 — the error is the local missing-`;`, not a downstream top-level error,
+/// and the statement after the block still belongs to the function.
+#[test]
+fn block_expr_missing_semi_reports_only_the_local_error() {
+    let output = parse_src("fn f() { let v = { 1 2 }; let w = 3; }");
+    let errors: Vec<_> = output.parse_errors().iter().map(|e| e.kind()).collect();
+    assert_eq!(errors, vec![ParseErrorKind::ExpectedSemicolon]);
+
+    let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
+        panic!("expected a function item")
+    };
+    assert_eq!(func.body.stmts.len(), 2, "statements: {:?}", func.body.stmts);
+    assert!(matches!(&func.body.stmts[1].kind, StmtKind::Let(_)));
+}
+
+/// P6 — the Session 140 speculative `if`-expression attempt still restores the
+/// cursor: the following `7` is the trailing expression and the next `let` is
+/// still parsed.
+#[test]
+fn block_expr_if_statement_fallback_restores_the_cursor() {
+    let output = parse_src(
+        "fn f() { let v = { if 1 == 1 { let a = 1; } 7 }; let w = 2; }",
+    );
+    assert!(
+        output.parse_errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        output.parse_errors()
+    );
+    let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
+        panic!("expected a function item")
+    };
+    assert_eq!(func.body.stmts.len(), 2);
+    let StmtKind::Let(binding) = &func.body.stmts[0].kind else {
+        panic!("expected a let statement")
+    };
+    let ExprKind::Block(block) = &binding.init.kind else {
+        panic!("expected a block initializer")
+    };
+    assert_eq!(block.stmts.len(), 1, "statements: {:?}", block.stmts);
+    assert!(matches!(
+        &block.stmts[0].kind,
+        StmtKind::If(IfStmt {
+            else_branch: None,
+            ..
+        })
+    ));
+    assert!(matches!(
+        block.result.as_ref().map(|e| &e.kind),
+        Some(ExprKind::Int)
+    ));
+}
+
+/// P7 — Session 140 compatibility: a statement `if` without `else` in an
+/// expression block remains valid and is still a statement.
+#[test]
+fn block_expr_statement_if_without_else_remains_valid() {
+    let block = closure_body("|x: Int| { if x > 0 { let y = 1; } x }");
+    assert_eq!(block.stmts.len(), 1, "statements: {:?}", block.stmts);
+    assert!(matches!(
+        &block.stmts[0].kind,
+        StmtKind::If(IfStmt {
+            else_branch: None,
+            ..
+        })
+    ));
+    assert!(matches!(
+        block.result.as_ref().map(|e| &e.kind),
+        Some(ExprKind::Ident(_))
+    ));
+}
+
+/// P8 — a normal `if`/`else` expression remains the block's value.
+#[test]
+fn block_expr_if_else_expression_remains_valid() {
+    let e = expr("{ if 1 == 1 { 1 } else { 2 } }");
+    let ExprKind::Block(block) = &e.kind else {
+        panic!("expected a block expression")
+    };
+    assert!(block.stmts.is_empty(), "statements: {:?}", block.stmts);
+    assert!(matches!(
+        block.result.as_ref().map(|e| &e.kind),
+        Some(ExprKind::IfExpr(_))
+    ));
+}
+
+/// P9 — a nested `else if` expression chain remains valid.
+#[test]
+fn block_expr_nested_else_if_expression_remains_valid() {
+    let e = expr("{ if 1 == 1 { 1 } else if 2 == 2 { 2 } else { 3 } }");
+    let ExprKind::Block(block) = &e.kind else {
+        panic!("expected a block expression")
+    };
+    let Some(result) = &block.result else {
+        panic!("expected a trailing if-expression")
+    };
+    let ExprKind::IfExpr(if_expr) = &result.kind else {
+        panic!("expected an if-expression, found {result:?}")
+    };
+    let ElseBranch::IfExpr(nested) = &if_expr.else_branch else {
+        panic!("expected an `else if` expression: {if_expr:?}")
+    };
+    assert!(matches!(&nested.else_branch, ElseBranch::Block(_)));
+}
+
+/// P10 — a closure's ordinary statement-plus-trailing-expression body is
+/// unchanged.
+#[test]
+fn block_expr_closure_trailing_expression_remains_valid() {
+    let block = closure_body("|x: Int| { let y = x + 1; y * 2 }");
+    assert_eq!(block.stmts.len(), 1, "statements: {:?}", block.stmts);
+    let Some(result) = &block.result else {
+        panic!("expected a trailing expression")
+    };
+    assert!(matches!(
+        &result.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Mul,
+            ..
+        }
+    ));
+}
+
+/// P11 — a block expression in a return remains valid.
+#[test]
+fn block_expr_in_return_remains_valid() {
+    let output = parse_src("fn f() -> Int { return { 1 + 2 }; }");
+    assert!(
+        output.parse_errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        output.parse_errors()
+    );
+    let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
+        panic!("expected a function item")
+    };
+    let StmtKind::Return(Some(value)) = &func.body.stmts[0].kind else {
+        panic!("expected a return with a value")
+    };
+    assert!(matches!(&value.kind, ExprKind::Block(_)));
+}
+
+/// P12 — two missing semicolons produce two local errors and two recovered
+/// statements; no token is silently swallowed by a fake closing brace.
+#[test]
+fn block_expr_multiple_missing_semis_do_not_swallow_tokens() {
+    let output = parse_src("fn f() { let v = { 1 2 3 }; let w = 4; }");
+    let errors: Vec<_> = output.parse_errors().iter().map(|e| e.kind()).collect();
+    assert_eq!(
+        errors,
+        vec![
+            ParseErrorKind::ExpectedSemicolon,
+            ParseErrorKind::ExpectedSemicolon
+        ]
+    );
+    let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
+        panic!("expected a function item")
+    };
+    assert_eq!(func.body.stmts.len(), 2, "statements: {:?}", func.body.stmts);
+    let StmtKind::Let(binding) = &func.body.stmts[0].kind else {
+        panic!("expected a let statement")
+    };
+    let ExprKind::Block(block) = &binding.init.kind else {
+        panic!("expected a block initializer")
+    };
+    assert_eq!(block.stmts.len(), 2, "statements: {:?}", block.stmts);
+    assert!(matches!(
+        block.result.as_ref().map(|e| &e.kind),
+        Some(ExprKind::Int)
+    ));
+}
+
 #[test]
 fn long_program_parses() {
     let mut program = String::new();

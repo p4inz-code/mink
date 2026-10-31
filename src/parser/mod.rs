@@ -2706,17 +2706,46 @@ impl<'a> Parser<'a> {
                                 span,
                             });
                         } else {
-                            // Trailing expression — must be the last item.
-                            result = Some(expr);
-                            break;
+                            // A trailing expression must be the last item. If
+                            // the next token is neither `;` (handled above),
+                            // `}`, nor end of input, the preceding expression
+                            // statement is missing its `;`. Report that here
+                            // and keep the expression as a statement so the
+                            // following token is not consumed as the block's
+                            // closing brace.
+                            if self.current_kind() == TokenKind::RBrace
+                                || self.current_kind() == TokenKind::Eof
+                            {
+                                result = Some(expr);
+                                break;
+                            }
+                            let token = self.current();
+                            self.record_error(ParseErrorKind::ExpectedSemicolon, token.span());
+                            let span = expr.span;
+                            stmts.push(Stmt {
+                                kind: StmtKind::Expr(expr),
+                                span,
+                            });
                         }
                     }
                 }
             }
         }
-        let close = self.bump().span(); // `}`
-        self.open_delims.pop();
-        let span = self.join(open, close);
+        if self.current_kind() == TokenKind::RBrace {
+            let close = self.bump().span();
+            self.open_delims.pop();
+            let span = self.join(open, close);
+            return Ok(Block {
+                stmts,
+                result,
+                span,
+            });
+        }
+        // The loop only leaves through a trailing expression. If that
+        // expression is followed by end of input, the block's `}` was never
+        // written; report it at the opener rather than consuming the Eof.
+        self.report_unclosed(TokenKind::LBrace, ParseErrorKind::UnclosedBrace);
+        let span = Span::new(self.file.id(), open.start()..self.file.len());
         Ok(Block {
             stmts,
             result,
