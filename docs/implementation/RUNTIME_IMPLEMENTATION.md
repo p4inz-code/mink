@@ -101,6 +101,18 @@ The `.text` entry-point stub:
 | `WriteStdout`      | `write(buf, len)`                 | cached handle through `WriteFile`      |
 | `WriteStderr`      | `write(buf, len)`                 | cached handle through `WriteFile`      |
 
+Printing has no initialization dependency. `rt_print_int`, `rt_print_float`
+and `rt_print_char` format their text in per-call stack scratch and write the
+text and its CRLF with one `WriteStdout` call. They read no cell written by
+`rt_init` (the image's `.bss` is loader-zeroed, and the stdout handle is
+fetched and cached on first use), so the first print needs no `rt_init`.
+There is no print init flag, no print cleanup, and no allocation. Because the
+scratch is per call and the line leaves in one write, concurrent prints
+cannot overwrite each other's digits or split each other's lines; no lock or
+thread-local state is involved. `rt_str_from_float` still formats through the
+same float writer, but its write redirect stores the arming thread's id, so a
+print on another thread cannot be captured into the formatter's sink.
+
 The intrinsics are predeclared as `SymbolKind::Intrinsic` module symbols
 (`rt_alloc`, `rt_free`, `rt_mem_load`, `rt_mem_store`, `rt_str_alloc`,
 `rt_str_free`, `rt_str_len`, `rt_str_byte`, `rt_str_set_byte`,

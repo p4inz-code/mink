@@ -229,6 +229,51 @@ fn print_int_zero_and_single_digit() {
     assert_eq!(stdout, b"0\r\n1\r\n");
 }
 
+#[test]
+fn print_int_float_interleaving_and_repeats_are_exact() {
+    // Session 143: one matrix over both numeric print intrinsics — first
+    // call, repeats, zero, negatives, the Int extremes, fractional and
+    // extreme Float values, every int/float ordering, and the
+    // float-to-string formatter between prints. The exact bytes are the
+    // regression: values and CRLF framing must not change, and formatting a
+    // float into a string must not disturb the next print.
+    let exe = build(
+        "fn main() {
+            rt_print_int(0);
+            rt_print_int(42);
+            rt_print_int(-7);
+            rt_print_int(9223372036854775807);
+            rt_print_int(0 - 9223372036854775807 - 1);
+            rt_print_float(0.0);
+            rt_print_float(1.5);
+            rt_print_float(-2.25);
+            rt_print_float(0.015);
+            rt_print_float(123456.25);
+            rt_print_float(1e308);
+            rt_print_float(5e-324);
+            rt_print_int(11);
+            rt_print_float(2.5);
+            rt_print_int(-3);
+            rt_print_float(3.5);
+            rt_print_int(0);
+            rt_print_float(0.5);
+            let s = rt_str_from_float(1.5);
+            rt_print_int(rt_str_len(s));
+            rt_str_free(s);
+            rt_print_int(99);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout,
+        b"0\r\n42\r\n-7\r\n9223372036854775807\r\n-9223372036854775808\r\n\
+          0\r\n1.5\r\n-2.25\r\n0.014999999999999999\r\n123456.25\r\n1e+308\r\n\
+          4.9406564584124654e-324\r\n11\r\n2.5\r\n-3\r\n3.5\r\n0\r\n0.5\r\n3\r\n99\r\n"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Strings: rt_print_str, rt_str_alloc, rt_str_len, byte access
 // ---------------------------------------------------------------------------

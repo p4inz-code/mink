@@ -647,6 +647,158 @@ fn main() -> Int {
 }
 
 #[test]
+fn s143_concurrent_print_int_emits_one_intact_line_per_call() {
+    // Session 143: `rt_print_int` built its digits in the process-global
+    // `.bss` `print_buf` and then wrote the digits and the CRLF with two
+    // separate writes. Two threads printing at once could overwrite each
+    // other's digits between formatting and writing (one value printed
+    // twice, its owner's value lost) and could interleave the two writes
+    // (merged lines and empty lines). The scratch is now per-call stack
+    // memory and the digits and CRLF leave in one write, so every call
+    // contributes exactly one intact line.
+    let decls = r#"
+fn worker(p: Ptr<Int>) -> Int {
+    let base = rt_mem_load(p);
+    let mut i = 0;
+    while i < 3000 {
+        rt_print_int(base * 100000 + i);
+        i = i + 1;
+    }
+    return 0;
+}
+"#;
+    let body = r#"let slots = rt_alloc(64);
+let handles = rt_alloc(64);
+let mut i = 0;
+while i < 8 {
+    rt_mem_store(slots + i * 8, i + 1);
+    rt_mem_store(handles + i * 8, rt_thread_spawn(worker, slots + i * 8));
+    i = i + 1;
+}
+i = 0;
+while i < 8 {
+    rt_thread_join(rt_mem_load(handles + i * 8));
+    i = i + 1;
+}
+rt_free(handles);
+rt_free(slots);"#;
+    let (code, out) = build_and_run(decls, body);
+    assert_ok(code, &out);
+    let mut got = lines(&out);
+    assert_eq!(got.len(), 24000, "one line per rt_print_int call");
+    got.sort();
+    let mut expected: Vec<String> = (1..=8)
+        .flat_map(|base| (0..3000).map(move |i| (base * 100000 + i).to_string()))
+        .collect();
+    expected.sort();
+    assert_eq!(got, expected, "every printed value appears exactly once");
+}
+
+#[test]
+fn s143_concurrent_mixed_int_and_float_lines_stay_intact() {
+    // The float path had the same defect: its big-integer words, the exact
+    // digit expansion and the output assembly were all shared `.bss`
+    // scratch. Four threads alternate an int and a thread-unique float;
+    // every line must be one complete value, with no merged or empty
+    // lines.
+    let decls = r#"
+fn worker(p: Ptr<Int>) -> Int {
+    let base = rt_mem_load(p);
+    let f = rt_int_to_float(base) + 0.5;
+    let mut i = 0;
+    while i < 500 {
+        rt_print_int(base * 10000 + i);
+        rt_print_float(f);
+        i = i + 1;
+    }
+    return 0;
+}
+"#;
+    let body = r#"let slots = rt_alloc(64);
+let handles = rt_alloc(64);
+let mut i = 0;
+while i < 4 {
+    rt_mem_store(slots + i * 8, i + 1);
+    rt_mem_store(handles + i * 8, rt_thread_spawn(worker, slots + i * 8));
+    i = i + 1;
+}
+i = 0;
+while i < 4 {
+    rt_thread_join(rt_mem_load(handles + i * 8));
+    i = i + 1;
+}
+rt_free(handles);
+rt_free(slots);"#;
+    let (code, out) = build_and_run(decls, body);
+    assert_ok(code, &out);
+    let got = lines(&out);
+    assert_eq!(got.len(), 4000, "one int line and one float line per iteration");
+    let mut ints: Vec<String> = got.iter().filter(|l| !l.contains('.')).cloned().collect();
+    let mut floats: Vec<String> = got.iter().filter(|l| l.contains('.')).cloned().collect();
+    ints.sort();
+    let mut expected_ints: Vec<String> = (1..=4)
+        .flat_map(|base| (0..500).map(move |i| (base * 10000 + i).to_string()))
+        .collect();
+    expected_ints.sort();
+    assert_eq!(ints, expected_ints, "int lines");
+    floats.sort();
+    let mut expected_floats: Vec<String> = ["1.5", "2.5", "3.5", "4.5"]
+        .iter()
+        .flat_map(|v| std::iter::repeat(v.to_string()).take(500))
+        .collect();
+    expected_floats.sort();
+    assert_eq!(floats, expected_floats, "float lines");
+}
+
+#[test]
+fn s143_str_from_float_does_not_swallow_another_threads_print() {
+    // `rt_str_from_float` formats through the same float writer by arming
+    // the process-global `write_redirect` sink. Before Session 143 the sink
+    // was armed for every write on every thread, so a printer running next
+    // to a formatter had its output appended into the formatter's sink:
+    // 2,874 of 3,000 lines were lost and 117 of 3,000 formatted strings
+    // were corrupted in the probe. The sink is now tagged with the arming
+    // thread's id; only that thread's writes may enter it.
+    let decls = r#"
+fn fmt(p: Ptr<Int>) -> Int {
+    let mut i = 0;
+    let mut bad = 0;
+    while i < 3000 {
+        let s = rt_str_from_float(1.5);
+        if rt_str_len(s) != 3 { bad = bad + 1; }
+        rt_str_free(s);
+        i = i + 1;
+    }
+    return bad;
+}
+
+fn printer(p: Ptr<Int>) -> Int {
+    let mut i = 0;
+    while i < 3000 {
+        rt_print_int(700000 + i);
+        i = i + 1;
+    }
+    return 0;
+}
+"#;
+    let body = r#"let cell = rt_alloc(8);
+rt_mem_store(cell, 0);
+let t1 = rt_thread_spawn(fmt, cell);
+let t2 = rt_thread_spawn(printer, cell);
+let bad = rt_thread_join(t1);
+rt_thread_join(t2);
+rt_print_int(bad);
+rt_free(cell);"#;
+    let (code, out) = build_and_run(decls, body);
+    assert_ok(code, &out);
+    let got = lines(&out);
+    assert_eq!(got.len(), 3001, "3,000 ints plus the bad-string count");
+    let expected: Vec<String> = (0..3000).map(|i| (700000 + i).to_string()).collect();
+    assert_eq!(&got[..3000], &expected[..], "printer lines");
+    assert_eq!(got[3000], "0", "no formatted string was corrupted");
+}
+
+#[test]
 fn r19_example_threaded_work_is_deterministic() {
     // The shipped proof application, run through the real CLI. Four threads
     // accumulate under a lock; the result must match the closed form on

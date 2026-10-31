@@ -1299,17 +1299,27 @@ fn emit_str_validate(code: &mut Code, heap_only: bool) {
 }
 
 /// `rt_print_int(value)` (value at `[rbp + 16]`): decimal conversion into
-/// the `.bss` print buffer, then a write of the digits (with a `-` sign
-/// for negatives) and a CRLF to stdout.
-fn emit_print_int(code: &mut Code, offsets: &RuntimeOffsets) {
+/// a per-call stack scratch area, then one write of the digits (with a `-`
+/// sign for negatives) and the CRLF to stdout.
+///
+/// The scratch is stack memory on purpose: it used to be the process-global
+/// `.bss` `print_buf`, which two threads printing at once overwrote between
+/// formatting and writing, so a worker could print another thread's digits.
+/// Appending the CRLF to the same buffer makes one print one write, so
+/// concurrent calls cannot split each other's lines. Nothing here reads
+/// runtime-initialized state — the image's `.bss` only has to be zeroed by
+/// the loader, and the write thunk fetches the stdout handle lazily — so the
+/// first print needs no `rt_init`.
+fn emit_print_int(code: &mut Code, _offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(16);
+    // [rbp-8] value; digits at [rbp-17] downward; CRLF at -16,-15.
+    code.sub_rsp(48);
+
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // save the value for the sign
 
-    // Build the digits from the end of the buffer downward.
-    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
-    code.add_r_imm8(Reg::R8, 31);
+    // Build the digits from the end of the stack scratch downward.
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -17);
     code.test_rr(Reg::Rax, Reg::Rax);
     let digits = code.label();
     let digit_loop = code.label();
@@ -1334,17 +1344,13 @@ fn emit_print_int(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_imm8(Reg::R8, 0, b'-');
     code.dec_r(Reg::R8);
 
-    // Write the digits, then the CRLF.
+    // Append the CRLF after the last digit and write digits+CRLF at once.
     code.bind_label(write);
+    code.mov_mem_imm8(Reg::Rbp, -16, b'\r');
+    code.mov_mem_imm8(Reg::Rbp, -15, b'\n');
     code.lea_r_mem(Reg::Rcx, Reg::R8, 1); // buffer start
-    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.print_buf as u32));
-    code.add_r_imm8(Reg::Rax, 32);
-    code.sub_rr(Reg::Rax, Reg::Rcx); // length
-    code.mov_rr(Reg::Rdx, Reg::Rax);
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
-
-    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
-    code.mov_r32_imm32(Reg::Rdx, 2);
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -14);
+    code.sub_rr(Reg::Rdx, Reg::Rcx); // length
     code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
 
     code.xor_rr32(Reg::Rax, Reg::Rax);
@@ -1385,16 +1391,15 @@ fn emit_float_to_int(code: &mut Code) {
     code.leave_ret();
 }
 
-fn emit_print_char(code: &mut Code, offsets: &RuntimeOffsets) {
+fn emit_print_char(code: &mut Code, _offsets: &RuntimeOffsets) {
     prologue(code);
-    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.sub_rsp(16); // [rbp-16] char, [rbp-15] CR, [rbp-14] LF
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
-    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
-    code.mov_rr(Reg::Rcx, Reg::R8);
-    code.mov_r32_imm32(Reg::Rdx, 1);
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
-    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
-    code.mov_r32_imm32(Reg::Rdx, 2);
+    code.mov_mem_r8(Reg::Rbp, -16, Reg::Rax);
+    code.mov_mem_imm8(Reg::Rbp, -15, b'\r');
+    code.mov_mem_imm8(Reg::Rbp, -14, b'\n');
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_r32_imm32(Reg::Rdx, 3);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
@@ -1418,13 +1423,20 @@ fn emit_print_char(code: &mut Code, offsets: &RuntimeOffsets) {
 /// rounded half-even against the remaining digits. 17 digits guarantee a
 /// round trip through `decode_float` back to the same double.
 ///
-/// Scratch: `dtoa_words` (40 u64 words) holds the big integer, built by
-/// repeated multiplication by 5 (or doubling for `k >= 0`); `dtoa_digits`
-/// holds the expansion digits, one byte each. `print_buf` is the output
-/// assembly area (the format never exceeds 24 characters).
-fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
+/// Scratch: a 320-byte stack area holds the big integer, built by repeated
+/// multiplication by 5 (or doubling for `k >= 0`); a 1024-byte stack area
+/// holds the expansion digits, one byte each; a 40-byte stack area is the
+/// output assembly area (the format never exceeds 24 characters). All of it
+/// is per-call stack memory: the float path used to share the process-global
+/// `.bss` `print_buf`/`dtoa_words`/`dtoa_digits`, so concurrent prints
+/// corrupted each other's digits. The value and its CRLF leave in one write.
+/// Nothing here depends on `rt_init`.
+fn emit_print_float(code: &mut Code, _offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(48);
+    code.sub_rsp(1440);
+    // Stack scratch, per call: [rbp-88 .. rbp-48) output area (40 bytes),
+    // [rbp-408 .. rbp-88) dtoa words (320 bytes),
+    // [rbp-1432 .. rbp-408) dtoa digits (1024 bytes).
     // Spills: [rbp-8] sign flag, [rbp-16] bits, [rbp-24] digit count,
     // [rbp-32] decimal exponent E, [rbp-40] N (digits shifted right by
     // N decimal places), [rbp-48] unused. Registers: r12 = words base,
@@ -1456,7 +1468,7 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.test_rr(Reg::Rcx, Reg::Rcx);
     code.jcc_label(0x85, nan); // jnz: NaN
     // Inf at [buf .. buf+3).
-    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -88);
     code.mov_mem_imm8(Reg::R8, 0, b'I');
     code.mov_mem_imm8(Reg::R8, 1, b'n');
     code.mov_mem_imm8(Reg::R8, 2, b'f');
@@ -1464,7 +1476,7 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(special);
     // NaN at [buf .. buf+3).
     code.bind_label(nan);
-    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -88);
     code.mov_mem_imm8(Reg::R8, 0, b'N');
     code.mov_mem_imm8(Reg::R8, 1, b'a');
     code.mov_mem_imm8(Reg::R8, 2, b'N');
@@ -1483,23 +1495,34 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_imm8(Reg::R8, 0, b'-');
     code.add_r_imm8(Reg::Rdx, 1);
     code.bind_label(special_write);
+    // Rdx is the text length (3, or 4 with a sign). Append the CRLF after
+    // the text and write once, like the finite path.
+    let special_three = code.label();
+    let special_crlf = code.label();
+    code.cmp_r_imm32(Reg::Rdx, 3);
+    code.jcc_label(0x84, special_three); // je
+    code.mov_mem_imm8(Reg::R8, 4, b'\r');
+    code.mov_mem_imm8(Reg::R8, 5, b'\n');
+    code.jmp_label(special_crlf);
+    code.bind_label(special_three);
+    code.mov_mem_imm8(Reg::R8, 3, b'\r');
+    code.mov_mem_imm8(Reg::R8, 4, b'\n');
+    code.bind_label(special_crlf);
+    code.add_r_imm8(Reg::Rdx, 2);
     code.mov_rr(Reg::Rcx, Reg::R8);
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
-    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
-    code.mov_r32_imm32(Reg::Rdx, 2);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
 
     // --- finite values ---
-    // r15 = output offset into print_buf (0, or 1 with '-' at [0]).
+    // r15 = output offset into the stack output area (0, or 1 with '-' at [0]).
     code.bind_label(normal);
     let sign_done = code.label();
     code.xor_rr32(Reg::R15, Reg::R15);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     code.test_rr(Reg::Rcx, Reg::Rcx);
     code.jcc_label(0x84, sign_done); // jz
-    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -88);
     code.mov_mem_imm8(Reg::R8, 0, b'-');
     code.mov_r32_imm32(Reg::R15, 1);
     code.bind_label(sign_done);
@@ -1508,8 +1531,8 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     // k = exp_field - 1075 (normal) or -1074 (subnormal); value = f * 2^k.
     // The exponent field is recomputed here (the sign handling above
     // clobbered `rcx`, which held it after the NaN check).
-    code.lea_r_rip(Reg::R12, PatchKind::Bss(BSS.dtoa_words as u32));
-    code.lea_r_rip(Reg::R13, PatchKind::Bss(BSS.dtoa_digits as u32));
+    code.lea_r_mem(Reg::R12, Reg::Rbp, -408);
+    code.lea_r_mem(Reg::R13, Reg::Rbp, -1432);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // bits
     code.shr_r_imm8(Reg::Rcx, 52);
     code.movabs(Reg::Rdx, 0x7FF);
@@ -1717,7 +1740,7 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(write_pow10);
 
     // --- formatting ---
-    // The output is assembled at print_buf[out ..]; r9 is the write
+    // The output is assembled at [rbp-88 + out ..]; r9 is the write
     // pointer, r15 the offset, r13 the digits, D_total/E/N in spills.
     let format_dispatch = code.label();
     let scientific = code.label();
@@ -1732,7 +1755,7 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x88, fixed_neg); // js: -4 <= E < 0
     // Fixed notation, E >= 0: integer digits then a trimmed fraction.
-    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -88);
     code.add_rr(Reg::R9, Reg::R15);
     code.mov_rr(Reg::R8, Reg::R13);
     code.add_rr(Reg::R8, Reg::R11);
@@ -1796,7 +1819,7 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(frac_write);
     // Fixed notation, -4 <= E < 0: 0.00…digits.
     code.bind_label(fixed_neg);
-    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -88);
     code.add_rr(Reg::R9, Reg::R15);
     code.mov_mem_imm8(Reg::R9, 0, b'0');
     code.add_r_imm8(Reg::R9, 1);
@@ -1853,7 +1876,7 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(fneg_write);
     // Scientific: d[.dddd]e±XX.
     code.bind_label(scientific);
-    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -88);
     code.add_rr(Reg::R9, Reg::R15);
     code.mov_rr(Reg::R8, Reg::R13);
     code.add_rr(Reg::R8, Reg::R11);
@@ -1955,7 +1978,7 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(finish);
     // The value is exactly 10^E (a rounding overflow): 1 + zeros.
     code.bind_label(write_pow10);
-    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -88);
     code.add_rr(Reg::R9, Reg::R15);
     code.mov_mem_imm8(Reg::R9, 0, b'1');
     code.add_r_imm8(Reg::R9, 1);
@@ -2001,22 +2024,21 @@ fn emit_print_float(code: &mut Code, offsets: &RuntimeOffsets) {
     code.add_r_imm8(Reg::R9, 1);
     code.jmp_label(sci_exp_digits); // E' >= 17: |E'| is 2-3 digits
 
-    // --- write the assembled output and CRLF ---
+    // --- append the CRLF and write the assembled output in one call ---
     code.bind_label(finish);
-    code.lea_r_rip(Reg::Rax, PatchKind::Bss(BSS.print_buf as u32));
-    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.mov_mem_imm8(Reg::R9, 0, b'\r');
+    code.mov_mem_imm8(Reg::R9, 1, b'\n');
+    code.add_r_imm8(Reg::R9, 2);
+    code.lea_r_mem(Reg::Rcx, Reg::Rbp, -88);
     code.mov_rr(Reg::Rdx, Reg::R9);
-    code.sub_rr(Reg::Rdx, Reg::Rax);
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
-    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
-    code.mov_r32_imm32(Reg::Rdx, 2);
+    code.sub_rr(Reg::Rdx, Reg::Rcx);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
 
     // Zero value (including -0.0): "0" at the output offset.
     code.bind_label(print_zero);
-    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.print_buf as u32));
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -88);
     code.add_rr(Reg::R9, Reg::R15);
     code.mov_mem_imm8(Reg::R9, 0, b'0');
     code.add_r_imm8(Reg::R9, 1);
@@ -2239,12 +2261,14 @@ fn emit_write(code: &mut Code, stdout: bool) {
         BSS.stderr_handle
     };
     prologue(code);
-    code.sub_rsp(16); // spills [rbp-8] = buffer, [rbp-16] = length
+    // Spills: [rbp-8] = buffer, [rbp-16] = length, [rbp-24] = redirect owner.
+    code.sub_rsp(32);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rcx);
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rdx);
 
-    // When `write_redirect` is set (only during `rt_str_from_float`),
-    // append into the `float_sink` BSS buffer instead of the console:
+    // When `write_redirect` is set (only during `rt_str_from_float`, and
+    // only for the arming thread), append into the `float_sink` BSS buffer
+    // instead of the console:
     // [float_sink+0..8] = byte count, [float_sink+8..80] = data. This
     // lets `rt_str_from_float` reuse the exact `rt_print_float` dtoa
     // pipeline without duplicating it.
@@ -2256,6 +2280,15 @@ fn emit_write(code: &mut Code, stdout: bool) {
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(WRITE_REDIRECT));
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, normal); // jz — no redirect
+    // The sink belongs to the thread that armed it: WRITE_REDIRECT holds
+    // that thread's id. A print from any other thread must reach stdout,
+    // not the formatter's sink (Session 143).
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // owner id
+    code.sub_rsp(32);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ThreadId));
+    code.add_rsp(32);
+    code.cmp_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.jcc_label(0x85, normal); // jne — another thread
     code.lea_r_rip(Reg::Rax, PatchKind::Bss(FLOAT_SINK));
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // count
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // length
@@ -9016,8 +9049,12 @@ fn emit_argv(code: &mut Code) {
 fn emit_str_from_float(code: &mut Code) {
     prologue(code);
     code.sub_rsp(48); // [rbp-8] len, [rbp-16] result
-    // Arm the redirect sink and reset its byte count.
-    code.mov_r32_imm32(Reg::Rax, 1);
+    // Arm the redirect sink for this thread and reset its byte count. The
+    // flag holds the owner's thread id, so another thread's print is not
+    // captured into the sink (Session 143).
+    code.sub_rsp(32);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::ThreadId));
+    code.add_rsp(32);
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(WRITE_REDIRECT));
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(FLOAT_SINK));

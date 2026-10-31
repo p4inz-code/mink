@@ -142,8 +142,10 @@ pub struct RuntimeLayout {
     pub stderr_handle: u64,
     /// Scratch slot for `WriteFile`'s bytes-written count.
     pub bytes_written: u64,
-    /// Scratch buffer for decimal conversion in `rt_print_int` and
-    /// `rt_print_float` output assembly (32 bytes).
+    /// Scratch buffer for decimal conversion in the Linux runtime's
+    /// `rt_print_int`/`rt_str_from_int` paths (32 bytes). The Windows print
+    /// paths build their text in per-call stack scratch and leave this cell
+    /// unused, so concurrent printing cannot collide in it.
     pub print_buf: u64,
     /// Scratch words for `rt_print_float`'s exact big-integer expansion
     /// (40 u64 words = 320 bytes; `f * 5^1074` needs 2548 bits).
@@ -209,8 +211,10 @@ pub struct RuntimeLayout {
     pub arg_data: u64,
     /// Fixed BSS buffer for stdin reads [len:u64][bytes;65528].
     pub stdin_buf: u64,
-    /// Redirect flag for `rt_str_from_float`: non-zero when the write
-    /// thunk appends into `float_sink` instead of the console.
+    /// Redirect owner for `rt_str_from_float`: the arming thread's id, or 0
+    /// when disarmed. The write thunk appends into `float_sink` instead of
+    /// the console only for that thread (Session 143), so a concurrent
+    /// print on another thread is not swallowed by the formatter's sink.
     pub write_redirect: u64,
     /// Float-to-string sink buffer (80 bytes; trailing CRLF stripped).
     pub float_sink: u64,
