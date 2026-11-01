@@ -4,6 +4,9 @@
 # Generated machine-readable records.
 results/
 
+# Python bytecode from the harness.
+__pycache__/
+
 # Per-project build directories created by cargo/dotnet inside apps/.
 apps/rust/**/target/
 apps/csharp/**/bin/
