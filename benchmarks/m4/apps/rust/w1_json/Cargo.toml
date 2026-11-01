@@ -1,0 +1,15 @@
+[package]
+name = "jsontool"
+version = "0.1.0"
+edition = "2021"
+description = "M4 W1 jsontool — Rust port"
+publish = false
+
+[[bin]]
+name = "jsontool"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned exactly. `preserve_order` keeps object members in document order,
+# which the W1 compact contract requires (serde_json's default Map is sorted).
+serde_json = { version = "=1.0.151", features = ["preserve_order"] }

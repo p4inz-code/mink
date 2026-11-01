@@ -1,0 +1,197 @@
+{
+  "workload": "w1_json",
+  "contract": "docs/benchmarks/M4/M4_SESSION_151.md",
+  "notes": [
+    "Declarative oracle: expected bytes are authored from the contract, not produced by running any implementation.",
+    "stdout/stderr are UTF-8 bytes; \\r\\n is explicit so CRLF is compared byte-for-byte.",
+    "{fixtures} is replaced with the absolute fixture directory by the harness.",
+    "'scored' marks the ten cases in the M4 case budget; the rest are contract-required supporting cases and must also pass."
+  ],
+  "cases": [
+    {
+      "id": "validate_object",
+      "scored": true,
+      "argv": ["validate", "{fixtures}/object.json"],
+      "exit": 0,
+      "stdout": "ok\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "type_object",
+      "scored": true,
+      "argv": ["type", "{fixtures}/object.json"],
+      "exit": 0,
+      "stdout": "object\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "type_array",
+      "scored": true,
+      "argv": ["type", "{fixtures}/array.json"],
+      "exit": 0,
+      "stdout": "array\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "type_scalar_number",
+      "scored": true,
+      "argv": ["type", "{fixtures}/number.json"],
+      "exit": 0,
+      "stdout": "number\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "sum_records",
+      "scored": true,
+      "argv": ["sum", "{fixtures}/records.json", "qty"],
+      "exit": 0,
+      "stdout": "306\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "compact_spaced",
+      "scored": true,
+      "argv": ["compact", "{fixtures}/spaced.json"],
+      "exit": 0,
+      "stdout": "{\"service\":\"gateway\",\"enabled\":true,\"retries\":3,\"hosts\":[\"alpha\",\"beta\"],\"limits\":{\"cpu\":2,\"memory\":512}}\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "validate_broken",
+      "scored": true,
+      "argv": ["validate", "{fixtures}/broken.json"],
+      "exit": 3,
+      "stdout": "",
+      "stderr": "jsontool: invalid JSON\r\n"
+    },
+    {
+      "id": "validate_empty",
+      "scored": true,
+      "argv": ["validate", "{fixtures}/empty.json"],
+      "exit": 3,
+      "stdout": "",
+      "stderr": "jsontool: invalid JSON\r\n"
+    },
+    {
+      "id": "validate_missing_file",
+      "scored": true,
+      "argv": ["validate", "{fixtures}/missing.json"],
+      "exit": 2,
+      "stdout": "",
+      "stderr": "jsontool: input file does not exist: {fixtures}/missing.json\r\n"
+    },
+    {
+      "id": "validate_directory",
+      "scored": true,
+      "argv": ["validate", "{fixtures}"],
+      "exit": 2,
+      "stdout": "",
+      "stderr": "jsontool: not a regular file: {fixtures}\r\n"
+    },
+
+    {
+      "id": "type_scalar_string",
+      "scored": false,
+      "argv": ["type", "{fixtures}/string.json"],
+      "exit": 0,
+      "stdout": "string\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "type_scalar_bool",
+      "scored": false,
+      "argv": ["type", "{fixtures}/bool.json"],
+      "exit": 0,
+      "stdout": "bool\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "type_scalar_null",
+      "scored": false,
+      "argv": ["type", "{fixtures}/null.json"],
+      "exit": 0,
+      "stdout": "null\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "compact_escaped",
+      "scored": false,
+      "argv": ["compact", "{fixtures}/escaped.json"],
+      "exit": 0,
+      "stdout": "{\"msg\":\"line1\\nline2 \\\"quoted\\\" \\\\ back\"}\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "compact_utf8",
+      "scored": false,
+      "argv": ["compact", "{fixtures}/utf8.json"],
+      "exit": 0,
+      "stdout": "{\"greeting\":\"caf\u00e9\",\"city\":\"Z\u00fcrich\"}\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "sum_missing_field",
+      "scored": false,
+      "argv": ["sum", "{fixtures}/records.json", "nope"],
+      "exit": 0,
+      "stdout": "0\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "sum_on_object",
+      "scored": false,
+      "argv": ["sum", "{fixtures}/object.json", "qty"],
+      "exit": 4,
+      "stdout": "",
+      "stderr": "jsontool: document is not an array\r\n"
+    },
+    {
+      "id": "no_args",
+      "scored": false,
+      "argv": [],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "jsontool: usage: jsontool <validate|type|sum|compact> <file> [args]\r\n"
+    },
+    {
+      "id": "unknown_command_valid_file",
+      "scored": false,
+      "argv": ["frobnicate", "{fixtures}/object.json"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "jsontool: usage: jsontool <validate|type|sum|compact> <file> [args]\r\n"
+    },
+    {
+      "id": "unknown_command_broken_file",
+      "scored": false,
+      "argv": ["frobnicate", "{fixtures}/broken.json"],
+      "exit": 3,
+      "stdout": "",
+      "stderr": "jsontool: invalid JSON\r\n"
+    },
+    {
+      "id": "option_looking_arg",
+      "scored": false,
+      "argv": ["-x", "{fixtures}/object.json"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "jsontool: this tool has no options\r\n"
+    },
+    {
+      "id": "compact_extra_arg",
+      "scored": false,
+      "argv": ["compact", "{fixtures}/object.json", "extra"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "jsontool: usage: jsontool compact <file>\r\n"
+    },
+    {
+      "id": "validate_trailing_garbage",
+      "scored": false,
+      "argv": ["validate", "{fixtures}/trailing.json"],
+      "exit": 3,
+      "stdout": "",
+      "stderr": "jsontool: invalid JSON\r\n"
+    }
+  ]
+}

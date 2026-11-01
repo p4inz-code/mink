@@ -1,0 +1,13 @@
+{
+  "service": "gateway",
+  "enabled": true,
+  "retries": 3,
+  "hosts": [
+    "alpha",
+    "beta"
+  ],
+  "limits": {
+    "cpu": 2,
+    "memory": 512
+  }
+}

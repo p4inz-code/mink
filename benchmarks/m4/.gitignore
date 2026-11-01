@@ -1,0 +1,10 @@
+# Benchmark-owned build outputs (never committed).
+.build/
+
+# Generated machine-readable records.
+results/
+
+# Per-project build directories created by cargo/dotnet inside apps/.
+apps/rust/**/target/
+apps/csharp/**/bin/
+apps/csharp/**/obj/
