@@ -1,0 +1,9 @@
+workers=5
+n=97
+stage1[0]=2470
+stage1[1]=16549
+stage1[2]=44346
+stage1[3]=85861
+stage1[4]=159719
+total=308945
+expected=308945

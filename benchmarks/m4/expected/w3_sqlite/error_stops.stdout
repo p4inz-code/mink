@@ -1,0 +1,6 @@
+sql> CREATE TABLE t (a INT, b STR)
+OK
+sql> INSERT INTO t VALUES (1, 'one')
+OK
+sql> SELECT * FROM missing
+ERROR: no such table

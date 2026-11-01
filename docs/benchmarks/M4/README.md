@@ -1,10 +1,11 @@
 # M4 — Developer Experience Benchmark
 
-**Status:** IN PROGRESS — W1 `jsontool` is COMPLETE (Sessions 151-152) and
-W2 `netcheck` is implemented and correctness-green (Session 153). **W3 is
-BLOCKED**: the Rust and Go SQLite drivers are not available locally and
-installing them needs network authorization (Session 154). W4-W5 are not
-started. **No M4 timing or performance measurement exists yet.**
+**Status:** IN PROGRESS. W1, W2, W4 and W5 are correctness-green in all five
+languages. **W3 is 3/5**: MINK, Python and C# pass; Rust and Go are BLOCKED
+because their SQLite drivers are absent locally and need an authorized
+network restore (Session 154). **M4 is NOT READY FOR MEASUREMENT**
+(Session 157). No timing, memory or startup measurement has been collected,
+and no language is claimed to be faster, smaller or easier.
 
 ## Objective
 
@@ -26,7 +27,10 @@ it is merely different, and where it is not competitive.
 | [`M4_SESSION_151.md`](M4_SESSION_151.md) | W1 contract resolution, fixtures, oracle, five implementations, harness, correctness |
 | [`M4_SESSION_152.md`](M4_SESSION_152.md) | W1 clean builds, repeatability, contract audit, dependency audit |
 | [`M4_SESSION_153.md`](M4_SESSION_153.md) | W2 contract, local fixture server, five implementations, correctness |
-| [`M4_SESSION_154.md`](M4_SESSION_154.md) | W3 contract and dependency audit; **blocked** on unavailable Rust/Go SQLite drivers |
+| [`M4_SESSION_154.md`](M4_SESSION_154.md) | W3 contract, final row shape, 500-row evidence, 3/5 implementations; Rust/Go **blocked** on unavailable drivers |
+| [`M4_SESSION_155.md`](M4_SESSION_155.md) | W4 contract, concurrency model per language, 130/130 correctness, repeatability |
+| [`M4_SESSION_156.md`](M4_SESSION_156.md) | W5 contract, 100/400-file fixtures, hashing/CSV, 70/70 correctness, Unicode-path evidence |
+| [`M4_SESSION_157.md`](M4_SESSION_157.md) | Full W1-W5 matrix, repeatability, build/dependency readiness, fairness audit, harness audit |
 
 ## Hard boundaries
 
@@ -50,5 +54,9 @@ correctness gates:
 | --- | --- | --- | --- |
 | W1 `jsontool` | MINK, Python, Rust, Go, C# | 10 scored + 13 supporting | PASS 115/115 |
 | W2 `netcheck` | MINK, Python, Rust, Go, C# | 8 scored + 6 supporting | PASS 70/70 |
+| W3 `dbshell` | MINK, Python, C# (Rust/Go blocked) | 10 scored + 3 supporting | PASS 39/39 available; **26 blocked** |
+| W4 `poolrun` | MINK, Python, Rust, Go, C# | 8 scored + 18 supporting | PASS 130/130 |
+| W5 `manifest` | MINK, Python, Rust, Go, C# | 10 scored + 4 supporting | PASS 70/70 |
+| **Total** | | **46 scored + 44 supporting** | **424/450 green, 26 blocked** |
 
 Executable evidence lives in [`benchmarks/m4/`](../../../benchmarks/m4/).

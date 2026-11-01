@@ -1,8 +1,9 @@
 # M4 — Workload Selection
 
-**Status:** selected in Session 150. W1 is COMPLETE (Sessions 151-152);
-W2 is implemented and correctness-green (Session 153); W3-W5 are not
-started. No timing has been collected.
+**Status:** selected in Session 150. W1, W2, W4 and W5 are implemented and
+correctness-green in all five languages. W3 is green in MINK, Python and C#;
+Rust and Go are blocked on SQLite drivers that are not available locally
+(Session 154). No timing, memory or startup measurement has been collected.
 **Rule:** every selected workload must have one functional contract that all
 five languages can satisfy, a deterministic local fixture, byte-exact golden
 output, and an explicit statement of what is and is not comparable.
@@ -113,8 +114,8 @@ cases). **Purpose:** create a table, insert rows, query counts/rows with
 | SQL subset | `CREATE TABLE`, `INSERT`, `SELECT *`, `SELECT COUNT(*)`, `WHERE` with `= != <> < > <= >=` and `IS [NOT] NULL`, `UPDATE`, `DELETE`, `BEGIN`/`COMMIT`/`ROLLBACK` |
 | Success output | Canonical CRLF: `OK` / `OK <n>` for statements, integer for `COUNT(*)`, tab-separated rows with `NULL` for null, matching the M1 renderer |
 | Errors | exit 1 usage; 2 script missing/not a file; 3 statement failed (print the engine's message and stop) |
-| Baseline | 100 rows, four columns; 10-12 statements including a committed and a rolled-back transaction |
-| Scale probe | 200 rows (inside the documented ~220 four-column-row default-heap envelope) and a one-shot 500-row failure probe |
+| Baseline | 100 rows, four columns; one `INSERT` per row plus 13 non-bulk statements (the 10-12 sketch predates the two-transaction shape) including a committed and a rolled-back transaction |
+| Scale probe | 200 rows, plus a one-shot 500-row probe that **passes** at the final row shape (Session 154 §1.2). The earlier "500-row failure" expectation was not reproduced and is corrected here, not hidden |
 | Correctness oracle | Golden per-statement output and final row/count checks; Python `sqlite3` is used to cross-check semantics, not as the only oracle |
 | Dependencies | MINK `sqlite`; Python `sqlite3`; Rust `rusqlite` (bundled SQLite); Go `database/sql` + `modernc.org/sqlite`; C# `Microsoft.Data.Sqlite` |
 | Comparable | **Partial.** The observable common-subset semantics are comparable; MINK is not a SQLite implementation |
@@ -181,7 +182,8 @@ single library call exists.
 **Separate Unicode probe (not scored):** create `naïve café.txt` and
 `日本語.txt` under the fixture tree, run all implementations, and record MINK's
 ANSI path behavior. This is a documented MINK limitation, not a performance
-comparison.
+comparison. Implemented in Session 156 as `benchmarks/m4/harness/probe_unicode.py`;
+evidence in `results/raw/w5_manifest/unicode-probe.json`.
 
 ## 4. Workload coverage matrix
 
@@ -255,7 +257,7 @@ in-box framework.
 | W2 | stdlib `http`, `json` | stdlib `http.client`, `json` | `ureq`, `serde_json` | stdlib `net/http`, `encoding/json` | in-box `HttpClient`, `System.Text.Json` |
 | W3 | stdlib `sqlite` (in-memory) | stdlib `sqlite3` (`:memory:`) | `rusqlite` (bundled SQLite) | `modernc.org/sqlite` + `database/sql` | `Microsoft.Data.Sqlite` |
 | W4 | stdlib `threads` | stdlib `threading` | stdlib `std::thread` + `Mutex` | stdlib goroutines + `sync` | in-box `Task`/`Thread` + lock |
-| W5 | stdlib `json`, `filesystem`, `hashing`, `csv` | stdlib `json`, `os`, `hashlib`, `csv` | `serde_json`, `sha2`, `csv` | stdlib `encoding/json`, `crypto/sha256`, `encoding/csv` | in-box `System.Text.Json`, `SHA256`; manual CSV writer |
+| W5 | stdlib `json`, `filesystem`, `hashing`, `csv` | stdlib `json`, `os`, `hashlib`, `csv` | `serde_json`, `sha2`; manual CSV writer | stdlib `encoding/json`, `crypto/sha256`, `encoding/csv` | in-box `System.Text.Json`, `SHA256`; manual CSV writer |
 
 The Rust and C# dependency counts are part of the measured dependency burden.
 They are not "cheating" and must not be hidden; neither is MINK's bundled

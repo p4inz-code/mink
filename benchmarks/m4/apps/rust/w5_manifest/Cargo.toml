@@ -1,0 +1,15 @@
+[package]
+name = "manifest"
+version = "0.1.0"
+edition = "2021"
+description = "M4 W5 manifest — Rust port"
+publish = false
+
+[[bin]]
+name = "manifest"
+path = "src/main.rs"
+
+[dependencies]
+# Both resolve from the local cargo cache; the build uses --offline.
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"

@@ -1,0 +1,8 @@
+workers=4
+n=100
+stage1[0]=5525
+stage1[1]=37400
+stage1[2]=100525
+stage1[3]=194900
+total=338350
+expected=338350

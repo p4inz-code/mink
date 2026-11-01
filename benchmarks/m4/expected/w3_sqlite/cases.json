@@ -1,0 +1,118 @@
+{
+  "workload": "w3_sqlite",
+  "contract": "docs/benchmarks/M4/M4_SESSION_154.md",
+  "notes": [
+    "One statement per line; blank lines and -- comments are skipped.",
+    "stdout/stderr are UTF-8 with CRLF; SELECT * blocks keep internal LF, as in M1.",
+    "Expected transcripts are authored by expected/w3_sqlite/make_expected.py, the M1-verified renderer.",
+    "'scored' marks the ten cases in the M4 case budget; the rest are contract-required or scale cases.",
+    "No file is written by dbshell; the database is in memory for the whole run."
+  ],
+  "cases": [
+    {
+      "id": "baseline_100",
+      "scored": true,
+      "argv": ["{fixtures}/baseline_100.sql"],
+      "exit": 0,
+      "stdout_file": "baseline_100.stdout",
+      "stderr": ""
+    },
+    {
+      "id": "clean",
+      "scored": true,
+      "argv": ["{fixtures}/clean.sql"],
+      "exit": 0,
+      "stdout_file": "clean.stdout",
+      "stderr": ""
+    },
+    {
+      "id": "error_stops",
+      "scored": true,
+      "argv": ["{fixtures}/error_stops.sql"],
+      "exit": 3,
+      "stdout_file": "error_stops.stdout",
+      "stderr": ""
+    },
+    {
+      "id": "crlf",
+      "scored": true,
+      "argv": ["{fixtures}/crlf.sql"],
+      "exit": 0,
+      "stdout_file": "crlf.stdout",
+      "stderr": ""
+    },
+    {
+      "id": "comments",
+      "scored": true,
+      "argv": ["{fixtures}/comments.sql"],
+      "exit": 0,
+      "stdout_file": "comments.stdout",
+      "stderr": ""
+    },
+    {
+      "id": "empty_script",
+      "scored": true,
+      "argv": ["{fixtures}/empty.sql"],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "id": "missing_file",
+      "scored": true,
+      "argv": ["{fixtures}/missing.sql"],
+      "exit": 2,
+      "stdout": "",
+      "stderr": "dbshell: script does not exist: {fixtures}/missing.sql\r\n"
+    },
+    {
+      "id": "directory_as_script",
+      "scored": true,
+      "argv": ["{fixtures}"],
+      "exit": 2,
+      "stdout": "",
+      "stderr": "dbshell: not a regular file: {fixtures}\r\n"
+    },
+    {
+      "id": "no_args",
+      "scored": true,
+      "argv": [],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "dbshell: usage: dbshell <script>\r\n"
+    },
+    {
+      "id": "two_positionals",
+      "scored": true,
+      "argv": ["{fixtures}/clean.sql", "extra"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "dbshell: usage: dbshell <script>\r\n"
+    },
+
+    {
+      "id": "scale_200",
+      "scored": false,
+      "argv": ["{fixtures}/scale_200.sql"],
+      "exit": 0,
+      "stdout_file": "scale_200.stdout",
+      "stderr": ""
+    },
+    {
+      "id": "probe_500",
+      "scored": false,
+      "argv": ["{fixtures}/probe_500.sql"],
+      "exit": 0,
+      "stdout_file": "probe_500.stdout",
+      "stderr": ""
+    },
+    {
+      "id": "option_looking_arg",
+      "scored": false,
+      "argv": ["-x"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "dbshell: this tool has no options\r\n"
+    }
+  ]
+}

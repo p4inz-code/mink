@@ -1,0 +1,9 @@
+workers=4
+n=10000
+subtotal[0]=5211458750
+subtotal[1]=36467708750
+subtotal[2]=98973958750
+subtotal[3]=192730208750
+locked-total=333383335000
+joined-total=333383335000
+expected=333383335000

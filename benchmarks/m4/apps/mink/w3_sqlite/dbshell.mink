@@ -1,0 +1,166 @@
+// ============================================================================
+// dbshell — Validation milestone 1 / D: SQLite-backed application.
+//
+//   dbshell <script>
+//
+// Reads a script of one SQL statement per line (-blank- lines and `--`
+// comments are skipped), executes each against a fresh embedded database,
+// and prints an echoed statement and its result:
+//
+//   sql> <statement>
+//   <result>
+//
+// The result rendering is the stdlib sqlite module's: `OK` for a successful
+// write statement, `OK <n>` for UPDATE/DELETE (rows affected), a bare integer
+// for `SELECT COUNT(*)`, tab-separated rows each terminated by LF for
+// `SELECT *` (NULL renders as `NULL`), and `ERROR: ...` for a rejected
+// statement. The run stops at the first `ERROR:` result.
+//
+// The database is the stdlib module's in-memory text blob (`sql_new`), so it
+// does not persist across runs — see the record's CLASSIFICATION.
+//
+// Exit codes:
+//   0  ok
+//   1  usage error (no/extra arguments or any option)
+//   2  script file missing or not a regular file
+//   3  a statement failed (its `ERROR:` result was printed)
+//
+// Ownership: single-exit style. `sql_exec`/`sql_tables`/`sql_rows` consume
+// their inputs and hand the database back; every returned string is released.
+// ============================================================================
+
+mod filesystem;
+mod sqlite;
+mod strings;
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("dbshell: ", label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_str_free(label);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn fail_file(label: Str, path: Str) -> Int {
+    let head = rt_str_concat("dbshell: ", label);
+    let mid = rt_str_concat(head, path);
+    rt_str_free(head);
+    let line = rt_str_concat(mid, "\r\n");
+    rt_str_free(mid);
+    rt_str_free(label);
+    rt_str_free(path);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// True when `s` starts with `p`. Consumes both arguments (callers pass
+// copies when they still need either string).
+fn has_prefix(s: Str, p: Str) -> Bool {
+    let sl = rt_str_len(s);
+    let pl = rt_str_len(p);
+    let mut ok = false;
+    if pl <= sl {
+        ok = true;
+        let mut i = 0;
+        while i < pl {
+            if rt_str_byte(s, i) != rt_str_byte(p, i) { ok = false; }
+            i = i + 1;
+        }
+    }
+    rt_str_free(s);
+    rt_str_free(p);
+    return ok;
+}
+
+// Run every statement in `lines` against `db`. Returns (db, code) where code
+// is 3 once a statement failed. Consumes `lines`; consumes and returns `db`.
+fn run_lines(db: Str, lines: Vec<Str>) -> (Str, Int) {
+    let count = rt_vec_len(lines);
+    let mut cur = db;
+    let mut code = 0;
+    let mut stop = 0;
+    let mut i = 0;
+    while i < count && stop == 0 {
+        let raw = rt_vec_get(lines, i);
+        // str_trim consumes: trim a copy so the vector keeps its element.
+        let line = str_trim(rt_str_concat(raw, ""));
+        let ln = rt_str_len(line);
+        if ln == 0 {
+            rt_str_free(line);
+        } else if has_prefix(rt_str_concat(line, ""), "--") == true {
+            rt_str_free(line);
+        } else {
+            // rt_str_concat is read-borrowing, so a *nested* call would leak
+            // the inner temporary: bind the statement copy and release it.
+            let stmt_copy = rt_str_concat(line, "");
+            let echo = rt_str_concat("sql> ", stmt_copy);
+            rt_str_free(stmt_copy);
+            rt_print_str(echo);
+            rt_str_free(echo);
+            let r = sql_exec(cur, line);
+            rt_print_str(r.0);
+            let bad = has_prefix(rt_str_concat(r.0, ""), "ERROR:");
+            rt_str_free(r.0);
+            cur = r.1;
+            if bad == true {
+                code = 3;
+                stop = 1;
+            }
+        }
+        i = i + 1;
+    }
+    rt_vec_free(lines);
+    return (cur, code);
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+
+    let mut pos = rt_vec_new(4);
+    let mut bad = 0;
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut optionish = 0;
+        if rt_str_len(arg) > 0 {
+            if rt_str_byte(arg, 0) == 45 { optionish = 1; }
+        }
+        if optionish == 1 {
+            bad = 1;
+            rt_str_free(arg);
+        } else {
+            pos = rt_vec_push(pos, arg);
+        }
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    let n = rt_vec_len(pos);
+    if bad == 1 {
+        fail_msg("this tool has no options");
+    } else if n != 1 {
+        fail_msg("usage: dbshell <script>");
+    } else {
+        let path = rt_vec_get(pos, 0);
+        if fs_exists(rt_str_concat(path, "")) == false {
+            fail_file("script does not exist: ", rt_str_concat(path, ""));
+            code = 2;
+        } else if fs_is_file(rt_str_concat(path, "")) == false {
+            fail_file("not a regular file: ", rt_str_concat(path, ""));
+            code = 2;
+        } else {
+            let content = fs_read(rt_str_concat(path, ""));
+            let lines = str_split(content, "\n");
+            let db = sql_new();
+            let (final_db, run_code) = run_lines(db, lines);
+            sql_free(final_db);
+            code = run_code;
+        }
+    }
+
+    rt_vec_free(pos);
+    return code;
+}

@@ -1,0 +1,7 @@
+# M4 compares golden stdout/stderr/CSV bytes exactly.
+#
+# This host has core.autocrlf enabled. Without this file Git would normalize
+# CRLF to LF in the index and expand LF back to CRLF on checkout, which
+# rewrites the mixed CRLF/LF W3 transcripts and the LF W5 report. Storing the
+# working-tree bytes verbatim keeps a fresh clone reproducible.
+* -text

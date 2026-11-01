@@ -1,0 +1,12 @@
+workers=7
+n=999
+subtotal[0]=964535
+subtotal[1]=6711275
+subtotal[2]=18184591
+subtotal[3]=35384483
+subtotal[4]=58310951
+subtotal[5]=86963995
+subtotal[6]=126313670
+locked-total=332833500
+joined-total=332833500
+expected=332833500

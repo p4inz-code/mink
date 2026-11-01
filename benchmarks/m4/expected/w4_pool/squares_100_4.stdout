@@ -1,0 +1,9 @@
+workers=4
+n=100
+subtotal[0]=5525
+subtotal[1]=37400
+subtotal[2]=100525
+subtotal[3]=194900
+locked-total=338350
+joined-total=338350
+expected=338350

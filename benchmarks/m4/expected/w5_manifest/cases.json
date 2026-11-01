@@ -1,0 +1,142 @@
+{
+  "workload": "w5_manifest",
+  "contract": "docs/benchmarks/M4/M4_SESSION_156.md",
+  "notes": [
+    "Each case runs in its own work directory containing tree/ and config.json; config paths are relative.",
+    "Successful cases are compared on stdout, exit code and the produced out/report.csv bytes.",
+    "Expected summaries and reports are authored by expected/w5_manifest/make_expected.py.",
+    "MINK's filesystem layer is ANSI; the Unicode-path tree is a separate probe, not a scored case."
+  ],
+  "cases": [
+    {
+      "id": "baseline_100",
+      "scored": true,
+      "argv": ["config.json"],
+      "exit": 0,
+      "stdout_file": "baseline_100.stdout",
+      "stderr": "",
+      "prepare": {"tree": "tree_100", "config": {"root": "tree", "out": "out/report.csv", "extensions": [".txt", ".csv"]}},
+      "artifacts": ["out/report.csv"]
+    },
+    {
+      "id": "uppercase_ext",
+      "scored": true,
+      "argv": ["config.json"],
+      "exit": 0,
+      "stdout_file": "uppercase_ext.stdout",
+      "stderr": "",
+      "prepare": {"tree": "tree_100", "config": {"root": "tree", "out": "out/report.csv", "extensions": [".TXT"]}},
+      "artifacts": ["out/report.csv"]
+    },
+    {
+      "id": "no_match",
+      "scored": true,
+      "argv": ["config.json"],
+      "exit": 5,
+      "stdout": "",
+      "stderr_file": "no_match.stderr",
+      "prepare": {"tree": "tree_100", "config": {"root": "tree", "out": "out/report.csv", "extensions": [".zzz"]}}
+    },
+    {
+      "id": "missing_root",
+      "scored": true,
+      "argv": ["config.json"],
+      "exit": 4,
+      "stdout": "",
+      "stderr_file": "missing_root.stderr",
+      "prepare": {"config": {"root": "missing-tree", "out": "out/report.csv", "extensions": [".txt"]}}
+    },
+    {
+      "id": "bad_json",
+      "scored": true,
+      "argv": ["config.json"],
+      "exit": 3,
+      "stdout": "",
+      "stderr_file": "bad_json.stderr",
+      "prepare": {"raw_config": "{\"root\": }"}
+    },
+    {
+      "id": "missing_keys",
+      "scored": true,
+      "argv": ["config.json"],
+      "exit": 3,
+      "stdout": "",
+      "stderr_file": "missing_keys.stderr",
+      "prepare": {"raw_config": "{\"root\": \"tree\"}"}
+    },
+    {
+      "id": "bad_types",
+      "scored": true,
+      "argv": ["config.json"],
+      "exit": 3,
+      "stdout": "",
+      "stderr_file": "bad_types.stderr",
+      "prepare": {"raw_config": "{\"root\": 1, \"out\": \"o\", \"extensions\": \".txt\"}"}
+    },
+    {
+      "id": "missing_config",
+      "scored": true,
+      "argv": ["config.json"],
+      "exit": 2,
+      "stdout": "",
+      "stderr_file": "missing_config.stderr",
+      "prepare": {}
+    },
+    {
+      "id": "directory_as_config",
+      "scored": true,
+      "argv": ["."],
+      "exit": 2,
+      "stdout": "",
+      "stderr_file": "directory_as_config.stderr",
+      "prepare": {}
+    },
+    {
+      "id": "no_args",
+      "scored": true,
+      "argv": [],
+      "exit": 1,
+      "stdout": "",
+      "stderr_file": "no_args.stderr",
+      "prepare": {}
+    },
+
+    {
+      "id": "scale_400",
+      "scored": false,
+      "argv": ["config.json"],
+      "exit": 0,
+      "stdout_file": "scale_400.stdout",
+      "stderr": "",
+      "prepare": {"tree": "tree_400", "config": {"root": "tree", "out": "out/report.csv", "extensions": [".txt", ".csv"]}},
+      "artifacts": ["out/report.csv"]
+    },
+    {
+      "id": "root_not_object",
+      "scored": false,
+      "argv": ["config.json"],
+      "exit": 3,
+      "stdout": "",
+      "stderr_file": "root_not_object.stderr",
+      "prepare": {"raw_config": "[1, 2, 3]"}
+    },
+    {
+      "id": "extra_args",
+      "scored": false,
+      "argv": ["config.json", "extra"],
+      "exit": 1,
+      "stdout": "",
+      "stderr_file": "extra_args.stderr",
+      "prepare": {}
+    },
+    {
+      "id": "option_looking_arg",
+      "scored": false,
+      "argv": ["-x"],
+      "exit": 1,
+      "stdout": "",
+      "stderr_file": "option_looking_arg.stderr",
+      "prepare": {}
+    }
+  ]
+}

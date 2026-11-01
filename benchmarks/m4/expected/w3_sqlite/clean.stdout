@@ -1,0 +1,31 @@
+sql> CREATE TABLE notes (id INT, body STR, weight INT, tag STR)
+OK
+sql> INSERT INTO notes VALUES (1, 'alpha', 10, 'x')
+OK
+sql> INSERT INTO notes VALUES (2, 'beta', 20, 'y')
+OK
+sql> INSERT INTO notes VALUES (3, 'gamma', 30, 'x')
+OK
+sql> SELECT COUNT(*) FROM notes
+3
+sql> SELECT * FROM notes WHERE tag = 'x'
+1	alpha	10	x
+3	gamma	30	x
+
+sql> UPDATE notes SET weight = 99 WHERE id = 2
+OK 1
+sql> SELECT * FROM notes WHERE id = 2
+2	beta	99	y
+
+sql> DELETE FROM notes WHERE id = 3
+OK 1
+sql> SELECT COUNT(*) FROM notes
+2
+sql> BEGIN
+OK
+sql> INSERT INTO notes VALUES (4, 'delta', 40, 'z')
+OK
+sql> COMMIT
+OK
+sql> SELECT COUNT(*) FROM notes
+3

@@ -1,0 +1,12 @@
+[package]
+name = "poolrun"
+version = "0.1.0"
+edition = "2021"
+description = "M4 W4 poolrun — Rust port"
+publish = false
+
+[[bin]]
+name = "poolrun"
+path = "src/main.rs"
+
+[dependencies]

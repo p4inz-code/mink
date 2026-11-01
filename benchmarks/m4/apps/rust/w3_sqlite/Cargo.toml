@@ -1,0 +1,16 @@
+[package]
+name = "dbshell"
+version = "0.1.0"
+edition = "2021"
+description = "M4 W3 dbshell — Rust port"
+publish = false
+
+[[bin]]
+name = "dbshell"
+path = "src/main.rs"
+
+[dependencies]
+# BLOCKED OFFLINE: `rusqlite` is not in the local cargo cache. The cached
+# `libsqlite3-sys 0.30.1` is the native half of the rusqlite 0.32 line.
+# Building this crate requires a network restore, which is not authorized.
+rusqlite = { version = "0.32", features = ["bundled"] }

@@ -1,0 +1,249 @@
+sql> CREATE TABLE items (sku INT, name STR, qty INT, category STR)
+OK
+sql> INSERT INTO items VALUES (1001, 'item-001', 7, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1002, 'item-002', 14, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1003, 'item-003', 21, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1004, 'item-004', 28, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1005, 'item-005', 35, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1006, 'item-006', 42, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1007, 'item-007', 49, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1008, 'item-008', 56, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1009, 'item-009', 63, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1010, 'item-010', 70, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1011, 'item-011', 77, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1012, 'item-012', 84, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1013, 'item-013', 91, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1014, 'item-014', 1, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1015, 'item-015', 8, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1016, 'item-016', 15, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1017, 'item-017', 22, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1018, 'item-018', 29, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1019, 'item-019', 36, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1020, 'item-020', 43, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1021, 'item-021', 50, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1022, 'item-022', 57, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1023, 'item-023', 64, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1024, 'item-024', 71, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1025, 'item-025', 78, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1026, 'item-026', 85, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1027, 'item-027', 92, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1028, 'item-028', 2, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1029, 'item-029', 9, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1030, 'item-030', 16, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1031, 'item-031', 23, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1032, 'item-032', 30, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1033, 'item-033', 37, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1034, 'item-034', 44, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1035, 'item-035', 51, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1036, 'item-036', 58, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1037, 'item-037', 65, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1038, 'item-038', 72, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1039, 'item-039', 79, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1040, 'item-040', 86, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1041, 'item-041', 93, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1042, 'item-042', 3, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1043, 'item-043', 10, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1044, 'item-044', 17, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1045, 'item-045', 24, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1046, 'item-046', 31, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1047, 'item-047', 38, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1048, 'item-048', 45, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1049, 'item-049', 52, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1050, 'item-050', 59, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1051, 'item-051', 66, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1052, 'item-052', 73, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1053, 'item-053', 80, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1054, 'item-054', 87, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1055, 'item-055', 94, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1056, 'item-056', 4, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1057, 'item-057', 11, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1058, 'item-058', 18, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1059, 'item-059', 25, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1060, 'item-060', 32, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1061, 'item-061', 39, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1062, 'item-062', 46, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1063, 'item-063', 53, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1064, 'item-064', 60, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1065, 'item-065', 67, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1066, 'item-066', 74, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1067, 'item-067', 81, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1068, 'item-068', 88, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1069, 'item-069', 95, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1070, 'item-070', 5, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1071, 'item-071', 12, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1072, 'item-072', 19, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1073, 'item-073', 26, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1074, 'item-074', 33, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1075, 'item-075', 40, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1076, 'item-076', 47, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1077, 'item-077', 54, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1078, 'item-078', 61, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1079, 'item-079', 68, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1080, 'item-080', 75, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1081, 'item-081', 82, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1082, 'item-082', 89, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1083, 'item-083', 96, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1084, 'item-084', 6, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1085, 'item-085', 13, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1086, 'item-086', 20, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1087, 'item-087', 27, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1088, 'item-088', 34, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1089, 'item-089', 41, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1090, 'item-090', 48, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1091, 'item-091', 55, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1092, 'item-092', 62, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1093, 'item-093', 69, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1094, 'item-094', 76, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1095, 'item-095', 83, 'cat-0')
+OK
+sql> INSERT INTO items VALUES (1096, 'item-096', 90, 'cat-1')
+OK
+sql> INSERT INTO items VALUES (1097, 'item-097', 0, 'cat-2')
+OK
+sql> INSERT INTO items VALUES (1098, 'item-098', 7, 'cat-3')
+OK
+sql> INSERT INTO items VALUES (1099, 'item-099', 14, 'cat-4')
+OK
+sql> INSERT INTO items VALUES (1100, 'item-100', 21, 'cat-0')
+OK
+sql> SELECT COUNT(*) FROM items
+100
+sql> SELECT * FROM items WHERE category = 'cat-1'
+1001	item-001	7	cat-1
+1006	item-006	42	cat-1
+1011	item-011	77	cat-1
+1016	item-016	15	cat-1
+1021	item-021	50	cat-1
+1026	item-026	85	cat-1
+1031	item-031	23	cat-1
+1036	item-036	58	cat-1
+1041	item-041	93	cat-1
+1046	item-046	31	cat-1
+1051	item-051	66	cat-1
+1056	item-056	4	cat-1
+1061	item-061	39	cat-1
+1066	item-066	74	cat-1
+1071	item-071	12	cat-1
+1076	item-076	47	cat-1
+1081	item-081	82	cat-1
+1086	item-086	20	cat-1
+1091	item-091	55	cat-1
+1096	item-096	90	cat-1
+
+sql> UPDATE items SET qty = 0 WHERE sku = 1001
+OK 1
+sql> SELECT * FROM items WHERE sku = 1001
+1001	item-001	0	cat-1
+
+sql> DELETE FROM items WHERE sku = 1002
+OK 1
+sql> SELECT COUNT(*) FROM items WHERE qty < 50
+52
+sql> BEGIN
+OK
+sql> INSERT INTO items VALUES (1101, 'tx-item', 7, 'cat-2')
+OK
+sql> COMMIT
+OK
+sql> BEGIN
+OK
+sql> INSERT INTO items VALUES (1102, 'rb-item', 8, 'cat-3')
+OK
+sql> ROLLBACK
+OK
+sql> SELECT COUNT(*) FROM items
+100

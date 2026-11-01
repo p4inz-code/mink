@@ -1,0 +1,5 @@
+CREATE TABLE t (a INT, b STR)
+INSERT INTO t VALUES (1, 'one')
+SELECT * FROM missing
+INSERT INTO t VALUES (2, 'two')
+SELECT COUNT(*) FROM t

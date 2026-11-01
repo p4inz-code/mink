@@ -1,0 +1,40 @@
+{
+  "workload": "w4_pool",
+  "contract": "docs/benchmarks/M4/M4_SESSION_155.md",
+  "notes": [
+    "Ranges are disjoint, so every subtotal and the total are deterministic; join order fixes print order.",
+    "stdout/stderr are UTF-8 with CRLF.",
+    "Expected transcripts are authored by expected/w4_pool/make_expected.py from the M1 contract.",
+    "Mode, n and workers are arguments; no fixture files exist for this workload."
+  ],
+  "cases": [
+    {"id": "squares_100_4", "scored": true, "argv": ["squares", "100", "4"], "exit": 0, "stdout_file": "squares_100_4.stdout", "stderr": ""},
+    {"id": "squares_1024_16", "scored": true, "argv": ["squares", "1024", "16"], "exit": 0, "stdout_file": "squares_1024_16.stdout", "stderr": ""},
+    {"id": "squares_10000_8", "scored": true, "argv": ["squares", "10000", "8"], "exit": 0, "stdout_file": "squares_10000_8.stdout", "stderr": ""},
+    {"id": "squares_10000_16", "scored": true, "argv": ["squares", "10000", "16"], "exit": 0, "stdout_file": "squares_10000_16.stdout", "stderr": ""},
+    {"id": "pipeline_100_4", "scored": true, "argv": ["pipeline", "100", "4"], "exit": 0, "stdout_file": "pipeline_100_4.stdout", "stderr": ""},
+    {"id": "pipeline_1000_3", "scored": true, "argv": ["pipeline", "1000", "3"], "exit": 0, "stdout_file": "pipeline_1000_3.stdout", "stderr": ""},
+    {"id": "pipeline_999_7", "scored": true, "argv": ["pipeline", "999", "7"], "exit": 0, "stdout_file": "pipeline_999_7.stdout", "stderr": ""},
+    {"id": "pipeline_10000_8", "scored": true, "argv": ["pipeline", "10000", "8"], "exit": 0, "stdout_file": "pipeline_10000_8.stdout", "stderr": ""},
+
+    {"id": "squares_1_1", "scored": false, "argv": ["squares", "1", "1"], "exit": 0, "stdout_file": "squares_1_1.stdout", "stderr": ""},
+    {"id": "squares_97_5", "scored": false, "argv": ["squares", "97", "5"], "exit": 0, "stdout_file": "squares_97_5.stdout", "stderr": ""},
+    {"id": "squares_10000_1", "scored": false, "argv": ["squares", "10000", "1"], "exit": 0, "stdout_file": "squares_10000_1.stdout", "stderr": ""},
+    {"id": "squares_10000_4", "scored": false, "argv": ["squares", "10000", "4"], "exit": 0, "stdout_file": "squares_10000_4.stdout", "stderr": ""},
+    {"id": "squares_999_7", "scored": false, "argv": ["squares", "999", "7"], "exit": 0, "stdout_file": "squares_999_7.stdout", "stderr": ""},
+    {"id": "pipeline_1_1", "scored": false, "argv": ["pipeline", "1", "1"], "exit": 0, "stdout_file": "pipeline_1_1.stdout", "stderr": ""},
+    {"id": "pipeline_97_5", "scored": false, "argv": ["pipeline", "97", "5"], "exit": 0, "stdout_file": "pipeline_97_5.stdout", "stderr": ""},
+    {"id": "pipeline_10000_1", "scored": false, "argv": ["pipeline", "10000", "1"], "exit": 0, "stdout_file": "pipeline_10000_1.stdout", "stderr": ""},
+    {"id": "pipeline_10000_4", "scored": false, "argv": ["pipeline", "10000", "4"], "exit": 0, "stdout_file": "pipeline_10000_4.stdout", "stderr": ""},
+
+    {"id": "no_args", "scored": false, "argv": [], "exit": 1, "stdout": "", "stderr": "poolrun: usage: poolrun <squares|pipeline> <n> <workers>\r\n"},
+    {"id": "missing_workers", "scored": false, "argv": ["squares", "100"], "exit": 1, "stdout": "", "stderr": "poolrun: usage: poolrun <squares|pipeline> <n> <workers>\r\n"},
+    {"id": "extra_args", "scored": false, "argv": ["squares", "100", "4", "x"], "exit": 1, "stdout": "", "stderr": "poolrun: usage: poolrun <squares|pipeline> <n> <workers>\r\n"},
+    {"id": "bad_n", "scored": false, "argv": ["squares", "abc", "4"], "exit": 1, "stdout": "", "stderr": "poolrun: usage: poolrun <squares|pipeline> <n> <workers>\r\n"},
+    {"id": "bad_workers", "scored": false, "argv": ["pipeline", "100", "abc"], "exit": 1, "stdout": "", "stderr": "poolrun: usage: poolrun <squares|pipeline> <n> <workers>\r\n"},
+    {"id": "zero_n", "scored": false, "argv": ["squares", "0", "4"], "exit": 1, "stdout": "", "stderr": "poolrun: usage: poolrun <squares|pipeline> <n> <workers>\r\n"},
+    {"id": "zero_workers", "scored": false, "argv": ["pipeline", "100", "0"], "exit": 1, "stdout": "", "stderr": "poolrun: usage: poolrun <squares|pipeline> <n> <workers>\r\n"},
+    {"id": "unknown_mode", "scored": false, "argv": ["threads", "100", "4"], "exit": 1, "stdout": "", "stderr": "poolrun: usage: poolrun <squares|pipeline> <n> <workers>\r\n"},
+    {"id": "option_looking_arg", "scored": false, "argv": ["-x", "100", "4"], "exit": 1, "stdout": "", "stderr": "poolrun: this tool has no options\r\n"}
+  ]
+}

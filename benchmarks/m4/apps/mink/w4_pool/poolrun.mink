@@ -1,0 +1,289 @@
+// ============================================================================
+// poolrun — Validation milestone 1 / G: worker pools and pipelines.
+//
+//   poolrun squares  <n> <workers>   worker pool with a locked accumulator
+//   poolrun pipeline <n> <workers>   two-stage pipeline through shared slots
+//
+// Both modes split 1..n into `workers` disjoint ranges and compute
+// sum(i*i) per range, so every subtotal (and the final total) is deterministic
+// regardless of scheduling; only the *ordering* is fixed by join order.
+//
+//   squares:  each worker adds its subtotal to a shared counter under one
+//             lock; main joins every worker, prints the subtotals and the
+//             locked total and checks it against n(n+1)(2n+1)/6.
+//   pipeline: stage 1 — every worker writes its subtotal into its own slot of
+//             a shared buffer; a join barrier separates the stages; stage 2 —
+//             one reducer thread sums the slots; main prints both stages.
+//
+// Exit codes:
+//   0  ok (total == closed form)
+//   1  usage error (missing/extra arguments, non-numeric/zero values, option)
+//   3  the computed total did not match the closed form
+//
+// Ownership: raw context/argument blocks are `rt_alloc`/`rt_free`; each
+// `thread_join` releases the thread control block; every Str is released at
+// its single exit (nested rt_str_concat is avoided by binding each step).
+// ============================================================================
+
+mod strings;
+mod threads;
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("poolrun: ", label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_str_free(label);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// Print `label` + `value` as one line. Consumes and frees both.
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn say_int(label: Str, value: Int) {
+    say(label, rt_str_from_int(value));
+}
+
+// "<prefix><index><suffix>", with every rt_str_concat step bound.
+fn indexed(prefix: Str, index: Int, suffix: Str) -> Str {
+    let num = rt_str_from_int(index);
+    let a = rt_str_concat(prefix, num);
+    rt_str_free(num);
+    let b = rt_str_concat(a, suffix);
+    rt_str_free(a);
+    rt_str_free(prefix);
+    rt_str_free(suffix);
+    return b;
+}
+
+fn expected_squares(n: Int) -> Int {
+    return n * (n + 1) * (2 * n + 1) / 6;
+}
+
+// ---------------------------------------------------------------------------
+// squares: one shared counter guarded by one lock.
+// Context block: [lock @ 0][total @ 8]. Worker args: [ctx @ 0][start @ 8][end @ 16].
+// ---------------------------------------------------------------------------
+
+fn worker_squares(p: Ptr<Int>) -> Int {
+    let ctx = rt_int_to_ptr(rt_mem_load(p));
+    let start = rt_mem_load(p + 8);
+    let end = rt_mem_load(p + 16);
+    let lock = rt_mem_load(ctx);
+
+    let mut i = start;
+    let mut subtotal = 0;
+    while i <= end {
+        subtotal = subtotal + i * i;
+        i = i + 1;
+    }
+
+    lock_acquire(lock);
+    rt_mem_store(ctx + 8, rt_mem_load(ctx + 8) + subtotal);
+    lock_release(lock);
+    return subtotal;
+}
+
+// Worker args for `squares`: [ctx @ 0][start @ 8][end @ 16] (24 bytes).
+fn make_args(base: Ptr<Int>, start: Int, end: Int) -> Ptr<Int> {
+    let p = rt_alloc(24);
+    rt_mem_store(p, rt_ptr_to_int(base));
+    rt_mem_store(p + 8, start);
+    rt_mem_store(p + 16, end);
+    return p;
+}
+
+// Worker args for `worker_slots`: [slots @ 0][index @ 8][start @ 16][end @ 24].
+fn make_slot_args(slots: Ptr<Int>, index: Int, start: Int, end: Int) -> Ptr<Int> {
+    let p = rt_alloc(32);
+    rt_mem_store(p, rt_ptr_to_int(slots));
+    rt_mem_store(p + 8, index);
+    rt_mem_store(p + 16, start);
+    rt_mem_store(p + 24, end);
+    return p;
+}
+
+// Stage 1 of the pipeline: sum i*i over the range and publish it in `index`.
+fn worker_slots(p: Ptr<Int>) -> Int {
+    let slots = rt_int_to_ptr(rt_mem_load(p));
+    let index = rt_mem_load(p + 8);
+    let start = rt_mem_load(p + 16);
+    let end = rt_mem_load(p + 24);
+
+    let mut i = start;
+    let mut subtotal = 0;
+    while i <= end {
+        subtotal = subtotal + i * i;
+        i = i + 1;
+    }
+    rt_mem_store(slots + index * 8, subtotal);
+    return subtotal;
+}
+
+// Stage 2 of the pipeline: reduce every published slot.
+fn worker_reduce(p: Ptr<Int>) -> Int {
+    let slots = rt_int_to_ptr(rt_mem_load(p));
+    let count = rt_mem_load(p + 8);
+    let mut i = 0;
+    let mut total = 0;
+    while i < count {
+        total = total + rt_mem_load(slots + i * 8);
+        i = i + 1;
+    }
+    return total;
+}
+
+fn run_squares(n: Int, workers: Int) -> Int {
+    let ctx = rt_alloc(16);
+    let lock = lock_new();
+    rt_mem_store(ctx, lock);
+    rt_mem_store(ctx + 8, 0);
+
+    let handles = rt_alloc(8 * workers);
+    let args = rt_alloc(8 * workers);
+    let chunk = n / workers;
+    let mut k = 0;
+    while k < workers {
+        let start = k * chunk + 1;
+        let mut end = (k + 1) * chunk;
+        if k == workers - 1 { end = n; }
+        let p = make_args(ctx, start, end);
+        rt_mem_store(args + k * 8, rt_ptr_to_int(p));
+        rt_mem_store(handles + k * 8, thread_spawn(worker_squares, p));
+        k = k + 1;
+    }
+
+    say_int("workers=", workers);
+    say_int("n=", n);
+    let mut joined = 0;
+    k = 0;
+    while k < workers {
+        let h = rt_mem_load(handles + k * 8);
+        let subtotal = thread_join(h);
+        joined = joined + subtotal;
+        say_int(indexed("subtotal[", k, "]="), subtotal);
+        let p = rt_int_to_ptr(rt_mem_load(args + k * 8));
+        rt_free(p);
+        k = k + 1;
+    }
+
+    let locked_total = rt_mem_load(ctx + 8);
+    let expected = expected_squares(n);
+    say_int("locked-total=", locked_total);
+    say_int("joined-total=", joined);
+    say_int("expected=", expected);
+
+    lock_free(lock);
+    rt_free(args);
+    rt_free(handles);
+    rt_free(ctx);
+
+    if locked_total != expected { return 3; }
+    if joined != expected { return 3; }
+    return 0;
+}
+
+fn run_pipeline(n: Int, workers: Int) -> Int {
+    let slots = rt_alloc(8 * workers);
+    let handles = rt_alloc(8 * workers);
+    let args = rt_alloc(8 * workers);
+    let chunk = n / workers;
+    let mut k = 0;
+    while k < workers {
+        let start = k * chunk + 1;
+        let mut end = (k + 1) * chunk;
+        if k == workers - 1 { end = n; }
+        let p = make_slot_args(slots, k, start, end);
+        rt_mem_store(args + k * 8, rt_ptr_to_int(p));
+        rt_mem_store(handles + k * 8, thread_spawn(worker_slots, p));
+        k = k + 1;
+    }
+
+    say_int("workers=", workers);
+    say_int("n=", n);
+    // Join barrier: stage 1 must be complete before the reducer runs.
+    k = 0;
+    while k < workers {
+        let h = rt_mem_load(handles + k * 8);
+        thread_join(h);
+        let p = rt_int_to_ptr(rt_mem_load(args + k * 8));
+        rt_free(p);
+        k = k + 1;
+    }
+    k = 0;
+    while k < workers {
+        let v = rt_mem_load(slots + k * 8);
+        say_int(indexed("stage1[", k, "]="), v);
+        k = k + 1;
+    }
+
+    let reduce_args = rt_alloc(16);
+    rt_mem_store(reduce_args, rt_ptr_to_int(slots));
+    rt_mem_store(reduce_args + 8, workers);
+    let reducer = thread_spawn(worker_reduce, reduce_args);
+    let total = thread_join(reducer);
+    rt_free(reduce_args);
+
+    let expected = expected_squares(n);
+    say_int("total=", total);
+    say_int("expected=", expected);
+
+    rt_free(slots);
+    rt_free(args);
+    rt_free(handles);
+    if total != expected { return 3; }
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+
+    let mut pos = rt_vec_new(4);
+    let mut bad = 0;
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut optionish = 0;
+        if rt_str_len(arg) > 0 {
+            if rt_str_byte(arg, 0) == 45 { optionish = 1; }
+        }
+        if optionish == 1 {
+            bad = 1;
+            rt_str_free(arg);
+        } else {
+            pos = rt_vec_push(pos, arg);
+        }
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    let n = rt_vec_len(pos);
+    if bad == 1 {
+        fail_msg("this tool has no options");
+    } else if n != 3 {
+        fail_msg("usage: poolrun <squares|pipeline> <n> <workers>");
+    } else {
+        let mode = rt_vec_get(pos, 0);
+        let (count, cok) = str_parse_int(rt_str_concat(rt_vec_get(pos, 1), ""));
+        let (workers, wok) = str_parse_int(rt_str_concat(rt_vec_get(pos, 2), ""));
+        if cok == false || wok == false || count <= 0 || workers <= 0 {
+            fail_msg("usage: poolrun <squares|pipeline> <n> <workers>");
+        } else if rt_str_eq(mode, "squares") {
+            code = run_squares(count, workers);
+        } else if rt_str_eq(mode, "pipeline") {
+            code = run_pipeline(count, workers);
+        } else {
+            fail_msg("usage: poolrun <squares|pipeline> <n> <workers>");
+        }
+    }
+
+    rt_vec_free(pos);
+    return code;
+}

@@ -1,0 +1,2 @@
+manifest fixture
+second line

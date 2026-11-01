@@ -25,6 +25,9 @@ LANGUAGES = ("mink", "python", "rust", "go", "csharp")
 WORKLOADS = {
     "w1_json": "jsontool",
     "w2_http": "netcheck",
+    "w3_sqlite": "dbshell",
+    "w4_pool": "poolrun",
+    "w5_manifest": "manifest",
 }
 
 
@@ -40,8 +43,20 @@ def fixtures_dir(workload):
     return os.path.join(FIXTURES_ROOT, workload)
 
 
+def work_root(workload):
+    return os.path.join(RESULTS_ROOT, "work", workload)
+
+
+def work_dir(workload, case_id, language):
+    return os.path.join(work_root(workload), case_id, language)
+
+
+def expected_directory(workload):
+    return os.path.join(EXPECTED_ROOT, workload)
+
+
 def expected_cases_path(workload):
-    return os.path.join(EXPECTED_ROOT, workload, "cases.json")
+    return os.path.join(expected_directory(workload), "cases.json")
 
 
 def load_cases(workload):
