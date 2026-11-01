@@ -1,8 +1,10 @@
 # M4 — Developer Experience Benchmark
 
 **Status:** IN PROGRESS — W1 `jsontool` is COMPLETE (Sessions 151-152) and
-W2 `netcheck` is implemented and correctness-green (Session 153). W3-W5 are
-not started. **No M4 timing or performance measurement exists yet.**
+W2 `netcheck` is implemented and correctness-green (Session 153). **W3 is
+BLOCKED**: the Rust and Go SQLite drivers are not available locally and
+installing them needs network authorization (Session 154). W4-W5 are not
+started. **No M4 timing or performance measurement exists yet.**
 
 ## Objective
 
@@ -24,6 +26,7 @@ it is merely different, and where it is not competitive.
 | [`M4_SESSION_151.md`](M4_SESSION_151.md) | W1 contract resolution, fixtures, oracle, five implementations, harness, correctness |
 | [`M4_SESSION_152.md`](M4_SESSION_152.md) | W1 clean builds, repeatability, contract audit, dependency audit |
 | [`M4_SESSION_153.md`](M4_SESSION_153.md) | W2 contract, local fixture server, five implementations, correctness |
+| [`M4_SESSION_154.md`](M4_SESSION_154.md) | W3 contract and dependency audit; **blocked** on unavailable Rust/Go SQLite drivers |
 
 ## Hard boundaries
 
