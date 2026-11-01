@@ -1,0 +1,126 @@
+{
+  "workload": "w2_http",
+  "contract": "docs/benchmarks/M4/M4_SESSION_153.md",
+  "notes": [
+    "The fixture server is harness-owned and deterministic (harness/server.py); there are no input files.",
+    "stdout/stderr are UTF-8 bytes with explicit CRLF.",
+    "{port} is the live fixture-server port; {closed_port} is a just-released port used for connection refused.",
+    "Transport failures and completed responses with no status line share exit 2 and one stable message.",
+    "A 2xx response must carry a JSON object with an integral 'value'; 4xx/5xx exchanges are not JSON-checked."
+  ],
+  "cases": [
+    {
+      "id": "ok",
+      "scored": true,
+      "argv": ["127.0.0.1", "{port}", "/ok"],
+      "exit": 0,
+      "stdout": "STATUS 200\r\nBODY 31\r\nVALUE 42\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "chunked",
+      "scored": true,
+      "argv": ["127.0.0.1", "{port}", "/chunked"],
+      "exit": 0,
+      "stdout": "STATUS 200\r\nBODY 31\r\nVALUE 42\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "notfound",
+      "scored": true,
+      "argv": ["127.0.0.1", "{port}", "/notfound"],
+      "exit": 0,
+      "stdout": "STATUS 404\r\nBODY 18\r\n",
+      "stderr": ""
+    },
+    {
+      "id": "badjson",
+      "scored": true,
+      "argv": ["127.0.0.1", "{port}", "/badjson"],
+      "exit": 3,
+      "stdout": "",
+      "stderr": "netcheck: malformed JSON\r\n"
+    },
+    {
+      "id": "peer_close",
+      "scored": true,
+      "argv": ["127.0.0.1", "{port}", "/close"],
+      "exit": 2,
+      "stdout": "",
+      "stderr": "netcheck: connection failed\r\n"
+    },
+    {
+      "id": "refused",
+      "scored": true,
+      "argv": ["127.0.0.1", "{closed_port}", "/ok"],
+      "exit": 2,
+      "stdout": "",
+      "stderr": "netcheck: connection failed\r\n"
+    },
+    {
+      "id": "no_status_line",
+      "scored": true,
+      "argv": ["127.0.0.1", "{port}", "/garbage"],
+      "exit": 2,
+      "stdout": "",
+      "stderr": "netcheck: connection failed\r\n"
+    },
+    {
+      "id": "usage_too_few_args",
+      "scored": true,
+      "argv": ["127.0.0.1", "{port}"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "netcheck: usage: netcheck <host> <port> <path>\r\n"
+    },
+
+    {
+      "id": "value_missing",
+      "scored": false,
+      "argv": ["127.0.0.1", "{port}", "/novalue"],
+      "exit": 3,
+      "stdout": "",
+      "stderr": "netcheck: missing value\r\n"
+    },
+    {
+      "id": "empty_body",
+      "scored": false,
+      "argv": ["127.0.0.1", "{port}", "/empty"],
+      "exit": 3,
+      "stdout": "",
+      "stderr": "netcheck: malformed JSON\r\n"
+    },
+    {
+      "id": "nonnumeric_port",
+      "scored": false,
+      "argv": ["127.0.0.1", "abc", "/ok"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "netcheck: usage: netcheck <host> <port> <path>\r\n"
+    },
+    {
+      "id": "zero_port",
+      "scored": false,
+      "argv": ["127.0.0.1", "0", "/ok"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "netcheck: usage: netcheck <host> <port> <path>\r\n"
+    },
+    {
+      "id": "option_looking_arg",
+      "scored": false,
+      "argv": ["-x", "{port}", "/ok"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "netcheck: this tool has no options\r\n"
+    },
+    {
+      "id": "extra_argument",
+      "scored": false,
+      "argv": ["127.0.0.1", "{port}", "/ok", "extra"],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "netcheck: usage: netcheck <host> <port> <path>\r\n"
+    }
+  ]
+}

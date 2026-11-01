@@ -1,0 +1,16 @@
+[package]
+name = "netcheck"
+version = "0.1.0"
+edition = "2021"
+description = "M4 W2 netcheck — Rust port"
+publish = false
+
+[[bin]]
+name = "netcheck"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned exactly; both crates resolve from the local cargo cache.
+# ureq default features are disabled because W2 is HTTP only (no TLS).
+serde_json = "=1.0.151"
+ureq = { version = "=2.12.1", default-features = false }

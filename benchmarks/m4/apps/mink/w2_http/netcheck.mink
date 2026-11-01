@@ -1,0 +1,223 @@
+// ============================================================================
+// M4 W2 `netcheck` — MINK 1.0.4.
+//
+//   netcheck <host> <port> <path>
+//
+// Performs one HTTP/1.1 GET against a local fixture server and reports the
+// status, the decoded body byte length and, when the body is a JSON object
+// with an integral `value` member, its value.
+//
+// Exit codes:
+//   0  completed exchange (including 4xx/5xx)
+//   1  usage error (wrong argument count, non-numeric/out-of-range port, any
+//      `-`-prefixed argument)
+//   2  connect/read failure, or a completed response with no status line
+//   3  a 2xx body that is not a JSON object with an integral `value`
+// ============================================================================
+
+mod http;
+mod json;
+mod network;
+mod strings;
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("netcheck: ", label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_str_free(label);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+// Print `label` + `value` as one CRLF line. Consumes and frees both.
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn parse_port(s: Str) -> (Int, Bool) {
+    let (port, ok) = str_parse_int(s);
+    if ok == false { return (port, false); }
+    if port < 1 { return (port, false); }
+    if port > 65535 { return (port, false); }
+    return (port, true);
+}
+
+// A completed HTTP response begins with `HTTP/<digit>.<digit> <ddd> `.
+// Anything else is a response without a status line.
+//
+// `resp` is a consumed Str parameter (MINK user functions take ownership), so
+// the caller passes a copy and this single-exit helper frees it.
+fn has_status_line(resp: Str) -> Bool {
+    let len = rt_str_len(resp);
+    let mut ok = 1;
+    if len < 13 { ok = 0; }
+    if ok == 1 && rt_str_byte(resp, 0) != 72 { ok = 0; }
+    if ok == 1 && rt_str_byte(resp, 1) != 84 { ok = 0; }
+    if ok == 1 && rt_str_byte(resp, 2) != 84 { ok = 0; }
+    if ok == 1 && rt_str_byte(resp, 3) != 80 { ok = 0; }
+    if ok == 1 && rt_str_byte(resp, 4) != 47 { ok = 0; }
+    let major = rt_str_byte(resp, 5);
+    if ok == 1 && major < 48 { ok = 0; }
+    if ok == 1 && major > 57 { ok = 0; }
+    if ok == 1 && rt_str_byte(resp, 6) != 46 { ok = 0; }
+    let minor = rt_str_byte(resp, 7);
+    if ok == 1 && minor < 48 { ok = 0; }
+    if ok == 1 && minor > 57 { ok = 0; }
+    if ok == 1 && rt_str_byte(resp, 8) != 32 { ok = 0; }
+    let d1 = rt_str_byte(resp, 9);
+    let d2 = rt_str_byte(resp, 10);
+    let d3 = rt_str_byte(resp, 11);
+    if ok == 1 && d1 < 48 { ok = 0; }
+    if ok == 1 && d1 > 57 { ok = 0; }
+    if ok == 1 && d2 < 48 { ok = 0; }
+    if ok == 1 && d2 > 57 { ok = 0; }
+    if ok == 1 && d3 < 48 { ok = 0; }
+    if ok == 1 && d3 > 57 { ok = 0; }
+    if ok == 1 && rt_str_byte(resp, 12) != 32 { ok = 0; }
+    rt_str_free(resp);
+    if ok == 1 { return true; }
+    return false;
+}
+
+// Index of member `name` in object `obj`, or -1. Consumes `name`.
+fn find_key(arena: Ptr<Int>, obj: Int, name: Str) -> Int {
+    let n = json_obj_len(arena, obj);
+    let mut found = -1;
+    let mut i = 0;
+    while i < n {
+        let k = json_obj_get_key(arena, obj, i);
+        let eq = rt_str_eq(k, name);
+        rt_str_free(k);
+        if eq == true {
+            found = i;
+            i = n;
+        } else {
+            i = i + 1;
+        }
+    }
+    rt_str_free(name);
+    return found;
+}
+
+fn run(host: Str, port_s: Str, path: Str) -> Int {
+    let (port, ok) = parse_port(port_s);
+    if ok == false {
+        rt_str_free(host);
+        rt_str_free(path);
+        fail_msg("usage: netcheck <host> <port> <path>");
+        return 1;
+    }
+
+    // "http://" + host + ":" + port + path, releasing each intermediate.
+    let a = rt_str_concat("http://", host);
+    rt_str_free(host);
+    let b = rt_str_concat(a, ":");
+    rt_str_free(a);
+    let pstr = rt_str_from_int(port);
+    let c = rt_str_concat(b, pstr);
+    rt_str_free(b);
+    rt_str_free(pstr);
+    let url = rt_str_concat(c, path);
+    rt_str_free(c);
+    rt_str_free(path);
+
+    let resp = http_client_get(url);
+    let rlen = rt_str_len(resp);
+    if rlen == 0 {
+        rt_str_free(resp);
+        fail_msg("connection failed");
+        return 2;
+    }
+    if has_status_line(rt_str_concat(resp, "")) == false {
+        rt_str_free(resp);
+        fail_msg("connection failed");
+        return 2;
+    }
+
+    let code = http_status_code(rt_str_concat(resp, ""));
+    let body = http_body(rt_str_concat(resp, ""));
+    let blen = rt_str_len(body);
+    rt_str_free(resp);
+
+    let arena = rt_alloc(65536);
+    let v = json_parse(rt_str_concat(body, ""), arena);
+    let mut has_value = 0;
+    let mut value_num = 0;
+    if v != 0 {
+        if json_tag(arena, v) == 5 {
+            let idx = find_key(arena, v, rt_str_concat("value", ""));
+            if idx >= 0 {
+                let vo = json_obj_get_val(arena, v, idx);
+                if json_tag(arena, vo) == 2 {
+                    has_value = 1;
+                    value_num = json_as_int(arena, vo);
+                }
+            }
+        }
+    }
+
+    if code < 400 {
+        if v == 0 {
+            rt_free(arena);
+            rt_str_free(body);
+            fail_msg("malformed JSON");
+            return 3;
+        }
+        if has_value == 0 {
+            rt_free(arena);
+            rt_str_free(body);
+            fail_msg("missing value");
+            return 3;
+        }
+    }
+
+    say("STATUS ", rt_str_from_int(code));
+    say("BODY ", rt_str_from_int(blen));
+    if has_value == 1 { say("VALUE ", rt_str_from_int(value_num)); }
+
+    rt_free(arena);
+    rt_str_free(body);
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+
+    let mut pos = rt_vec_new(8);
+    let mut bad = 0;
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let mut optionish = 0;
+        if rt_str_len(arg) > 0 {
+            if rt_str_byte(arg, 0) == 45 { optionish = 1; }
+        }
+        if optionish == 1 {
+            bad = 1;
+            rt_str_free(arg);
+        } else {
+            pos = rt_vec_push(pos, arg);
+        }
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    let n = rt_vec_len(pos);
+    if bad == 1 {
+        fail_msg("this tool has no options");
+    } else if n != 3 {
+        fail_msg("usage: netcheck <host> <port> <path>");
+    } else {
+        code = run(rt_str_concat(rt_vec_get(pos, 0), ""),
+                   rt_str_concat(rt_vec_get(pos, 1), ""),
+                   rt_str_concat(rt_vec_get(pos, 2), ""));
+    }
+
+    rt_vec_free(pos);
+    return code;
+}
