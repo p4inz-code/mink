@@ -1,11 +1,11 @@
 # M4 — Developer Experience Benchmark
 
-**Status:** IN PROGRESS. W1, W2, W4 and W5 are correctness-green in all five
-languages. **W3 is 3/5**: MINK, Python and C# pass; Rust and Go are BLOCKED
-because their SQLite drivers are absent locally and need an authorized
-network restore (Session 154). **M4 is NOT READY FOR MEASUREMENT**
-(Session 157). No timing, memory or startup measurement has been collected,
-and no language is claimed to be faster, smaller or easier.
+**Status:** IN PROGRESS. All five workloads are correctness-green in all five
+languages: **450/450 language-case combinations** (Session 159). W3's Rust and
+Go SQLite drivers are resolved and pinned (Session 158). The measurement
+harness and preconditions are verified, but **no timing, startup, memory or
+clean-build measurement has been run yet**, and no language is claimed to be
+faster, smaller or easier.
 
 ## Objective
 
@@ -31,6 +31,8 @@ it is merely different, and where it is not competitive.
 | [`M4_SESSION_155.md`](M4_SESSION_155.md) | W4 contract, concurrency model per language, 130/130 correctness, repeatability |
 | [`M4_SESSION_156.md`](M4_SESSION_156.md) | W5 contract, 100/400-file fixtures, hashing/CSV, 70/70 correctness, Unicode-path evidence |
 | [`M4_SESSION_157.md`](M4_SESSION_157.md) | Full W1-W5 matrix, repeatability, build/dependency readiness, fairness audit, harness audit |
+| [`M4_SESSION_158.md`](M4_SESSION_158.md) | W3 dependency closure: rusqlite 0.32.1 bundled and modernc.org/sqlite v1.61.1, 65/65 green |
+| [`M4_SESSION_159.md`](M4_SESSION_159.md) | Final 450/450 correctness sweep, determinism and measurement preflight audit |
 
 ## Hard boundaries
 
@@ -54,9 +56,9 @@ correctness gates:
 | --- | --- | --- | --- |
 | W1 `jsontool` | MINK, Python, Rust, Go, C# | 10 scored + 13 supporting | PASS 115/115 |
 | W2 `netcheck` | MINK, Python, Rust, Go, C# | 8 scored + 6 supporting | PASS 70/70 |
-| W3 `dbshell` | MINK, Python, C# (Rust/Go blocked) | 10 scored + 3 supporting | PASS 39/39 available; **26 blocked** |
+| W3 `dbshell` | MINK, Python, Rust, Go, C# | 10 scored + 3 supporting | PASS 65/65 |
 | W4 `poolrun` | MINK, Python, Rust, Go, C# | 8 scored + 18 supporting | PASS 130/130 |
 | W5 `manifest` | MINK, Python, Rust, Go, C# | 10 scored + 4 supporting | PASS 70/70 |
-| **Total** | | **46 scored + 44 supporting** | **424/450 green, 26 blocked** |
+| **Total** | | **46 scored + 44 supporting** | **PASS 450/450** |
 
 Executable evidence lives in [`benchmarks/m4/`](../../../benchmarks/m4/).

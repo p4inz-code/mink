@@ -10,7 +10,6 @@ name = "dbshell"
 path = "src/main.rs"
 
 [dependencies]
-# BLOCKED OFFLINE: `rusqlite` is not in the local cargo cache. The cached
-# `libsqlite3-sys 0.30.1` is the native half of the rusqlite 0.32 line.
-# Building this crate requires a network restore, which is not authorized.
-rusqlite = { version = "0.32", features = ["bundled"] }
+# Resolved and pinned in Cargo.lock: rusqlite 0.32.1 with bundled SQLite
+# (libsqlite3-sys 0.30.1). The harness builds with --offline from the cache.
+rusqlite = { version = "=0.32.1", features = ["bundled"] }

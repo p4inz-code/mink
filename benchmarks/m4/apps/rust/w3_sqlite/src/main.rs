@@ -2,9 +2,8 @@
 //!
 //! Contract: `docs/benchmarks/M4/M4_SESSION_154.md`.
 //!
-//! BUILD STATUS: blocked offline. `rusqlite` is absent from the local cargo
-//! cache, so this crate has not been compiled or run. The source is complete
-//! against the documented `rusqlite` API and is committed as blocked work.
+//! BUILD STATUS: verified. Built against rusqlite 0.32.1 (bundled SQLite) and
+//! gated against the W3 golden contract.
 
 use std::io::{BufRead, Write};
 use std::path::Path;

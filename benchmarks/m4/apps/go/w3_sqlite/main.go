@@ -2,10 +2,8 @@
 //
 // Contract: `docs/benchmarks/M4/M4_SESSION_154.md`.
 //
-// BUILD STATUS: blocked offline. `modernc.org/sqlite` is absent from the local
-// module cache, so this program has not been compiled or run. The source is
-// complete against the documented `database/sql` API and is committed as
-// blocked work.
+// BUILD STATUS: verified. Built against modernc.org/sqlite v1.61.1 and gated
+// against the W3 golden contract.
 package main
 
 import (
