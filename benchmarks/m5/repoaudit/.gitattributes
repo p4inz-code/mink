@@ -1,0 +1,6 @@
+# repoaudit fixtures and goldens are byte-exact test inputs.
+#
+# The host has core.autocrlf enabled. Without this file, Git would normalize
+# CRLF fixtures to LF in the index and re-expand LF fixtures to CRLF on
+# checkout, changing the very bytes that the contract tests compare.
+* -text

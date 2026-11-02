@@ -1,0 +1,6 @@
+# M5 repoaudit build outputs.
+build/
+app/*.exe
+
+# Python test-driver bytecode.
+__pycache__/

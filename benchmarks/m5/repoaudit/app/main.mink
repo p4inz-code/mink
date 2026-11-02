@@ -1,0 +1,1006 @@
+// ============================================================================
+// repoaudit — M5 Application 1
+//
+// Offline ASCII project inventory and policy audit. The frozen contract lives
+// in docs/benchmarks/M5/M5_APPLICATION_SELECTION.md (section 5).
+//
+//   repoaudit <config.json>
+//   repoaudit --help
+//
+// Exit codes: 0 clean, 1 usage, 2 config missing/not a file, 3 config
+// schema/JSON, 4 root missing/not a directory, 5 out missing or report write
+// failure, 6 policy violations, 7 scan I/O failure.
+//
+// Ownership is single-exit: every owned Str/Vec is released on the path that
+// reaches main's final cleanup. Read-borrowing intrinsics receive copies when
+// the value is also needed later. The walk is iterative so no recursive Vec
+// duplication is required.
+// ============================================================================
+
+mod filesystem;
+mod json;
+mod strings;
+
+struct Config {
+    root: Str,
+    out: Str,
+    exts: Str,       // comma-separated, e.g. ".mink,.md"
+    excludes: Str,   // newline-separated base names
+    markers: Str,    // newline-separated marker tokens
+    max_file_bytes: Int,
+    max_markers: Int,
+}
+
+fn empty_config() -> Config {
+    // Literals keep the empty state free of heap allocations, so assigning the
+    // first parsed value does not leak a placeholder string.
+    return Config {
+        root: "",
+        out: "",
+        exts: "",
+        excludes: "",
+        markers: "",
+        max_file_bytes: 0,
+        max_markers: 0,
+    };
+}
+
+fn config_clear(c: Config) {
+    rt_str_free(c.root);
+    rt_str_free(c.out);
+    rt_str_free(c.exts);
+    rt_str_free(c.excludes);
+    rt_str_free(c.markers);
+}
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("repoaudit: ", label);
+    rt_str_free(label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn fail_path(label: Str, path: Str) -> Int {
+    let head = rt_str_concat("repoaudit: ", label);
+    rt_str_free(label);
+    let mid = rt_str_concat(head, path);
+    rt_str_free(head);
+    rt_str_free(path);
+    let line = rt_str_concat(mid, "\r\n");
+    rt_str_free(mid);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn usage() -> Int {
+    // Usage errors are diagnostics: stdout stays untouched, and the hint is
+    // prefixed like every other repoaudit diagnostic.
+    rt_stderr_write("repoaudit: usage: repoaudit <config.json> | repoaudit --help\r\n");
+    return 1;
+}
+
+fn print_help() {
+    // rt_print_str appends the platform line ending; the literals carry none.
+    rt_print_str("repoaudit — offline project inventory and policy audit");
+    rt_print_str("");
+    rt_print_str("usage: repoaudit <config.json>");
+    rt_print_str("       repoaudit --help");
+    rt_print_str("");
+    rt_print_str("The config is a JSON object with exactly these keys:");
+    rt_print_str("  root, out, include_extensions, exclude_dirs,");
+    rt_print_str("  markers, max_file_bytes, max_markers");
+    rt_print_str("");
+    rt_print_str("Writes inventory.csv, violations.csv and summary.json to out.");
+    rt_print_str("Exit 0 clean, 6 policy violations, 1-5/7 for errors.");
+}
+
+// ---------------------------------------------------------------------------
+// JSON config helpers
+// ---------------------------------------------------------------------------
+
+// Index of member `name` in object `obj`, or -1. Consumes `name`.
+fn find_key(arena: Ptr<Int>, obj: Int, name: Str) -> Int {
+    let n = json_obj_len(arena, obj);
+    let mut found = -1;
+    let mut i = 0;
+    while i < n {
+        let k = json_obj_get_key(arena, obj, i);
+        let eq = rt_str_eq(k, name);
+        rt_str_free(k);
+        if eq == true {
+            found = i;
+            i = n;
+        } else {
+            i = i + 1;
+        }
+    }
+    rt_str_free(name);
+    return found;
+}
+
+// Required non-empty string field. On failure returns a borrowed empty
+// literal and false; on success the caller owns the returned string.
+fn get_string(arena: Ptr<Int>, obj: Int, name: Str) -> (Str, Bool) {
+    let idx = find_key(arena, obj, name);
+    if idx < 0 { return ("", false); }
+    let vo = json_obj_get_val(arena, obj, idx);
+    if json_tag(arena, vo) != 3 { return ("", false); }
+    let s = json_as_str(arena, vo);
+    if rt_str_len(s) == 0 {
+        rt_str_free(s);
+        return ("", false);
+    }
+    return (s, true);
+}
+
+// Required array of strings. On failure returns an owned empty Vec that the
+// caller releases; on success the Vec and its strings are owned by the caller.
+fn get_string_array(arena: Ptr<Int>, obj: Int, name: Str) -> (Vec<Str>, Bool) {
+    let idx = find_key(arena, obj, name);
+    let mut v = rt_vec_new(1);
+    if idx < 0 { return (v, false); }
+    let vo = json_obj_get_val(arena, obj, idx);
+    if json_tag(arena, vo) != 4 { return (v, false); }
+    let n = json_arr_len(arena, vo);
+    rt_vec_free(v);
+    let mut cap = n;
+    if cap < 1 { cap = 1; }
+    let mut out = rt_vec_new(cap);
+    let mut ok = true;
+    let mut i = 0;
+    while i < n {
+        let el = json_arr_get(arena, vo, i);
+        if json_tag(arena, el) != 3 {
+            ok = false;
+            i = n;
+        } else {
+            out = rt_vec_push(out, json_as_str(arena, el));
+            i = i + 1;
+        }
+    }
+    if ok == false {
+        rt_vec_free(out);
+        return (rt_vec_new(1), false);
+    }
+    return (out, true);
+}
+
+// Required non-negative integer field in canonical decimal form. Floats,
+// exponents, signs and leading/trailing junk are rejected.
+fn get_uint(arena: Ptr<Int>, obj: Int, name: Str) -> (Int, Bool) {
+    let idx = find_key(arena, obj, name);
+    if idx < 0 { return (0, false); }
+    let vo = json_obj_get_val(arena, obj, idx);
+    if json_tag(arena, vo) != 2 { return (0, false); }
+    let raw = json_num_str(arena, vo);
+    let n = rt_str_len(raw);
+    let mut ok = true;
+    if n == 0 { ok = false; }
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(raw, i);
+        if b < 48 { ok = false; }
+        if b > 57 { ok = false; }
+        i = i + 1;
+    }
+    if ok == false {
+        rt_str_free(raw);
+        return (0, false);
+    }
+    let (value, parsed) = str_parse_int(raw);
+    return (value, parsed);
+}
+
+fn is_alnum(b: Int) -> Bool {
+    let mut r = false;
+    if b >= 48 { if b <= 57 { r = true; } }
+    if b >= 65 { if b <= 90 { r = true; } }
+    if b >= 97 { if b <= 122 { r = true; } }
+    return r;
+}
+
+// ^\.[A-Za-z0-9]{1,8}$ — consumes `s`.
+fn valid_extension(s: Str) -> Bool {
+    let n = rt_str_len(s);
+    let mut ok = true;
+    if n < 2 { ok = false; }
+    if n > 9 { ok = false; }
+    if ok == true {
+        if rt_str_byte(s, 0) != 46 { ok = false; }
+    }
+    let mut i = 1;
+    while i < n {
+        if is_alnum(rt_str_byte(s, i)) == false { ok = false; }
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return ok;
+}
+
+// ^[A-Za-z0-9_]{1,16}$ — consumes `s`.
+fn valid_marker(s: Str) -> Bool {
+    let n = rt_str_len(s);
+    let mut ok = true;
+    if n < 1 { ok = false; }
+    if n > 16 { ok = false; }
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        let mut good = is_alnum(b);
+        if b == 95 { good = true; }
+        if good == false { ok = false; }
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return ok;
+}
+
+// Base name: non-empty and contains no path separator or control character.
+// Newlines separate entries in the stored list, so they are rejected here.
+fn valid_exclude_name(s: Str) -> Bool {
+    let n = rt_str_len(s);
+    let mut ok = true;
+    if n == 0 { ok = false; }
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b == 47 { ok = false; }
+        if b == 92 { ok = false; }
+        if b == 10 { ok = false; }
+        if b == 13 { ok = false; }
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return ok;
+}
+
+fn schema_fail(cfg: Config) -> (Config, Int) {
+    config_clear(cfg);
+    fail_msg("config does not match the required schema");
+    return (empty_config(), 3);
+}
+
+// Consumes `path`; on success the returned Config owns all of its strings.
+fn load_config(path: Str, arena: Ptr<Int>) -> (Config, Int) {
+    let mut cfg = empty_config();
+    if fs_exists(rt_str_concat(path, "")) == false {
+        fail_path("config file does not exist: ", rt_str_concat(path, ""));
+        rt_str_free(path);
+        return (cfg, 2);
+    }
+    if fs_is_file(rt_str_concat(path, "")) == false {
+        fail_path("config is not a regular file: ", rt_str_concat(path, ""));
+        rt_str_free(path);
+        return (cfg, 2);
+    }
+    let content = fs_read(rt_str_concat(path, ""));
+    rt_str_free(path);
+    let v = json_parse(content, arena);
+    if v == 0 {
+        fail_msg("config is not valid JSON");
+        return (cfg, 3);
+    }
+    if json_tag(arena, v) != 5 {
+        fail_msg("config root is not a JSON object");
+        return (cfg, 3);
+    }
+    if json_obj_len(arena, v) != 7 {
+        fail_msg("config must contain exactly the seven required keys");
+        return (cfg, 3);
+    }
+
+    let (root, ok_root) = get_string(arena, v, "root");
+    if ok_root == false { return schema_fail(cfg); }
+    cfg.root = root;
+
+    let (out, ok_out) = get_string(arena, v, "out");
+    if ok_out == false { return schema_fail(cfg); }
+    cfg.out = out;
+
+    let (exts, ok_exts) = get_string_array(arena, v, "include_extensions");
+    if ok_exts == false {
+        rt_vec_free(exts);
+        return schema_fail(cfg);
+    }
+    let en = rt_vec_len(exts);
+    if en < 1 { rt_vec_free(exts); return schema_fail(cfg); }
+    if en > 8 { rt_vec_free(exts); return schema_fail(cfg); }
+    let mut i = 0;
+    while i < en {
+        if valid_extension(rt_str_concat(rt_vec_get(exts, i), "")) == false {
+            rt_vec_free(exts);
+            return schema_fail(cfg);
+        }
+        i = i + 1;
+    }
+    cfg.exts = str_join(exts, ",");
+
+    let (excludes, ok_excludes) = get_string_array(arena, v, "exclude_dirs");
+    if ok_excludes == false {
+        rt_vec_free(excludes);
+        return schema_fail(cfg);
+    }
+    let xn = rt_vec_len(excludes);
+    if xn > 8 { rt_vec_free(excludes); return schema_fail(cfg); }
+    i = 0;
+    while i < xn {
+        if valid_exclude_name(rt_str_concat(rt_vec_get(excludes, i), "")) == false {
+            rt_vec_free(excludes);
+            return schema_fail(cfg);
+        }
+        i = i + 1;
+    }
+    cfg.excludes = str_join(excludes, "\n");
+
+    let (markers, ok_markers) = get_string_array(arena, v, "markers");
+    if ok_markers == false {
+        rt_vec_free(markers);
+        return schema_fail(cfg);
+    }
+    let mn = rt_vec_len(markers);
+    if mn < 1 { rt_vec_free(markers); return schema_fail(cfg); }
+    if mn > 4 { rt_vec_free(markers); return schema_fail(cfg); }
+    i = 0;
+    while i < mn {
+        if valid_marker(rt_str_concat(rt_vec_get(markers, i), "")) == false {
+            rt_vec_free(markers);
+            return schema_fail(cfg);
+        }
+        i = i + 1;
+    }
+    cfg.markers = str_join(markers, "\n");
+
+    let (max_file_bytes, ok_bytes) = get_uint(arena, v, "max_file_bytes");
+    if ok_bytes == false { return schema_fail(cfg); }
+    if max_file_bytes < 1 { return schema_fail(cfg); }
+    if max_file_bytes > 1048576 { return schema_fail(cfg); }
+    cfg.max_file_bytes = max_file_bytes;
+
+    let (max_markers, ok_mark) = get_uint(arena, v, "max_markers");
+    if ok_mark == false { return schema_fail(cfg); }
+    if max_markers > 1000 { return schema_fail(cfg); }
+    cfg.max_markers = max_markers;
+
+    return (cfg, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Path filtering and iteration
+// ---------------------------------------------------------------------------
+
+fn lower_byte(b: Int) -> Int {
+    if b >= 65 { if b <= 90 { return b + 32; } }
+    return b;
+}
+
+// Compare [start,end) of `list` with `item`, ASCII case-insensitively.
+// User-function Str parameters are consumed, so the caller passes copies and
+// this helper releases them before returning.
+fn segment_eq_ci(list: Str, start: Int, end: Int, item: Str) -> Bool {
+    let ilen = rt_str_len(item);
+    let mut same = true;
+    if end - start != ilen { same = false; }
+    if same == true {
+        let mut i = 0;
+        while i < ilen {
+            if lower_byte(rt_str_byte(list, start + i)) != lower_byte(rt_str_byte(item, i)) {
+                same = false;
+                i = ilen;
+            } else {
+                i = i + 1;
+            }
+        }
+    }
+    rt_str_free(list);
+    rt_str_free(item);
+    return same;
+}
+
+// True when `item` is one of the `delim`-separated entries in `list`.
+// Consumes both arguments.
+fn list_has_ci(list: Str, delim: Int, item: Str) -> Bool {
+    let n = rt_str_len(list);
+    let mut hit = false;
+    let mut start = 0;
+    while start <= n {
+        let mut end = start;
+        let mut done = 0;
+        while done == 0 {
+            if end >= n {
+                done = 1;
+            } else {
+                if rt_str_byte(list, end) == delim {
+                    done = 1;
+                } else {
+                    end = end + 1;
+                }
+            }
+        }
+        if segment_eq_ci(rt_str_concat(list, ""), start, end, rt_str_concat(item, "")) == true { hit = true; }
+        if end >= n {
+            start = n + 1;
+        } else {
+            start = end + 1;
+        }
+    }
+    rt_str_free(list);
+    rt_str_free(item);
+    return hit;
+}
+
+// True when `path` ends in one of the comma-separated extensions.
+// Consumes both arguments.
+fn ext_selected(path: Str, exts: Str) -> Bool {
+    let ext = path_extension(rt_str_concat(path, ""));
+    let hit = list_has_ci(exts, 44, ext);
+    rt_str_free(path);
+    return hit;
+}
+
+// True when base name `name` is one of the newline-separated excludes.
+// Consumes both arguments.
+fn name_excluded(name: Str, excludes: Str) -> Bool {
+    let hit = list_has_ci(excludes, 10, rt_str_concat(name, ""));
+    rt_str_free(name);
+    return hit;
+}
+
+// "<rel>/<name>", or just `name` when rel is empty. Consumes both.
+fn rel_child(rel: Str, name: Str) -> Str {
+    if rt_str_len(rel) == 0 {
+        rt_str_free(rel);
+        return name;
+    }
+    let a = rt_str_concat(rel, "/");
+    let out = rt_str_concat(a, name);
+    rt_str_free(a);
+    rt_str_free(rel);
+    rt_str_free(name);
+    return out;
+}
+
+// Iterative depth-first-ish walk. Returns selected relative paths and a status:
+// 0 ok, 7 a directory could not be read. Consumes root/exts/excludes.
+fn walk(root: Str, exts: Str, excludes: Str) -> (Vec<Str>, Int) {
+    let mut files = rt_vec_new(16);
+    let mut dirs = rt_vec_new(8);
+    let mut rels = rt_vec_new(8);
+    dirs = rt_vec_push(dirs, rt_str_concat(root, ""));
+    rels = rt_vec_push(rels, rt_str_alloc(0));
+
+    let mut status = 0;
+    let mut idx = 0;
+    while idx < rt_vec_len(dirs) {
+        if status != 0 {
+            idx = rt_vec_len(dirs);
+        } else {
+            let dir = rt_str_concat(rt_vec_get(dirs, idx), "");
+            let rel = rt_str_concat(rt_vec_get(rels, idx), "");
+            let handle = fs_dir_open(rt_str_concat(dir, ""));
+            if handle <= 0 {
+                fail_path("cannot open directory: ", rt_str_concat(dir, ""));
+                status = 7;
+                rt_str_free(dir);
+                rt_str_free(rel);
+            } else {
+                let mut keep_going = 1;
+                while keep_going == 1 {
+                    let name = fs_dir_next(handle);
+                    if rt_str_len(name) == 0 {
+                        rt_str_free(name);
+                        keep_going = 0;
+                    } else {
+                        let is_dot = rt_str_eq(name, ".");
+                        let is_dotdot = rt_str_eq(name, "..");
+                        if is_dot == true {
+                            rt_str_free(name);
+                        } else {
+                            if is_dotdot == true {
+                                rt_str_free(name);
+                            } else {
+                                if name_excluded(rt_str_concat(name, ""), rt_str_concat(excludes, "")) == true {
+                                    rt_str_free(name);
+                                } else {
+                                    let full = path_join(rt_str_concat(dir, ""), rt_str_concat(name, ""));
+                                    if fs_is_dir(rt_str_concat(full, "")) == true {
+                                        let child_rel = rel_child(rt_str_concat(rel, ""), rt_str_concat(name, ""));
+                                        dirs = rt_vec_push(dirs, rt_str_concat(full, ""));
+                                        rels = rt_vec_push(rels, child_rel);
+                                    } else {
+                                        if ext_selected(rt_str_concat(full, ""), rt_str_concat(exts, "")) == true {
+                                            let child_rel = rel_child(rt_str_concat(rel, ""), rt_str_concat(name, ""));
+                                            files = rt_vec_push(files, child_rel);
+                                        }
+                                    }
+                                    rt_str_free(full);
+                                    rt_str_free(name);
+                                }
+                            }
+                        }
+                    }
+                }
+                fs_dir_close(handle);
+                rt_str_free(dir);
+                rt_str_free(rel);
+                idx = idx + 1;
+            }
+        }
+    }
+
+    rt_vec_free(dirs);
+    rt_vec_free(rels);
+    rt_str_free(root);
+    rt_str_free(exts);
+    rt_str_free(excludes);
+    return (files, status);
+}
+
+// In-place insertion sort, ascending byte order. Consumes and returns `v`.
+fn sort_paths(v: Vec<Str>) -> Vec<Str> {
+    let mut cur = v;
+    let n = rt_vec_len(cur);
+    let mut i = 1;
+    while i < n {
+        let key = rt_str_concat(rt_vec_get(cur, i), "");
+        let mut j = i - 1;
+        let mut done = 0;
+        while done == 0 {
+            if j < 0 {
+                done = 1;
+            } else {
+                let cmp = str_cmp(rt_str_concat(rt_vec_get(cur, j), ""), rt_str_concat(key, ""));
+                if cmp < 0 {
+                    done = 1;
+                } else {
+                    cur = rt_vec_set(cur, j + 1, rt_str_concat(rt_vec_get(cur, j), ""));
+                    j = j - 1;
+                }
+            }
+        }
+        cur = rt_vec_set(cur, j + 1, key);
+        i = i + 1;
+    }
+    return cur;
+}
+
+// ---------------------------------------------------------------------------
+// Analysis and report construction
+// ---------------------------------------------------------------------------
+
+// Non-overlapping, case-sensitive occurrences of `needle` in `text`.
+// Consumes both.
+fn count_marker(text: Str, needle: Str) -> Int {
+    let tlen = rt_str_len(text);
+    let nlen = rt_str_len(needle);
+    let mut count = 0;
+    if nlen > 0 {
+        let mut pos = 0;
+        while pos + nlen <= tlen {
+            let mut match_here = true;
+            let mut k = 0;
+            while k < nlen {
+                if rt_str_byte(text, pos + k) != rt_str_byte(needle, k) {
+                    match_here = false;
+                    k = nlen;
+                } else {
+                    k = k + 1;
+                }
+            }
+            if match_here == true {
+                count = count + 1;
+                pos = pos + nlen;
+            } else {
+                pos = pos + 1;
+            }
+        }
+    }
+    rt_str_free(text);
+    rt_str_free(needle);
+    return count;
+}
+
+// CSV field with RFC-4180 quoting when the text contains comma, quote, CR or
+// LF. Consumes and may return the original string when quoting is unnecessary.
+fn csv_field(s: Str) -> Str {
+    let n = rt_str_len(s);
+    let mut needs = false;
+    let mut quotes = 0;
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b == 44 { needs = true; }
+        if b == 34 { needs = true; quotes = quotes + 1; }
+        if b == 13 { needs = true; }
+        if b == 10 { needs = true; }
+        i = i + 1;
+    }
+    if needs == false { return s; }
+    let out = rt_str_alloc(n + 2 + quotes);
+    rt_str_set_byte(out, 0, 34);
+    let mut o = 1;
+    i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        rt_str_set_byte(out, o, b);
+        o = o + 1;
+        if b == 34 {
+            rt_str_set_byte(out, o, 34);
+            o = o + 1;
+        }
+        i = i + 1;
+    }
+    rt_str_set_byte(out, o, 34);
+    rt_str_free(s);
+    return out;
+}
+
+fn join_comma(a: Str, b: Str) -> Str {
+    let mid = rt_str_concat(a, ",");
+    rt_str_free(a);
+    let out = rt_str_concat(mid, b);
+    rt_str_free(mid);
+    rt_str_free(b);
+    return out;
+}
+
+fn comma_num(acc: Str, value: Int) -> Str {
+    let num = rt_str_from_int(value);
+    let out = join_comma(acc, num);
+    return out;
+}
+
+fn inventory_row(path: Str, bytes: Int, lines: Int, binary: Int, todo: Int, fixme: Int) -> Str {
+    let mut row = csv_field(path);
+    row = comma_num(row, bytes);
+    row = comma_num(row, lines);
+    row = comma_num(row, binary);
+    row = comma_num(row, todo);
+    row = comma_num(row, fixme);
+    return row;
+}
+
+fn violation_row(path: Str, rule: Str, detail: Str) -> Str {
+    let mut row = csv_field(path);
+    row = join_comma(row, csv_field(rule));
+    row = join_comma(row, csv_field(detail));
+    return row;
+}
+
+fn append_line(body: Str, row: Str) -> Str {
+    let a = rt_str_concat(body, "\n");
+    rt_str_free(body);
+    let out = rt_str_concat(a, row);
+    rt_str_free(a);
+    rt_str_free(row);
+    return out;
+}
+
+fn finalize_body(body: Str) -> Str {
+    let out = rt_str_concat(body, "\n");
+    rt_str_free(body);
+    return out;
+}
+
+// Append `label` then decimal `value`; optional comma follows the value.
+fn append_num(acc: Str, label: Str, value: Int, comma: Int) -> Str {
+    let a = rt_str_concat(acc, label);
+    rt_str_free(acc);
+    rt_str_free(label);
+    let num = rt_str_from_int(value);
+    let b = rt_str_concat(a, num);
+    rt_str_free(a);
+    rt_str_free(num);
+    if comma == 1 {
+        let c = rt_str_concat(b, ",");
+        rt_str_free(b);
+        return c;
+    }
+    return b;
+}
+
+fn write_report(path: Str, body: Str) -> Bool {
+    let rc = fs_write(rt_str_concat(path, ""), body);
+    if rc < 0 {
+        fail_path("cannot write report: ", path);
+        return false;
+    }
+    rt_str_free(path);
+    return true;
+}
+
+// Scan sorted paths and emit the three reports plus stdout. Consumes all
+// arguments. Returns 0, 5, 6 or 7.
+fn scan(paths: Vec<Str>, root: Str, out: Str, markers: Str, max_file_bytes: Int, max_markers: Int) -> Int {
+    let marker_list = str_split(rt_str_concat(markers, ""), "\n");
+    rt_str_free(markers);
+    let mn = rt_vec_len(marker_list);
+    let mut todo_marker = rt_str_alloc(0);
+    let mut fixme_marker = rt_str_alloc(0);
+    if mn > 0 {
+        rt_str_free(todo_marker);
+        todo_marker = rt_str_concat(rt_vec_get(marker_list, 0), "");
+    }
+    if mn > 1 {
+        rt_str_free(fixme_marker);
+        fixme_marker = rt_str_concat(rt_vec_get(marker_list, 1), "");
+    }
+
+    let mut inventory = rt_str_concat("path,bytes,lines,binary,todo,fixme", "");
+    let mut violations = rt_str_concat("path,rule,detail", "");
+    let mut total_files = 0;
+    let mut total_bytes = 0;
+    let mut total_lines = 0;
+    let mut total_binary = 0;
+    let mut total_todo = 0;
+    let mut total_fixme = 0;
+    let mut total_violations = 0;
+    let mut status = 0;
+
+    let n = rt_vec_len(paths);
+    let mut i = 0;
+    while i < n {
+        if status != 0 {
+            i = n;
+        } else {
+            let rel = rt_str_concat(rt_vec_get(paths, i), "");
+            let full = path_join(rt_str_concat(root, ""), rt_str_concat(rel, ""));
+            let size = fs_file_size(rt_str_concat(full, ""));
+            if size < 0 {
+                fail_path("cannot read file: ", rt_str_concat(full, ""));
+                status = 7;
+                rt_str_free(full);
+                rt_str_free(rel);
+            } else {
+                let mut lines = -1;
+                let mut binary = 0;
+                let mut todo = 0;
+                let mut fixme = 0;
+                let mut too_large = 0;
+                if size > max_file_bytes {
+                    too_large = 1;
+                } else {
+                    let data = fs_read(rt_str_concat(full, ""));
+                    if rt_str_len(data) != size {
+                        fail_path("cannot read file: ", rt_str_concat(full, ""));
+                        status = 7;
+                        rt_str_free(data);
+                    } else {
+                        let dlen = rt_str_len(data);
+                        let probe = dlen;
+                        let mut limit = probe;
+                        if limit > 4096 { limit = 4096; }
+                        let mut k = 0;
+                        while k < limit {
+                            if rt_str_byte(data, k) == 0 { binary = 1; }
+                            k = k + 1;
+                        }
+                        if binary == 1 {
+                            lines = -1;
+                        } else {
+                            let mut lf = 0;
+                            let mut k2 = 0;
+                            while k2 < dlen {
+                                if rt_str_byte(data, k2) == 10 { lf = lf + 1; }
+                                k2 = k2 + 1;
+                            }
+                            if dlen == 0 {
+                                lines = 0;
+                            } else {
+                                let last = rt_str_byte(data, dlen - 1);
+                                if last == 10 {
+                                    lines = lf;
+                                } else {
+                                    lines = lf + 1;
+                                }
+                            }
+                            todo = count_marker(rt_str_concat(data, ""), rt_str_concat(todo_marker, ""));
+                            fixme = count_marker(rt_str_concat(data, ""), rt_str_concat(fixme_marker, ""));
+                        }
+                        rt_str_free(data);
+                    }
+                }
+
+                if status == 0 {
+                    inventory = append_line(inventory, inventory_row(rt_str_concat(rel, ""), size, lines, binary, todo, fixme));
+                    total_files = total_files + 1;
+                    total_bytes = total_bytes + size;
+                    if lines > 0 { total_lines = total_lines + lines; }
+                    if binary == 1 { total_binary = total_binary + 1; }
+                    total_todo = total_todo + todo;
+                    total_fixme = total_fixme + fixme;
+
+                    if too_large == 1 {
+                        let limit_num = rt_str_from_int(max_file_bytes);
+                        let detail = rt_str_concat("limit=", limit_num);
+                        rt_str_free(limit_num);
+                        violations = append_line(violations, violation_row(rt_str_concat(rel, ""), "file_too_large", detail));
+                        total_violations = total_violations + 1;
+                    } else {
+                        if binary == 0 {
+                            if todo + fixme > max_markers {
+                                let count_num = rt_str_from_int(todo + fixme);
+                                let detail = rt_str_concat("count=", count_num);
+                                rt_str_free(count_num);
+                                violations = append_line(violations, violation_row(rt_str_concat(rel, ""), "too_many_markers", detail));
+                                total_violations = total_violations + 1;
+                            }
+                        }
+                    }
+                }
+                rt_str_free(full);
+                rt_str_free(rel);
+                i = i + 1;
+            }
+        }
+    }
+
+    let mut code = 0;
+    if status != 0 {
+        code = 7;
+    } else {
+        inventory = finalize_body(inventory);
+        violations = finalize_body(violations);
+
+        let mut summary = rt_str_concat("{", "");
+        summary = append_num(summary, "\"files\":", total_files, 1);
+        summary = append_num(summary, "\"bytes\":", total_bytes, 1);
+        summary = append_num(summary, "\"lines\":", total_lines, 1);
+        summary = append_num(summary, "\"binary\":", total_binary, 1);
+        summary = append_num(summary, "\"todo\":", total_todo, 1);
+        summary = append_num(summary, "\"fixme\":", total_fixme, 1);
+        summary = append_num(summary, "\"violations\":", total_violations, 0);
+        let closing = rt_str_concat(summary, "}");
+        rt_str_free(summary);
+        summary = closing;
+
+        let inv_path = path_join(rt_str_concat(out, ""), "inventory.csv");
+        let vio_path = path_join(rt_str_concat(out, ""), "violations.csv");
+        let sum_path = path_join(rt_str_concat(out, ""), "summary.json");
+        let ok_inv = write_report(inv_path, inventory);
+        inventory = rt_str_alloc(0);
+        if ok_inv == false {
+            // Later report paths were never consumed by write_report.
+            rt_str_free(vio_path);
+            rt_str_free(sum_path);
+            code = 5;
+        } else {
+            let ok_vio = write_report(vio_path, violations);
+            violations = rt_str_alloc(0);
+            if ok_vio == false {
+                rt_str_free(sum_path);
+                code = 5;
+            } else {
+                let ok_sum = write_report(sum_path, summary);
+                summary = rt_str_alloc(0);
+                if ok_sum == false {
+                    code = 5;
+                }
+            }
+        }
+
+        if code == 0 {
+            let mut line = rt_str_concat("files=", "");
+            line = append_num(line, "", total_files, 0);
+            line = append_num(line, " bytes=", total_bytes, 0);
+            line = append_num(line, " lines=", total_lines, 0);
+            line = append_num(line, " todo=", total_todo, 0);
+            line = append_num(line, " fixme=", total_fixme, 0);
+            line = append_num(line, " violations=", total_violations, 0);
+            // rt_print_str terminates the line itself.
+            rt_print_str(line);
+            rt_str_free(line);
+            if total_violations > 0 { code = 6; }
+        }
+        // `summary` is scoped to this success branch: free it here, including
+        // the placeholder installed after a successful write (or the body when
+        // an earlier write failed).
+        rt_str_free(summary);
+    }
+
+    rt_str_free(inventory);
+    rt_str_free(violations);
+    rt_str_free(todo_marker);
+    rt_str_free(fixme_marker);
+    rt_vec_free(marker_list);
+    rt_str_free(root);
+    rt_str_free(out);
+    rt_vec_free(paths);
+    return code;
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+fn main() -> Int {
+    let argc = rt_argc();
+    let mut config_index = -1;
+    let mut help = 0;
+    let mut bad = 0;
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        if rt_str_eq(arg, "--help") == true {
+            help = 1;
+            if argc != 1 { bad = 1; }
+        } else {
+            if rt_str_len(arg) > 0 {
+                if rt_str_byte(arg, 0) == 45 {
+                    bad = 1;
+                } else {
+                    if config_index < 0 {
+                        config_index = i;
+                    } else {
+                        bad = 1;
+                    }
+                }
+            } else {
+                bad = 1;
+            }
+        }
+        rt_str_free(arg);
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    if help == 1 {
+        if bad == 1 {
+            fail_msg("--help takes no other arguments");
+            code = usage();
+        } else {
+            print_help();
+            code = 0;
+        }
+    } else {
+        if bad == 1 {
+            fail_msg("unknown option or extra argument");
+            code = usage();
+        } else {
+            if config_index < 0 {
+                fail_msg("missing config path");
+                code = usage();
+            } else {
+                let arena = rt_alloc(65536);
+                let (cfg, config_code) = load_config(rt_argv(config_index), arena);
+                code = config_code;
+                if code == 0 {
+                    if fs_exists(rt_str_concat(cfg.root, "")) == false {
+                        fail_path("root does not exist: ", rt_str_concat(cfg.root, ""));
+                        code = 4;
+                    } else {
+                        if fs_is_dir(rt_str_concat(cfg.root, "")) == false {
+                            fail_path("root is not a directory: ", rt_str_concat(cfg.root, ""));
+                            code = 4;
+                        } else {
+                            if fs_exists(rt_str_concat(cfg.out, "")) == false {
+                                fail_path("out does not exist: ", rt_str_concat(cfg.out, ""));
+                                code = 5;
+                            } else {
+                                if fs_is_dir(rt_str_concat(cfg.out, "")) == false {
+                                    fail_path("out is not a directory: ", rt_str_concat(cfg.out, ""));
+                                    code = 5;
+                                } else {
+                                    let (paths, walk_status) = walk(rt_str_concat(cfg.root, ""), rt_str_concat(cfg.exts, ""), rt_str_concat(cfg.excludes, ""));
+                                    if walk_status != 0 {
+                                        rt_vec_free(paths);
+                                        code = 7;
+                                    } else {
+                                        let sorted = sort_paths(paths);
+                                        code = scan(sorted, rt_str_concat(cfg.root, ""), rt_str_concat(cfg.out, ""), rt_str_concat(cfg.markers, ""), cfg.max_file_bytes, cfg.max_markers);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                config_clear(cfg);
+                rt_free(arena);
+            }
+        }
+    }
+    return code;
+}

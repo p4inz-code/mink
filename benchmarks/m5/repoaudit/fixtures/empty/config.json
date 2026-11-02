@@ -1,0 +1,13 @@
+{
+  "root": "tree",
+  "out": "out",
+  "include_extensions": [
+    ".mink"
+  ],
+  "exclude_dirs": [],
+  "markers": [
+    "TODO"
+  ],
+  "max_file_bytes": 1024,
+  "max_markers": 0
+}

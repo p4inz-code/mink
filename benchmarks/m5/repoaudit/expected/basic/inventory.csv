@@ -1,0 +1,17 @@
+path,bytes,lines,binary,todo,fixme
+README.md,22,3,0,1,0
+assets/binary.txt,15,-1,1,0,0
+assets/nul_at_4096.txt,4102,1,0,1,0
+assets/oversized.txt,8193,-1,0,0,0
+docs/clean.MD,21,3,0,0,0
+docs/notes.txt,38,3,0,1,1
+mixed.CaSe.MiNk,14,1,0,0,0
+nested/deeper/ok.txt,3,1,0,0,0
+space dir/file with space.txt,6,1,0,1,0
+src/app.mink,70,5,0,3,1
+src/crlf.txt,6,2,0,0,0
+src/empty.txt,0,0,0,0,0
+src/lf_end.txt,4,2,0,0,0
+src/no_final.txt,23,2,0,1,0
+src/repeat.txt,9,1,0,2,0
+src/util.mink,23,1,0,0,0

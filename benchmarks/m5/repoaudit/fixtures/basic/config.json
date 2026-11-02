@@ -1,0 +1,18 @@
+{
+  "root": "tree",
+  "out": "out",
+  "include_extensions": [
+    ".mink",
+    ".md",
+    ".txt"
+  ],
+  "exclude_dirs": [
+    "target"
+  ],
+  "markers": [
+    "TODO",
+    "FIXME"
+  ],
+  "max_file_bytes": 8192,
+  "max_markers": 3
+}

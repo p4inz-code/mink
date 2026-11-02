@@ -1,0 +1,3 @@
+path,rule,detail
+assets/oversized.txt,file_too_large,limit=8192
+src/app.mink,too_many_markers,count=4
