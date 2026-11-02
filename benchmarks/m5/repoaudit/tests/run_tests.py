@@ -553,6 +553,41 @@ def run_suite(exe: Path) -> Suite:
 
     suite.check("stdout is exactly one CRLF line", stdout_contract)
 
+    def casing_and_boundaries() -> None:
+        with fixture("basic") as work:
+            (work / "tree" / "docs" / "lowercase.txt").write_bytes(
+                b"todo fixme TODO\n"
+            )
+            cfg = base_config()
+            cfg["exclude_dirs"] = ["TARGET"]
+            cfg["max_file_bytes"] = 8193  # exactly the oversized fixture size
+            cfg["max_markers"] = 4       # exactly src/app.mink's count
+            write_config(work, cfg)
+            result = check_contract(exe, work)
+            rows = {row[0]: row for row in result["inventory"]}
+            expect(result["code"] == 0, "inclusive boundaries must be clean")
+            expect(result["violations"] == [], "boundary run produced violations")
+            expect("target/generated.mink" not in rows, "exclude must be case-insensitive")
+            expect("nested/target/deep.mink" not in rows, "nested exclude must be case-insensitive")
+            expect(rows["docs/lowercase.txt"][4:] == [1, 0], "markers must be case-sensitive")
+            expect(rows["assets/oversized.txt"][2] == 1, "equal max_file_bytes must be read")
+
+    suite.check("case sensitivity and inclusive boundaries", casing_and_boundaries)
+
+    def csv_quoting() -> None:
+        with fixture("basic") as work:
+            (work / "tree" / "docs" / "comma,name.txt").write_bytes(b"TODO\n")
+            cfg = base_config()
+            cfg["max_markers"] = 100
+            write_config(work, cfg)
+            result = check_contract(exe, work)
+            expect(
+                b'"docs/comma,name.txt"' in result["reports"]["inventory.csv"],
+                "comma path was not CSV-quoted",
+            )
+
+    suite.check("CSV quoting for a comma path", csv_quoting)
+
     def unreadable_scan() -> None:
         if sys.platform != "win32":
             raise SkipTest("Windows sharing lock needed for scan-I/O test")
