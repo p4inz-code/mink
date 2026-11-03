@@ -1,0 +1,5 @@
+# releasepack fixtures and goldens are byte-exact test inputs.
+#
+# The host has core.autocrlf enabled; these files include a binary fixture and
+# CRLF/LF-distinguished text, so checkout must not rewrite them.
+* -text whitespace=cr-at-eol

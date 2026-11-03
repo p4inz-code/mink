@@ -1,0 +1,7 @@
+{
+  "root": "tree",
+  "archive": "out/release.zip",
+  "manifest": "out/manifest.csv",
+  "include_extensions": [".txt", ".json"],
+  "exclude_dirs": ["skip"]
+}

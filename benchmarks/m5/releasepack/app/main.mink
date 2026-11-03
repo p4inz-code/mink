@@ -1,0 +1,1384 @@
+// ============================================================================
+// releasepack — M5 Application 3
+//
+// Deterministic Windows release ZIP archives from a JSON configuration, with a
+// sorted SHA-256 CSV manifest, verification and safe extraction. The frozen
+// contract lives in docs/benchmarks/M5/M5_APPLICATION_SELECTION.md (section 7).
+//
+//   releasepack build <config.json>
+//   releasepack verify <archive.zip> <manifest.csv>
+//   releasepack extract <archive.zip> <dest-dir>
+//   releasepack --help
+//
+// Exit codes: 0 success, 1 usage, 2 missing file, 3 invalid config/manifest,
+// 4 filesystem/output failure or output inside root, 5 no files matched,
+// 6 corrupt/unsupported/unsafe archive or manifest/archive mismatch.
+//
+// Ownership is single-exit per function. The ZIP work is delegated to
+// stdlib/zip.mink (fixed level 6, fixed DOS epoch, sorted entries are supplied
+// here); hashing to stdlib/hashing.mink; CSV parsing to stdlib/csv.mink.
+// ============================================================================
+
+mod csv;
+mod filesystem;
+mod hashing;
+mod json;
+mod strings;
+mod zip;
+
+struct BuildConfig {
+    root: Str,
+    archive: Str,
+    manifest: Str,
+    exts: Str,      // comma-separated
+    excludes: Str,  // newline-separated
+}
+
+fn empty_config() -> BuildConfig {
+    return BuildConfig {
+        root: "",
+        archive: "",
+        manifest: "",
+        exts: "",
+        excludes: "",
+    };
+}
+
+fn config_clear(c: BuildConfig) {
+    rt_str_free(c.root);
+    rt_str_free(c.archive);
+    rt_str_free(c.manifest);
+    rt_str_free(c.exts);
+    rt_str_free(c.excludes);
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("releasepack: ", label);
+    rt_str_free(label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn fail_path(label: Str, path: Str) -> Int {
+    let head = rt_str_concat("releasepack: ", label);
+    rt_str_free(label);
+    let mid = rt_str_concat(head, path);
+    rt_str_free(head);
+    rt_str_free(path);
+    let line = rt_str_concat(mid, "\r\n");
+    rt_str_free(mid);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn usage() -> Int {
+    rt_stderr_write(
+        "releasepack: usage: releasepack build <config.json> | verify <archive.zip> <manifest.csv> | extract <archive.zip> <dest-dir> | --help\r\n"
+    );
+    return 1;
+}
+
+fn print_help() {
+    rt_print_str("releasepack - deterministic release archives");
+    rt_print_str("");
+    rt_print_str("usage: releasepack build <config.json>");
+    rt_print_str("       releasepack verify <archive.zip> <manifest.csv>");
+    rt_print_str("       releasepack extract <archive.zip> <dest-dir>");
+    rt_print_str("       releasepack --help");
+    rt_print_str("");
+    rt_print_str("build reads a JSON object with exactly these keys:");
+    rt_print_str("  root, archive, manifest, include_extensions, exclude_dirs");
+    rt_print_str("Entries are sorted by path; compression is fixed at level 6");
+    rt_print_str("and timestamps are the fixed DOS epoch, so output is deterministic.");
+    rt_print_str("Exit: 0 ok, 1 usage, 2 missing file, 3 invalid config/manifest,");
+    rt_print_str("      4 filesystem failure, 5 no files matched, 6 archive/mismatch.");
+}
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+fn is_alnum(b: Int) -> Bool {
+    let mut r = false;
+    if b >= 48 { if b <= 57 { r = true; } }
+    if b >= 65 { if b <= 90 { r = true; } }
+    if b >= 97 { if b <= 122 { r = true; } }
+    return r;
+}
+
+// ^\.[A-Za-z0-9]{1,8}$ — consumes `s`.
+fn valid_extension(s: Str) -> Bool {
+    let n = rt_str_len(s);
+    let mut ok = true;
+    if n < 2 { ok = false; }
+    if n > 9 { ok = false; }
+    if ok == true {
+        if rt_str_byte(s, 0) != 46 { ok = false; }
+    }
+    let mut i = 1;
+    while i < n {
+        if is_alnum(rt_str_byte(s, i)) == false { ok = false; }
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return ok;
+}
+
+// Base name: non-empty, no separator, no control byte, no ':'. Consumes `s`.
+fn valid_exclude_name(s: Str) -> Bool {
+    let n = rt_str_len(s);
+    let mut ok = true;
+    if n == 0 { ok = false; }
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b == 47 { ok = false; }
+        if b == 92 { ok = false; }
+        if b == 58 { ok = false; }
+        if b == 10 { ok = false; }
+        if b == 13 { ok = false; }
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return ok;
+}
+
+// Lower-case one ASCII byte.
+fn lower_byte(b: Int) -> Int {
+    if b >= 65 { if b <= 90 { return b + 32; } }
+    return b;
+}
+
+// File extension including '.', or "" when the base name has none.
+fn extension_of(path: Str) -> Str {
+    let n = rt_str_len(path);
+    let mut last_slash = -1;
+    let mut last_dot = -1;
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(path, i);
+        if b == 47 || b == 92 { last_slash = i; }
+        if b == 46 { last_dot = i; }
+        i = i + 1;
+    }
+    let mut start = n;
+    if last_dot > last_slash { start = last_dot; }
+    let out = rt_str_alloc(n - start);
+    let mut j = 0;
+    while j < n - start {
+        rt_str_set_byte(out, j, rt_str_byte(path, start + j));
+        j = j + 1;
+    }
+    rt_str_free(path);
+    return out;
+}
+
+// Compare [start,end) of `list` with `item`, ASCII case-insensitively.
+// Consumes both arguments.
+fn segment_eq_ci(list: Str, start: Int, end: Int, item: Str) -> Bool {
+    let ilen = rt_str_len(item);
+    let mut same = true;
+    if end - start != ilen { same = false; }
+    if same == true {
+        let mut i = 0;
+        while i < ilen {
+            if lower_byte(rt_str_byte(list, start + i)) != lower_byte(rt_str_byte(item, i)) {
+                same = false;
+                i = ilen;
+            } else {
+                i = i + 1;
+            }
+        }
+    }
+    rt_str_free(list);
+    rt_str_free(item);
+    return same;
+}
+
+// True when `item` is one of the `delim`-separated entries in `list`.
+// Consumes both arguments.
+fn list_has_ci(list: Str, delim: Int, item: Str) -> Bool {
+    let n = rt_str_len(list);
+    let mut hit = false;
+    let mut start = 0;
+    while start <= n {
+        let mut end = start;
+        let mut done = 0;
+        while done == 0 {
+            if end >= n {
+                done = 1;
+            } else {
+                if rt_str_byte(list, end) == delim {
+                    done = 1;
+                } else {
+                    end = end + 1;
+                }
+            }
+        }
+        if segment_eq_ci(rt_str_concat(list, ""), start, end, rt_str_concat(item, "")) == true {
+            hit = true;
+        }
+        if end >= n {
+            start = n + 1;
+        } else {
+            start = end + 1;
+        }
+    }
+    rt_str_free(list);
+    rt_str_free(item);
+    return hit;
+}
+
+// "a/b" for two path components; consumes both.
+fn rel_child(rel: Str, name: Str) -> Str {
+    if rt_str_len(rel) == 0 {
+        rt_str_free(rel);
+        return name;
+    }
+    let a = rt_str_concat(rel, "/");
+    let out = rt_str_concat(a, name);
+    rt_str_free(a);
+    rt_str_free(rel);
+    rt_str_free(name);
+    return out;
+}
+
+// True when `path` ends in one of the comma-separated extensions.
+fn ext_selected(path: Str, exts: Str) -> Bool {
+    let ext = extension_of(rt_str_concat(path, ""));
+    let hit = list_has_ci(exts, 44, ext);
+    rt_str_free(path);
+    return hit;
+}
+
+// True when base name `name` is one of the newline-separated excludes.
+fn name_excluded(name: Str, excludes: Str) -> Bool {
+    let hit = list_has_ci(excludes, 10, rt_str_concat(name, ""));
+    rt_str_free(name);
+    return hit;
+}
+
+// Recursive ASCII walk. Returns selected relative paths and a status:
+// 0 ok, 4 a directory could not be read. Consumes root/exts/excludes.
+fn walk(root: Str, exts: Str, excludes: Str) -> (Vec<Str>, Int) {
+    let mut files = rt_vec_new(16);
+    let mut dirs = rt_vec_new(8);
+    let mut rels = rt_vec_new(8);
+    dirs = rt_vec_push(dirs, rt_str_concat(root, ""));
+    rels = rt_vec_push(rels, rt_str_alloc(0));
+
+    let mut status = 0;
+    let mut idx = 0;
+    while idx < rt_vec_len(dirs) {
+        if status != 0 {
+            idx = rt_vec_len(dirs);
+        } else {
+            let dir = rt_str_concat(rt_vec_get(dirs, idx), "");
+            let rel = rt_str_concat(rt_vec_get(rels, idx), "");
+            let handle = fs_dir_open(rt_str_concat(dir, ""));
+            if handle <= 0 {
+                fail_path("cannot open directory: ", rt_str_concat(dir, ""));
+                status = 4;
+                rt_str_free(dir);
+                rt_str_free(rel);
+            } else {
+                let mut keep_going = 1;
+                while keep_going == 1 {
+                    let name = fs_dir_next(handle);
+                    if rt_str_len(name) == 0 {
+                        rt_str_free(name);
+                        keep_going = 0;
+                    } else {
+                        let is_dot = rt_str_eq(name, ".");
+                        let is_dotdot = rt_str_eq(name, "..");
+                        if is_dot == true {
+                            rt_str_free(name);
+                        } else {
+                            if is_dotdot == true {
+                                rt_str_free(name);
+                            } else {
+                                if name_excluded(rt_str_concat(name, ""), rt_str_concat(excludes, "")) == true {
+                                    rt_str_free(name);
+                                } else {
+                                    let full = path_join(rt_str_concat(dir, ""), rt_str_concat(name, ""));
+                                    if fs_is_dir(rt_str_concat(full, "")) == true {
+                                        let child_rel = rel_child(rt_str_concat(rel, ""), rt_str_concat(name, ""));
+                                        dirs = rt_vec_push(dirs, rt_str_concat(full, ""));
+                                        rels = rt_vec_push(rels, child_rel);
+                                    } else {
+                                        if ext_selected(rt_str_concat(full, ""), rt_str_concat(exts, "")) == true {
+                                            let child_rel = rel_child(rt_str_concat(rel, ""), rt_str_concat(name, ""));
+                                            files = rt_vec_push(files, child_rel);
+                                        }
+                                    }
+                                    rt_str_free(full);
+                                    rt_str_free(name);
+                                }
+                            }
+                        }
+                    }
+                }
+                fs_dir_close(handle);
+                rt_str_free(dir);
+                rt_str_free(rel);
+                idx = idx + 1;
+            }
+        }
+    }
+
+    rt_vec_free(dirs);
+    rt_vec_free(rels);
+    rt_str_free(root);
+    rt_str_free(exts);
+    rt_str_free(excludes);
+    return (files, status);
+}
+
+// In-place insertion sort, ascending byte order. Consumes and returns `v`.
+fn sort_strings(v: Vec<Str>) -> Vec<Str> {
+    let mut cur = v;
+    let n = rt_vec_len(cur);
+    let mut i = 1;
+    while i < n {
+        let key = rt_str_concat(rt_vec_get(cur, i), "");
+        let mut j = i - 1;
+        let mut done = 0;
+        while done == 0 {
+            if j < 0 {
+                done = 1;
+            } else {
+                let cmp = str_cmp(rt_str_concat(rt_vec_get(cur, j), ""), rt_str_concat(key, ""));
+                if cmp < 0 {
+                    done = 1;
+                } else {
+                    cur = rt_vec_set(cur, j + 1, rt_str_concat(rt_vec_get(cur, j), ""));
+                    j = j - 1;
+                }
+            }
+        }
+        cur = rt_vec_set(cur, j + 1, key);
+        i = i + 1;
+    }
+    return cur;
+}
+
+// ---------------------------------------------------------------------------
+// Path safety and relationship checks
+// ---------------------------------------------------------------------------
+
+// '\\' -> '/', strip leading "./" and trailing separators. Consumes `p`.
+fn clean_path(p: Str) -> Str {
+    let n = rt_str_len(p);
+    let mut start = 0;
+    let mut going = 1;
+    while going == 1 {
+        if start + 1 < n {
+            if rt_str_byte(p, start) == 46 && rt_str_byte(p, start + 1) == 47 {
+                start = start + 2;
+            } else {
+                going = 0;
+            }
+        } else {
+            going = 0;
+        }
+    }
+    let mut end = n;
+    while end > start {
+        let b = rt_str_byte(p, end - 1);
+        if b == 47 || b == 92 {
+            end = end - 1;
+        } else {
+            end = end + 0;
+            break;
+        }
+    }
+    let out = rt_str_alloc(end - start);
+    let mut i = start;
+    while i < end {
+        let b = rt_str_byte(p, i);
+        let mut v = b;
+        if b == 92 { v = 47; }
+        rt_str_set_byte(out, i - start, v);
+        i = i + 1;
+    }
+    rt_str_free(p);
+    return out;
+}
+
+// A plain relative path with no drive, ADS ':' or ".." segment. Borrows `p`.
+fn relative_ok(p: Str) -> Bool {
+    let n = rt_str_len(p);
+    let mut ok = true;
+    if n == 0 { ok = false; }
+    if ok == true {
+        let b0 = rt_str_byte(p, 0);
+        if b0 == 47 || b0 == 92 { ok = false; }
+        if n >= 2 {
+            if rt_str_byte(p, 1) == 58 { ok = false; }
+        }
+    }
+    let mut seg = 0;
+    let mut i = 0;
+    while i <= n {
+        let mut b = 47;
+        if i < n { b = rt_str_byte(p, i); }
+        if b == 58 { ok = false; }
+        if b == 47 || b == 92 || i == n {
+            let sl = i - seg;
+            if sl == 2 {
+                if rt_str_byte(p, seg) == 46 && rt_str_byte(p, seg + 1) == 46 {
+                    ok = false;
+                }
+            }
+            seg = i + 1;
+        }
+        i = i + 1;
+    }
+    rt_str_free(p);
+    return ok;
+}
+
+// True when `s` begins with `prefix`, ASCII case-insensitively.
+// Consumes both arguments (the caller passes copies when it keeps them).
+fn starts_with_ci(s: Str, prefix: Str) -> Bool {
+    let sl = rt_str_len(s);
+    let pl = rt_str_len(prefix);
+    let mut same = true;
+    if pl > sl { same = false; }
+    if same == true {
+        let mut i = 0;
+        while i < pl {
+            if lower_byte(rt_str_byte(s, i)) != lower_byte(rt_str_byte(prefix, i)) {
+                same = false;
+                i = pl;
+            } else {
+                i = i + 1;
+            }
+        }
+    }
+    rt_str_free(s);
+    rt_str_free(prefix);
+    return same;
+}
+
+// True when output path `p` is `root` or lies beneath it. Consumes both.
+fn inside_root(root: Str, p: Str) -> Bool {
+    let mut hit = false;
+    if rt_str_eq(root, p) == true { hit = true; }
+    if hit == false {
+        let prefix = rt_str_concat(root, "/");
+        if starts_with_ci(rt_str_concat(p, ""), prefix) == true { hit = true; }
+    }
+    rt_str_free(root);
+    rt_str_free(p);
+    return hit;
+}
+
+// True when the parent directory of `p` exists. Consumes `p`.
+fn parent_is_dir(p: Str) -> Bool {
+    let par = path_parent(rt_str_concat(p, ""));
+    let ok = fs_is_dir(par);
+    rt_str_free(p);
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+fn find_key(arena: Ptr<Int>, obj: Int, name: Str) -> Int {
+    let n = json_obj_len(arena, obj);
+    let mut found = -1;
+    let mut i = 0;
+    while i < n {
+        let k = json_obj_get_key(arena, obj, i);
+        let eq = rt_str_eq(k, name);
+        rt_str_free(k);
+        if eq == true {
+            found = i;
+            i = n;
+        } else {
+            i = i + 1;
+        }
+    }
+    rt_str_free(name);
+    return found;
+}
+
+fn get_string(arena: Ptr<Int>, obj: Int, name: Str) -> (Str, Bool) {
+    let idx = find_key(arena, obj, name);
+    if idx < 0 { return ("", false); }
+    let vo = json_obj_get_val(arena, obj, idx);
+    if json_tag(arena, vo) != 3 { return ("", false); }
+    let s = json_as_str(arena, vo);
+    if rt_str_len(s) == 0 {
+        rt_str_free(s);
+        return ("", false);
+    }
+    return (s, true);
+}
+
+fn get_string_array(arena: Ptr<Int>, obj: Int, name: Str) -> (Vec<Str>, Bool) {
+    let idx = find_key(arena, obj, name);
+    let mut v = rt_vec_new(1);
+    if idx < 0 { return (v, false); }
+    let vo = json_obj_get_val(arena, obj, idx);
+    if json_tag(arena, vo) != 4 { return (v, false); }
+    let n = json_arr_len(arena, vo);
+    rt_vec_free(v);
+    let mut cap = n;
+    if cap < 1 { cap = 1; }
+    let mut out = rt_vec_new(cap);
+    let mut ok = true;
+    let mut i = 0;
+    while i < n {
+        let el = json_arr_get(arena, vo, i);
+        if json_tag(arena, el) != 3 {
+            ok = false;
+            i = n;
+        } else {
+            out = rt_vec_push(out, json_as_str(arena, el));
+            i = i + 1;
+        }
+    }
+    if ok == false {
+        rt_vec_free(out);
+        return (rt_vec_new(1), false);
+    }
+    return (out, true);
+}
+
+fn schema_fail(cfg: BuildConfig) -> (BuildConfig, Int) {
+    config_clear(cfg);
+    fail_msg("config does not match the required schema");
+    return (empty_config(), 3);
+}
+
+// Consumes `path`; on success the returned Config owns all of its strings.
+fn load_config(path: Str, arena: Ptr<Int>) -> (BuildConfig, Int) {
+    let mut cfg = empty_config();
+    if fs_exists(rt_str_concat(path, "")) == false {
+        fail_path("config file does not exist: ", rt_str_concat(path, ""));
+        rt_str_free(path);
+        return (cfg, 2);
+    }
+    if fs_is_file(rt_str_concat(path, "")) == false {
+        fail_path("config is not a regular file: ", rt_str_concat(path, ""));
+        rt_str_free(path);
+        return (cfg, 2);
+    }
+    let content = fs_read(rt_str_concat(path, ""));
+    rt_str_free(path);
+    let v = json_parse(content, arena);
+    if v == 0 {
+        fail_msg("config is not valid JSON");
+        return (cfg, 3);
+    }
+    if json_tag(arena, v) != 5 {
+        fail_msg("config root is not a JSON object");
+        return (cfg, 3);
+    }
+    if json_obj_len(arena, v) != 5 {
+        fail_msg("config must contain exactly the five required keys");
+        return (cfg, 3);
+    }
+
+    let (root, ok_root) = get_string(arena, v, "root");
+    if ok_root == false { return schema_fail(cfg); }
+    cfg.root = root;
+
+    let (archive, ok_archive) = get_string(arena, v, "archive");
+    if ok_archive == false { return schema_fail(cfg); }
+    cfg.archive = archive;
+
+    let (manifest, ok_manifest) = get_string(arena, v, "manifest");
+    if ok_manifest == false { return schema_fail(cfg); }
+    cfg.manifest = manifest;
+
+    let (exts, ok_exts) = get_string_array(arena, v, "include_extensions");
+    if ok_exts == false {
+        rt_vec_free(exts);
+        return schema_fail(cfg);
+    }
+    let en = rt_vec_len(exts);
+    if en < 1 { rt_vec_free(exts); return schema_fail(cfg); }
+    if en > 8 { rt_vec_free(exts); return schema_fail(cfg); }
+    let mut i = 0;
+    while i < en {
+        if valid_extension(rt_str_concat(rt_vec_get(exts, i), "")) == false {
+            rt_vec_free(exts);
+            return schema_fail(cfg);
+        }
+        i = i + 1;
+    }
+    cfg.exts = str_join(exts, ",");
+
+    let (excludes, ok_excludes) = get_string_array(arena, v, "exclude_dirs");
+    if ok_excludes == false {
+        rt_vec_free(excludes);
+        return schema_fail(cfg);
+    }
+    let xn = rt_vec_len(excludes);
+    if xn > 8 { rt_vec_free(excludes); return schema_fail(cfg); }
+    i = 0;
+    while i < xn {
+        if valid_exclude_name(rt_str_concat(rt_vec_get(excludes, i), "")) == false {
+            rt_vec_free(excludes);
+            return schema_fail(cfg);
+        }
+        i = i + 1;
+    }
+    cfg.excludes = str_join(excludes, "\n");
+
+    return (cfg, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Manifest / report helpers
+// ---------------------------------------------------------------------------
+
+// CSV field, RFC-4180 quoted when needed. Consumes `s`.
+fn csv_field(s: Str) -> Str {
+    let n = rt_str_len(s);
+    let mut needs = false;
+    let mut quotes = 0;
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b == 44 { needs = true; }
+        if b == 34 { needs = true; quotes = quotes + 1; }
+        if b == 13 { needs = true; }
+        if b == 10 { needs = true; }
+        i = i + 1;
+    }
+    if needs == false { return s; }
+    let out = rt_str_alloc(n + 2 + quotes);
+    rt_str_set_byte(out, 0, 34);
+    let mut o = 1;
+    i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        rt_str_set_byte(out, o, b);
+        o = o + 1;
+        if b == 34 {
+            rt_str_set_byte(out, o, 34);
+            o = o + 1;
+        }
+        i = i + 1;
+    }
+    rt_str_set_byte(out, o, 34);
+    rt_str_free(s);
+    return out;
+}
+
+// "path,size,sha256"; consumes `path` and `hex`.
+fn manifest_row(path: Str, size: Int, hex: Str) -> Str {
+    let p = csv_field(path);
+    let a = rt_str_concat(p, ",");
+    rt_str_free(p);
+    let num = rt_str_from_int(size);
+    let b = rt_str_concat(a, num);
+    rt_str_free(a);
+    rt_str_free(num);
+    let c = rt_str_concat(b, ",");
+    rt_str_free(b);
+    let out = rt_str_concat(c, hex);
+    rt_str_free(c);
+    rt_str_free(hex);
+    return out;
+}
+
+fn append_line(body: Str, row: Str) -> Str {
+    let a = rt_str_concat(body, "\n");
+    rt_str_free(body);
+    let out = rt_str_concat(a, row);
+    rt_str_free(a);
+    rt_str_free(row);
+    return out;
+}
+
+fn finalize_body(body: Str) -> Str {
+    let out = rt_str_concat(body, "\n");
+    rt_str_free(body);
+    return out;
+}
+
+fn append_num(acc: Str, label: Str, value: Int) -> Str {
+    let a = rt_str_concat(acc, label);
+    rt_str_free(acc);
+    rt_str_free(label);
+    let num = rt_str_from_int(value);
+    let out = rt_str_concat(a, num);
+    rt_str_free(a);
+    rt_str_free(num);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// build
+// ---------------------------------------------------------------------------
+
+fn build_cmd(cfg: BuildConfig) -> Int {
+    let mut code = 0;
+
+    if fs_is_dir(rt_str_concat(cfg.root, "")) == false {
+        fail_path("root is not a directory: ", rt_str_concat(cfg.root, ""));
+        code = 4;
+    }
+
+    let root_clean = clean_path(rt_str_concat(cfg.root, ""));
+    let arc_clean = clean_path(rt_str_concat(cfg.archive, ""));
+    let man_clean = clean_path(rt_str_concat(cfg.manifest, ""));
+
+    if code == 0 {
+        // A root containing ".." or an absolute root would defeat the
+        // string-based inside-root check below, so both are rejected.
+        if relative_ok(rt_str_concat(root_clean, "")) == false {
+            fail_path("root must be a plain relative path: ", rt_str_concat(root_clean, ""));
+            code = 4;
+        }
+    }
+    if code == 0 {
+        if relative_ok(rt_str_concat(arc_clean, "")) == false {
+            fail_path("archive must be a plain relative path: ", rt_str_concat(arc_clean, ""));
+            code = 4;
+        }
+    }
+    if code == 0 {
+        if relative_ok(rt_str_concat(man_clean, "")) == false {
+            fail_path("manifest must be a plain relative path: ", rt_str_concat(man_clean, ""));
+            code = 4;
+        }
+    }
+    if code == 0 {
+        if inside_root(rt_str_concat(root_clean, ""), rt_str_concat(arc_clean, "")) == true {
+            fail_msg("archive must not be inside root");
+            code = 4;
+        }
+    }
+    if code == 0 {
+        if inside_root(rt_str_concat(root_clean, ""), rt_str_concat(man_clean, "")) == true {
+            fail_msg("manifest must not be inside root");
+            code = 4;
+        }
+    }
+    if code == 0 {
+        if parent_is_dir(rt_str_concat(arc_clean, "")) == false {
+            fail_path("archive directory does not exist: ", rt_str_concat(arc_clean, ""));
+            code = 4;
+        }
+    }
+    if code == 0 {
+        if parent_is_dir(rt_str_concat(man_clean, "")) == false {
+            fail_path("manifest directory does not exist: ", rt_str_concat(man_clean, ""));
+            code = 4;
+        }
+    }
+
+    let mut paths = rt_vec_new(1);
+    if code == 0 {
+        let (found, walk_status) = walk(
+            rt_str_concat(cfg.root, ""),
+            rt_str_concat(cfg.exts, ""),
+            rt_str_concat(cfg.excludes, "")
+        );
+        rt_vec_free(paths);
+        paths = sort_strings(found);
+        if walk_status != 0 { code = 4; }
+    }
+
+    if code == 0 {
+        let n = rt_vec_len(paths);
+        if n == 0 {
+            // No outputs are written for an empty match set.
+            fail_msg("no files matched the include list");
+            code = 5;
+        } else {
+            let mut arc = zip_new_level(6);
+            let mut manifest = rt_str_concat("path,size,sha256", "");
+            let mut total_bytes = 0;
+            let mut st = 0;
+            let mut i = 0;
+            while i < n {
+                if st != 0 {
+                    i = n;
+                } else {
+                    let rel = rt_str_concat(rt_vec_get(paths, i), "");
+                    let full = path_join(
+                        rt_str_concat(cfg.root, ""),
+                        rt_str_concat(rel, "")
+                    );
+                    let size = fs_file_size(rt_str_concat(full, ""));
+                    if size < 0 {
+                        rt_str_free(full);
+                        fail_path("cannot read file: ", rt_str_concat(rel, ""));
+                        st = 4;
+                    } else {
+                        let data = fs_read(full);
+                        if rt_str_len(data) != size {
+                            rt_str_free(data);
+                            fail_path("cannot read file: ", rt_str_concat(rel, ""));
+                            st = 4;
+                        } else {
+                            let hex = hash_sha256(rt_str_concat(data, ""));
+                            arc = zip_add(arc, rt_str_concat(rel, ""), data);
+                            manifest = append_line(
+                                manifest,
+                                manifest_row(rt_str_concat(rel, ""), size, hex)
+                            );
+                            total_bytes = total_bytes + size;
+                        }
+                    }
+                    rt_str_free(rel);
+                    i = i + 1;
+                }
+            }
+
+            if st != 0 {
+                zip_free(arc);
+                rt_str_free(manifest);
+                code = st;
+            } else {
+                let body = finalize_body(manifest);
+                let zip_bytes = zip_finish(arc);
+                let archive_size = rt_str_len(zip_bytes);
+                let written = fs_write(rt_str_concat(arc_clean, ""), zip_bytes);
+                if written < 0 {
+                    rt_str_free(body);
+                    fail_path("cannot write archive: ", rt_str_concat(arc_clean, ""));
+                    code = 4;
+                } else {
+                    let wrote_manifest = fs_write(rt_str_concat(man_clean, ""), body);
+                    if wrote_manifest < 0 {
+                        fail_path("cannot write manifest: ", rt_str_concat(man_clean, ""));
+                        code = 4;
+                    } else {
+                        let files_text = rt_str_from_int(n);
+                        let mut line = rt_str_concat("files=", files_text);
+                        rt_str_free(files_text);
+                        line = append_num(line, " bytes=", total_bytes);
+                        line = append_num(line, " archive_bytes=", archive_size);
+                        rt_print_str(line);
+                        rt_str_free(line);
+                        code = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    rt_vec_free(paths);
+    rt_str_free(root_clean);
+    rt_str_free(arc_clean);
+    rt_str_free(man_clean);
+    config_clear(cfg);
+    return code;
+}
+
+// ---------------------------------------------------------------------------
+// verify
+// ---------------------------------------------------------------------------
+
+// One `MISMATCH <path> <reason>` line. Consumes both arguments.
+fn mismatch_line(path: Str, reason: Str) -> Str {
+    let a = rt_str_concat(path, " ");
+    rt_str_free(path);
+    let b = rt_str_concat(a, reason);
+    rt_str_free(a);
+    rt_str_free(reason);
+    let out = rt_str_concat("MISMATCH ", b);
+    rt_str_free(b);
+    return out;
+}
+
+// 64 lowercase hex characters. Borrows `s`.
+fn valid_sha(s: Str) -> Bool {
+    let n = rt_str_len(s);
+    let mut ok = true;
+    if n != 64 { ok = false; }
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        let mut good = false;
+        if b >= 48 { if b <= 57 { good = true; } }
+        if b >= 97 { if b <= 102 { good = true; } }
+        if good == false { ok = false; }
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return ok;
+}
+
+// Canonical non-negative digits. Consumes `s`.
+fn digits_only(s: Str) -> Bool {
+    let n = rt_str_len(s);
+    let mut ok = true;
+    if n == 0 { ok = false; }
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b < 48 { ok = false; }
+        if b > 57 { ok = false; }
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return ok;
+}
+
+// Copy `s` without one trailing CR. Consumes `s`.
+fn strip_cr(s: Str) -> Str {
+    let n = rt_str_len(s);
+    let mut out = "";
+    if n > 0 {
+        if rt_str_byte(s, n - 1) == 13 {
+            out = rt_str_alloc(n - 1);
+            let mut i = 0;
+            while i < n - 1 {
+                rt_str_set_byte(out, i, rt_str_byte(s, i));
+                i = i + 1;
+            }
+            rt_str_free(s);
+        } else {
+            out = s;
+        }
+    } else {
+        out = s;
+    }
+    return out;
+}
+
+fn verify_cmd(archive: Str, manifest_path: Str) -> Int {
+    let mut code = 0;
+
+    if fs_exists(rt_str_concat(archive, "")) == false {
+        fail_path("archive does not exist: ", rt_str_concat(archive, ""));
+        code = 2;
+    } else {
+        if fs_is_file(rt_str_concat(archive, "")) == false {
+            fail_path("archive is not a regular file: ", rt_str_concat(archive, ""));
+            code = 2;
+        }
+    }
+    if code == 0 {
+        if fs_exists(rt_str_concat(manifest_path, "")) == false {
+            fail_path("manifest does not exist: ", rt_str_concat(manifest_path, ""));
+            code = 2;
+        } else {
+            if fs_is_file(rt_str_concat(manifest_path, "")) == false {
+                fail_path("manifest is not a regular file: ", rt_str_concat(manifest_path, ""));
+                code = 2;
+            }
+        }
+    }
+
+    let mut mpaths = rt_vec_new(4);
+    let mut msizes = rt_vec_new(4);
+    let mut mhashes = rt_vec_new(4);
+    let mut anames = rt_vec_new(4);
+    let mut data = rt_str_alloc(0);
+
+    if code == 0 {
+        let text = fs_read(rt_str_concat(manifest_path, ""));
+        let lines = str_split(text, "\n");
+        let ln = rt_vec_len(lines);
+        let mut seen_header = 0;
+        let mut i = 0;
+        while i < ln {
+            if code != 0 {
+                i = ln;
+            } else {
+                let content = strip_cr(rt_str_concat(rt_vec_get(lines, i), ""));
+                if rt_str_len(content) == 0 {
+                    rt_str_free(content);
+                } else {
+                    if seen_header == 0 {
+                        seen_header = 1;
+                        if rt_str_eq(content, "path,size,sha256") == false {
+                            fail_msg("manifest header must be path,size,sha256");
+                            code = 3;
+                        }
+                        rt_str_free(content);
+                    } else {
+                        let fields = csv_parse_row(content);
+                        if rt_vec_len(fields) != 3 {
+                            fail_msg("manifest row must have three fields");
+                            code = 3;
+                        } else {
+                            let p = rt_str_concat(rt_vec_get(fields, 0), "");
+                            let sz = rt_str_concat(rt_vec_get(fields, 1), "");
+                            let hx = rt_str_concat(rt_vec_get(fields, 2), "");
+                            if rt_str_len(p) == 0 {
+                                fail_msg("manifest path is empty");
+                                code = 3;
+                            }
+                            if digits_only(rt_str_concat(sz, "")) == false {
+                                fail_msg("manifest size is not a decimal integer");
+                                code = 3;
+                            }
+                            if valid_sha(rt_str_concat(hx, "")) == false {
+                                fail_msg("manifest sha256 is not 64 lowercase hex characters");
+                                code = 3;
+                            }
+                            if code == 0 {
+                                let existing = rt_vec_len(mpaths);
+                                let mut k = 0;
+                                let mut dup = 0;
+                                while k < existing {
+                                    if rt_str_eq(rt_vec_get(mpaths, k), p) == true { dup = 1; }
+                                    k = k + 1;
+                                }
+                                if dup == 1 {
+                                    fail_msg("manifest contains a duplicate path");
+                                    rt_str_free(p);
+                                    rt_str_free(sz);
+                                    rt_str_free(hx);
+                                    code = 3;
+                                } else {
+                                    mpaths = rt_vec_push(mpaths, p);
+                                    msizes = rt_vec_push(msizes, sz);
+                                    mhashes = rt_vec_push(mhashes, hx);
+                                }
+                            } else {
+                                rt_str_free(p);
+                                rt_str_free(sz);
+                                rt_str_free(hx);
+                            }
+                            if code == 0 { } else { }
+                        }
+                        rt_vec_free(fields);
+                    }
+                }
+                i = i + 1;
+            }
+        }
+        rt_vec_free(lines);
+        if code == 0 {
+            if seen_header == 0 {
+                fail_msg("manifest is empty");
+                code = 3;
+            }
+        }
+    }
+
+    if code == 0 {
+        rt_str_free(data);
+        data = fs_read(rt_str_concat(archive, ""));
+        let (count, back) = zip_read_count(rt_str_concat(data, ""));
+        rt_str_free(back);
+        if count < 0 {
+            fail_msg("archive is corrupt or unsupported");
+            code = 6;
+        } else {
+            let mut mismatches = rt_vec_new(4);
+            let mut i = 0;
+            while i < count {
+                if code != 0 {
+                    i = count;
+                } else {
+                    let (name, st) = zip_entry_name(rt_str_concat(data, ""), i);
+                    if st != 0 {
+                        mismatches = rt_vec_push(
+                            mismatches,
+                            mismatch_line("(archive)", "corrupt")
+                        );
+                        code = 6;
+                        rt_str_free(name);
+                    } else {
+                        anames = rt_vec_push(anames, rt_str_concat(name, ""));
+                        let total = rt_vec_len(mpaths);
+                        let mut idx = -1;
+                        let mut k = 0;
+                        while k < total {
+                            if rt_str_eq(rt_vec_get(mpaths, k), name) == true { idx = k; }
+                            k = k + 1;
+                        }
+                        if idx < 0 {
+                            mismatches = rt_vec_push(
+                                mismatches, mismatch_line(name, "extra")
+                            );
+                        } else {
+                            let (asize, back) = zip_entry_size(rt_str_concat(data, ""), i);
+                            rt_str_free(back);
+                            let (declared, ok_declared) = str_parse_int(rt_str_concat(rt_vec_get(msizes, idx), ""));
+                            if ok_declared == false {
+                                mismatches = rt_vec_push(
+                                    mismatches, mismatch_line(name, "size")
+                                );
+                            } else {
+                                if asize != declared {
+                                    mismatches = rt_vec_push(
+                                        mismatches, mismatch_line(name, "size")
+                                    );
+                                } else {
+                                    let (payload, dst) = zip_entry_data(rt_str_concat(data, ""), i);
+                                    if dst != 0 {
+                                        mismatches = rt_vec_push(
+                                            mismatches, mismatch_line(name, "corrupt")
+                                        );
+                                        rt_str_free(payload);
+                                        code = 6;
+                                    } else {
+                                        let hex = hash_sha256(payload);
+                                        if rt_str_eq(hex, rt_vec_get(mhashes, idx)) == false {
+                                            mismatches = rt_vec_push(
+                                                mismatches, mismatch_line(name, "sha256")
+                                            );
+                                        } else {
+                                            rt_str_free(name);
+                                        }
+                                        rt_str_free(hex);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    i = i + 1;
+                }
+            }
+
+            // A manifest row is missing when its path does not occur in the
+            // archive's central directory (collected in `anames` above).
+            let total = rt_vec_len(mpaths);
+            let mut j = 0;
+            while j < total {
+                let p = rt_str_concat(rt_vec_get(mpaths, j), "");
+                let an = rt_vec_len(anames);
+                let mut found = 0;
+                let mut k = 0;
+                while k < an {
+                    if rt_str_eq(rt_vec_get(anames, k), p) == true { found = 1; }
+                    k = k + 1;
+                }
+                if found == 0 {
+                    mismatches = rt_vec_push(mismatches, mismatch_line(p, "missing"));
+                    code = 6;
+                } else {
+                    rt_str_free(p);
+                }
+                j = j + 1;
+            }
+
+            if rt_vec_len(mismatches) > 0 {
+                let sorted = sort_strings(mismatches);
+                let mn = rt_vec_len(sorted);
+                let mut m = 0;
+                while m < mn {
+                    let line = rt_str_concat(rt_vec_get(sorted, m), "");
+                    rt_print_str(line);
+                    rt_str_free(line);
+                    m = m + 1;
+                }
+                rt_vec_free(sorted);
+                if code == 0 { code = 6; }
+            } else {
+                rt_vec_free(mismatches);
+                if code == 0 {
+                    let num = rt_str_from_int(total);
+                    let line = rt_str_concat("verified files=", num);
+                    rt_str_free(num);
+                    rt_print_str(line);
+                    rt_str_free(line);
+                }
+            }
+        }
+    }
+
+    rt_str_free(data);
+    rt_vec_free(mpaths);
+    rt_vec_free(msizes);
+    rt_vec_free(mhashes);
+    rt_vec_free(anames);
+    rt_str_free(archive);
+    rt_str_free(manifest_path);
+    return code;
+}
+
+// ---------------------------------------------------------------------------
+// extract
+// ---------------------------------------------------------------------------
+
+fn extract_cmd(archive: Str, dest: Str) -> Int {
+    let mut code = 0;
+
+    if fs_exists(rt_str_concat(archive, "")) == false {
+        fail_path("archive does not exist: ", rt_str_concat(archive, ""));
+        code = 2;
+    } else {
+        if fs_is_file(rt_str_concat(archive, "")) == false {
+            fail_path("archive is not a regular file: ", rt_str_concat(archive, ""));
+            code = 2;
+        }
+    }
+
+    if code == 0 {
+        if fs_exists(rt_str_concat(dest, "")) == true {
+            if fs_is_dir(rt_str_concat(dest, "")) == false {
+                fail_path("destination is not a directory: ", rt_str_concat(dest, ""));
+                code = 4;
+            }
+        } else {
+            // The frozen contract creates exactly one level: its parent must
+            // already exist. The runtime helper may create intermediates, so
+            // the parent is checked explicitly rather than relying on it.
+            let parent = path_parent(rt_str_concat(dest, ""));
+            let parent_ok = fs_is_dir(rt_str_concat(parent, ""));
+            rt_str_free(parent);
+            if parent_ok == false {
+                fail_path("destination parent does not exist: ", rt_str_concat(dest, ""));
+                code = 4;
+            } else {
+                if fs_create_dir(rt_str_concat(dest, "")) < 0 {
+                    fail_path("cannot create destination: ", rt_str_concat(dest, ""));
+                    code = 4;
+                }
+            }
+        }
+    }
+
+    if code == 0 {
+        let data = fs_read(rt_str_concat(archive, ""));
+        let (count, body) = zip_read_count(rt_str_concat(data, ""));
+        rt_str_free(data);
+        if count < 0 {
+            rt_str_free(body);
+            fail_msg("archive is corrupt or unsupported");
+            code = 6;
+        } else {
+            let st = zip_extract_all(body, rt_str_concat(dest, ""));
+            if st == 0 {
+                let num = rt_str_from_int(count);
+                let line = rt_str_concat("extracted files=", num);
+                rt_str_free(num);
+                rt_print_str(line);
+                rt_str_free(line);
+                code = 0;
+            } else {
+                if st == -6 {
+                    fail_msg("cannot write an extracted file");
+                    code = 4;
+                } else {
+                    if st == -4 {
+                        fail_msg("archive contains an unsafe entry name");
+                    } else {
+                        if st == -5 {
+                            fail_msg("archive uses an unsupported feature");
+                        } else {
+                            fail_msg("archive is corrupt");
+                        }
+                    }
+                    code = 6;
+                }
+            }
+        }
+    }
+
+    rt_str_free(archive);
+    rt_str_free(dest);
+    return code;
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+fn main() -> Int {
+    let argc = rt_argc();
+    let mut pos = rt_vec_new(4);
+    let mut help = 0;
+    let mut bad = 0;
+
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let is_help = rt_str_eq(arg, "--help");
+        let mut optionish = 0;
+        if rt_str_len(arg) > 0 {
+            if rt_str_byte(arg, 0) == 45 { optionish = 1; }
+        }
+        if is_help == true {
+            help = 1;
+            if argc != 1 { bad = 1; }
+            rt_str_free(arg);
+        } else if optionish == 1 {
+            bad = 1;
+            rt_str_free(arg);
+        } else {
+            pos = rt_vec_push(pos, arg);
+        }
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    if help == 1 {
+        if bad == 1 {
+            fail_msg("--help takes no other arguments");
+            usage();
+        } else {
+            print_help();
+            code = 0;
+        }
+    } else if bad == 1 {
+        fail_msg("unknown option");
+        usage();
+    } else {
+        let n = rt_vec_len(pos);
+        if n == 0 {
+            fail_msg("missing command");
+            usage();
+        } else {
+            let cmd = rt_vec_get(pos, 0);
+            if rt_str_eq(cmd, "build") == true {
+                if n != 2 {
+                    fail_msg("build takes exactly one config path");
+                    usage();
+                } else {
+                    let arena = rt_alloc(65536);
+                    let (cfg, config_code) = load_config(
+                        rt_str_concat(rt_vec_get(pos, 1), ""), arena
+                    );
+                    code = config_code;
+                    if code == 0 {
+                        code = build_cmd(cfg);
+                    } else {
+                        config_clear(cfg);
+                    }
+                    rt_free(arena);
+                }
+            } else if rt_str_eq(cmd, "verify") == true {
+                if n != 3 {
+                    fail_msg("verify takes an archive and a manifest");
+                    usage();
+                } else {
+                    code = verify_cmd(
+                        rt_str_concat(rt_vec_get(pos, 1), ""),
+                        rt_str_concat(rt_vec_get(pos, 2), "")
+                    );
+                }
+            } else if rt_str_eq(cmd, "extract") == true {
+                if n != 3 {
+                    fail_msg("extract takes an archive and a directory");
+                    usage();
+                } else {
+                    code = extract_cmd(
+                        rt_str_concat(rt_vec_get(pos, 1), ""),
+                        rt_str_concat(rt_vec_get(pos, 2), "")
+                    );
+                }
+            } else {
+                fail_msg("unknown command");
+                usage();
+            }
+        }
+    }
+
+    rt_vec_free(pos);
+    return code;
+}

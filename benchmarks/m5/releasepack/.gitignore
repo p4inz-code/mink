@@ -1,0 +1,7 @@
+# Build outputs for the releasepack application.
+build/
+app/*.exe
+
+# Python bytecode from the test driver.
+__pycache__/
+*.pyc

@@ -1,0 +1,13 @@
+releasepack - deterministic release archives
+
+usage: releasepack build <config.json>
+       releasepack verify <archive.zip> <manifest.csv>
+       releasepack extract <archive.zip> <dest-dir>
+       releasepack --help
+
+build reads a JSON object with exactly these keys:
+  root, archive, manifest, include_extensions, exclude_dirs
+Entries are sorted by path; compression is fixed at level 6
+and timestamps are the fixed DOS epoch, so output is deterministic.
+Exit: 0 ok, 1 usage, 2 missing file, 3 invalid config/manifest,
+      4 filesystem failure, 5 no files matched, 6 archive/mismatch.
