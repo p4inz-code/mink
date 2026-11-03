@@ -115,6 +115,10 @@ and unsafe paths, a Windows sharing-lock read failure, verify mismatches
 entry names, extraction round-trips, three repeated builds, and execution from
 outside the repository.
 
+Copying `fixtures/basic` and building it directly requires its output parent:
+`mkdir -p out` (the config writes `out/release.zip` and `out/manifest.csv`).
+The test driver creates that directory in every temporary copy.
+
 ## Semantics and recorded boundaries
 
 - Manifest rows are sorted by path in byte order, the same order as the ZIP

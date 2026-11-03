@@ -70,8 +70,8 @@ Regression goldens:
 | Golden | SHA-256 |
 | --- | --- |
 | `expected/basic/manifest.csv` | `f3c942b27ad1fc82e5cd0b02c403884dfe501958c7d5c183a9983c51883fd544` |
-| `expected/basic/archive.sha256` | `d68e6775c88f011099aa61f283e25e37c9fc0b1c26e1c3c78f47c36b2062bc58` (file digest) |
-| recorded archive digest | `d68e6775c88f011099aa61f283e25e37c9fc0b1c26e1c3c78f47c36b2062bc58` |
+| `expected/basic/archive.sha256` | `d68e6775c88f011099aa61f283e25e37c9fc0b1c26e1c3c78f47c36b2062bc58` (digest of the golden file itself) |
+| recorded archive digest (content of that golden) | `4ca56bba39d02103f2d3f23efbe1b5158a7ba2137fe9e1f4a0830dd492400501` |
 | `expected/basic/stdout.txt` | `251202aa2fa092ece802c89267d66a82e9b82988e639d0d8ec377e7bf94c5ed0` |
 | `expected/help.txt` | `89e0f105d52b85d9ca90669639464ba7e3c286bf42541efe291707f67152876e` |
 
