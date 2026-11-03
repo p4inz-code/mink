@@ -154,8 +154,17 @@ class Server:
         raise AssertionError(f"hookbox never listened on {self.port}: {last}")
 
     def request(self, raw: bytes, timeout: float = 10.0) -> bytes:
+        return self.request_parts([raw], delay=0.0, timeout=timeout)
+
+    def request_parts(
+        self, parts: list[bytes], delay: float = 0.05, timeout: float = 10.0
+    ) -> bytes:
+        """Send one request in several TCP writes (read-reassembly check)."""
         with socket.create_connection(("127.0.0.1", self.port), timeout=timeout) as sock:
-            sock.sendall(raw)
+            for part in parts:
+                sock.sendall(part)
+                if delay > 0:
+                    time.sleep(delay)
             try:
                 sock.shutdown(socket.SHUT_WR)
             except OSError:
@@ -623,8 +632,10 @@ def run_suite(exe: Path, only: str | None = None) -> Suite:
         wrong_method = [
             ("GET", "/hooks"),
             ("PUT", "/hooks"),
+            ("OPTIONS", "/hooks"),
             ("POST", "/health"),
             ("DELETE", "/health"),
+            ("PATCH", "/health"),
             ("POST", "/events"),
             ("HEAD", "/events"),
         ]
@@ -780,6 +791,124 @@ def run_suite(exe: Path, only: str | None = None) -> Suite:
             expect_no_events(work / "inbox")
 
     suite.check("JSON body 8193 bytes -> 413", json_boundary_413)
+
+    def declared_oversize() -> None:
+        # The declared length alone proves the body cannot be accepted; the
+        # peer then closes early, so only part of the body ever arrives.
+        with workdir() as work:
+            srv, port = run_server(exe, work, max_requests=1)
+            head = (
+                b"POST /hooks HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Length: 9000\r\n\r\n"
+            )
+            check_response(
+                srv.request(head + b'{"a":1}'),
+                413,
+                oracle.DOCUMENTED_BODIES[413],
+            )
+            code, out, err = srv.finish()
+            expect(code == 0, f"exit {code}; stderr={err!r}")
+            expect_no_events(work / "inbox")
+
+    suite.check("declared Content-Length over 8192 -> 413", declared_oversize)
+
+    def split_tcp_request() -> None:
+        # One request spread over three writes: the server must reassemble by
+        # Content-Length rather than treat the first segment as the request.
+        payload = b'{"split":true}'
+        expect(len(payload) == 14, "fixture length")
+        head = b"POST /hooks HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 14\r\n\r\n"
+        with workdir() as work:
+            srv, port = run_server(exe, work, max_requests=1)
+            raw = srv.request_parts([head, payload[:5], payload[5:]])
+            check_response(raw, 201, oracle.created_body(1))
+            code, out, err = srv.finish()
+            expect(code == 0, f"exit {code}; stderr={err!r}")
+            files = read_inbox(work / "inbox")
+            expect_clean_event("000001.json", files["000001.json"], 1, payload)
+
+    suite.check("request split across three TCP writes is reassembled", split_tcp_request)
+
+    def rejected_body_keeps_sequence() -> None:
+        with workdir() as work:
+            srv, port = run_server(exe, work, max_requests=2)
+            check_response(
+                srv.request(http_request("POST", "/hooks", body("array.json"))),
+                400,
+                oracle.DOCUMENTED_BODIES[400],
+            )
+            check_response(
+                srv.request(http_request("POST", "/hooks", b'{"ok":1}')),
+                201,
+                oracle.created_body(1),
+            )
+            code, _, err = srv.finish()
+            expect(code == 0, f"exit {code}; stderr={err!r}")
+            files = read_inbox(work / "inbox")
+            expect(list(files) == ["000001.json"], f"rejection consumed a sequence: {sorted(files)}")
+            expect(files["000001.json"] == oracle.event_file(1, b'{"ok":1}'), "event bytes")
+
+    suite.check("a rejected body does not advance the sequence", rejected_body_keeps_sequence)
+
+    def startup_window_and_ignored_names() -> None:
+        with workdir() as work:
+            inbox = work / "inbox"
+            inbox.mkdir()
+            for i in range(1, 26):
+                (inbox / f"{i:06d}.json").write_bytes(
+                    oracle.event_file(i, b'{"n":%d}' % i)
+                )
+            # 000099.JSON is deliberately above the next sequence: it is not
+            # an event (byte-exact lowercase ".json" required), and on a
+            # case-insensitive filesystem writing 000099.json later would be
+            # the same file. 000026 is the live target, so the probe must not
+            # sit on it.
+            ignored = {
+                "000000.json": oracle.event_file(0, b'{"n":0}'),
+                "1234567.json": b'{"seq":1234567,"body":{}}\n',
+                "000099.JSON": b"uppercase extension is not an event",
+                "notes.txt": b"not an event",
+            }
+            for name, data in ignored.items():
+                (inbox / name).write_bytes(data)
+            srv, port = run_server(exe, work, max_requests=3)
+            check_response(
+                srv.request(http_request("POST", "/hooks", b'{"n":26}')),
+                201,
+                oracle.created_body(26),
+            )
+            check_response(
+                srv.request(http_request("GET", "/health")), 200, oracle.health_body(26)
+            )
+            window = [
+                oracle.event_file(i, b'{"n":%d}' % i) for i in range(7, 27)
+            ]
+            check_response(
+                srv.request(http_request("GET", "/events?limit=20")),
+                200,
+                oracle.events_payload(window),
+                content_type=oracle.NDJSON_TYPE,
+            )
+            code, out, err = srv.finish()
+            expect(code == 0, f"exit {code}; stderr={err!r}")
+            files = read_inbox(inbox)
+            for name, data in ignored.items():
+                expect(files[name] == data, f"ignored entry {name} was modified")
+            expect(
+                files["000026.json"] == oracle.event_file(26, b'{"n":26}'),
+                "new event must follow the startup maximum",
+            )
+            expect(
+                "000000.json" in files
+                and "1234567.json" in files
+                and "000099.JSON" in files,
+                "non-event names must be preserved",
+            )
+
+    suite.check(
+        "25 existing events: newest-20 startup window, junk names ignored",
+        startup_window_and_ignored_names,
+    )
 
     # --- Lifecycle ---------------------------------------------------------
     def request_limit_counts_every_request() -> None:

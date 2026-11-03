@@ -106,6 +106,10 @@ bytes up correctly return `413`.
   `1.json`, `1234567.json` and non-`.json` files are ignored. A sequence at or
   above 1,000,000 would produce a seven-digit name that the frozen six-digit
   rule cannot represent; the maximum request count makes that theoretical.
+- Windows file names are case-insensitive. An existing `000026.JSON` is the
+  same file as the next event `000026.json`: it is not recognized as an event
+  (the name must be byte-exact lowercase) and the next event overwrites it.
+  Fixtures avoid placing an upper-case-extension file on the live sequence.
 - Methods match exactly (no `HEAD` support). Paths match exactly; only
   `/events` accepts a query string, and only `limit=<digits>` (leading zeros
   are accepted).
