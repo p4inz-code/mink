@@ -362,6 +362,12 @@ def run_suite(exe: Path, only: str | None = None) -> Suite:
             cfg["manifest"] = "out/../release.csv"
             write_config(work, cfg)
             expect_exit(exe, work, ["build", "config.json"], 4)
+            cfg = base_config()
+            cfg["archive"] = "out/release.zip"
+            cfg["manifest"] = "out/release.zip"
+            write_config(work, cfg)
+            expect_exit(exe, work, ["build", "config.json"], 4)
+            expect(not (work / "out" / "release.zip").exists(), "same-path run wrote output")
 
     suite.check("absolute or '..' paths -> 4", unsafe_output_paths)
 
@@ -462,6 +468,48 @@ def run_suite(exe: Path, only: str | None = None) -> Suite:
             expect(verified.stderr == b"", f"stderr {verified.stderr!r}")
 
     suite.check("verify accepts a matching archive and manifest", verify_ok)
+
+    def verify_foreign_archive() -> None:
+        import zipfile
+
+        with fixture_work() as work:
+            model = oracle.build_model(work, base_config())
+            out = work / "out"
+            out.mkdir(exist_ok=True)
+            (out / "foreign.csv").write_bytes(model["manifest"])
+            entries = [
+                (rel, (work / "tree" / rel).read_bytes())
+                for rel in reversed(model["paths"])
+            ]
+            oracle.make_archive(out / "foreign.zip", entries, zipfile.ZIP_STORED)
+            proc = run(exe, work, "verify", "out/foreign.zip", "out/foreign.csv")
+            expect(proc.returncode == 0, f"exit {proc.returncode}: {proc.stderr!r}")
+            expect(proc.stdout == oracle.expected_verified(model["files"]), f"{proc.stdout!r}")
+            expect(proc.stderr == b"", f"stderr {proc.stderr!r}")
+            proc = run(exe, work, "extract", "out/foreign.zip", "dest")
+            expect(proc.returncode == 0, f"exit {proc.returncode}: {proc.stderr!r}")
+            expect(proc.stdout == oracle.expected_extracted(model["files"]), f"{proc.stdout!r}")
+            for rel in model["paths"]:
+                expect(
+                    (work / "dest" / rel).read_bytes()
+                    == (work / "tree" / rel).read_bytes(),
+                    f"extracted bytes differ: {rel}",
+                )
+
+    suite.check("foreign stored, out-of-order archive verifies and extracts", verify_foreign_archive)
+
+    def manifest_crlf() -> None:
+        with fixture_work() as work:
+            proc, model, archive = build_basic(exe, work)
+            expect(proc.returncode == 0, "build must succeed")
+            text = (work / "out" / "manifest.csv").read_bytes().replace(b"\n", b"\r\n")
+            (work / "out" / "crlf.csv").write_bytes(text)
+            proc = run(exe, work, "verify", "out/release.zip", "out/crlf.csv")
+            expect(proc.returncode == 0, f"exit {proc.returncode}: {proc.stderr!r}")
+            expect(proc.stdout == oracle.expected_verified(model["files"]), f"{proc.stdout!r}")
+            expect(proc.stderr == b"", f"stderr {proc.stderr!r}")
+
+    suite.check("CRLF manifest is accepted", manifest_crlf)
 
     def verify_missing() -> None:
         with fixture_work() as work:

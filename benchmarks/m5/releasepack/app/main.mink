@@ -759,6 +759,13 @@ fn build_cmd(cfg: BuildConfig) -> Int {
         }
     }
     if code == 0 {
+        // Writing both outputs to one path would destroy the archive.
+        if rt_str_eq(arc_clean, man_clean) == true {
+            fail_path("archive and manifest must differ: ", rt_str_concat(arc_clean, ""));
+            code = 4;
+        }
+    }
+    if code == 0 {
         if inside_root(rt_str_concat(root_clean, ""), rt_str_concat(arc_clean, "")) == true {
             fail_msg("archive must not be inside root");
             code = 4;

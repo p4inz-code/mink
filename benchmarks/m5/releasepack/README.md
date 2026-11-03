@@ -28,8 +28,8 @@ Build config (UTF-8 JSON object, exactly these five keys):
 
 - `root` must be an existing directory; all paths are relative to the current
   working directory.
-- `archive` and `manifest` parents must already exist and must not be inside
-  `root` (prevents self-inclusion).
+- `archive` and `manifest` parents must already exist, must not be inside
+  `root` (prevents self-inclusion), and must be different paths.
 - `include_extensions`: 1–8 entries matching `^\.[A-Za-z0-9]{1,8}$`,
   case-insensitive.
 - `exclude_dirs`: 0–8 non-empty base names, matched case-insensitively at any

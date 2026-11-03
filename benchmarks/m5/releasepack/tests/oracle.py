@@ -113,10 +113,14 @@ def archive_facts(path: Path) -> list[dict]:
     return facts
 
 
-def make_archive(path: Path, entries: list[tuple[str, bytes]]) -> None:
+def make_archive(
+    path: Path,
+    entries: list[tuple[str, bytes]],
+    compression: int = zipfile.ZIP_DEFLATED,
+) -> None:
     """Craft an archive with arbitrary (possibly unsafe) names."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(path, "w", compression=compression) as archive:
         for name, data in entries:
             archive.writestr(name, data)
 
