@@ -1,0 +1,8 @@
+# hookbox fixtures and goldens are byte-exact test inputs.
+#
+# The host has core.autocrlf enabled. Without this file, Git would normalize
+# request bodies and expected event files on checkout, changing the very bytes
+# the contract tests compare (events end in a single LF, stdout in CRLF).
+# `whitespace=cr-at-eol` keeps `git diff --check` from treating the intentional
+# CRLF bytes in stdout.txt/help.txt as trailing whitespace.
+* -text whitespace=cr-at-eol

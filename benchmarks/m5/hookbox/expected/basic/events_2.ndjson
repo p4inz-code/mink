@@ -1,0 +1,2 @@
+{"seq":1,"body":{"event":"push","id":7}}
+{"seq":2,"body":{"repo":"mink","commits":[{"sha":"abc123","ok":true}]}}

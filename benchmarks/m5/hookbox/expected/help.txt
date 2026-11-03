@@ -1,0 +1,13 @@
+hookbox - local loopback webhook inbox
+
+usage: hookbox --port <n> --inbox <dir> [--max-requests <n>]
+       hookbox --help
+
+Options:
+  --port <n>          loopback port, 1-65535 (required)
+  --inbox <dir>       directory for numbered event files (required)
+  --max-requests <n>  stop after n requests, 0-1000000 (0 = until killed)
+
+Endpoints: POST /hooks, GET /health, GET /events?limit=N
+Events are written as <inbox>/<seq:06d>.json.
+Exit: 0 clean, 1 usage, 2 inbox, 3 bind, 4 server I/O.

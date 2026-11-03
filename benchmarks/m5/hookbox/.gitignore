@@ -1,0 +1,7 @@
+# Build outputs for the hookbox application.
+build/
+app/*.exe
+
+# Python bytecode from the test driver.
+__pycache__/
+*.pyc

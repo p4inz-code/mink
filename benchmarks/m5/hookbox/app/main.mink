@@ -1,0 +1,796 @@
+// ============================================================================
+// hookbox — M5 Application 2
+//
+// A local, loopback-only HTTP webhook inbox. The frozen contract lives in
+// docs/benchmarks/M5/M5_APPLICATION_SELECTION.md (section 6).
+//
+//   hookbox --port <n> --inbox <dir> [--max-requests <n>]
+//   hookbox --help
+//
+// Exit codes: 0 clean shutdown, 1 usage, 2 inbox, 3 bind, 4 server I/O or
+// event-file write failure.
+//
+// Ownership is single-exit: every owned Str/Vec is released on the path that
+// reaches the enclosing function's single return. Read-borrowing intrinsics
+// (rt_str_*, rt_vec_get) receive copies when the value is also needed later,
+// because user-function Str/Vec parameters are consumed.
+//
+// JSON ARENA RULE (Session 166): the stdlib parser keeps a persistent write
+// pointer in slot 8191 of the arena. Before every json_parse on the reused
+// server arena the pointer is reset to 0, otherwise a second request would
+// write its value tree after the previous one and eventually be refused.
+// json.mink is deliberately NOT modified: the reset is the documented caller
+// requirement, and the 4097..8192-byte refusal is a genuine stdlib limit that
+// is reported, not hidden.
+// ============================================================================
+
+mod filesystem;
+mod httpserver;
+mod json;
+mod strings;
+
+// Existing event files are remembered as at most this many newest names:
+// GET /events never returns more than 20, and /health uses a counter, so the
+// inbox listing stays bounded on a long run.
+struct Inbox {
+    path: Str,
+    names: Vec<Str>,
+    next_seq: Int,
+    count: Int,
+}
+
+fn empty_inbox() -> Inbox {
+    return Inbox {
+        path: "",
+        names: rt_vec_new(1),
+        next_seq: 1,
+        count: 0,
+    };
+}
+
+fn inbox_clear(i: Inbox) {
+    rt_str_free(i.path);
+    rt_vec_free(i.names);
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+fn fail_msg(label: Str) -> Int {
+    let head = rt_str_concat("hookbox: ", label);
+    rt_str_free(label);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn fail_path(label: Str, path: Str) -> Int {
+    let head = rt_str_concat("hookbox: ", label);
+    rt_str_free(label);
+    let mid = rt_str_concat(head, path);
+    rt_str_free(head);
+    rt_str_free(path);
+    let line = rt_str_concat(mid, "\r\n");
+    rt_str_free(mid);
+    let written = rt_stderr_write(line);
+    rt_str_free(line);
+    return written;
+}
+
+fn usage() -> Int {
+    rt_stderr_write(
+        "hookbox: usage: hookbox --port <n> --inbox <dir> [--max-requests <n>] | hookbox --help\r\n"
+    );
+    return 1;
+}
+
+fn print_help() {
+    // rt_print_str terminates each line with the platform line ending (CRLF
+    // on Windows); the literals carry none.
+    rt_print_str("hookbox - local loopback webhook inbox");
+    rt_print_str("");
+    rt_print_str("usage: hookbox --port <n> --inbox <dir> [--max-requests <n>]");
+    rt_print_str("       hookbox --help");
+    rt_print_str("");
+    rt_print_str("Options:");
+    rt_print_str("  --port <n>          loopback port, 1-65535 (required)");
+    rt_print_str("  --inbox <dir>       directory for numbered event files (required)");
+    rt_print_str("  --max-requests <n>  stop after n requests, 0-1000000 (0 = until killed)");
+    rt_print_str("");
+    rt_print_str("Endpoints: POST /hooks, GET /health, GET /events?limit=N");
+    rt_print_str("Events are written as <inbox>/<seq:06d>.json.");
+    rt_print_str("Exit: 0 clean, 1 usage, 2 inbox, 3 bind, 4 server I/O.");
+}
+
+// ---------------------------------------------------------------------------
+// Small parsing / formatting helpers
+// ---------------------------------------------------------------------------
+
+// Canonical non-negative decimal integer: digits only, no sign, whitespace,
+// separators or leading-junk. Consumes `s`. Values are capped to nine digits.
+fn parse_count(s: Str) -> (Int, Bool) {
+    let n = rt_str_len(s);
+    let mut ok = true;
+    if n == 0 { ok = false; }
+    if n > 9 { ok = false; }
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b < 48 { ok = false; }
+        if b > 57 { ok = false; }
+        i = i + 1;
+    }
+    let mut value = 0;
+    if ok == true {
+        let (parsed, good) = str_parse_int(rt_str_concat(s, ""));
+        value = parsed;
+        if good == false { ok = false; }
+    }
+    rt_str_free(s);
+    return (value, ok);
+}
+
+// "<seq:06d>.json". The width grows past six digits only beyond 999999, which
+// the frozen six-digit naming rule cannot represent; that edge is documented.
+fn event_name(seq: Int) -> Str {
+    let digits = rt_str_from_int(seq);
+    let dn = rt_str_len(digits);
+    let mut width = 6;
+    if dn > 6 { width = dn; }
+    let name = rt_str_alloc(width + 5);
+    let mut i = 0;
+    while i < width {
+        rt_str_set_byte(name, i, 48);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < dn {
+        rt_str_set_byte(name, width - dn + j, rt_str_byte(digits, j));
+        j = j + 1;
+    }
+    rt_str_set_byte(name, width, 46);
+    rt_str_set_byte(name, width + 1, 106);
+    rt_str_set_byte(name, width + 2, 115);
+    rt_str_set_byte(name, width + 3, 111);
+    rt_str_set_byte(name, width + 4, 110);
+    rt_str_free(digits);
+    return name;
+}
+
+// Sequence number of an exact eleven-byte "<6 digits>.json" entry name, or -1.
+// Names that do not match the frozen pattern are not event files.
+fn seq_from_name(name: Str) -> Int {
+    let n = rt_str_len(name);
+    let mut ok = true;
+    if n != 11 { ok = false; }
+    if ok == true {
+        let mut i = 0;
+        while i < 6 {
+            let b = rt_str_byte(name, i);
+            if b < 48 { ok = false; }
+            if b > 57 { ok = false; }
+            i = i + 1;
+        }
+        if rt_str_byte(name, 6) != 46 { ok = false; }
+        if rt_str_byte(name, 7) != 106 { ok = false; }
+        if rt_str_byte(name, 8) != 115 { ok = false; }
+        if rt_str_byte(name, 9) != 111 { ok = false; }
+        if rt_str_byte(name, 10) != 110 { ok = false; }
+    }
+    let mut result = -1;
+    if ok == true {
+        let mut value = 0;
+        let mut k = 0;
+        while k < 6 {
+            value = value * 10 + rt_str_byte(name, k) - 48;
+            k = k + 1;
+        }
+        // 000000.json is not an event: sequences start at 1.
+        if value > 0 { result = value; }
+    }
+    rt_str_free(name);
+    return result;
+}
+
+// In-place insertion sort, ascending byte order. Fixed six-digit names sort
+// lexicographically in numeric order. Consumes and returns `v`.
+fn sort_names(v: Vec<Str>) -> Vec<Str> {
+    let mut cur = v;
+    let n = rt_vec_len(cur);
+    let mut i = 1;
+    while i < n {
+        let key = rt_str_concat(rt_vec_get(cur, i), "");
+        let mut j = i - 1;
+        let mut done = 0;
+        while done == 0 {
+            if j < 0 {
+                done = 1;
+            } else {
+                let cmp = str_cmp(rt_str_concat(rt_vec_get(cur, j), ""), rt_str_concat(key, ""));
+                if cmp < 0 {
+                    done = 1;
+                } else {
+                    cur = rt_vec_set(cur, j + 1, rt_str_concat(rt_vec_get(cur, j), ""));
+                    j = j - 1;
+                }
+            }
+        }
+        cur = rt_vec_set(cur, j + 1, key);
+        i = i + 1;
+    }
+    return cur;
+}
+
+// GET /events query: empty means the default 10; "limit=<1..20>" is accepted.
+// Consumes `query`. Anything else is a bad limit (ok=false).
+fn parse_limit(query: Str) -> (Int, Bool) {
+    let n = rt_str_len(query);
+    let mut ok = true;
+    let mut limit = 0;
+    if n == 0 {
+        limit = 10;
+    } else {
+        if n < 7 { ok = false; }
+        if n > 9 { ok = false; }
+        if ok == true {
+            let key = "limit=";
+            let mut i = 0;
+            while i < 6 {
+                if rt_str_byte(query, i) != rt_str_byte(key, i) { ok = false; }
+                i = i + 1;
+            }
+            if ok == true {
+                let mut value = 0;
+                let mut k = 6;
+                while k < n {
+                    let b = rt_str_byte(query, k);
+                    if b < 48 { ok = false; }
+                    if b > 57 { ok = false; }
+                    value = value * 10 + (b - 48);
+                    k = k + 1;
+                }
+                if ok == true {
+                    if value < 1 { ok = false; }
+                    if value > 20 { ok = false; }
+                    limit = value;
+                }
+            }
+        }
+    }
+    if ok == false { limit = 0; }
+    rt_str_free(query);
+    return (limit, ok);
+}
+
+// ---------------------------------------------------------------------------
+// Inbox preparation
+// ---------------------------------------------------------------------------
+
+// Create the inbox when missing (one level), verify it is usable, and recover
+// the sequence state from existing six-digit event files. Consumes `path`.
+// Returns (state, 0) on success or (empty state, 2) after a diagnostic.
+fn prepare_inbox(path: Str) -> (Inbox, Int) {
+    let mut code = 0;
+
+    if fs_exists(rt_str_concat(path, "")) == false {
+        if fs_create_dir(rt_str_concat(path, "")) < 0 {
+            fail_path("cannot create inbox: ", rt_str_concat(path, ""));
+            code = 2;
+        }
+    } else {
+        if fs_is_dir(rt_str_concat(path, "")) == false {
+            fail_path("inbox is not a directory: ", rt_str_concat(path, ""));
+            code = 2;
+        }
+    }
+
+    if code == 0 {
+        // Writability probe. An unwritable inbox must fail at startup (2), not
+        // on the first webhook. A directory squatting on the probe name is the
+        // reproducible "not writable" case.
+        let rc = fs_write(
+            path_join(rt_str_concat(path, ""), ".hookbox-probe"),
+            rt_str_concat("probe", "")
+        );
+        if rc < 0 {
+            fs_remove_file(path_join(rt_str_concat(path, ""), ".hookbox-probe"));
+            fail_path("inbox is not writable: ", rt_str_concat(path, ""));
+            code = 2;
+        } else {
+            let cleaned = fs_remove_file(
+                path_join(rt_str_concat(path, ""), ".hookbox-probe")
+            );
+            if cleaned < 0 {
+                fail_path("cannot clean inbox probe: ", rt_str_concat(path, ""));
+                code = 2;
+            }
+        }
+    }
+
+    let mut found = rt_vec_new(16);
+    let mut max_seq = 0;
+    if code == 0 {
+        let handle = fs_dir_open(rt_str_concat(path, ""));
+        if handle <= 0 {
+            fail_path("cannot read inbox: ", rt_str_concat(path, ""));
+            code = 2;
+        } else {
+            let mut going = 1;
+            while going == 1 {
+                let name = fs_dir_next(handle);
+                if rt_str_len(name) == 0 {
+                    rt_str_free(name);
+                    going = 0;
+                } else {
+                    let seq = seq_from_name(rt_str_concat(name, ""));
+                    if seq < 0 {
+                        rt_str_free(name);
+                    } else {
+                        if seq > max_seq { max_seq = seq; }
+                        found = rt_vec_push(found, name);
+                    }
+                }
+            }
+            fs_dir_close(handle);
+        }
+    }
+
+    // Single exit: build the state from whatever was recovered. `path` is
+    // moved exactly once here, and the caller always releases the state, so
+    // no conditional free can mark a value moved on the checker's behalf.
+    let sorted = sort_names(found);
+    let total = rt_vec_len(sorted);
+    let mut state = empty_inbox();
+    state.path = path;
+    state.count = total;
+    state.next_seq = max_seq + 1;
+
+    // Keep only the newest 20 names: /events is bounded to 20.
+    let mut recent = rt_vec_new(20);
+    let mut start = 0;
+    if total > 20 { start = total - 20; }
+    let mut k = start;
+    while k < total {
+        recent = rt_vec_push(recent, rt_str_concat(rt_vec_get(sorted, k), ""));
+        k = k + 1;
+    }
+    rt_vec_free(sorted);
+    rt_vec_free(state.names);
+    state.names = recent;
+    return (state, code);
+}
+
+// ---------------------------------------------------------------------------
+// Response helper
+// ---------------------------------------------------------------------------
+
+// Build, send and close. Consumes `ctype` and `body`. Returns the send result.
+fn send_response(client: Int, status: Int, ctype: Str, body: Str) -> Int {
+    let response = http_server_response(status, http_server_reason(status), ctype, body);
+    let sent = http_server_send(client, response);
+    net_close(client);
+    return sent;
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+fn main() -> Int {
+    let argc = rt_argc();
+    let mut port = 0;
+    let mut have_port = 0;
+    let mut inbox = "";
+    let mut have_inbox = 0;
+    let mut max_requests = 0;
+    let mut have_max = 0;
+    let mut help = 0;
+    let mut bad = 0;
+
+    let mut i = 0;
+    while i < argc {
+        let arg = rt_argv(i);
+        let is_help = rt_str_eq(arg, "--help");
+        let is_port = rt_str_eq(arg, "--port");
+        let is_inbox = rt_str_eq(arg, "--inbox");
+        let is_max = rt_str_eq(arg, "--max-requests");
+
+        if is_help == true {
+            help = 1;
+            if argc != 1 { bad = 1; }
+            rt_str_free(arg);
+        } else if is_port == true {
+            rt_str_free(arg);
+            if have_port == 1 {
+                bad = 1;
+            } else {
+                if i + 1 >= argc {
+                    bad = 1;
+                } else {
+                    i = i + 1;
+                    let (value, ok) = parse_count(rt_argv(i));
+                    if ok == false {
+                        bad = 1;
+                    } else {
+                        if value < 1 { bad = 1; }
+                        if value > 65535 { bad = 1; }
+                        if bad == 0 { port = value; have_port = 1; }
+                    }
+                }
+            }
+        } else if is_inbox == true {
+            rt_str_free(arg);
+            if have_inbox == 1 {
+                bad = 1;
+                if i + 1 < argc {
+                    i = i + 1;
+                    rt_str_free(rt_argv(i));
+                }
+            } else {
+                if i + 1 >= argc {
+                    bad = 1;
+                } else {
+                    i = i + 1;
+                    let value = rt_argv(i);
+                    let vlen = rt_str_len(value);
+                    let mut usable = true;
+                    if vlen == 0 { usable = false; }
+                    if vlen > 0 {
+                        if rt_str_byte(value, 0) == 45 { usable = false; }
+                    }
+                    if usable == true {
+                        inbox = value;
+                        have_inbox = 1;
+                    } else {
+                        bad = 1;
+                        rt_str_free(value);
+                    }
+                }
+            }
+        } else if is_max == true {
+            rt_str_free(arg);
+            if have_max == 1 {
+                bad = 1;
+                if i + 1 < argc {
+                    i = i + 1;
+                    rt_str_free(rt_argv(i));
+                }
+            } else {
+                if i + 1 >= argc {
+                    bad = 1;
+                } else {
+                    i = i + 1;
+                    let (value, ok) = parse_count(rt_argv(i));
+                    if ok == false {
+                        bad = 1;
+                    } else {
+                        if value > 1000000 { bad = 1; }
+                        if bad == 0 { max_requests = value; have_max = 1; }
+                    }
+                }
+            }
+        } else {
+            // Unknown option, empty argument or stray positional.
+            bad = 1;
+            rt_str_free(arg);
+        }
+        i = i + 1;
+    }
+
+    let mut code = 1;
+    if help == 1 {
+        if bad == 1 {
+            fail_msg("--help takes no other arguments");
+            usage();
+        } else {
+            print_help();
+            code = 0;
+        }
+    } else if bad == 1 {
+        fail_msg("invalid arguments");
+        usage();
+    } else if have_port == 0 {
+        fail_msg("missing required --port");
+        usage();
+    } else if have_inbox == 0 {
+        fail_msg("missing required --inbox");
+        usage();
+    } else {
+        let (state, inbox_code) = prepare_inbox(rt_str_concat(inbox, ""));
+        code = inbox_code;
+        if code == 0 {
+            let listener = http_server_listen("127.0.0.1", port);
+            if listener == -1 {
+                let port_text = rt_str_from_int(port);
+                let addr = rt_str_concat("127.0.0.1:", port_text);
+                rt_str_free(port_text);
+                fail_path("cannot bind ", addr);
+                code = 3;
+            } else {
+                let port_text = rt_str_from_int(port);
+                let listening = rt_str_concat("listening port=", port_text);
+                rt_str_free(port_text);
+                rt_print_str(listening);
+                rt_str_free(listening);
+
+                // 256 KiB: the parser's fixed write-pointer slot is 8191 and
+                // the serializer writes after the value tree, so the arena has
+                // to hold both even when a 4096-byte body just fits.
+                let arena = rt_alloc(262144);
+                let mut served = 0;
+                let mut next_seq = state.next_seq;
+                let mut count = state.count;
+
+                let mut recent = rt_vec_new(20);
+                let mut r0 = 0;
+                while r0 < rt_vec_len(state.names) {
+                    recent = rt_vec_push(recent, rt_str_concat(rt_vec_get(state.names, r0), ""));
+                    r0 = r0 + 1;
+                }
+
+                let mut running = 1;
+                while running == 1 {
+                    let client = http_server_accept(listener, http_server_timeout_ms());
+                    if client == -1 {
+                        // Accept timeout: keep waiting for the next connection.
+                    } else {
+                        let request = http_server_read_request(
+                            client, http_server_max_request()
+                        );
+                        if rt_str_len(request) == 0 {
+                            // Peer closed before sending a request, or the
+                            // request exceeded the stdlib 64 KiB read cap.
+                            rt_str_free(request);
+                            net_close(client);
+                        } else {
+                            served = served + 1;
+
+                            let parsed = http_server_parse(request, "");
+                            let (method, target, version, declared, header, body) = parsed;
+                            rt_str_free(version);
+                            rt_str_free(header);
+
+                            // Split the request target at the first '?'.
+                            let tlen = rt_str_len(target);
+                            let mut qpos = -1;
+                            let mut ti = 0;
+                            while ti < tlen {
+                                if rt_str_byte(target, ti) == 63 {
+                                    qpos = ti;
+                                    ti = tlen;
+                                } else {
+                                    ti = ti + 1;
+                                }
+                            }
+                            let mut pend = tlen;
+                            if qpos >= 0 { pend = qpos; }
+                            let path = str_sub(rt_str_concat(target, ""), 0, pend);
+                            let mut qstart = tlen;
+                            if qpos >= 0 { qstart = qpos + 1; }
+                            let query = str_sub(target, qstart, tlen);
+
+                            let body_len = rt_str_len(body);
+                            let mut too_large = 0;
+                            if body_len > 8192 { too_large = 1; }
+                            if declared > 8192 { too_large = 1; }
+
+                            let mut status = 404;
+                            let mut ctype = "application/json";
+                            let mut reply = "{\"error\":\"not found\"}";
+                            let mut fatal = 0;
+
+                            if rt_str_eq(path, "/hooks") == true {
+                                if rt_str_eq(method, "POST") == false {
+                                    status = 405;
+                                    reply = "{\"error\":\"method not allowed\"}";
+                                } else if rt_str_len(query) > 0 {
+                                    status = 404;
+                                    reply = "{\"error\":\"not found\"}";
+                                } else if too_large == 1 {
+                                    status = 413;
+                                    reply = "{\"error\":\"payload too large\"}";
+                                } else {
+                                    // Required reuse reset: json_parse keeps its
+                                    // write cursor in slot 8191.
+                                    rt_mem_store(arena + 8191 * 8, 0);
+                                    let v = json_parse(rt_str_concat(body, ""), arena);
+                                    if v == 0 {
+                                        status = 400;
+                                        reply = "{\"error\":\"bad request\"}";
+                                    } else {
+                                        if json_tag(arena, v) != 5 {
+                                            status = 400;
+                                            reply = "{\"error\":\"bad request\"}";
+                                        } else {
+                                            let compact = json_to_str(arena, v);
+                                            let seq_text = rt_str_from_int(next_seq);
+                                            let head = rt_str_concat("{\"seq\":", seq_text);
+                                            rt_str_free(seq_text);
+                                            let mid = rt_str_concat(head, ",\"body\":");
+                                            rt_str_free(head);
+                                            let with_body = rt_str_concat(mid, compact);
+                                            rt_str_free(mid);
+                                            rt_str_free(compact);
+                                            let doc = rt_str_concat(with_body, "}\n");
+                                            rt_str_free(with_body);
+
+                                            let name = event_name(next_seq);
+                                            let full = path_join(
+                                                rt_str_concat(state.path, ""),
+                                                rt_str_concat(name, "")
+                                            );
+                                            let rc = fs_write(full, doc);
+                                            if rc < 0 {
+                                                // A failed write must not leave a
+                                                // partial event file behind.
+                                                fs_remove_file(path_join(
+                                                    rt_str_concat(state.path, ""),
+                                                    rt_str_concat(name, "")
+                                                ));
+                                                fail_path(
+                                                    "cannot write event: ",
+                                                    rt_str_concat(name, "")
+                                                );
+                                                rt_str_free(name);
+                                                status = 500;
+                                                reply = "{\"error\":\"storage failure\"}";
+                                                fatal = 4;
+                                            } else {
+                                                let seq_text2 = rt_str_from_int(next_seq);
+                                                let a2 = rt_str_concat("{\"seq\":", seq_text2);
+                                                rt_str_free(seq_text2);
+                                                let b2 = rt_str_concat(a2, "}");
+                                                rt_str_free(a2);
+                                                status = 201;
+                                                reply = b2;
+                                                next_seq = next_seq + 1;
+                                                count = count + 1;
+                                                recent = rt_vec_push(recent, name);
+                                                if rt_vec_len(recent) > 20 {
+                                                    let mut trimmed = rt_vec_new(20);
+                                                    let tstart = rt_vec_len(recent) - 20;
+                                                    let mut tk = tstart;
+                                                    while tk < rt_vec_len(recent) {
+                                                        trimmed = rt_vec_push(
+                                                            trimmed,
+                                                            rt_str_concat(rt_vec_get(recent, tk), "")
+                                                        );
+                                                        tk = tk + 1;
+                                                    }
+                                                    rt_vec_free(recent);
+                                                    recent = trimmed;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if rt_str_eq(path, "/health") == true {
+                                if rt_str_eq(method, "GET") == false {
+                                    status = 405;
+                                    reply = "{\"error\":\"method not allowed\"}";
+                                } else if rt_str_len(query) > 0 {
+                                    status = 404;
+                                    reply = "{\"error\":\"not found\"}";
+                                } else {
+                                    status = 200;
+                                    let num = rt_str_from_int(count);
+                                    let a = rt_str_concat(
+                                        "{\"status\":\"ok\",\"count\":", num
+                                    );
+                                    rt_str_free(num);
+                                    let b = rt_str_concat(a, "}");
+                                    rt_str_free(a);
+                                    reply = b;
+                                }
+                            } else if rt_str_eq(path, "/events") == true {
+                                if rt_str_eq(method, "GET") == false {
+                                    status = 405;
+                                    reply = "{\"error\":\"method not allowed\"}";
+                                } else {
+                                    let (limit, limit_ok) = parse_limit(
+                                        rt_str_concat(query, "")
+                                    );
+                                    if limit_ok == false {
+                                        status = 400;
+                                        reply = "{\"error\":\"bad request\"}";
+                                    } else {
+                                        let n = rt_vec_len(recent);
+                                        let mut take = n;
+                                        if take > limit { take = limit; }
+                                        let start = n - take;
+                                        let mut payload = "";
+                                        let mut payload_ok = 1;
+                                        let mut k = start;
+                                        while k < n {
+                                            if payload_ok == 0 {
+                                                k = n;
+                                            } else {
+                                                let epath = path_join(
+                                                    rt_str_concat(state.path, ""),
+                                                    rt_str_concat(rt_vec_get(recent, k), "")
+                                                );
+                                                let size = fs_file_size(
+                                                    rt_str_concat(epath, "")
+                                                );
+                                                if size <= 0 {
+                                                    rt_str_free(epath);
+                                                    payload_ok = 0;
+                                                } else {
+                                                    let chunk = fs_read(epath);
+                                                    if rt_str_len(chunk) != size {
+                                                        rt_str_free(chunk);
+                                                        payload_ok = 0;
+                                                    } else {
+                                                        let joined = rt_str_concat(
+                                                            payload, chunk
+                                                        );
+                                                        rt_str_free(payload);
+                                                        rt_str_free(chunk);
+                                                        payload = joined;
+                                                        k = k + 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if payload_ok == 0 {
+                                            rt_str_free(payload);
+                                            fail_msg("cannot read event file");
+                                            status = 500;
+                                            reply = "{\"error\":\"storage failure\"}";
+                                            fatal = 4;
+                                        } else {
+                                            status = 200;
+                                            ctype = "application/x-ndjson";
+                                            reply = payload;
+                                        }
+                                    }
+                                }
+                            }
+
+                            rt_str_free(method);
+                            rt_str_free(path);
+                            rt_str_free(query);
+                            rt_str_free(body);
+
+                            let sent = send_response(client, status, ctype, reply);
+                            if sent < 0 {
+                                fail_msg("response send failed");
+                                fatal = 4;
+                            }
+                            if fatal != 0 {
+                                code = fatal;
+                                running = 0;
+                            } else {
+                                if max_requests > 0 {
+                                    if served >= max_requests { running = 0; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                rt_vec_free(recent);
+                rt_free(arena);
+                net_close(listener);
+                net_cleanup();
+
+                if code == 0 {
+                    if max_requests > 0 {
+                        let served_text = rt_str_from_int(served);
+                        let done = rt_str_concat("served=", served_text);
+                        rt_str_free(served_text);
+                        rt_print_str(done);
+                        rt_str_free(done);
+                    }
+                }
+            }
+        }
+        inbox_clear(state);
+    }
+
+    rt_str_free(inbox);
+    return code;
+}
