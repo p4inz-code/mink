@@ -19,7 +19,13 @@
 //   tag 4 = array                 [4, count, elem0..., elem1..., ...]
 //   tag 5 = object                [5, count, klen0, kbyte0..., val0..., ...]
 //
-// Limits: 64KB arena, ~8000-byte input, ~20 nesting depth
+// Limits: `json_parse` keeps the historical 64 KiB arena geometry (8192
+// slots, persistent write pointer in the last slot), so input up to roughly
+// 3.5 KiB parses (~20 nesting depth). `json_parse_in(input, arena, slots)`
+// takes the caller's real slot count instead, so a larger arena can accept a
+// larger document; the input bytes and the parsed tree must still fit below
+// the final slot. The serializer writes after the parsed value tree, so the
+// arena must also hold the serialized output.
 
 fn _read(arena: Ptr<Int>, offset: Int) -> Int {
     return rt_mem_load(arena + offset * 8);
@@ -501,18 +507,28 @@ fn _parse_value(arena: Ptr<Int>, input_len: Int, pos: Int, wp: Int) -> (Int, Int
 // Session 95: input bytes are pre-read into the arena and parsing works
 // entirely off the arena, so the consumed `input` string is freed at the
 // single textual exit (literal inputs are a safe no-op free).
-fn json_parse(input: Str, arena: Ptr<Int>) -> Int {
+//
+// `slots` is the number of Int slots the caller allocated at `arena`. The
+// persistent write pointer occupies the final slot, so a caller that needs a
+// larger document than the historical 64 KiB geometry must pass its real
+// capacity. Input bytes still occupy one slot per byte starting at slot 0.
+fn json_parse_in(input: Str, arena: Ptr<Int>, slots: Int) -> Int {
+    let mut ptr_slot = slots - 1;
     let mut input_len = rt_str_len(input);
+    if ptr_slot < 2 || input_len + 2 >= ptr_slot {
+        rt_str_free(input);
+        return 0;
+    }
     // Pre-read input bytes into arena[0..input_len-1]
     let mut i = 0;
     while i < input_len {
         _write(arena, i, rt_str_byte(input, i));
         i = i + 1;
     }
-    // Use a persistent write pointer stored at arena[8191] so that
-    // multiple json_parse() calls into the same arena do not overwrite
-    // each other's parsed values.
-    let mut wp = _read(arena, 8191);
+    // Use a persistent write pointer stored in the arena's final slot so that
+    // multiple parses into the same arena do not overwrite each other's
+    // parsed values.
+    let mut wp = _read(arena, ptr_slot);
     if wp == 0 {
         wp = input_len + 1;
     }
@@ -522,14 +538,27 @@ fn json_parse(input: Str, arena: Ptr<Int>) -> Int {
     if result.0 != 0 {
         let mut p = _skip_ws(arena, input_len, result.1);
         if p >= input_len {
-            // Advance the write pointer past the newly written value
+            // Advance the write pointer past the newly written value. If the
+            // value tree would reach the pointer slot, refusing the parse
+            // keeps the library from exposing a value that the pointer write
+            // has overwritten.
             let mut val_size = _val_size(arena, result.0);
-            _write(arena, 8191, result.0 + val_size);
+            if result.0 + val_size > ptr_slot {
+                rt_str_free(input);
+                return 0;
+            }
+            _write(arena, ptr_slot, result.0 + val_size);
             parsed = result.0;
         }
     }
     rt_str_free(input);
     return parsed;
+}
+
+// Backwards-compatible entry point: the historical 64 KiB arena geometry
+// (8192 slots, persistent write pointer in slot 8191).
+fn json_parse(input: Str, arena: Ptr<Int>) -> Int {
+    return json_parse_in(input, arena, 8192);
 }
 
 // ============================================================================
@@ -600,14 +629,12 @@ fn _ser_size(arena: Ptr<Int>, offset: Int) -> Int {
 }
 
 // --- Arena-based output buffer ---
-// We write serialized bytes into the arena starting at offset _SER_OUT_BASE,
+// Serialized bytes are written into the arena after the parsed value tree,
 // one byte per Int slot. This avoids passing Str to recursive functions
-// (which would consume it). At the end, we copy to a Str.
-
-fn _ser_out_base(arena_size: Int) -> Int {
-    // Use the last 1024 slots of a 64KB arena (slots 7168..8191).
-    return 7168;
-}
+// (which would consume it). Writing after the value tree keeps the output
+// from overwriting values that are still being read: the previous fixed base
+// at slot 7168 corrupted serialization once the caller supplied an enlarged
+// arena (Session 138). At the end, the bytes are copied to a Str.
 
 fn _ser_put(arena: Ptr<Int>, pos: Int, byte: Int) {
     _write(arena, pos, byte);
@@ -726,7 +753,7 @@ fn _ser_write(arena: Ptr<Int>, offset: Int, out_base: Int, pos: Int) -> Int {
 
 fn json_to_str(arena: Ptr<Int>, offset: Int) -> Str {
     let mut size = _ser_size(arena, offset);
-    let mut out_base = _ser_out_base(65536);
+    let mut out_base = offset + _val_size(arena, offset);
     let mut end = _ser_write(arena, offset, out_base, 0);
     // Copy from arena output area to a Str
     let mut buf = rt_str_alloc(end);

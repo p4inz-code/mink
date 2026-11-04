@@ -528,3 +528,143 @@ fn object_members_still_reject_garbage_after_comma() {
     assert_parse_err(r#"{"a": 1 "b": 2}"#);
     assert_parse_err(r#"{,}"#);
 }
+
+// =========================================================================
+// Session 138: serializer output must not overlap the parsed value tree
+// =========================================================================
+
+/// A compact integer array (`[0,1,2,...]`) whose text is at most `max_len`
+/// bytes and as close to it as the next element allows.
+fn compact_integer_array(max_len: usize) -> String {
+    let mut nums = Vec::new();
+    let mut len = 2; // "[]"
+    let mut n = 0;
+    loop {
+        let text = n.to_string();
+        let add = text.len() + usize::from(!nums.is_empty());
+        if len + add > max_len {
+            break;
+        }
+        nums.push(text);
+        len += add;
+        n += 1;
+    }
+    format!("[{}]", nums.join(","))
+}
+
+/// Assert that JSON parses and serializes back byte-identically in a
+/// caller-sized arena. The library's documented default is 64 KiB, but
+/// `json_parse`/`json_to_str` take a caller-supplied `Ptr<Int>` and therefore
+/// support larger arenas.
+fn assert_ser_in_arena(json: &str, arena_bytes: usize) {
+    let mink_literal = mink_str(json);
+    let expected_literal = mink_str(json);
+    let test = format!(
+        r#"
+fn main() -> Int {{
+    let arena = rt_alloc({arena_bytes});
+    let v = json_parse({mink_literal}, arena);
+    if v == 0 {{ rt_free(arena); rt_exit(1); }}
+    let s = json_to_str(arena, v);
+    let exp = {expected_literal};
+    let ok = rt_str_eq(s, exp);
+    rt_str_free(s);
+    rt_free(arena);
+    if ok {{ rt_exit(0); }} else {{ rt_exit(2); }}
+}}"#
+    );
+    let (code, _) = build_and_run(&test);
+    assert_eq!(
+        code, 0,
+        "serialize in a {arena_bytes}-byte arena failed (exit code: {code})"
+    );
+}
+
+#[test]
+fn serialize_2047_byte_document_in_documented_arena() {
+    let doc = compact_integer_array(2047);
+    assert_eq!(doc.len(), 2047);
+    assert_ser_in_arena(&doc, 65536);
+}
+
+#[test]
+fn serialize_3499_byte_document_in_enlarged_arena() {
+    let doc = compact_integer_array(3499);
+    assert_eq!(doc.len(), 3499);
+    // The parsed value tree ends below the arena's persistent write-pointer
+    // slot but overlaps the old fixed output base (slot 7168). Before
+    // Session 138 this document serialized to a shorter, wrong string with
+    // `json_to_str` reporting no error; it must now round-trip exactly.
+    assert_ser_in_arena(&doc, 1 << 20);
+}
+
+#[test]
+fn parse_rejects_document_that_would_reach_the_write_pointer() {
+    // A 4091-byte document's value tree crosses slot 8191, where the library
+    // stores its persistent write pointer. A larger caller-supplied arena
+    // keeps the writes in bounds, so before Session 138 the parse returned a
+    // value whose bytes the pointer write had overwritten (silent middle
+    // corruption). It must now be refused: parse returns 0, and no corrupt
+    // value is exposed.
+    let doc = compact_integer_array(4091);
+    assert_eq!(doc.len(), 4091);
+    let mink_literal = mink_str(&doc);
+    let test = format!(
+        r#"
+fn main() -> Int {{
+    let arena = rt_alloc(1048576);
+    let v = json_parse({mink_literal}, arena);
+    rt_free(arena);
+    if v == 0 {{ rt_exit(0); }} else {{ rt_exit(3); }}
+}}"#
+    );
+    let (code, _) = build_and_run(&test);
+    assert_eq!(code, 0, "oversized parse must be refused (exit {code})");
+}
+
+// =========================================================================
+// Session 174: caller-sized arena capacity
+// =========================================================================
+
+/// An object whose compact text is exactly `size` bytes (minimum 10).
+fn padded_object(size: usize) -> String {
+    assert!(size >= 10);
+    format!("{{\"pad\":\"{}\"}}", "X".repeat(size - 10))
+}
+
+/// Parse and serialize with an explicit arena slot count. Returns the MINK
+/// exit code: 0 round-trip, 1 parse refused, 2 serialized bytes differ.
+fn run_capacity_parse(json: &str, arena_bytes: usize, slots: usize) -> i32 {
+    let mink_literal = mink_str(json);
+    let ptr_slot = slots - 1;
+    let test = format!(
+        r#"
+fn main() -> Int {{
+    let arena = rt_alloc({arena_bytes});
+    rt_mem_store(arena + {ptr_slot} * 8, 0);
+    let v = json_parse_in({mink_literal}, arena, {slots});
+    if v == 0 {{ rt_free(arena); rt_exit(1); }}
+    let s = json_to_str(arena, v);
+    let exp = {mink_literal};
+    let ok = rt_str_eq(s, exp);
+    rt_str_free(s);
+    rt_free(arena);
+    if ok {{ rt_exit(0); }} else {{ rt_exit(2); }}
+}}"#
+    );
+    build_and_run(&test).0
+}
+
+#[test]
+fn parse_8192_byte_document_with_caller_capacity() {
+    let doc = padded_object(8192);
+    assert_eq!(doc.len(), 8192);
+    // 256 KiB = 32768 slots; the write pointer lives in the final slot.
+    assert_eq!(run_capacity_parse(&doc, 262144, 32768), 0);
+}
+
+#[test]
+fn capacity_aware_parse_refuses_document_larger_than_arena() {
+    let doc = padded_object(8192);
+    assert_eq!(run_capacity_parse(&doc, 4096, 512), 1);
+}

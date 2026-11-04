@@ -15,13 +15,11 @@
 // (rt_str_*, rt_vec_get) receive copies when the value is also needed later,
 // because user-function Str/Vec parameters are consumed.
 //
-// JSON ARENA RULE (Session 166): the stdlib parser keeps a persistent write
-// pointer in slot 8191 of the arena. Before every json_parse on the reused
-// server arena the pointer is reset to 0, otherwise a second request would
-// write its value tree after the previous one and eventually be refused.
-// json.mink is deliberately NOT modified: the reset is the documented caller
-// requirement, and the 4097..8192-byte refusal is a genuine stdlib limit that
-// is reported, not hidden.
+// JSON ARENA RULE (Sessions 166, 174): the stdlib parser keeps a persistent
+// write pointer in the arena's final slot. This server passes its real arena
+// capacity to json_parse_in and resets that slot to 0 before every parse,
+// otherwise a second request would write its value tree after the previous
+// one and eventually be refused.
 // ============================================================================
 
 mod filesystem;
@@ -516,9 +514,10 @@ fn main() -> Int {
                 rt_print_str(listening);
                 rt_str_free(listening);
 
-                // 256 KiB: the parser's fixed write-pointer slot is 8191 and
-                // the serializer writes after the value tree, so the arena has
-                // to hold both even when a 4096-byte body just fits.
+                // 256 KiB = 32768 slots. The parser stores its write pointer
+                // in the final slot and the serializer writes after the value
+                // tree, so the arena must hold input, tree and output for an
+                // 8192-byte body.
                 let arena = rt_alloc(262144);
                 let mut served = 0;
                 let mut next_seq = state.next_seq;
@@ -593,10 +592,12 @@ fn main() -> Int {
                                     status = 413;
                                     reply = "{\"error\":\"payload too large\"}";
                                 } else {
-                                    // Required reuse reset: json_parse keeps its
-                                    // write cursor in slot 8191.
-                                    rt_mem_store(arena + 8191 * 8, 0);
-                                    let v = json_parse(rt_str_concat(body, ""), arena);
+                                    // Required reuse reset: the write cursor
+                                    // lives in the arena's final slot.
+                                    rt_mem_store(arena + 32767 * 8, 0);
+                                    let v = json_parse_in(
+                                        rt_str_concat(body, ""), arena, 32768
+                                    );
                                     if v == 0 {
                                         status = 400;
                                         reply = "{\"error\":\"bad request\"}";

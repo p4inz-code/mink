@@ -751,30 +751,28 @@ def run_suite(exe: Path, only: str | None = None) -> Suite:
 
     suite.check("JSON body 4096 bytes -> 201 (largest accepted body)", json_boundary_4096)
 
-    def json_boundary_refused(size: int) -> None:
+    def json_boundary_accepted(size: int) -> None:
         payload = pad_body(size)
         with workdir() as work:
             srv, port = run_server(exe, work, max_requests=1)
             check_response(
                 srv.request(http_request("POST", "/hooks", payload)),
-                400,
-                oracle.DOCUMENTED_BODIES[400],
+                201,
+                oracle.created_body(1),
             )
             code, out, err = srv.finish()
             expect(code == 0, f"exit {code}; stderr={err!r}")
-            expect(
-                out == oracle.stdout_lines(port, 1),
-                f"refused body must not change the served count: {out!r}",
-            )
-            expect_no_events(work / "inbox")
+            expect(out == oracle.stdout_lines(port, 1), f"stdout {out!r}")
+            files = read_inbox(work / "inbox")
+            expect_clean_event("000001.json", files["000001.json"], 1, payload)
 
     suite.check(
-        "JSON body 4097 bytes -> 400 (MINK stdlib arena limit)",
-        lambda: json_boundary_refused(4097),
+        "JSON body 4097 bytes -> 201 (capacity-aware parse)",
+        lambda: json_boundary_accepted(4097),
     )
     suite.check(
-        "JSON body 8192 bytes -> 400 (contract maximum refused by MINK)",
-        lambda: json_boundary_refused(8192),
+        "JSON body 8192 bytes -> 201 (frozen contract maximum)",
+        lambda: json_boundary_accepted(8192),
     )
 
     def json_boundary_413() -> None:
