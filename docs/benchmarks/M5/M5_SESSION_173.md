@@ -4,6 +4,9 @@
 **Decision:** **M5 PARTIAL**
 **Scope:** final evidence report. No performance measurement, no language
 comparison (M4 owns that), no MINK source change, no push/tag/publish.
+**Deliverable:** [`M5_FINAL_REPORT.md`](M5_FINAL_REPORT.md) (the required final
+report). This file is the durable session record; the readiness gate is
+[`M5_SESSION_172_READINESS_GATE.md`](M5_SESSION_172_READINESS_GATE.md).
 
 ## 1. Representative applications completed
 
