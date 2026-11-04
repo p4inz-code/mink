@@ -9,7 +9,7 @@
 | Session | Planned work | Status |
 | ---: | --- | --- |
 | 174 | M6 experiment design and baseline | **COMPLETE** |
-| 175 | Installation and environment validation | **NOT STARTED** |
+| 175 | Installation and environment validation | **COMPLETE** |
 | 176 | First program and basic language learning | **NOT STARTED** |
 | 177 | Language documentation audit | **NOT STARTED** |
 | 178 | Standard-library discoverability | **NOT STARTED** |
@@ -27,18 +27,17 @@
 M5 is COMPLETE. Its final report and readiness gate remain authoritative for
 the application evidence used by M6.
 
-## Starting point for Session 175
+## Starting point for Session 176
 
 Read:
 
 - [`M6_SESSION_174_TEST_DESIGN.md`](M6_SESSION_174_TEST_DESIGN.md)
-- [`../M5/M5_FINAL_REPORT.md`](../M5/M5_FINAL_REPORT.md)
-- `README.md` "Install MINK"
-- `npm/mink/package.json`
+- [`M6_SESSION_175_INSTALLATION.md`](M6_SESSION_175_INSTALLATION.md)
+- `README.md` Quick Start and `docs/language/CORE_GRAMMAR.md`
 
-Then follow the documented installation path in an isolated prefix, record every
-command and failure, and do not fix documentation until the baseline is
-captured.
+Then write the first program from documented material only, recording every
+lookup, failed command and point where internal knowledge was needed. Do not
+fix documentation until the observations are recorded.
 
 ## Rules for this block
 
