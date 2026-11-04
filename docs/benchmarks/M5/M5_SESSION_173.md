@@ -1,7 +1,9 @@
 # Session 173 — final M5 evidence report and roadmap decision
 
-**Date:** 2026-11-03
-**Decision:** **M5 PARTIAL**
+**Date:** 2026-11-03 (historical record; revised 2026-11-04)
+**Decision:** **M5 PARTIAL** at the time; revised to **COMPLETE** after
+Sessions 174-175 closed the JSON arena gap. See `M5_FINAL_REPORT.md` and
+`M5_SESSION_172_READINESS_GATE.md` for the current status.
 **Scope:** final evidence report. No performance measurement, no language
 comparison (M4 owns that), no MINK source change, no push/tag/publish.
 **Deliverable:** [`M5_FINAL_REPORT.md`](M5_FINAL_REPORT.md) (the required final

@@ -1,366 +1,316 @@
 # M5 — Final engineering report
 
-**Date:** 2026-11-04
+**Date:** 2026-11-04 (revised after Sessions 174-175)
 **Milestone:** M5 — Representative real-world applications
-**Status:** **M5 PARTIAL**
-**Starting HEAD:** `5e67649` (`docs: publish final M5 evidence report`)
+**Status:** **M5 COMPLETE**
+**Revision HEAD:** `aeceee1` (`fix: make JSON arena capacity caller-selectable`)
 **Gate:** [`M5_SESSION_172_READINESS_GATE.md`](M5_SESSION_172_READINESS_GATE.md)
-**Scope of this report:** reporting and roadmap recommendation only. No
-features, no MINK source change, no performance measurement, no push/tag/publish.
+**Scope:** reporting and roadmap recommendation only. No performance
+measurement, no push/tag/publish.
 
 ## 1. Executive summary
 
-### Objective
-
 M5 asked whether MINK's demonstrated advantages survive when the deliverable is
 a complete Windows application with real input validation, filesystem or
-network behavior, error handling, tests and a standalone executable. It is an
-application-engineering evidence stage, not another five-language benchmark
-suite.
+network behavior, error handling, tests and a standalone executable.
 
-### Applications completed
+Three frozen applications were delivered: `repoaudit` (offline policy audit),
+`hookbox` (loopback HTTP webhook inbox) and `releasepack` (deterministic ZIP +
+SHA-256 manifest). All three are **GREEN**, all 163 application checks pass per
+full run, and each ships as one native PE executable.
 
-| Application | Domain | Contract | Result |
-| --- | --- | --- | --- |
-| `repoaudit` | offline project inventory and policy audit | section 5 | GREEN |
-| `hookbox` | loopback HTTP webhook inbox | section 6 | PARTIAL |
-| `releasepack` | deterministic ZIP + SHA-256 manifest, verify, extract | section 7 | GREEN |
-
-All three are single native PE executables with no sidecar files and no runtime
-dependency beyond Windows.
-
-### Overall status
-
-**M5 PARTIAL.** Two applications are GREEN and one is
-APPLICATION GREEN / CONTRACT PARTIAL. The single unmet frozen clause is
-`hookbox`'s acceptance of valid JSON bodies between 4,097 and 8,192 bytes,
-which the stdlib JSON arena refuses. That is a genuine MINK capability gap, not
-a test gap, and it is recorded rather than hidden.
+The milestone initially closed as PARTIAL because `hookbox` could not accept
+valid JSON bodies of 4,097-8,192 bytes: the stdlib parser hardcoded its write
+pointer at slot 8191 of a 64 KiB geometry. Sessions 174-175 closed that gap
+with a capacity-aware `json_parse_in(input, arena, slots)` entry point, moved
+`hookbox` to its real 32,768-slot arena, and added permanent boundary
+regressions. The formerly open range is now accepted with exact event bytes.
 
 ### What the evidence demonstrates
 
 - Three materially distinct Windows-native applications can be built with
-  existing MINK standard-library modules and no compiler, runtime or stdlib
-  change.
+  existing MINK standard-library modules.
 - Deterministic, byte-exact outputs are achievable across text reports, HTTP
   responses/event files and ZIP archives.
 - All defined process exit classes, HTTP error statuses, failure cleanup and
   outside-source-tree execution are exercised by 163 executable checks per run.
-- Independent Python oracles reproduce the contract semantics without deriving
+- Independent Python oracles reproduce contract semantics without deriving
   expectations from MINK output.
+- A genuine standard-library limitation was isolated, fixed with a
+  backward-compatible API, and covered by permanent tests.
 
 ### What the evidence does not demonstrate
 
 - Broad superiority over Rust, Go, C#, or Python. M4 owns the cross-language
   comparison; M5 adds no timing, throughput or memory measurement.
-- Full satisfaction of the frozen `hookbox` 8 KiB body contract.
 - External-developer usability. Only the original developer built, debugged and
-  tested these applications.
+  tested these applications; M6 is designed to test that separately.
 - Concurrency, load, Unicode paths, TLS, durability, or large-scale operation.
 - That the same results hold on any platform other than Windows x86_64.
 
-## 2. Application summaries
+## 2. M5 objective and result
 
-### 2.1 `repoaudit`
+Objective: move beyond isolated language/runtime tests to complete,
+useful applications with real I/O, validation, error handling and standalone
+distribution.
+
+Result: 3 of 3 frozen applications complete, 3 GREEN, 163 checks per run, no
+open in-scope defect. M5 is COMPLETE.
+
+## 3. Application summaries
+
+### 3.1 `repoaudit`
 
 - **Purpose:** audit an ASCII Windows project tree against a JSON policy and
   write deterministic CSV/JSON reports, exiting nonzero on violations.
 - **Contract:** selection section 5, frozen in `8cdb33e`.
-- **Implemented capabilities:** manual argv and `--help`; seven-key JSON schema
-  validation; recursive walk with extension/exclude filtering and byte-order
-  sorting; binary/NUL detection; LF-based line counting; case-sensitive marker
-  counts; size and marker policies; RFC-4180 CSV; fixed-order summary JSON; exit
-  codes 0-7.
+- **Capabilities:** manual argv and `--help`; seven-key JSON schema validation;
+  recursive walk with extension/exclude filtering and byte-order sorting;
+  binary/NUL detection; LF-based line counting; case-sensitive marker counts;
+  size and marker policies; RFC-4180 CSV; fixed-order summary JSON; exits 0-7.
 - **Source:** `benchmarks/m5/repoaudit/app/main.mink`, 1,006 lines.
-- **Tests:** 50 checks per run, 0 failed, 0 skipped. Oracle recomputes inventory,
-  violations, summary and stdout independently.
-- **Standalone build:** 216,576 bytes, SHA-256
+- **Tests:** 50 checks per run, 0 failed, 0 skipped; independent oracle.
+- **Artifact:** 216,576 bytes, SHA-256
   `3d1b15cf91f9afa8466a811c82355564660c716e753187c0bc4763e2a361b46a`.
-- **Dependencies:** MINK standard library only; no network or third-party
-  library.
-- **Audit:** Session 165 (implementation Session 164). GREEN.
-- **Limitations:** `markers[3..4]` accepted by the schema but the frozen report
-  schema has no column for them; reports are replaced in place, not atomic; no
-  Unicode path guarantee.
+- **Dependencies:** MINK standard library only.
+- **Audit:** Session 165 (implementation 164). GREEN.
+- **Limitations:** markers 3-4 have no frozen report column; reports not atomic;
+  no Unicode path guarantee.
 
-### 2.2 `hookbox`
+### 3.2 `hookbox`
 
-- **Purpose:** a loopback-only HTTP webhook inbox that stores each accepted
-  JSON object as a numbered event file and shuts down after a request budget.
+- **Purpose:** loopback HTTP webhook inbox that stores each accepted JSON object
+  as a numbered event file and stops after a request budget.
 - **Contract:** selection section 6, frozen in `8cdb33e`.
-- **Implemented capabilities:** manual argv and `--help`; port bind on
-  `127.0.0.1`; Content-Length request reading and reassembly; four endpoints;
-  routing with method precedence; JSON object validation and compact
-  re-serialization; six-digit sequence files with recovery from existing names;
-  bounded `/events` windows; CRLF status lines on stdout; stderr diagnostics;
-  exit codes 0-4 and HTTP 400/404/405/413/500.
+- **Capabilities:** CLI/help; loopback bind; Content-Length requests including
+  reassembly across TCP writes; four endpoints; method-before-query routing;
+  JSON object validation and compact serialization; six-digit sequence files
+  with restart recovery; bounded `/events`; CRLF status lines; exit codes 0-4
+  and HTTP 400/404/405/413/500.
 - **Source:** `benchmarks/m5/hookbox/app/main.mink`, 796 lines.
-- **Tests:** 60 checks per run, 0 failed, 0 skipped. Oracle implements its own
-  JSON reader/writer, event format and response format; the driver speaks raw
-  TCP.
-- **Standalone build:** 230,912 bytes, SHA-256
-  `6ac524fae3282caa62bdb0138841295480545c147319d5b67d2d750d9e993c77`.
-- **Dependencies:** MINK standard library `httpserver` and `json` (plus their
-  own filesystem/network dependencies); Python standard library for the oracle.
-- **Audit:** Session 167 (implementation Session 166).
-  APPLICATION GREEN / CONTRACT PARTIAL.
-- **Limitations:** valid JSON bodies 4,097-8,192 bytes return `400` (stdlib
-  arena); Windows case-insensitive event names; one connection at a time;
-  Content-Length only; no TLS, keep-alive, chunked requests or Ctrl+C handler;
-  ASCII paths only.
+- **Tests:** 60 checks per run, 0 failed, 0 skipped, three consecutive runs;
+  independent JSON/HTTP oracle and raw-TCP driver.
+- **Boundary:** valid 4,096, 4,097 and 8,192-byte objects -> `201` with exact
+  event bytes; 8,193 bytes -> `413`.
+- **Artifact:** 231,424 bytes, SHA-256
+  `a7c4be44a67f7f0dbb54372e4386fd6b862a842f3593d83e0a00add078a48e25`.
+- **Dependencies:** MINK stdlib `httpserver`, `json`, `filesystem`, `strings`.
+- **Audit:** Session 167; closure Session 175. GREEN.
+- **Limitations:** sequential single-connection HTTP; Content-Length only; no
+  keep-alive, chunked requests, TLS or Ctrl+C handler; ASCII path scope;
+  Windows case-insensitive event names.
 
-### 2.3 `releasepack`
+### 3.3 `releasepack`
 
 - **Purpose:** build, verify and safely extract deterministic Windows release
-  ZIP archives from a JSON configuration, with a sorted SHA-256 CSV manifest.
+  ZIP archives from JSON config, with a sorted SHA-256 CSV manifest.
 - **Contract:** selection section 7, frozen in `8cdb33e`.
-- **Implemented capabilities:** three commands with exact arity; five-key JSON
-  config validation; recursive selection with sorted `/` entries; DEFLATE level
-  6 with the fixed 1980-01-01 DOS epoch; SHA-256 per file; RFC-4180 CSV
-  manifest; verification by name, size and digest with sorted `MISMATCH` lines;
-  validated extraction rejecting absolute, drive, UNC, ADS and `..` names; exit
-  codes 0-6.
+- **Capabilities:** three commands with exact arity; five-key config validation;
+  recursive selection with sorted `/` entries; DEFLATE level 6 and fixed
+  1980-01-01 epoch; SHA-256; RFC-4180 manifest; verify by name/size/digest with
+  sorted `MISMATCH` lines; validated extraction rejecting unsafe names; exits
+  0-6.
 - **Source:** `benchmarks/m5/releasepack/app/main.mink`, 1,391 lines.
-- **Tests:** 53 checks per run, 0 failed, 0 skipped. Oracle uses `hashlib`,
-  `csv` and `zipfile`, and inspects archives independently of MINK's writer.
-- **Standalone build:** 352,256 bytes, SHA-256
+- **Tests:** 53 checks per run, 0 failed, 0 skipped; `hashlib`/`csv`/`zipfile`
+  oracle.
+- **Artifact:** 352,256 bytes, SHA-256
   `1ce414067003fe8a2c7924d3effc41a5e93f7a46597207ef08dc538cb1c8cadb`.
-- **Dependencies:** MINK standard library `zip`, `zlib`, `hashing`, `csv`,
-  `filesystem`; Python standard library for the oracle.
-- **Audit:** Session 169 (implementation Session 168). GREEN.
-- **Limitations:** no ZIP64, encryption, signing, permissions or timestamps
-  beyond the fixed epoch; fully buffered (fixture target at most 200 KiB
-  uncompressed); extraction is not transactional on a mid-run filesystem
-  failure; output paths must be plain relative paths (stricter than the frozen
-  text).
+- **Dependencies:** MINK stdlib `zip`, `zlib`, `hashing`, `csv`, `filesystem`.
+- **Audit:** Session 169 (implementation 168). GREEN.
+- **Limitations:** no ZIP64/encryption/signing; fully buffered; extraction not
+  transactional on mid-run filesystem failure; relative output paths required.
 
-## 3. Consolidated verification
+## 4. Contract verification
 
-Counts in this table are **checks per full suite run**. Three runs were recorded
-on 2026-11-03 (Sessions 170, 171, 173) and one independent re-run was executed
-on 2026-11-04. Repeated runs execute the same check set and are not additional
-cases.
+| Contract area | `repoaudit` | `hookbox` | `releasepack` |
+| --- | --- | --- | --- |
+| CLI, help, arity | PASS | PASS | PASS |
+| Input/config validation | PASS | PASS | PASS |
+| Core workflow | PASS | PASS | PASS |
+| Exact output bytes | PASS | PASS | PASS |
+| Exit codes | 0-7 | 0-4 | 0-6 |
+| HTTP status behavior | n/a | 400/404/405/413/500 | n/a |
+| Boundary behavior | PASS | PASS (4,096/4,097/8,192/8,193) | PASS |
+| Failure cleanup | PASS | PASS | PASS |
+| Standalone execution | PASS | PASS | PASS |
+| **Result** | **GREEN** | **GREEN** | **GREEN** |
 
-| Application | Contract checks | Oracle-derived comparisons | Golden-output status | Audit | Standalone build | Final result |
-| --- | ---: | --- | --- | --- | --- | --- |
-| `repoaudit` | 50 | every deterministic case; reports, summary and stdout recomputed | byte-exact, committed | Session 165 | PASS, outside tree | GREEN |
-| `hookbox` | 60 | every deterministic response/event; own JSON and HTTP model | byte-exact, committed; events LF, stdout/help CRLF | Session 167 | PASS, outside tree | PARTIAL |
-| `releasepack` | 53 | every deterministic case; `hashlib`/`csv`/`zipfile` | byte-exact, committed; archive digest golden | Session 169 | PASS, outside tree | GREEN |
-| **Total per run** | **163** | no shared oracle code with the applications | 100% byte-compared | 3 audits | 3 PEs | 2 GREEN, 1 PARTIAL |
+## 5. Independent oracle results
 
-Supporting counts, deliberately not added to the contract-check total:
+- `repoaudit`: Python recomputes inventory, line/binary/marker semantics,
+  violations, summary and stdout; every deterministic case compares bytes.
+- `hookbox`: oracle implements its own JSON reader/writer, event format, HTTP
+  response format and stdout format; the driver speaks raw TCP and compares
+  event files.
+- `releasepack`: `hashlib`/`csv`/`zipfile`; archives are inspected by Python's
+  ZIP reader, not MINK's writer; deterministic builds compared byte-for-byte.
 
-- 3 recorded full-suite runs per application, 1 independent re-run: 4 runs of
-  the 163-check set.
-- Each application has 1 outside-source-tree execution case and at least 1
-  repeated-determinism case inside its suite.
-- Exit classes exercised: `repoaudit` 0-7, `hookbox` 0-4, `releasepack` 0-6.
+No oracle imports the application source or parses MINK output to derive an
+expectation. No count above treats supporting infrastructure as a scored case.
 
-No count above includes a performance measurement, because M5 has none.
+## 6. Golden-output results
 
-## 4. Engineering findings
+Byte-exact goldens are committed for all three applications and compared on
+every run: CSV/JSON reports, stdout and help (`repoaudit`); event files,
+NDJSON, stdout and help (`hookbox`); manifest, archive digest, stdout and help
+(`releasepack`). Line endings are deliberate: LF for CSV, events and manifests;
+CRLF for stdout and help; `summary.json` has no trailing newline.
 
-### Application structure
+## 7. Standalone executable evidence
 
-All three applications are single-file MINK programs with manual argument
-parsing, explicit error labels, single-exit ownership and no module split. The
-largest is 1,391 lines. Test drivers are larger than the applications in two
-cases (hookbox 1,232 lines, releasepack 793) because they include an independent
-oracle, process lifecycle management and byte comparison.
+| Application | Size (bytes) | SHA-256 |
+| --- | ---: | --- |
+| `repoaudit.exe` | 216,576 | `3d1b15cf91f9afa8466a811c82355564660c716e753187c0bc4763e2a361b46a` |
+| `hookbox.exe` | 231,424 | `a7c4be44a67f7f0dbb54372e4386fd6b862a842f3593d83e0a00add078a48e25` |
+| `releasepack.exe` | 352,256 | `1ce414067003fe8a2c7924d3effc41a5e93f7a46597207ef08dc538cb1c8cadb` |
 
-### Standard-library usability
+Each suite copies the executable and fixtures into a temporary directory
+outside the repository and runs there. No sidecar files are required.
 
-The standard library covered every required capability without modification:
-filesystem traversal and reads, JSON parse/serialize, CSV parse/write, SHA-256,
-ZIP create/read/extract, TCP listen/accept and HTTP request parsing. No
-application needed a third-party dependency or a platform shim. The single
-capability shortfall is JSON input capacity.
+## 8. Dependencies
 
-### Filesystem and JSON workflows
+- Runtime: Windows x86_64 only; no third-party runtime, service or package.
+- Build: the repository's `target/release/mink.exe` (version 1.0.4).
+- Tests: Python 3.11 standard library; `cargo test --test json` for stdlib
+  regressions.
+- No application imports a non-MINK library.
 
-Recursive ASCII traversal, binary detection, CRLF/LF handling, sorted output
-and path filtering were reliable once ownership was handled explicitly.
-Compact re-serialization preserved member order and duplicate keys, which made
-event bytes and config diagnostics deterministic. JSON configuration worked
-for all configs used; the arena ceiling appears only with large request bodies.
+## 9. Defect history
 
-### HTTP and server workflows
+| Application / area | Defect | Resolution |
+| --- | --- | --- |
+| `repoaudit` | zero-capacity vector, unfreed summary/report paths, duplicate line ending | fixed before closure |
+| `hookbox` | fatal `/events` read failure without diagnostic | diagnostic added |
+| `hookbox` | driver asserted 405 as 404; request budget off by one | test corrected; precedence documented |
+| `hookbox` / stdlib | valid 4,097-8,192-byte bodies refused | `json_parse_in` capacity API; permanent 8,192-byte regressions |
+| `releasepack` | unmatched manifest row not detected | central-directory name scan |
+| `releasepack` | missing destination parent created implicitly | explicit parent check |
+| `releasepack` | `..`/absolute root bypassed inside-root check | plain relative root required |
+| `releasepack` | archive and manifest could overwrite each other | same-path rejection |
+| M5 docs | wrong archive digest recorded in Session 168 | corrected in Session 171 |
+| M5 fixture | releasepack fixture lacked `out/` parent | documented `mkdir -p out` |
 
-The `httpserver` module supported a complete loopback server: bind, accept,
-read a Content-Length request, route, respond and close, including a request
-reassembled from three TCP writes. Recorded boundaries: one connection at a
-time, Content-Length only, a 64 KiB request read cap, and no keep-alive,
-chunked requests, TLS or console-control handler.
+## 10. Compiler, runtime and stdlib findings
 
-### Concurrency
+- The only capability gap found in M5 was the JSON arena geometry. It is a
+  standard-library limitation, not a compiler or runtime defect.
+- It was fixed by adding a capacity-aware parser entry point while keeping
+  `json_parse` byte-for-byte compatible; 68 JSON tests pass, including the
+  existing 4,091-byte refusal case.
+- No compiler or runtime source was changed in M5. `mink --version` remains
+  1.0.4.
+- The fix landed the pending Session 138 JSON arena guard and serializer-base
+  corrections that the capacity path depends on; both are covered in
+  `tests/json.rs`.
 
-No concurrent application behavior is verified. `hookbox` serves one connection
-at a time by design, and the frozen contracts require no concurrency. M4 owns
-the concurrency experiments; M5 makes no concurrency claim.
+## 11. Developer-experience findings
 
-### Error handling
+Observed, not measured: single-file programs with manual argv parsing and
+single-exit ownership; explicit boundary handling for arena capacity and
+Windows file-name case folding; one documented build command per application;
+Python drivers larger than the applications in two cases because they carry an
+independent oracle and process lifecycle management. The JSON capacity API is
+the one place where an application needed a stdlib change rather than a
+workaround.
 
-Every declared process exit class and every declared HTTP error status was
-exercised. Failure paths produced no partial report, no partial event file and
-no extracted files from an unsafe archive. Diagnostics stayed on stderr with the
-application prefix, and no stack trace was observed.
+## 12. Reliability findings
 
-### Build and distribution
+Failure paths produced no partial report, no partial event file and no files
+from an unsafe archive. Diagnostics stayed on stderr with the application
+prefix; no stack trace was observed. Listeners are closed before exit; no probe
+or temp file remains after a clean run.
 
-Each application builds to one PE executable with the documented
-`target/release/mink.exe build <source>` command, and each suite runs the
-executable from a temporary directory outside the repository. `mink check`
-passes all three sources (18,927 / 22,276 / 37,636 tokens). No sidecar files,
-environment variables or installed runtimes are required.
+## 13. Limitations
 
-### Determinism
+### Language
 
-All three produce byte-identical output across repeated runs: sorted reports,
-fixed JSON key order, fixed event sequence and bytes, fixed ZIP level and epoch.
-Line endings are deliberate and tested: LF for CSV, event files and manifests;
-CRLF for stdout and help text; `summary.json` has no trailing newline.
+- No Unicode path or argv guarantee in the tested scope.
+- No console-control API (no graceful Ctrl+C).
+- JSON capacity is explicit, not unbounded.
 
-### Practical developer experience (observed, not measured)
+### Compiler / runtime / stdlib
 
-Writing these applications required explicit ownership and a single-exit style
-to avoid leaks, and explicit boundary handling for the JSON arena and Windows
-file-name case folding. The workflow itself is short: one source file, one
-documented build command, one Python driver. These are observations from three
-applications by the original developer, not a usability study.
+- `json_parse` retains the historical ~3.5 KiB practical limit by design;
+  callers needing more must use `json_parse_in` and a larger arena.
+- `MAX_LIVE_ALLOCS` is documented at 1,024; M5 stayed well below it.
+- HTTP requests are Content-Length, one connection at a time, 64 KiB read cap.
 
-## 5. Limitations and risks
+### Application
 
-### Language limitations
+- `repoaudit`: markers 3-4 have no report column; reports not atomic.
+- `hookbox`: sequential handling; no retention/search; six-digit sequence
+  naming.
+- `releasepack`: buffered; extraction not transactional on mid-run failure;
+  stricter relative-path rule.
 
-- No Unicode path or argv guarantee in the tested scope; all fixtures are ASCII.
-- No console-control API, so a server has no graceful Ctrl+C path.
-- JSON input is constrained by fixed arena geometry.
+### Platform / external
 
-### Compiler, runtime and stdlib limitations
+- Windows x86_64 only; file names are case-insensitive.
+- No external runtime or library dependency; Python is test-only.
+- Disk-full and permission-denied were not separately simulated.
 
-- `stdlib/json.mink` accepts a simple object body up to 4,096 bytes and refuses
-  4,097-8,192 bytes even with the required write-pointer reset. This is the one
-  contract-level gap.
-- `MAX_LIVE_ALLOCS` is documented at 1,024 simultaneous allocations. M5 stayed
-  well below it; the ceiling was not stressed.
-- The HTTP server reads Content-Length requests up to 64 KiB, one connection at
-  a time.
+### Test methodology
 
-### Application-specific limitations
-
-- `repoaudit`: markers 3-4 have no report column; reports are not atomic.
-- `hookbox`: sequential handling; no retention/search; sequence names above six
-  digits are theoretically unrepresentable.
-- `releasepack`: buffered operation; non-transactional mid-extraction failure;
-  stricter relative-output-path rule than the frozen text.
-
-### Windows platform constraints
-
-- File names are case-insensitive: `000026.JSON` and `000026.json` are the same
-  file. Event recognition is byte-exact lowercase.
-- Executables are x86_64 PE only; no other target was tested.
-- Failure injection used a directory on the write-probe name and a removed
-  inbox; disk-full and permission-denied were not separately simulated.
-
-### External dependency constraints
-
-- None at runtime beyond Windows.
-- Test oracles require Python 3.11 standard library only.
-- No package manager, network install or service account is involved.
-
-### Test methodology limitations
-
-- Oracles verify contract semantics independently but are not second MINK
-  implementations.
-- Determinism is checked on one machine; no cross-machine or clock-sensitive
-  case exists.
-- There is no load, soak, concurrency or timing test.
-- The committed executables were hashed, not rebuilt, during this reporting
-  session; prior sessions recorded their builds.
+- Oracles verify contract semantics but are not second MINK implementations.
+- Determinism is checked on one machine; no load, soak, timing or concurrency
+  tests.
+- The committed `repoaudit` and `releasepack` executables were not rebuilt
+  during this revision; `hookbox` was rebuilt and re-verified three times.
 - No external developer has attempted the workflow.
 
-## 6. Strategic conclusion
+## 14. Strategic conclusion
 
 **Question:** can MINK make a meaningful class of native software substantially
 simpler to build, test and ship than the alternatives?
 
-**Evidence-backed answer:** for a narrow, well-defined class - single-executable
-Windows x86_64 command-line tools and loopback services built only on the
-standard library - MINK is already sufficient to deliver complete applications
-with deterministic behavior, real validation, failure handling and standalone
-distribution. Three applications across offline analysis, HTTP serving and
-archive engineering were built without compiler or stdlib changes, and their
-contracts are verified by 163 executable checks per run plus independent
-oracles.
+**Evidence-backed answer:** for single-executable Windows x86_64 command-line
+tools and loopback services built only on the standard library, MINK is
+sufficient to deliver complete applications with deterministic behavior, real
+validation, failure handling and standalone distribution. Three applications
+across offline analysis, HTTP serving and archive engineering were built and
+verified by 163 executable checks per run plus independent oracles; the one
+contract-level gap found was closed in the standard library with regression
+coverage.
 
-That is a meaningful result, but it is not a claim of broad superiority. M5
-measured no performance, no startup, no memory and no cross-language
-productivity. It did not test concurrency, large data, Unicode paths, TLS,
-durability or third-party ecosystems. M4 provides the comparison evidence; M5
-provides application-completeness evidence.
+This is not a claim of broad superiority. M5 measured no performance, startup,
+memory or productivity. It did not test concurrency, large data, Unicode paths,
+TLS, durability or third-party ecosystems. M4 owns comparison evidence; M5 owns
+application-completeness evidence. Whether an unfamiliar developer can adopt
+MINK remains untested and is the purpose of M6.
 
-What MINK currently does well, on this evidence: compact single-file programs,
-direct filesystem and byte control, deterministic artifacts, simple standalone
-distribution and a standard library broad enough for these three domains.
+## 15. M6 recommendation
 
-Where it remains weaker on this evidence: JSON input capacity, Unicode/path
-handling, concurrency, graceful shutdown, and any workflow requiring external
-libraries or tooling. Whether an unfamiliar developer can adopt it is untested.
+Proceed to M6, external-developer usability, without expanding feature scope.
+M6 should test whether someone who did not write these applications can
+understand, install, build, debug, test and ship one from committed
+documentation alone, recording every point where hidden knowledge is required.
+If a genuinely independent participant is unavailable, the result must be
+labeled an internal cold-start simulation.
 
-## 7. Roadmap recommendation
+The M6 sessions in the handoff were not started because this block was used to
+close M5. See [`../M6/M6_DEFERRED_SESSIONS.md`](../M6/M6_DEFERRED_SESSIONS.md).
 
-Locked roadmap: M0 Foundation, M1 representative Windows workloads, M2 deep
-Windows x86_64 validation, M3 targeted gaps, M4 five-language comparison,
-M5 representative applications, M6 external developer usability, M7
-tooling/ecosystem demand, M8 strategic decision, M9 conditional platform
-expansion.
-
-**Recommendation: proceed to M6, scoped as an external-developer usability
-stage, without expanding MINK's feature scope first.**
-
-Rationale: the application set is complete (3 of 3) and every remaining
-limitation is bounded. The largest missing evidence is not another workload but
-whether someone who did not write these applications can understand, install,
-build, debug, test and ship one from the documentation alone.
-
-M6 should test exactly that, for example by having an independent developer
-build and modify one existing M5 application using only committed docs and the
-toolchain, and recording every point of friction. It should not add speculative
-features.
-
-Prerequisites and constraints for M6:
-
-- Accept M5 as PARTIAL; do not relabel it.
-- Decide explicitly whether to fix the JSON arena capacity or amend the
-  `hookbox` contract. Either choice requires a regression-backed change; neither
-  belongs inside a usability session.
-- Keep M5's evidence intact; do not rewrite passing records.
-- Do not begin M6 in this session.
-
-M7 should evaluate real tooling and ecosystem demand rather than build
-speculative infrastructure. M8 must make an evidence-backed strategic decision
-using M4, M5 and M6 results. M9 remains conditional: nothing in M5 justifies
+M7 should evaluate real tooling/ecosystem demand, M8 must make an evidence-based
+strategic decision, and M9 remains conditional: nothing in M5 justifies
 promising Linux or other platform support.
 
-## 8. Final repository state
+## 16. Repository state
 
 | Item | Value |
 | --- | --- |
 | Branch | `main` |
-| HEAD at report start | `5e67649` (`docs: publish final M5 evidence report`) |
+| HEAD at report revision | `aeceee1` |
 | Origin | `https://github.com/p4inz-code/mink` |
-| `origin/main` | `b860837`; local `main` is 26 ahead / 1 behind |
-| Worktree | 67 pre-existing M3/M4 entries unrelated to M5; M5 files clean before this report |
-| M5-owned commits | `8cdb33e`, `2fe1d21`, `bcd3fbd`, `75c3b3b`, `6714c52`, `4a5b551`, `67a3e38`, `3a06b19`, `b5d4d85`, `6d859ff`, `5e67649`, plus this report's commit |
-| Uncommitted work | only this report and the renamed readiness gate; pre-existing M3/M4 work left untouched |
-| Test totals | 163 checks per full run: 50 `repoaudit`, 60 `hookbox`, 53 `releasepack`; 163 passed, 0 failed, 0 skipped on 2026-11-04 |
-| Artifacts | `repoaudit.exe` 216,576 B `3d1b15cf...`; `hookbox.exe` 230,912 B `6ac524fa...`; `releasepack.exe` 352,256 B `1ce41406...` |
-| Outstanding actions | resolve or formally amend the `hookbox` 4,097-8,192-byte JSON body gap; decide M6 scope |
+| `origin/main` | `b860837`; local `main` ahead, not pushed |
+| Worktree | pre-existing M3/M4 entries unrelated to M5 remain; M5 files committed |
+| M5 commits | `8cdb33e`, `2fe1d21`, `bcd3fbd`, `75c3b3b`, `6714c52`, `4a5b551`, `67a3e38`, `3a06b19`, `b5d4d85`, `6d859ff`, `5e67649`, `d3f2211`, `aeceee1`, plus this report's commit |
+| Test totals | 163 application checks per full run (50/60/53), 3 hookbox runs post-fix; 68 stdlib JSON tests |
+| Outstanding actions | start M6 test design; no open M5 defect |
 
 No push, tag, publish, reset, clean, stash, rebase or amend was performed. The
 Git log is authoritative for the final hash.
 
-## 9. Record index
+## 17. Record index
 
 | Record | Contents |
 | --- | --- |
@@ -372,12 +322,6 @@ Git log is authoritative for the final hash.
 | [`M5_SESSION_170.md`](M5_SESSION_170.md) | cross-application matrix |
 | [`M5_SESSION_171.md`](M5_SESSION_171.md) | repository-wide evidence audit |
 | [`M5_SESSION_172_READINESS_GATE.md`](M5_SESSION_172_READINESS_GATE.md) | closure gate and decision |
-| [`M5_SESSION_173.md`](M5_SESSION_173.md) | Session 173 record |
-
-## 10. Handoff
-
-M5 closes as **PARTIAL** with the representative application set complete. The
-next phase is a scoped M6 usability decision, not more M5 workloads. The one
-technical prerequisite to decide first is whether the JSON arena capacity is
-fixed or the `hookbox` body contract is formally amended; both require a
-separate, regression-backed change.
+| [`M5_SESSION_173.md`](M5_SESSION_173.md) | original final report record |
+| [`M5_SESSION_174_JSON_ARENA_CAPACITY.md`](M5_SESSION_174_JSON_ARENA_CAPACITY.md) | blocker reproduction, root cause and fix |
+| [`M5_SESSION_175_CONTRACT_CLOSURE.md`](M5_SESSION_175_CONTRACT_CLOSURE.md) | boundary and full-suite re-verification |

@@ -77,26 +77,27 @@ sequence recovery with unrelated files present, two runs in one inbox, 25
 events, three byte-identical repeated runs, write and read failures, cleanup,
 and execution from outside the repository.
 
-## Known MINK limitation (contract PARTIAL)
+## JSON arena capacity
 
-**A valid JSON request body between 4,097 and 8,192 bytes is refused with
-`400`.**
+The frozen contract accepts bodies up to 8,192 bytes, and this application
+accepts them (Sessions 174-175).
 
-The stdlib `json_parse` arena geometry is fixed: input bytes occupy slots
-`0..len-1`, the value tree starts at `len+1`, and the persistent write pointer
-lives in slot 8191. A body whose tree would reach slot 8191 is refused. On
-this implementation a simple object body parses at 4,096 bytes and fails at
-4,097; the published arena budget is ~3.5 KiB, and the exact cutoff depends on
-the body's tree size, not only its byte length. This was reproduced in Session
-166 with the required write-pointer reset
-(`rt_mem_store(arena + 8191*8, 0)`) before every parse.
+`stdlib/json.mink` exposes two entry points:
 
-`stdlib/json.mink` is deliberately **not** modified. The frozen contract allows
-bodies up to 8,192 bytes, so the application is classified **IMPLEMENTATION
-GREEN / CONTRACT PARTIAL**: everything the stdlib supports is supported and
-tested, the over-limit range returns the contract-defined malformed-body
-behavior (`400`), and the gap is recorded instead of hidden. Bodies from 8,193
-bytes up correctly return `413`.
+- `json_parse(input, arena)` keeps the historical 64 KiB geometry: 8,192 slots
+  with the persistent write pointer in the final slot, which is why the old
+  cutoff was around 4 KiB.
+- `json_parse_in(input, arena, slots)` takes the caller's real slot count and
+  stores the write pointer in slot `slots - 1`, so a larger arena can parse a
+  larger document.
+
+`hookbox` allocates 256 KiB (32,768 slots), passes that capacity to
+`json_parse_in`, and resets the final slot before every parse. The 4,096 /
+4,097 / 8,192 boundaries are permanent tests: valid objects of 4,096, 4,097
+and 8,192 bytes return `201` with exact event bytes, and 8,193 bytes returns
+`413`. The input bytes and parsed tree must fit below the final slot, and the
+serializer writes after the tree; the 256 KiB arena accommodates an 8,192-byte
+body with margin.
 
 ## Other recorded boundaries
 
