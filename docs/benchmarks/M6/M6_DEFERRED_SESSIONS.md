@@ -1,43 +1,50 @@
-# M6 — Deferred session record
+# M6-M9 — Programme ledger
 
-**Date:** 2026-11-04
-**Status:** **M6 NOT STARTED**
-**Reason:** M5 did not pass its first readiness gate. The 16-session handoff
-requires Sessions 174-181 to close the exact M5 blockers instead of starting
-M6. M5 is now COMPLETE, but this block was spent on closure, so all M6
-sessions remain unstarted.
+**Updated:** 2026-11-04
+**Current milestone:** M6 — external developer usability
+**Status:** M6 IN PROGRESS; M7, M8, M9 NOT STARTED
 
 ## Session status
 
-| Session | Planned M6 work | Status |
+| Session | Planned work | Status |
 | ---: | --- | --- |
-| 174 | M6 definition and external-developer test design | **NOT STARTED** |
-| 175 | Installation, environment and first-program validation | **NOT STARTED** |
-| 176 | Documentation and language-learning audit | **NOT STARTED** |
-| 177 | Standard-library and API discoverability | **NOT STARTED** |
-| 178 | Debugging, diagnostics and test workflow | **NOT STARTED** |
-| 179 | Independent application build from documentation | **NOT STARTED** |
-| 180 | Usability audit and gap prioritization | **NOT STARTED** |
-| 181 | M6 closure, developer readiness and M7 handoff | **NOT STARTED** |
+| 174 | M6 experiment design and baseline | **COMPLETE** |
+| 175 | Installation and environment validation | **NOT STARTED** |
+| 176 | First program and basic language learning | **NOT STARTED** |
+| 177 | Language documentation audit | **NOT STARTED** |
+| 178 | Standard-library discoverability | **NOT STARTED** |
+| 179 | Compiler diagnostics and error recovery | **NOT STARTED** |
+| 180 | Testing and debugging workflow | **NOT STARTED** |
+| 181 | First external application workload selection | **NOT STARTED** |
+| 182 | Cold-start application implementation | **NOT STARTED** |
+| 183 | Cold-start application adversarial audit | **NOT STARTED** |
+| 184 | Build, packaging and distribution usability | **NOT STARTED** |
+| 185 | M6 final audit and closure | **NOT STARTED** |
+| 186-197 | M7 tooling and ecosystem demand | **NOT STARTED** |
+| 198-203 | M8 strategic evaluation and decision | **NOT STARTED** |
+| 204-209 | M9 conditional platform expansion evaluation | **NOT STARTED** |
 
-Session numbers 174-177 were reused for M5 closure records:
+M5 is COMPLETE. Its final report and readiness gate remain authoritative for
+the application evidence used by M6.
 
-- `M5_SESSION_174_JSON_ARENA_CAPACITY.md`
-- `M5_SESSION_175_CONTRACT_CLOSURE.md`
-- `M5_SESSION_176_READINESS_GATE_REVISION.md`
-- `M5_SESSION_177_FINAL_REPORT_REVISION.md`
+## Starting point for Session 175
 
-This is deliberate: the handoff requires preserving numbering while recording
-deferred M6 sessions as NOT STARTED.
+Read:
 
-## Starting point for M6
+- [`M6_SESSION_174_TEST_DESIGN.md`](M6_SESSION_174_TEST_DESIGN.md)
+- [`../M5/M5_FINAL_REPORT.md`](../M5/M5_FINAL_REPORT.md)
+- `README.md` "Install MINK"
+- `npm/mink/package.json`
 
-- Read [`../M5/M5_FINAL_REPORT.md`](../M5/M5_FINAL_REPORT.md) and
-  [`../M5/M5_SESSION_172_READINESS_GATE.md`](../M5/M5_SESSION_172_READINESS_GATE.md).
-- M5 status is COMPLETE; 163 application checks pass per run; the JSON 8 KiB
-  boundary is fixed and regression-covered.
-- Begin with M6 Session 174: define the experiment, persona, tasks and
-  measurements before running anything.
-- Do not add language features. Do not claim external validation unless a
-  genuinely independent participant performed the tasks; otherwise label the
-  work an internal cold-start simulation.
+Then follow the documented installation path in an isolated prefix, record every
+command and failure, and do not fix documentation until the baseline is
+captured.
+
+## Rules for this block
+
+- Do not add language features during M6.
+- Do not claim external validation: Session 174 is an internal cold-start
+  simulation.
+- Do not advance to M7 until M6 has a closure decision.
+- Do not push, publish, tag or change the release version.
+- Keep pre-existing M3/M4 worktree changes untouched.
