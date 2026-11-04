@@ -10,7 +10,7 @@
 | ---: | --- | --- |
 | 174 | M6 experiment design and baseline | **COMPLETE** |
 | 175 | Installation and environment validation | **COMPLETE** |
-| 176 | First program and basic language learning | **NOT STARTED** |
+| 176 | First program and basic language learning | **COMPLETE** |
 | 177 | Language documentation audit | **NOT STARTED** |
 | 178 | Standard-library discoverability | **NOT STARTED** |
 | 179 | Compiler diagnostics and error recovery | **NOT STARTED** |
@@ -27,17 +27,19 @@
 M5 is COMPLETE. Its final report and readiness gate remain authoritative for
 the application evidence used by M6.
 
-## Starting point for Session 176
+## Starting point for Session 177
 
 Read:
 
 - [`M6_SESSION_174_TEST_DESIGN.md`](M6_SESSION_174_TEST_DESIGN.md)
 - [`M6_SESSION_175_INSTALLATION.md`](M6_SESSION_175_INSTALLATION.md)
-- `README.md` Quick Start and `docs/language/CORE_GRAMMAR.md`
+- [`M6_SESSION_176_FIRST_PROGRAM_AND_LANGUAGE_LEARNING.md`](M6_SESSION_176_FIRST_PROGRAM_AND_LANGUAGE_LEARNING.md)
+- `docs/language/` and `examples/`
 
-Then write the first program from documented material only, recording every
-lookup, failed command and point where internal knowledge was needed. Do not
-fix documentation until the observations are recorded.
+Then audit the language documentation against source and test evidence. Use the
+Session 176 findings (line-oriented print, Map typing, module/use wording) as
+reported observations, not as assumptions, and do not correct the README in
+this session.
 
 ## Rules for this block
 

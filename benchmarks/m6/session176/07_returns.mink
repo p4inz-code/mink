@@ -1,0 +1,25 @@
+fn sign(n: Int) -> Int {
+    if n < 0 {
+        return -1;
+    }
+    if n == 0 {
+        return 0;
+    }
+    return 1;
+}
+
+fn early(flag: Bool) -> Int {
+    if flag {
+        return 10;
+    }
+    return 20;
+}
+
+fn main() {
+    rt_print_int(sign(-2));
+    rt_print_int(sign(0));
+    rt_print_int(sign(3));
+    rt_print_int(early(true));
+    rt_print_int(early(false));
+    return 0;
+}

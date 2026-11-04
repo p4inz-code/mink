@@ -1,0 +1,16 @@
+fn main() {
+    let a = "mink";
+    let b = "-lang";
+    let joined = rt_str_concat(a, b);
+
+    rt_print_str(joined);
+    rt_print_int(rt_str_len(joined));
+    rt_print_int(rt_str_byte(joined, 0));
+
+    let num = rt_str_from_int(176);
+    rt_print_str(num);
+
+    rt_str_free(joined);
+    rt_str_free(num);
+    return 0;
+}

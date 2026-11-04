@@ -1,0 +1,14 @@
+fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn scale(value: Int, factor: Int) -> Int {
+    let result = value * factor;
+    return result;
+}
+
+fn main() {
+    rt_print_int(add(4, 5));
+    rt_print_int(scale(add(1, 2), 3));
+    return 0;
+}

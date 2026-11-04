@@ -1,0 +1,16 @@
+fn main() {
+    let count: Int = 3;
+    let ratio: Float = 2.5;
+    let enabled: Bool = true;
+    let label: Str = "mink";
+
+    rt_print_int(count);
+    rt_print_float(ratio);
+    if enabled {
+        rt_print_int(1);
+    } else {
+        rt_print_int(0);
+    }
+    rt_print_str(label);
+    return 0;
+}

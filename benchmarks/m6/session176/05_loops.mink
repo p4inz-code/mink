@@ -1,0 +1,24 @@
+fn main() {
+    let mut i = 0;
+    let mut while_sum = 0;
+    while i < 5 {
+        while_sum = while_sum + i;
+        i = i + 1;
+    }
+    rt_print_int(while_sum);
+
+    let mut for_sum = 0;
+    for n in 1..=5 {
+        for_sum = for_sum + n;
+    }
+    rt_print_int(for_sum);
+
+    let mut evens = 0;
+    for n in 1..=6 {
+        if n % 2 == 0 {
+            evens = evens + 1;
+        }
+    }
+    rt_print_int(evens);
+    return 0;
+}

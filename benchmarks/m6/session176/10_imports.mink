@@ -1,0 +1,18 @@
+mod filesystem;
+
+fn main() -> Int {
+    let n = fs_write("import_probe.txt", "module-ok");
+    if n != 9 {
+        rt_print_str("write-failed\n");
+        return 1;
+    }
+
+    let data = fs_read("import_probe.txt");
+    rt_print_str(data);
+    rt_print_int(rt_str_len(data));
+    rt_str_free(data);
+
+    let removed = fs_remove_file("import_probe.txt");
+    rt_print_int(removed);
+    return 0;
+}

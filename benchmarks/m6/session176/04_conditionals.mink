@@ -1,0 +1,16 @@
+fn classify(n: Int) -> Int {
+    if n < 0 {
+        return -1;
+    }
+    if n == 0 {
+        return 0;
+    }
+    return 1;
+}
+
+fn main() {
+    rt_print_int(classify(-5));
+    rt_print_int(classify(0));
+    rt_print_int(classify(9));
+    return 0;
+}

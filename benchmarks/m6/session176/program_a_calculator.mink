@@ -1,0 +1,38 @@
+fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn sub(a: Int, b: Int) -> Int {
+    return a - b;
+}
+
+fn mul(a: Int, b: Int) -> Int {
+    return a * b;
+}
+
+fn divide(a: Int, b: Int) -> Int {
+    if b == 0 {
+        return 0;
+    }
+    return a / b;
+}
+
+fn main() {
+    let a = 84;
+    let b = 6;
+
+    rt_print_str("add,sub,mul,div,neg");
+    rt_print_int(add(a, b));
+    rt_print_int(sub(a, b));
+    rt_print_int(mul(a, b));
+    rt_print_int(divide(a, b));
+    rt_print_int(sub(b, a));
+
+    let zero_result = divide(7, 0);
+    if zero_result == 0 {
+        rt_print_str("div0=error");
+    } else {
+        rt_print_int(zero_result);
+    }
+    return 0;
+}

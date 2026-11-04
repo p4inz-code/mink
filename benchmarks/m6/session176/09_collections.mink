@@ -1,0 +1,23 @@
+fn main() {
+    let a = [10, 20, 30, 40];
+    let mut sum = 0;
+    let mut i = 0;
+    while i < 4 {
+        sum = sum + a[i];
+        i = i + 1;
+    }
+    rt_print_int(sum);
+
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, 1, 100);
+    m = rt_map_insert(m, 2, 200);
+    rt_print_int(rt_map_len(m));
+    rt_print_int(rt_map_get(m, 2));
+    if rt_map_has(m, 1) {
+        rt_print_int(1);
+    } else {
+        rt_print_int(0);
+    }
+    rt_map_free(m);
+    return 0;
+}

@@ -1,0 +1,71 @@
+mod filesystem;
+
+fn main() -> Int {
+    let written = fs_write("m6_session176_note.txt", "hello-m6");
+    let exists = fs_exists("m6_session176_note.txt");
+    let size = fs_file_size("m6_session176_note.txt");
+    let data = fs_read("m6_session176_note.txt");
+    let dlen = rt_str_len(data);
+
+    let missing = fs_read("m6_session176_missing.txt");
+    let missing_len = rt_str_len(missing);
+    rt_str_free(missing);
+    let missing_size = fs_file_size("m6_session176_missing.txt");
+    let bad = fs_write("m6_session176_no_dir/note.txt", "x");
+
+    rt_print_str("write,read,exists,size,missing_len,missing_size,bad_write,removed,cleanup");
+    rt_print_int(written);
+    rt_print_str(data);
+    if exists {
+        rt_print_int(1);
+    } else {
+        rt_print_int(0);
+    }
+    rt_print_int(size);
+    rt_print_int(missing_len);
+    rt_print_int(missing_size);
+    rt_print_int(bad);
+
+    rt_str_free(data);
+    let removed = fs_remove_file("m6_session176_note.txt");
+    let gone = fs_exists("m6_session176_note.txt");
+    rt_print_int(removed);
+    if !gone {
+        rt_print_int(1);
+    } else {
+        rt_print_int(0);
+    }
+
+    let mut ok = 1;
+    if written != 8 {
+        ok = 0;
+    }
+    if !exists {
+        ok = 0;
+    }
+    if size != 8 {
+        ok = 0;
+    }
+    if dlen != 8 {
+        ok = 0;
+    }
+    if missing_len != 0 {
+        ok = 0;
+    }
+    if missing_size != -1 {
+        ok = 0;
+    }
+    if bad != -1 {
+        ok = 0;
+    }
+    if removed != 0 {
+        ok = 0;
+    }
+    if gone {
+        ok = 0;
+    }
+    if ok == 0 {
+        return 1;
+    }
+    return 0;
+}

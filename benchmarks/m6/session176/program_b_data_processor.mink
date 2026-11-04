@@ -1,0 +1,64 @@
+fn value_for(i: Int) -> Int {
+    return (i + 1) * 10;
+}
+
+fn mean_x100(sum: Int, count: Int) -> Int {
+    if count == 0 {
+        return 0;
+    }
+    return sum * 100 / count;
+}
+
+fn main() {
+    let argc = rt_argc();
+    let mut count = 8;
+    if argc > 0 {
+        let mode = rt_argv(0);
+        if rt_str_eq(mode, "empty") {
+            count = 0;
+        }
+        if rt_str_eq(mode, "single") {
+            count = 1;
+        }
+        rt_str_free(mode);
+    }
+
+    let mut m = rt_map_new(8);
+    let mut i = 0;
+    while i < count {
+        m = rt_map_insert(m, i, value_for(i));
+        i = i + 1;
+    }
+
+    let mut sum = 0;
+    let mut min = -1;
+    let mut max = -1;
+    if count > 0 {
+        min = rt_map_get(m, 0);
+        max = min;
+    }
+
+    i = 0;
+    while i < count {
+        let v = rt_map_get(m, i);
+        sum = sum + v;
+        if v < min {
+            min = v;
+        }
+        if v > max {
+            max = v;
+        }
+        i = i + 1;
+    }
+
+    let mean100 = mean_x100(sum, count);
+    rt_print_str("count,sum,min,max,mean_x100");
+    rt_print_int(count);
+    rt_print_int(sum);
+    rt_print_int(min);
+    rt_print_int(max);
+    rt_print_int(mean100);
+
+    rt_map_free(m);
+    return 0;
+}
