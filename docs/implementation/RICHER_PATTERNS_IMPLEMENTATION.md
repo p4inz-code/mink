@@ -1,4 +1,4 @@
-# MINK Richer Match Patterns Implementation
+# MINK richer match patterns implementation
 
 **Status:** Implemented (Session 27)
 **Version:** 0.1.0
@@ -21,7 +21,7 @@ session-18/19 program compiles and behaves exactly as before.
   `1 | 2..=5`. The pattern matches when any alternative matches.
 - Every alternative must bind the **same set of names with the same
   types**; a mismatch is `E-T34` (invalid or-pattern). The alternatives
-  share **one binding per name** — the arm body sees a single binding, and
+  share **one binding per name**. The arm body sees a single binding, and
   type inference resolves every occurrence of the name to that one
   declaration.
 - Alternatives may be ranges (`1..=5 | 7..=9`) but an or-pattern
@@ -32,14 +32,14 @@ session-18/19 program compiles and behaves exactly as before.
 
 ### 1.2 Range patterns
 
-- `lo..=hi` is an **inclusive** range (`1..=5` matches 1, 2, 3, 4, 5);
+- `lo..=hi` is an inclusive range (`1..=5` matches 1, 2, 3, 4, 5);
   `lo..hi` is an **exclusive** range (`1..5` matches 1, 2, 3, 4). Both
   endpoints are integer literals, optionally negated (`-3..=2`,
   `-10..-1`). A non-literal endpoint or a chained range (`1..2..3`) is
   `E-P19` (expected an integer literal).
 - A range pattern is well-typed only on an `Int` scrutinee; a range on
   any other matchable type is a type mismatch (`E-T01`).
-- Coverage is tracked as integer **intervals**: a match of `1..=5` then
+- Coverage is tracked as integer intervals: a match of `1..=5` then
   `6..=10` then `11..=20` then `_` is exhaustive, and an uncovered gap is
   reported precisely by `E-T25` (e.g. `match x { 1..=5 => { .. } }`
   reports that the points below 1 and above 5 are uncovered). A range
@@ -50,11 +50,11 @@ session-18/19 program compiles and behaves exactly as before.
 ### 1.3 Guards
 
 - A guarded arm is `pattern if expr => { body }`. The guard is evaluated
-  **after** the pattern matches and **before** the body, with the
+  **after** the pattern matches and before the body, with the
   pattern's bindings in scope: `match x { n if n > 3 => { .. } }` reads
   `n` in the guard.
 - The guard must be a `Bool` expression (`E-T09` on mismatch).
-- A guarded arm **commits no coverage**: it can still fail, so it never
+- A guarded arm commits no coverage: it can still fail, so it never
   makes the match exhaustive and never makes later arms unreachable.
   `match x { 1 if c => { .. }, _ => { .. } }` still requires the `_`
   arm. An arm whose *pattern* an earlier arm already fully covers is
@@ -93,28 +93,28 @@ session-18/19 program compiles and behaves exactly as before.
 
 ## 4. Type checking
 
-- **Or-patterns**: each alternative is checked against the scrutinee
+- Or-patterns: each alternative is checked against the scrutinee
   type; a name bound with different types across alternatives is `E-T34`.
   All alternatives' bindings unify into the shared declaration, and the
   arm's coverage is the union of the alternatives' coverage (an unguarded
   or-pattern arm commits that union).
-- **Ranges**: the endpoints unify with `Int`; coverage is an interval
+- Ranges: the endpoints unify with `Int`; coverage is an interval
   `[lo, hi]` (`hi` decremented by one for exclusive ranges, with an empty
   result when the decrement underflows `i64::MIN`). Interval coverage is
   kept sorted and disjoint; exhaustiveness for `Int` is full-domain
   coverage `[i64::MIN, i64::MAX]` (a match of `1..=5` + `6..=10` alone
   reports the uncovered space). A range pattern on a non-`Int` scrutinee
   is `E-T01`.
-- **Guards**: checked as a condition (`E-T09` on a non-`Bool`); guarded
+- Guards: checked as a condition (`E-T09` on a non-`Bool`); guarded
   arms are excluded from the coverage merge and from the exhaustive
   check, and a guarded arm whose pattern an earlier arm already covers is
   `E-T25` unreachable.
-- **Coverage machinery**: `Coverage` holds a sorted disjoint interval
+- Coverage machinery: `Coverage` holds a sorted disjoint interval
   list plus an `all` flag (a catch-all pattern). Points, ranges,
   or-alternatives, and variant coverage all merge into it. The deferred
   re-type pass re-checks guards too (guards are conditions, resolved like
   `if` conditions).
-- New error codes: `E-T34` (invalid or-pattern — alternatives bind
+- New error codes: `E-T34` (invalid or-pattern, alternatives bind
   different names or types).
 
 ## 5. HIR
@@ -165,16 +165,16 @@ pin byte-for-byte image equality for a guarded/or/range program).
 
 ## 9. Diagnostics
 
-- `E-T34` — invalid or-pattern: `match x { E::A(a) | E::B(b) => { .. } }`
+- `E-T34`: invalid or-pattern: `match x { E::A(a) | E::B(b) => { .. } }`
   binds different names; `E::A(x) | 5 => { .. }` binds a name in one
   alternative only.
-- `E-P19` — expected an integer literal: a range endpoint that is not an
+- `E-P19`: expected an integer literal: a range endpoint that is not an
   integer literal (`1..x`, `1..2..3`).
-- `E-T25` — non-exhaustive/unreachable match, now with interval
+- `E-T25`: non-exhaustive/unreachable match, now with interval
   precision: uncovered gaps between range patterns are reported; a
   guarded arm leaves its space uncovered; an arm covered by an earlier
   arm is unreachable.
-- `E-T09` — a non-`Bool` guard.
+- `E-T09`: a non-`Bool` guard.
 
 ## 10. Test coverage
 

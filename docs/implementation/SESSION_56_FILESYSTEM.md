@@ -1,9 +1,9 @@
-# SESSION 56 — FILESYSTEM LIBRARY + PLATFORM FOUNDATION
+# SESSION 56: FILESYSTEM LIBRARY + PLATFORM FOUNDATION
 
-## 1. Library Selection
+## 1. Library selection
 Filesystem selected as the fifth official ecosystem library because it provides the I/O foundation for all future backend, networking, and systems libraries.
 
-## 2. Foundation Improvements
+## 2. Foundation improvements
 
 ### PE Import Table Expansion (17 kernel32 imports)
 | # | Import | Purpose |
@@ -41,21 +41,21 @@ Filesystem selected as the fifth official ecosystem library because it provides 
 | FsMove | 2 | Int | Move file (0=ok) |
 | FsSetCwd | 1 | Int | Set working dir (0=ok) |
 
-### Runtime Emit Functions Added
-- `emit_fs_read` — CreateFileA + GetFileSize + StrAlloc + ReadFile + CloseHandle
-- `emit_fs_write` — CreateFileA + WriteFile + CloseHandle
-- `emit_fs_exists` — GetFileAttributesA + conditional branch
-- `emit_fs_file_size` — CreateFileA + GetFileSize + CloseHandle
-- `emit_fs_get_cwd` — GetCurrentDirectoryA + StrAlloc + memcpy
-- `emit_fs_create_dir` — CreateDirectoryA
-- `emit_fs_remove_dir` — RemoveDirectoryA
-- `emit_fs_remove_file` — DeleteFileA
-- `emit_fs_copy` — CopyFileA
-- `emit_fs_move` — MoveFileA
-- `emit_fs_set_cwd` — SetCurrentDirectoryA
-- `copy_str_to_cstr` — Helper: convert MINK Str to null-terminated C string
+### Runtime emit functions added
+- `emit_fs_read`: CreateFileA + GetFileSize + StrAlloc + ReadFile + CloseHandle
+- `emit_fs_write`: CreateFileA + WriteFile + CloseHandle
+- `emit_fs_exists`: GetFileAttributesA + conditional branch
+- `emit_fs_file_size`: CreateFileA + GetFileSize + CloseHandle
+- `emit_fs_get_cwd`: GetCurrentDirectoryA + StrAlloc + memcpy
+- `emit_fs_create_dir`: CreateDirectoryA
+- `emit_fs_remove_dir`: RemoveDirectoryA
+- `emit_fs_remove_file`: DeleteFileA
+- `emit_fs_copy`: CopyFileA
+- `emit_fs_move`: MoveFileA
+- `emit_fs_set_cwd`: SetCurrentDirectoryA
+- `copy_str_to_cstr`: Helper: convert MINK Str to null-terminated C string
 
-### Bug Fixed
+### Bug fixed
 - `emit_fs_exists`: Changed from `setcc_al` + `movzx_byte` (read memory) to conditional branch (`jne/jmp`) to avoid segfault from incorrect register-to-memory zero extension.
 
 ## 3. Filesystem Library API (stdlib/filesystem.mink)
@@ -102,25 +102,25 @@ Filesystem selected as the fifth official ecosystem library because it provides 
 | fs_is_dir | Str -> Bool | Is a directory |
 | fs_file_size_or | (Str, Int) -> Int | Size with default |
 
-## 4. Key V1 Ownership Discoveries
+## 4. Key V1 ownership discoveries
 
-### User Function Wrappers Cause Crashes
+### User function wrappers cause crashes
 User function wrappers for FS intrinsics (e.g., `fn fs_file_size(path: Str) -> Int { return rt_fs_file_size(path); }`) cause crashes when called in sequence. The root cause: MINK V1 user function calling convention doesn't properly preserve stack state between calls when the wrapper wraps a complex runtime service.
 
 **Workaround:** Use `rt_fs_*` intrinsics directly in MINK code. The path operations (which use only intrinsics internally) work correctly through user function wrappers.
 
-### No Short-Circuit Evaluation
+### No Short-Circuit evaluation
 MINK V1 does NOT have short-circuit evaluation for `&&` and `||`. Both sides are always evaluated. This means `if len > 0 && rt_str_byte(s, 0) == 47` will crash if `len == 0` because `rt_str_byte` is called anyway.
 
 **Workaround:** Use nested `if` blocks instead of `&&`.
 
-### `return <param>` in Conditionals Consumes Permanently
+### `return <param>` in conditionals consumes permanently
 `return a` inside an `if` block marks `a` as consumed for the entire function, even in branches that don't execute. Must use mode variables and a single `return` at the end.
 
-### User Functions Consume Str Parameters
+### User functions consume str parameters
 All user function calls consume their Str parameters. Multiple calls with the same literal string work (literals are duplicated by the compiler). Variable reuse after a user function call fails at compile time.
 
-## 5. Test Results
+## 5. Test results
 | Suite | Tests | Status |
 |-------|-------|--------|
 | filesystem_lib | 33 | ALL PASS |
@@ -128,31 +128,31 @@ All user function calls consume their Str parameters. Multiple calls with the sa
 | strings_lib | 73 | ALL PASS |
 | encoding_lib | 57 | ALL PASS |
 | math_lib | 106 | ALL PASS |
-| **Total ecosystem** | **306** | **ALL PASS** |
+| Total ecosystem | 306 | ALL PASS |
 
-## 6. Quality Gates
-- ✅ `cargo fmt --check` — clean
-- ✅ `cargo clippy --all-targets` — 0 new warnings (17 pre-existing)
-- ✅ `cargo test` — 0 failures
-- ✅ `cargo build` — success
-- ✅ `cargo build --release` — success
-- ✅ All 306 ecosystem tests pass
+## 6. Quality gates
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets`: 0 new warnings (17 pre-existing)
+- `cargo test`: 0 failures
+- `cargo build`: success
+- `cargo build --release`: success
+- All 306 ecosystem tests pass
 
-## 7. Known Limitations
-1. **User function wrappers for FS ops crash** — use `rt_fs_*` intrinsics directly
-2. **No short-circuit evaluation** — use nested `if` blocks
-3. **No directory listing** — FindFirstFile/FindNextFile imported but not yet implemented as emit functions
-4. **No recursive directory operations** — `fs_remove_dir_all` not implemented
-5. **`fs_is_dir` is heuristic** — based on `file_size < 0` rather than true type detection
-6. **No Windows path normalization** — backslash/forward slash handling not implemented
+## 7. Known limitations
+1. User function wrappers for FS ops crash: use `rt_fs_*` intrinsics directly
+2. No short-circuit evaluation: use nested `if` blocks
+3. No directory listing: FindFirstFile/FindNextFile imported but not yet implemented as emit functions
+4. No recursive directory operations: `fs_remove_dir_all` not implemented
+5. `fs_is_dir` is heuristic: based on `file_size < 0` rather than true type detection
+6. No Windows path normalization: backslash/forward slash handling not implemented
 
-## 8. V1 Language Limitations Discovered
-1. **No short-circuit `&&`/`||` evaluation** — both sides always evaluated
-2. **User function wrapping of runtime services causes stack corruption** — prevents clean wrapper patterns
-3. **`return <param>` in conditionals permanently consumes** — forces single-return pattern with mode variables
-4. **No null-terminated string concept** — requires manual C string conversion via `copy_str_to_cstr` helper
+## 8. V1 language limitations discovered
+1. No short-circuit `&&`/`||` evaluation: both sides always evaluated
+2. User function wrapping of runtime services causes stack corruption: prevents clean wrapper patterns
+3. `return <param>` in conditionals permanently consumes: forces single-return pattern with mode variables
+4. No null-terminated string concept: requires manual C string conversion via `copy_str_to_cstr` helper
 
-## 9. Files Changed
+## 9. Files changed
 | File | Lines Changed | Description |
 |------|--------------|-------------|
 | src/backend/emit/pe.rs | +17 | PE import table: 17 kernel32 imports |
@@ -165,10 +165,10 @@ All user function calls consume their Str parameters. Multiple calls with the sa
 | tests/filesystem_lib.rs | 400 | 33 integration tests |
 | docs/implementation/SESSION_56_FILESYSTEM.md | This file | Documentation |
 
-## 10. 10-Persona Audit Summary
+## 10. 10-Persona audit summary
 | # | Persona | Findings |
 |---|---------|----------|
-| 1 | Compiler | No issues — all new IR/emit changes compile correctly |
+| 1 | Compiler | No issues, all new IR/emit changes compile correctly |
 | 2 | Runtime | Stack alignment verified for all emit functions |
 | 3 | Ownership | V1 limitations documented; intrinsics bypass consumption |
 | 4 | Backend | 17 PE imports properly ordered and aligned |
@@ -180,9 +180,9 @@ All user function calls consume their Str parameters. Multiple calls with the sa
 | 10 | Developer | Clear API, consistent error model, documented limitations |
 
 ## 11. Classification
-**ECOSYSTEM-READY** — Path operations are production-quality. File I/O works correctly with rt_fs_* intrinsics. User function wrappers have a known V1 limitation.
+**ECOSYSTEM-READY**, Path operations are production-quality. File I/O works correctly with rt_fs_* intrinsics. User function wrappers have a known V1 limitation.
 
-## 12. Session 56 Files Changed (Summary)
+## 12. Session 56 files changed (summary)
 - 6 compiler/runtime source files modified
 - 1 stdlib library created (310 lines)
 - 1 test suite created (33 tests, 400 lines)

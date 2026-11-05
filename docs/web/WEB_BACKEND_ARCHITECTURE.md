@@ -1,4 +1,4 @@
-# MINK — Web and Backend Architecture
+# MINK: web and backend architecture
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -9,7 +9,7 @@ MINK must be capable of building production-grade web backends, APIs, services, 
 
 The web ecosystem should be fast, secure, composable, portable, and suitable for both small services and large production systems.
 
-## 2. Architecture Principle
+## 2. Architecture principle
 
 Web functionality should be layered above the language, runtime, networking primitives, and standard library.
 
@@ -27,7 +27,7 @@ Conceptually:
         ↓
     Applications
 
-## 3. HTTP Foundation
+## 3. HTTP foundation
 
 The ecosystem must provide robust HTTP functionality.
 
@@ -60,7 +60,7 @@ Web frameworks should provide clear routing primitives for:
 
 Routing should be predictable and efficient.
 
-## 5. API Development
+## 5. API development
 
 MINK should make API development straightforward.
 
@@ -100,7 +100,7 @@ Web frameworks should support composable middleware for concerns such as:
 
 Middleware execution order must be explicit.
 
-## 8. Web Security
+## 8. Web security
 
 Web tooling must provide secure defaults.
 
@@ -134,7 +134,7 @@ The ecosystem should support common mechanisms including:
 
 Cryptographic implementation should rely on trusted libraries rather than application-defined cryptography.
 
-## 10. Database Integration
+## 10. Database integration
 
 MINK must provide strong database integration without forcing one database technology.
 
@@ -149,7 +149,7 @@ The ecosystem should support:
 - Prepared statements
 - Async database access
 
-## 11. ORM and Query Systems
+## 11. ORM and query systems
 
 An official ORM is not required for the language itself.
 
@@ -166,7 +166,7 @@ Database tooling should support versioned schema migrations.
 
 Migrations should be deterministic, reviewable, reversible where technically possible, and suitable for automated deployment pipelines.
 
-## 13. Templates and Rendering
+## 13. Templates and rendering
 
 The ecosystem may provide server-side rendering capabilities.
 
@@ -178,7 +178,7 @@ Rendering systems should prioritize:
 - Streaming where appropriate
 - Good developer experience
 
-## 14. Web Application Architecture
+## 14. Web application architecture
 
 MINK should support multiple web application architectures rather than forcing one model.
 
@@ -191,7 +191,7 @@ Supported patterns may include:
 - Hybrid rendering
 - Real-time applications
 
-## 15. Static Assets
+## 15. Static assets
 
 Web tooling should provide efficient handling of:
 
@@ -203,7 +203,7 @@ Web tooling should provide efficient handling of:
 
 Asset processing should integrate with the MINK build system where appropriate.
 
-## 16. WebSockets and Real-Time Systems
+## 16. WebSockets and Real-Time systems
 
 The runtime and web ecosystem should provide efficient support for long-lived connections.
 
@@ -216,7 +216,7 @@ Capabilities should include:
 - Cancellation
 - Broadcast patterns
 
-## 17. Background Tasks
+## 17. Background tasks
 
 Backend applications should be able to run controlled background work.
 
@@ -293,7 +293,7 @@ Web infrastructure should target:
 
 Performance optimization must not compromise correctness or secure defaults.
 
-## 24. Error Handling
+## 24. Error handling
 
 Web frameworks must provide consistent structured error handling.
 
@@ -322,13 +322,13 @@ Web tooling should support:
 
 Test environments should be reproducible through the MINK build system.
 
-## 26. AI-Assisted Web Development
+## 26. AI-Assisted web development
 
 Frameworks should expose structured metadata that allows AI coding agents to understand routes, handlers, models, middleware, configuration, dependencies, and tests.
 
 AI tooling should be able to inspect application structure without relying solely on text searches.
 
-## 27. Framework Strategy
+## 27. Framework strategy
 
 MINK should not hard-code one mandatory web framework into the language.
 
@@ -344,7 +344,7 @@ The recommended framework should emphasize:
 - Production reliability
 - Strong tooling
 
-## 28. Open Architecture Decisions
+## 28. Open architecture decisions
 
 The following must be finalized before implementation architecture freeze:
 

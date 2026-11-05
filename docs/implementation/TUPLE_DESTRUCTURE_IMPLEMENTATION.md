@@ -1,8 +1,8 @@
-# MINK — Tuple Destructuring in Let Bindings Implementation
+# MINK: tuple destructuring in let bindings implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 31 — tuple destructuring in let bindings
+**Session:** 31, tuple destructuring in let bindings
 
 ## 1. Overview
 
@@ -15,7 +15,7 @@ The implementation covers the full compiler pipeline: parser, AST,
 semantic analysis, type checking, HIR, MIR, ownership analysis, backend,
 and native execution.
 
-## 2. Grammar Additions
+## 2. Grammar additions
 
 ```
 LetBinding  := 'let' 'mut'? LetPattern (':' Type)? '=' Expr ';'
@@ -27,13 +27,13 @@ See `docs/language/CORE_GRAMMAR.md` §24 for the full specification.
 
 ## 3. Parser
 
-- **Detection:** `parse_let` checks if the token after `let [mut]` is `(`.
+- Detection: `parse_let` checks if the token after `let [mut]` is `(`.
   If so, it dispatches to `parse_let_destructure`; otherwise it uses the
   existing `parse_binding_tail` for simple `name = expr;` bindings.
-- **Pattern parsing:** `parse_let_destructure` reuses the existing
+- Pattern parsing: `parse_let_destructure` reuses the existing
   `parse_pattern` infrastructure, which already handles `LParen` for tuple
   patterns in match arms (session 29).
-- **Backward compatibility:** `const` bindings are unchanged; const
+- Backward compatibility: `const` bindings are unchanged; const
   destructuring is deferred.
 
 ## 4. AST
@@ -42,12 +42,12 @@ See `docs/language/CORE_GRAMMAR.md` §24 for the full specification.
   binding is a destructuring pattern. The `name` field remains for backward
   compatibility (set to the first binding's identifier).
 
-## 5. Type System
+## 5. Type system
 
 **New error codes:**
-- `E-T37` (`CannotDestructure`) — a tuple destructuring pattern is applied
+- `E-T37` (`CannotDestructure`): a tuple destructuring pattern is applied
   to a non-tuple type.
-- `E-T38` (`DestructureArityMismatch`) — the destructuring pattern has a
+- `E-T38` (`DestructureArityMismatch`): the destructuring pattern has a
   different number of elements than the tuple type.
 
 **Type checking rules:**
@@ -99,14 +99,14 @@ The initializer is not consumed by destructuring.
 | E-T37  | Cannot destructure non-tuple type |
 | E-T38  | Tuple destructuring arity mismatch |
 
-## 11. Known Limitations
+## 11. Known limitations
 
-- **Nested tuples in native backend:** `(Int, (Int, Int))` destructuring
+- Nested tuples in native backend: `(Int, (Int, Int))` destructuring
   works at the type-checking level but the inner tuple is not classified
   as a supported aggregate by the native backend.
-- **Const destructuring:** `const (a, b) = expr;` remains deferred.
-- **Struct destructuring:** `let P { x, y } = p;` is a future feature.
-- **Or-patterns and guards in let:** `let (a | b, c) = expr;` and
+- Const destructuring: `const (a, b) = expr;` remains deferred.
+- Struct destructuring: `let P { x, y } = p;` is a future feature.
+- Or-patterns and guards in let: `let (a | b, c) = expr;` and
   `let (a, b) if condition = expr;` remain deferred.
 
 ## 12. Tests

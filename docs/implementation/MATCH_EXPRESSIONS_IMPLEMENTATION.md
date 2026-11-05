@@ -1,4 +1,4 @@
-# MINK — Match Expressions Implementation
+# MINK: match expressions implementation
 
 **Status:** Implemented (Session 33)
 **Version:** 0.1.0
@@ -33,7 +33,7 @@ program compiles and behaves exactly as before.
   return position (`return match ...`), expression statement position,
   block trailing position, and as operands to other expressions. They do
   **not** appear in arbitrary operand position (function arguments, binary
-  operands) — this mirrors the existing `if`-expression limitation.
+  operands), this mirrors the existing `if`-expression limitation.
 
 ### 1.2 Type semantics
 
@@ -45,9 +45,9 @@ program compiles and behaves exactly as before.
 
 ### 1.3 Backward compatibility
 
-- The match **statement** (`match e { pat => { block }, ... }`) is
+- The match statement (`match e { pat => { block }, ... }`) is
   unchanged: arms are statement blocks, the expression produces no value.
-- The match **expression** (`match e { pat => expr, ... }`) is new: arms
+- The match expression (`match e { pat => expr, ... }`) is new: arms
   are expressions that produce the result value.
 - Existing match-statement programs compile and behave identically.
 
@@ -172,11 +172,11 @@ statement and expression forms.
 
 ## 11. Known limitations
 
-- **Match expressions in arbitrary operand position:** match expressions
+- Match expressions in arbitrary operand position: match expressions
   work in binding, return, expression-statement, and block-trailing
   positions, but not as function arguments or binary operands. This
   mirrors the existing `if`-expression limitation.
-- **Match expressions inside block expressions in binding position:**
+- Match expressions inside block expressions in binding position:
   supported via `lower_block_trailing_expr()`.
 
 ## 12. Tests

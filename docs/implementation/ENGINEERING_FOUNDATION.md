@@ -1,12 +1,12 @@
-# MINK — Engineering Foundation
+# MINK: engineering foundation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 01 — Repository + Compiler Engineering Foundation
+**Session:** 01, Repository + Compiler Engineering Foundation
 
-## 1. Implementation Language
+## 1. Implementation language
 
-**Decision:** the MINK compiler is implemented in **Rust**.
+**Decision:** the MINK compiler is implemented in Rust.
 
 No specification document prescribes an implementation language, so the
 choice follows the evaluation criteria in `docs/core/DESIGN_DECISION_RULES.md`
@@ -30,16 +30,16 @@ architecture. Cargo was already anticipated by `.gitignore` (`/target/`).
 Toolchain in use: Rust 1.97.1, edition 2024. Declared MSRV floor: 1.85
 (the minimum required by edition 2024).
 
-## 2. Dependency Policy
+## 2. Dependency policy
 
 The compiler foundation has **zero third-party dependencies**. Dependencies
-are introduced only when a subsystem genuinely needs them — for example, a
+are introduced only when a subsystem genuinely needs them, for example, a
 CLI argument parser when the CLI grows, or LLVM bindings when the backend is
 chosen. This follows the anti-overengineering rule of
 `docs/roadmap/IMPLEMENTATION_ROADMAP.md` §16 and keeps the build
 deterministic and auditable.
 
-## 3. Repository Layout
+## 3. Repository layout
 
 ```
 Cargo.toml            Package manifest (library + binary)
@@ -51,7 +51,7 @@ src/                  Compiler implementation
 tests/                Integration and unit tests
 ```
 
-## 4. Compiler Crate Structure
+## 4. Compiler crate structure
 
 A single Cargo package `mink` with a library (`src/lib.rs`) and a thin
 binary (`src/main.rs`). The library exposes the compiler as a reusable API;
@@ -64,34 +64,34 @@ interfaces stabilize.
 | `cli`           | Argument parsing and command dispatch (build/check/run/test/fmt)  |
 | `driver`        | Compiler pipeline orchestration (load through MIR for `check`; through the backend and PE emission for `build`) |
 | `source`        | Source files, ids, spans, line/column mapping (implemented)       |
-| `lexer`         | Tokenization with accurate spans + lexical diagnostics (implemented — see LEXER_IMPLEMENTATION.md) |
-| `parser`        | Syntax tree with error recovery (implemented — see PARSER_IMPLEMENTATION.md) |
-| `ast`           | Typed syntax representation (implemented — see PARSER_IMPLEMENTATION.md) |
-| `semantics`     | Name resolution + semantic validation (implemented — see SEMANTIC_ANALYSIS_IMPLEMENTATION.md) |
-| `typecheck`     | Type checking + inference (implemented — see TYPE_SYSTEM_IMPLEMENTATION.md, TYPE_INFERENCE_IMPLEMENTATION.md) |
-| `hir`           | Typed, symbol-resolved, owned tree (implemented — see HIR_IMPLEMENTATION.md) |
-| `mir`           | Control-flow IR: basic blocks, statements, terminators (implemented — see MIR_IMPLEMENTATION.md) |
-| `backend`       | Native code generation: portable IR, verifier, x86-64/PE emitter (implemented — see NATIVE_BACKEND_IMPLEMENTATION.md) |
-| `runtime`       | Native runtime foundation: deterministic heap, `rt_*` intrinsics, E-R01+ diagnostics (implemented — see RUNTIME_IMPLEMENTATION.md) |
-| `diagnostics`   | Placeholder — structured diagnostic engine (§10 of the compiler spec) |
+| `lexer`         | Tokenization with accurate spans + lexical diagnostics (implemented, see LEXER_IMPLEMENTATION.md) |
+| `parser`        | Syntax tree with error recovery (implemented, see PARSER_IMPLEMENTATION.md) |
+| `ast`           | Typed syntax representation (implemented, see PARSER_IMPLEMENTATION.md) |
+| `semantics`     | Name resolution + semantic validation (implemented, see SEMANTIC_ANALYSIS_IMPLEMENTATION.md) |
+| `typecheck`     | Type checking + inference (implemented, see TYPE_SYSTEM_IMPLEMENTATION.md, TYPE_INFERENCE_IMPLEMENTATION.md) |
+| `hir`           | Typed, symbol-resolved, owned tree (implemented, see HIR_IMPLEMENTATION.md) |
+| `mir`           | Control-flow IR: basic blocks, statements, terminators (implemented, see MIR_IMPLEMENTATION.md) |
+| `backend`       | Native code generation: portable IR, verifier, x86-64/PE emitter (implemented, see NATIVE_BACKEND_IMPLEMENTATION.md) |
+| `runtime`       | Native runtime foundation: deterministic heap, `rt_*` intrinsics, E-R01+ diagnostics (implemented, see RUNTIME_IMPLEMENTATION.md) |
+| `diagnostics`   | Placeholder, structured diagnostic engine (§10 of the compiler spec) |
 
-## 5. Source Infrastructure Design
+## 5. Source infrastructure design
 
-- **Positions** are byte offsets into UTF-8 source text (`u32`), the
+- Positions are byte offsets into UTF-8 source text (`u32`), the
   standard currency for compiler internals; no memory is wasted on per-byte
   metadata.
-- **Lines and columns** are 1-based. Columns are byte-based (a multi-byte
+- Lines and columns are 1-based. Columns are byte-based (a multi-byte
   character occupies multiple columns); character-based columns can be
   layered onto `LineIndex` when the diagnostic system is implemented.
-- **`SourceId`** values are assigned sequentially by `SourceMap` and remain
+- `SourceId` values are assigned sequentially by `SourceMap` and remain
   stable for the lifetime of the map.
-- **`Span`** is a half-open byte range `[start, end)` tied to one
+- `Span` is a half-open byte range `[start, end)` tied to one
   `SourceId`. An empty span marks a point location. `join` produces the
   covering range of two spans from the same file.
-- **`LineIndex`** records line-start offsets at construction (O(n)) and
+- `LineIndex` records line-start offsets at construction (O(n)) and
   answers line/column queries by binary search (O(log n)).
 
-## 6. Development Commands
+## 6. Development commands
 
 | Task                 | Command                                |
 | -------------------- | -------------------------------------- |
@@ -104,7 +104,7 @@ interfaces stabilize.
 Compiler exit codes: `0` success, `1` usage or input error, `2` command not
 yet implemented.
 
-## 7. Deferred Decisions
+## 7. Deferred decisions
 
 - Toolchain pinning via `rust-toolchain.toml`
 - CI configuration

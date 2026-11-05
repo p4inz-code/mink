@@ -1,10 +1,10 @@
-# MINK Aggregate Types Implementation
+# MINK aggregate types implementation
 
 **Status:** Implemented (Session 14)
 **Version:** 0.1.0
 
 This document describes the second memory-backed aggregate foundation of the
-MINK language: user-declared **structs** and fixed-size **arrays** with
+MINK language: user-declared **structs** and fixed-size arrays with
 deterministic byte layout, struct/array literals, member/index access, and
 native x86-64 execution. It builds directly on the typed pointer/string
 memory model of Session 13 (`docs/implementation/STRING_MEMORY_IMPLEMENTATION.md`)
@@ -12,22 +12,22 @@ and deliberately does **not** introduce explicit borrow syntax, GC,
 arbitrary raw-pointer syntax, generics, or a dynamic object model. Since
 Session 15, compile-time **move semantics** apply to aggregates
 containing heap-owning values (an Owned-containing struct moves as a
-whole; an all-immutable struct copies) — see
+whole; an all-immutable struct copies). See
 `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`.
 
 ## 1. Design boundaries
 
-- **Deterministic C-style layout.** Struct and array values have a byte
+- Deterministic C-style layout. Struct and array values have a byte
   layout computed once from the type table by
   `src/runtime/layout.rs` (`struct_layout` / `array_layout`): field offsets
   follow declaration order with per-field alignment, arrays are contiguous
   runs of `len` elements with stride equal to the element size. Identical
   declarations always yield identical layouts.
-- **Aggregates are values.** A struct or array value occupies a stack slot
+- Aggregates are values. A struct or array value occupies a stack slot
   like any other value; assignment and argument passing copy the whole
   value (word-wise; byte-wise for unaligned tails). There is no reference
   semantics and no implicit sharing.
-- **Place semantics.** `base.field` and `base[i]` are *places*: reading
+- Place semantics. `base.field` and `base[i]` are *places*: reading
   evaluates the base and indexes into the value; assignment
   (`base.field = v`, `base[i] = v`, and chains like `g.rows[1].y = 40`)
   resolves the full path and stores through it, so nested mutation reaches
@@ -39,8 +39,8 @@ whole; an all-immutable struct copies) — see
   can also be returned from functions (caller-allocated return slot) and
   stored at module scope (constant-evaluated value images); the only
   aggregate restriction left is `main`'s result (`E-B09`).
-- **No unsafe Rust.** Everything is safe Rust plus emitted machine code.
-- **Deterministic.** Identical sources produce byte-identical images and
+- No unsafe Rust. Everything is safe Rust plus emitted machine code.
+- Deterministic. Identical sources produce byte-identical images and
   identical runtime behavior; every runtime error has a stable code and
   exit status.
 
@@ -63,30 +63,30 @@ fn main() {
 }
 ```
 
-- **Struct declarations** (`struct Name { f: T, ... }`) live in the type
+- Struct declarations (`struct Name { f: T, ... }`) live in the type
   namespace, separate from value names; field types are resolved after all
   declarations are visible, so structs may reference each other regardless
-  of declaration order (but only **acyclically** by value — §4).
-- **Array types** are written `[T; N]` with a positive integer literal
+  of declaration order (but only **acyclically** by value, §4).
+- Array types are written `[T; N]` with a positive integer literal
   length `N >= 1`.
-- **Struct literals** must name every declared field exactly once, in any
+- Struct literals must name every declared field exactly once, in any
   order: `P { x: 1, y: 2 }`. In condition positions (`if P { ... }`) the
   literal must be parenthesized, because `Name {` otherwise opens a block.
-- **Array literals** infer their length from the element count:
+- Array literals infer their length from the element count:
   `[e1, e2, e3]`. Elements must all have one common type.
-- Aggregate **returns** (a function whose result is a struct/array) and
+- Aggregate returns (a function whose result is a struct/array) and
   aggregate **module statics** are supported since session 22; passing
   aggregates **into** functions is supported.
 
 ## 3. Type system changes
 
-- `TypeKind::Struct(StructId)` — a nominal type: each declaration is a
+- `TypeKind::Struct(StructId)`: a nominal type: each declaration is a
   distinct type (the first declaration of a name wins; duplicates are
   `E-S08`). Display is the declared name (`Point`).
-- `TypeKind::Array { elem: TypeId, len: u64 }` — a structural type:
+- `TypeKind::Array { elem: TypeId, len: u64 }`: a structural type:
   canonicalized, so `[Int; 3]` compares equal by identity across the
   program. Display is `Array<Int, 3>`.
-- `StructInfo` / `StructFieldInfo` — the type table records each struct's
+- `StructInfo` / `StructFieldInfo`: the type table records each struct's
   name and its fields (name + field `TypeId`), in declaration order.
   Struct ids are assigned sequentially as declarations are registered and
   index the table's struct list.
@@ -100,8 +100,8 @@ fn main() {
   bottom-up: every parent that consumed a deferred expression is re-checked
   against the resolved types (operators, assignments, conditions,
   iterables, returns), so a mismatch that was invisible while the base was
-  unresolved — `s + g.tag` with a `Bool` field, an `Int` field used as a
-  condition — is diagnosed (`E-T02`/`E-T01`) instead of silently compiling;
+  unresolved, `s + g.tag` with a `Bool` field, an `Int` field used as a
+  condition, is diagnosed (`E-T02`/`E-T01`) instead of silently compiling;
   diagnostics the recomputation reproduces are deduplicated.
 
 ## 4. Deterministic layout model
@@ -118,39 +118,39 @@ size/alignment (`scalar_layout`):
 
 Aggregate rules:
 
-- **Struct:** fields are placed in declaration order; each field's offset
+- Struct: fields are placed in declaration order; each field's offset
   is rounded up to the field's alignment; the struct's size is rounded up
   to its alignment; the struct's alignment is the maximum field alignment.
   Example: `struct F { a: Bool, b: Int, c: Bool, d: Int }` → offsets
   0, 8, 16, 24; size 32; align 8.
-- **Array:** elements are laid out consecutively with stride equal to the
+- Array: elements are laid out consecutively with stride equal to the
   element size; size is `len * elem_size`; alignment is the element
   alignment. `[Bool; 3]` is 3 bytes with stride 1; `[Point; 2]` is 32
   bytes with stride 16.
-- **Nested aggregates inline** (no indirection): a struct field of struct
+- Nested aggregates inline (no indirection): a struct field of struct
   type occupies that struct's full layout inside the parent.
-- **Recursion is rejected:** a struct reachable from itself by value
+- Recursion is rejected: a struct reachable from itself by value
   (directly or through other structs/arrays) has no finite size and is
   `E-T18` at compile time; the layout engine returns
   `LayoutError::Recursive` rather than looping.
-- **Empty structs** (`struct P { }`) are `E-T18` (`LayoutError::Empty`).
-- **Size bound:** every aggregate value is bounded by
+- Empty structs (`struct P { }`) are `E-T18` (`LayoutError::Empty`).
+- Size bound: every aggregate value is bounded by
   `MAX_AGGREGATE_BYTES` (1 MiB, the size of the fixed heap); a larger
   type is rejected (`E-T18` / `LayoutError::TooLarge`). Size arithmetic is
   checked (`LayoutError::Overflow` never panics).
 
 **Value image in a slot.** A scalar value occupies its slot's first words.
 An aggregate value's bytes sit in the **chunked** convention (session
-23): byte `b` of the value lives at `word0 - 8*(b/8) + (b%8)` — normal
+23): byte `b` of the value lives at `word0 - 8*(b/8) + (b%8)`, normal
 byte order within each 8-byte chunk, chunks stacked downward, so full
 words occupy `[word0 - 8k, word0 - 8k + 7]` and sub-word pieces
 (booleans, sub-word elements, tails) stay inside their own chunk. This
 keeps unaligned fields (a `Bool` at byte offset 3) addressable from the
 slot base with one `lea`, and is the convention the emitter's copy
-helpers and bounds-checked addressing all share. (Session 14–22 placed
+helpers and bounds-checked addressing all share. (Session 14-22 placed
 sub-word pieces *mirrored* at `word0 - b`; that put a boolean at offsets
-1–7 inside the qword of a following integer field, silently clobbering
-both — fixed in session 23.) Slots are sized conservatively with at
+1-7 inside the qword of a following integer field, silently clobbering
+both, fixed in session 23.) Slots are sized conservatively with at
 least `ceil(size / 8)` words plus guard slack, so a slot's bytes never
 overlap the next slot.
 
@@ -158,7 +158,7 @@ overlap the next slot.
 
 ### Semantics (`src/semantics`)
 
-- Struct names are registered in a **type-namespace** table separate from
+- Struct names are registered in a type-namespace table separate from
   the value `SymbolTable`; duplicate struct names are `E-S08`, duplicate
   fields within one struct are `E-S09`. The first declaration of a name
   wins. Struct literals never resolve their name as a value.
@@ -188,7 +188,7 @@ overlap the next slot.
 
 - `HirStruct` items carry the declared fields; HIR has `StructLit` and
   `ArrayLit` expression nodes with exact spans.
-- MIR gains a **place** representation: a read of `base.field` /
+- MIR gains a place representation: a read of `base.field` /
   `base[i]` is a `Member`/`Index` rvalue; a write is a `MirTargetKind`
   whose path is a list of `Field(name)` / `Index(operand)` steps over an
   evaluated base. Deep chains (`g.rows[1].y`) lower to nested place steps,
@@ -201,18 +201,18 @@ overlap the next slot.
 
 - `BType::Struct` / `BType::Array` classify aggregate locals; `words()`
   gives the slot word count from the resolved layout.
-- `BInstKind::FieldLoad` / `FieldStore` — read/write a field at its
+- `BInstKind::FieldLoad` / `FieldStore`: read/write a field at its
   resolved byte offset within a struct slot.
-- `BInstKind::IndexLoad` / `IndexStore` — read/write an element at
+- `BInstKind::IndexLoad` / `IndexStore`: read/write an element at
   `index * stride` within an array slot, with a runtime bounds check.
-- `BInstKind::PlaceStore` — a store through a resolved chain of steps
+- `BInstKind::PlaceStore`: a store through a resolved chain of steps
   (`field` at offset / `index` scaled by stride), used for deep place
   mutation.
 - `BProgram` carries the struct/array layout tables; lowering resolves
   every member/index against `struct_layout` / `array_layout` (the same
   engine the type checker used), so backend and typechecker cannot
   disagree about offsets.
-- Aggregate **returns** are returned through a caller-allocated return
+- Aggregate returns are returned through a caller-allocated return
   slot (the hidden argument after the visible parameters, session 22),
   and aggregate **module statics** are constant-evaluated into value
   images in the data section with byte-exact load/store bridging; the
@@ -271,7 +271,7 @@ All errors carry exact source spans and structured messages.
   and negative indices), bool fields, struct copy semantics, structs
   containing strings, struct arguments, and byte-identical image
   determinism.
-- Existing suite: full `cargo test` passes **919 tests** (703 before
+- Existing suite: full `cargo test` passes 919 tests (703 before
   Session 14 + 59 new aggregate tests + 41 ownership tests from Session
   15 + 75 reference/borrowing tests from Session 16 + 41 tests from
   Session 17: 25 enums + 3 parser + 3 semantics + 7 typecheck + 2
@@ -284,7 +284,7 @@ All errors carry exact source spans and structured messages.
   module-scope aggregate statics, +52 in `tests/aggregate_returns.rs`,
   including sub-word guard-word regressions), and **1121 tests** after
   Session 23 (the sub-word layout fix, +21 in `tests/bool_packing.rs`:
-  packed booleans at offsets 1–7 and beyond coexisting with following
+  packed booleans at offsets 1-7 and beyond coexisting with following
   integer fields through stores, place chains, whole-value copies,
   statics, parameters, returns, references, and enum payloads). See
   `docs/implementation/NATIVE_BACKEND_IMPLEMENTATION.md` §13 for the

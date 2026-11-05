@@ -1,8 +1,8 @@
-# MINK — Native Backend Implementation
+# MINK: native backend implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Sessions:** 11 — Native Backend / Code Generation Foundation, 13 —
+**Sessions:** 11, Native Backend / Code Generation Foundation, 13
 String + Memory Types (strings and typed pointers)
 
 ## 1. Purpose
@@ -28,21 +28,21 @@ generated binary.
 
 Like every other stage, the backend is:
 
-- **target-independent up to the emission boundary** — MIR is lowered into a
+- target-independent up to the emission boundary: MIR is lowered into a
   portable instruction representation that any target consumes, and each
   `Target` supplies an emitter;
-- **deterministic** — items, functions, blocks, statements, and errors are
+- deterministic: items, functions, blocks, statements, and errors are
   produced in source order, so identical input always yields an identical
   image (verified by `emission_is_deterministic`);
-- **never silently wrong** — every construct outside the native subset is
+- never silently wrong: every construct outside the native subset is
   rejected with a structured `E-B01+` diagnostic instead of being
   miscompiled, and every independent problem is reported in source order;
-- **defensive** — a verifier checks the lowered program's structural
+- defensive: a verifier checks the lowered program's structural
   integrity before emission, so malformed hand-built or mutated
   instructions fail cleanly (`E-B07`) instead of panicking;
-- **safe Rust** — no `unsafe` anywhere in the backend.
+- safe Rust: no `unsafe` anywhere in the backend.
 
-## 2. Module Layout
+## 2. Module layout
 
     src/backend/
         mod.rs     Public API: lower, verify, compile, Target, errors
@@ -75,53 +75,53 @@ which finds and validates the entry function, lowers, verifies, and emits:
     optimized MIR → lowering → backend instructions → verification
         → emission → machine image
 
-## 3. The Target Boundary
+## 3. The target boundary
 
 `Target` (`src/backend/target.rs`) is an instruction-set/OS/format triple:
 
-- `x86_64-windows-pe` — **implemented**, the supported production target:
+- `x86_64-windows-pe`: implemented, the supported production target:
   64-bit x86-64 Windows PE image. Chosen first because the build environment
   is x86-64 Windows and the target needs no external toolchain.
-- `x86_64-linux-elf` — **implemented** (`src/backend/emit/elf.rs`,
+- `x86_64-linux-elf`: implemented (`src/backend/emit/elf.rs`,
   `src/backend/emit/linux_runtime.rs`) but **FROZEN** by policy: the ELF emitter
   exists, yet Linux development is paused and Linux is not a supported platform.
-- `aarch64-linux-elf` — recognized, not implemented (`E-B11`).
+- `aarch64-linux-elf`: recognized, not implemented (`E-B11`).
 
 `--target <name>` selects explicitly; unrecognized names are `E-B12`.
 `Target::native()` selects `x86_64-linux-elf` on an x86-64 Linux host and
 `x86_64-windows-pe` otherwise.
 
-## 4. The Backend Instruction Representation
+## 4. The backend instruction representation
 
 `ir.rs` defines the portable program the emitters consume:
 
-- `BProgram { functions, statics }` — functions in source order, module
+- `BProgram { functions, statics }`: functions in source order, module
   bindings in source order;
-- `BFunction { name, symbol, params, locals, blocks, result, span }` —
+- `BFunction { name, symbol, params, locals, blocks, result, span }`
   params and locals are typed `BLocal`s (name, symbol, `BType`, mutability,
   span); temporaries created during lowering are unnamed locals;
-- `BType` — `Int` (64-bit), `Bool` (`0`/`1`), `Range` (a two-word value:
+- `BType`: `Int` (64-bit), `Bool` (`0`/`1`), `Range` (a two-word value:
   the normalized exclusive end and the iteration cursor), `Ptr` (a typed
   pointer, one word), `Str` (a string, one word: the address of a
   length-prefixed UTF-8 blob), `Enum` (an enum value, one word holding the
   variant's discriminant), and `Unit` (a function that produces no
   value);
-- `BInst` — instructions with exact source spans:
+- `BInst`: instructions with exact source spans:
   `LoadConst`, `LoadLocal`, `StoreLocal`, `LoadStatic`, `StoreStatic`,
   `LoadStr`, `Binary`, `Unary`, `Call`, `RangeInit`, `RangeNext`,
   `RangeFinished`;
-- `BProgram` additionally carries `strings: Vec<BString>` — decoded literal
+- `BProgram` additionally carries `strings: Vec<BString>`: decoded literal
   blobs (bytes + exact source span) emitted into the image's immutable
   string-data region;
-- `BTerminator` — `Return` (with optional value), `Jump`, `Branch`
+- `BTerminator`: `Return` (with optional value), `Jump`, `Branch`
   (condition + then/else blocks);
-- `BStatic` — module bindings with decoded constant values
+- `BStatic`: module bindings with decoded constant values
   (`mutable`, `ty`, `value`, `span`).
 
 ## 5. Lowering (optimized MIR → instructions)
 
 `lower.rs` walks the optimized `MirProgram` once. It never re-runs name
-resolution, type checking, or MIR analysis — it only consumes the answers
+resolution, type checking, or MIR analysis. It only consumes the answers
 MIR already carries (classified types, locals, operands, control flow).
 
 **Supported subset.** Types `Int`, `Bool`, `Range<Int>`, `Ptr<Int>`, `Str`,
@@ -146,13 +146,13 @@ Aggregate layout is resolved during lowering through the same
 `struct_layout`/`array_layout` engine the type checker used, so backend
 and typechecker cannot disagree about offsets. Aggregate values in stack
 slots follow the **chunked value-image convention** (session 23): byte
-`b` of a value lives at `slot_word0 - 8*(b/8) + (b%8)` — normal byte
+`b` of a value lives at `slot_word0 - 8*(b/8) + (b%8)`, normal byte
 order within each 8-byte chunk, chunks stacked downward, so full-word
 fields occupy qwords `[slot_word0 - 8k, slot_word0 - 8k + 7]` and
 sub-word pieces (booleans, sub-word element arrays, tails) stay inside
 their own chunk. (A sub-word piece used to be placed *mirrored* at
-`word0 - b`, which for offsets 1–7 landed inside the following integer
-field's qword and silently clobbered it — the bool-packing defect fixed
+`word0 - b`, which for offsets 1-7 landed inside the following integer
+field's qword and silently clobbered it. The bool-packing defect fixed
 in session 23.) Copies and argument marshalling are word-wise with
 byte-wise unaligned tails. Every slot reserves conservative guard words
 so the next slot's first qword can never overwrite a sub-word value's
@@ -202,7 +202,7 @@ against malformed hand-built or mutated instructions.
 
 `emit/` dispatches on the selected `Target`. For `x86_64-windows-pe`:
 
-- **`x86_64.rs`** is a register-based code generator. Each function's
+- `x86_64.rs` is a register-based code generator. Each function's
   locals live on the stack in a fixed frame; instruction selection is
   direct (one backend instruction → one small sequence). Booleans are
   `0`/`1`; comparisons materialize a `0`/`1` via `setcc`; shifts are
@@ -214,7 +214,7 @@ against malformed hand-built or mutated instructions.
   target slot; the blob's data bytes live in `.text` between the
   `str_data_start`/`str_data_end` label bounds recorded into `.bss` by
   `rt_init`.
-- **`pe.rs`** assembles the sections (`.text` containing user code, the
+- `pe.rs` assembles the sections (`.text` containing user code, the
   embedded runtime, and the immutable string-data region; `.data` when
   there are module bindings; `.reloc`) into a complete PE image with
   correct headers, section table, RVAs, and file padding. Entry point RVA
@@ -226,7 +226,7 @@ against malformed hand-built or mutated instructions.
 their stable source order and produces byte-identical images for identical
 input.
 
-## 8. The Entry Point
+## 8. The entry point
 
 `compile` validates the entry function before emitting:
 
@@ -235,20 +235,20 @@ input.
   (`InvalidEntryPoint`; the entry result must be an integer, a boolean, or
   nothing).
 
-## 9. Driver and CLI Integration
+## 9. Driver and CLI integration
 
 `driver::build` runs the full pipeline (`check` through optimization, then
 `backend::compile`) and writes the image to `<stem>.exe` next to the source
 (or `--output`). `mink check` is unchanged: it still stops after
 optimization. The CLI:
 
-- `mink build <path> [--target <name>]` — exit 0 with a success message
+- `mink build <path> [--target <name>]`: exit 0 with a success message
   (`mink: build: '<in>' -> '<out>' (target: <name>, N function(s), M
   binding(s))`); exit 1 for front-end errors, backend errors (printed with
   their `E-B01+` codes and spans), an unrecognized target name, or
   output-write failures.
 
-## 10. Error Codes
+## 10. Error codes
 
 `E-B01` UnsupportedRvalue · `E-B02` UnsupportedConstant · `E-B03`
 UnsupportedType · `E-B04` UnsupportedPlace · `E-B05` UnsupportedStatic ·
@@ -269,40 +269,40 @@ safe-Rust reference implementation (`src/runtime/`) and documented in
 docs/implementation/RUNTIME_IMPLEMENTATION.md. The ABI is fixed and
 documented in `src/runtime/abi.rs`:
 
-- **Entry stub** — the PE entry point saves the loader stack, calls
+- Entry stub: the PE entry point saves the loader stack, calls
   `rt_init`, calls `main`, pushes `main`'s result, calls `rt_exit`, and
   returns to the loader; the loader-visible exit code is `main`'s result.
-- **Calling convention** — stack-based: arguments are pushed right-to-left
+- Calling convention: stack-based: arguments are pushed right-to-left
   with 16-byte alignment (padding first when the argument count is odd, so
   argument 1 always sits at `[rbp+16]`), the callee saves `rbp`/`rsp`, and
   the return value is left in `rax`. Results of `unit`-typed calls are
   ignored.
-- **Heap services** — `rt_alloc(size) → ptr` returns a zero-initialized
+- Heap services: `rt_alloc(size) → ptr` returns a zero-initialized
   block from the bump arena (or the free list) and traps with `E-R02` on
   exhaustion; `rt_free(ptr)` returns the block to the free list and traps
   with `E-R03`/`E-R04` on invalid pointers; `rt_mem_load`/`rt_mem_store` trap with
   `E-R05` when accessing a freed or never-allocated block. All memory is
   zero-initialized, so behavior is deterministic and leak-safe for every
   supported program.
-- **String services** — `rt_str_alloc(size)` allocates a heap blob of
+- String services: `rt_str_alloc(size)` allocates a heap blob of
   `8 + size` bytes (negative sizes trap `E-R08`) with a length prefix;
   `rt_str_len`/`rt_str_byte`/`rt_str_set_byte` validate the pointer
   (`E-R05`) and bounds-check every index (`E-R09`); `rt_str_free` returns
   heap blobs to the free list; `rt_print_str` writes the blob's bytes plus
   CRLF to stdout. Literal strings are validated against the immutable
   string-data bounds recorded by `rt_init`.
-- **Services** — `rt_print_int` writes an integer plus newline to stdout;
+- Services: `rt_print_int` writes an integer plus newline to stdout;
   `rt_exit(code)` traps with `E-R06` when a live block is leaked.
-- **Runtime table** — a `.bss` region holds the entry stack slot, heap
+- Runtime table: a `.bss` region holds the entry stack slot, heap
   cursor/free-list head, arena base, and print buffer, addressed by
   RIP-relative loads/stores resolved at emission time.
 
-## 12. Known Limitations
+## 12. Known limitations
 
 - Only the first native target (`x86_64-windows-pe`) is implemented;
   `x86_64-linux-elf` and `aarch64-linux-elf` are recognized but rejected
   (`E-B11`).
-- No function values — rejected with structured errors (`E-B01`).
+- No function values: rejected with structured errors (`E-B01`).
   Strings are byte sequences (no runtime UTF-8 validation, no
   concatenation, literals immutable); `TypeKind::Ptr<T>` exists in the
   type system but only `Ptr<Int>` is instantiable today. Structs,
@@ -321,12 +321,12 @@ documented in `src/runtime/abi.rs`:
   optimized the input).
 - Source mapping is preserved on every instruction for future diagnostics
   and debug info, but no consumer exists yet.
-- The **supported** image targets Windows x86_64. A native `x86_64-linux-elf`
+- The supported image targets Windows x86_64. A native `x86_64-linux-elf`
   emitter also exists (`src/backend/emit/elf.rs`) and is what `Target::native()`
   selects on an x86-64 Linux host, but Linux is FROZEN by policy and is not a
   supported platform; `aarch64-linux-elf` remains unimplemented (`E-B11`).
 
-## 13. Quality Gates
+## 13. Quality gates
 
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings

@@ -1,4 +1,4 @@
-# Session 26: Let-Binding Type Annotations
+# Session 26: let-binding type annotations
 
 **Status:** complete (session 26 changes).
 
@@ -11,11 +11,11 @@ on bindings were explicitly listed as deferred to a "type-system milestone" in
 
 This session completes the milestone by adding:
 
-- **Let binding type annotations:** `let x: Int = 1;` — a `let` binding may
+- Let binding type annotations: `let x: Int = 1;`, a `let` binding may
   optionally carry a declared type (`: Type`). When present, the type checker
   enforces that the initializer expression's type matches the declared type.
   When absent, the type is inferred from the initializer (existing behavior).
-- **Const binding type annotations:** `const X: Int = 42;` — mirroring let
+- Const binding type annotations: `const X: Int = 42;`, mirroring let
   bindings, a `const` may also carry an optional type annotation.
 
 All existing programs without annotations continue to work unchanged:
@@ -35,8 +35,8 @@ The existing `Type` production is reused (named types, `Ptr<T>`, `&T`/`&mut T`,
 
 ## 3. AST (`src/ast/mod.rs`)
 
-- `LetItem` gains `ty: Option<Ty>` — the optional type annotation.
-- `ConstItem` gains `ty: Option<Ty>` — the optional type annotation.
+- `LetItem` gains `ty: Option<Ty>`: the optional type annotation.
+- `ConstItem` gains `ty: Option<Ty>`: the optional type annotation.
 - Both fields are `None` for programs written before session 26, preserving
   backward compatibility.
 
@@ -52,7 +52,7 @@ The existing `Type` production is reused (named types, `Ptr<T>`, `&T`/`&mut T`,
 - Error recovery is unchanged: a malformed annotation produces a parse
   error and the parser continues.
 
-## 5. Type Checker (`src/typecheck/checker.rs`)
+## 5. Type checker (`src/typecheck/checker.rs`)
 
 - `check_item()` is updated: when a `Let` binding has a type annotation,
   the annotation type is resolved via `resolve_type()` and unified with the
@@ -69,7 +69,7 @@ The existing `Type` production is reused (named types, `Ptr<T>`, `&T`/`&mut T`,
 - No new error codes are needed: type mismatches use the existing `E-T01`
   (TypeMismatch).
 
-## 6. HIR, MIR, Backend
+## 6. HIR, MIR, backend
 
 No changes required in HIR lowering, MIR lowering, or the native backend.
 The type annotations are consumed during type analysis and expressed as
@@ -143,8 +143,8 @@ types; they never see annotations directly.
 
 ## 9. Known limitations
 
-- **Tuples, generics, optional/result types** remain future milestones.
-- **`let` binding annotations are enforced by the type checker only;** there
+- Tuples, generics, optional/result types remain future milestones.
+- `let` binding annotations are enforced by the type checker only; there
   is no compile-time layout check for annotated bindings (layout validation
   is at the struct/enum declaration level, not the binding level).
 - Existing programs without annotations continue to work unchanged.

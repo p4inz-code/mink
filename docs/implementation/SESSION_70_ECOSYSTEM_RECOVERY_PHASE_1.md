@@ -1,4 +1,4 @@
-# SESSION 70 — ECOSYSTEM RECOVERY PHASE 1
+# SESSION 70: ECOSYSTEM RECOVERY PHASE 1
 
 **Date:** 2026-08-30
 **Branch:** `main`
@@ -7,7 +7,7 @@
 
 ---
 
-## 1. Starting Repository State
+## 1. Starting repository state
 
 | Item | Value |
 |------|-------|
@@ -17,28 +17,28 @@
 | v1.0.0 tag | Points to `aaf8866` |
 | Working tree | 17 modified files, 195 untracked files (Sessions 49-70 ecosystem work) |
 
-## 2. Recovery Snapshot
+## 2. Recovery snapshot
 
 **Method:** Git stash (include-untracked) → commit on `recovery/eco-work` branch → restore to main via `git checkout recovery/eco-work -- .` → `git reset HEAD -- .`
 
 **Verification:**
-- `recovery/eco-work` at `d626a1e`: 212 files committed, all Sessions 49-70 work preserved ✓
-- Working tree restored on main: 17 modified + 195 untracked ✓
-- No work lost ✓
+- `recovery/eco-work` at `d626a1e`: 212 files committed, all Sessions 49-70 work preserved
+- Working tree restored on main: 17 modified + 195 untracked
+- No work lost
 
-## 3. Ecosystem Inventory
+## 3. Ecosystem inventory
 
 ### Compiler/Runtime Changes (10 modified files)
-- `src/backend/emit/pe.rs` — Win32 API imports for filesystem, process, crypto, env, net
-- `src/backend/emit/runtime.rs` — Runtime service emitters
-- `src/backend/emit/x86_64.rs` — x86-64 code generation
-- `src/backend/ir.rs` — RuntimeService enum definitions
-- `src/backend/lower.rs` — Intrinsic-to-service mapping
-- `src/cli.rs` — CLI commands (run, explain, check --json)
-- `src/diagnostics/mod.rs` — Diagnostic rendering
-- `src/mir/lower.rs` — MIR lowering
-- `src/runtime/abi.rs` — ABI layout constants
-- `src/runtime/intrinsics.rs` — Intrinsic definitions
+- `src/backend/emit/pe.rs`: Win32 API imports for filesystem, process, crypto, env, net
+- `src/backend/emit/runtime.rs`: Runtime service emitters
+- `src/backend/emit/x86_64.rs`: x86-64 code generation
+- `src/backend/ir.rs`: RuntimeService enum definitions
+- `src/backend/lower.rs`: Intrinsic-to-service mapping
+- `src/cli.rs`: CLI commands (run, explain, check --json)
+- `src/diagnostics/mod.rs`: Diagnostic rendering
+- `src/mir/lower.rs`: MIR lowering
+- `src/runtime/abi.rs`: ABI layout constants
+- `src/runtime/intrinsics.rs`: Intrinsic definitions
 
 ### Standard Libraries (14 new .mink files)
 | Library | File | Status |
@@ -65,9 +65,9 @@ One per library: collections_lib, crypto_lib, encoding_lib, filesystem_lib, hash
 Session docs (51-70), ecosystem architecture docs, audit reports.
 
 ### Cleaned Artifacts (101 files in tests/json/)
-.exe binaries and test artifacts from development — should not be committed.
+.exe binaries and test artifacts from development, should not be committed.
 
-## 4. Actual Test Matrix
+## 4. Actual test matrix
 
 ### Before Fix (f71f8ae)
 
@@ -83,12 +83,12 @@ Session docs (51-70), ecosystem architecture docs, audit reports.
 | cli | 69 | 0 | 0 |
 | closures | 26 | 0 | 0 |
 | collections | 24 | 0 | 0 |
-| **collections_lib** | **22** | **2** | 0 |
-| **crypto_lib** | **10** | **8** | 0 |
+| collections_lib | 22 | 2 | 0 |
+| crypto_lib | 10 | 8 | 0 |
 | discriminants | 32 | 0 | 0 |
 | encoding_lib | 57 | 0 | 0 |
 | enums | 25 | 0 | 0 |
-| **filesystem_lib** | **0** | **33** | 0 |
+| filesystem_lib | 0 | 33 | 0 |
 | function_annotations | 60 | 0 | 0 |
 | generics | 29 | 0 | 0 |
 | hashing_lib | 24 | 0 | 0 |
@@ -109,8 +109,8 @@ Session docs (51-70), ecosystem architecture docs, audit reports.
 | parser | 98 | 0 | 0 |
 | parser_hardening | 63 | 0 | 0 |
 | pattern_matching | 44 | 0 | 0 |
-| **process_lib** | **9** | **16** | 0 |
-| **random_lib** | **14** | **1** | 0 |
+| process_lib | 9 | 16 | 0 |
+| random_lib | 14 | 1 | 0 |
 | references | 58 | 0 | 0 |
 | release | 66 | 0 | 0 |
 | richer_patterns | 90 | 0 | 0 |
@@ -127,23 +127,23 @@ Session docs (51-70), ecosystem architecture docs, audit reports.
 | tuple_destructure | 40 | 0 | 0 |
 | tuples | 34 | 0 | 0 |
 | typecheck | 163 | 0 | 0 |
-| **TOTAL** | **2371** | **60** | **1** |
+| TOTAL | 2371 | 60 | 1 |
 
 ### After Fix (bf9576c)
 
 | Suite | Passed | Failed | Change |
 |-------|--------|--------|--------|
-| **filesystem_lib** | **23** | **10** | **+23 passed, -23 failed** |
+| filesystem_lib | 23 | 10 | +23 passed, -23 failed |
 | All others | unchanged | unchanged | — |
-| **TOTAL** | **2394** | **37** | **+23 passed, -23 failed** |
+| TOTAL | 2394 | 37 | +23 passed, -23 failed |
 
-## 5. Failure Classification
+## 5. Failure classification
 
 ### Fixed: Filesystem (root cause: missing emitter registration)
 
 **Root cause:** 13 RuntimeService variants (FsRead, FsWrite, FsExists, FsFileSize, FsCreateDir, FsRemoveDir, FsRemoveFile, FsCopy, FsMove, FsGetCwd, FsSetCwd, ToCstr, FreeCstr) were mapped in `lower.rs` but had NO emitter functions registered in `emit_services`. This caused a HashMap panic (`no entry found for key`) on every filesystem intrinsic call.
 
-**Classification:** C. Compiler/backend regression — services were declared in the enum and mapped in lower.rs but never wired into the emitter.
+**Classification:** C. Compiler/backend regression, services were declared in the enum and mapped in lower.rs but never wired into the emitter.
 
 **Fix:** Added 13 stub emitter functions + registration in `emit_services`.
 
@@ -153,29 +153,29 @@ Session docs (51-70), ecosystem architecture docs, audit reports.
 
 | Test | Exit Code | Classification |
 |------|-----------|----------------|
-| v08_vec_remove_middle | -1073741819 (0xC0000005) | B. Ecosystem implementation bug — codegen crash in emit_vec_remove |
-| v20_vec_mixed_ops | -1073741819 (0xC0000005) | B. Ecosystem implementation bug — same crash |
+| v08_vec_remove_middle | -1073741819 (0xC0000005) | B. Ecosystem implementation bug, codegen crash in emit_vec_remove |
+| v20_vec_mixed_ops | -1073741819 (0xC0000005) | B. Ecosystem implementation bug, same crash |
 
 **Root cause:** `emit_vec_remove` in runtime.rs has a codegen bug that accesses invalid memory during the element shift loop. Reproducible with any `rt_vec_remove` call, even on a single-element vector.
 
-**Severity:** P0 — crash (segfault)
+**Severity:** P0, crash (segfault)
 
 ### Remaining: crypto_lib (8 failures)
 
 | Test | Exit Code | Classification |
 |------|-----------|----------------|
 | h03_hmac_sha256_hex_key | -1 (BUILD FAILED) | G. Incomplete implementation — HMAC test references undefined function |
-| r01_random_int_runs | -1073741819 | B. Ecosystem bug — segfault in crypto_random |
-| r02_random_bytes_correct_length | -1073741819 | B. Ecosystem bug — same |
-| r03_random_hex_correct_length | -1073741819 | B. Ecosystem bug — same |
-| r04_random_int_nonzero | -1073741819 | B. Ecosystem bug — same |
-| r05_random_bytes_length_16 | -1073741819 | B. Ecosystem bug — same |
-| k02_hkdf_expand_42_bytes | -1073741819 | B. Ecosystem bug — same |
-| k05_hkdf_deterministic | -1073741819 | B. Ecosystem bug — same |
+| r01_random_int_runs | -1073741819 | B. Ecosystem bug, segfault in crypto_random |
+| r02_random_bytes_correct_length | -1073741819 | B. Ecosystem bug, same |
+| r03_random_hex_correct_length | -1073741819 | B. Ecosystem bug, same |
+| r04_random_int_nonzero | -1073741819 | B. Ecosystem bug, same |
+| r05_random_bytes_length_16 | -1073741819 | B. Ecosystem bug, same |
+| k02_hkdf_expand_42_bytes | -1073741819 | B. Ecosystem bug, same |
+| k05_hkdf_deterministic | -1073741819 | B. Ecosystem bug, same |
 
 **Root cause:** The crypto_random_bytes/crypto_random_int emitters crash (segfault). HMAC test has a compilation error (references undefined function).
 
-**Severity:** P0 — crash for random tests, P1 for HMAC
+**Severity:** P0, crash for random tests, P1 for HMAC
 
 ### Remaining: process_lib (16 failures)
 
@@ -199,23 +199,23 @@ Session docs (51-70), ecosystem architecture docs, audit reports.
 
 **Root cause:** `rt_process_run` is a stub that returns -1, `rt_process_stdout` returns empty string. Tests that depend on actual process execution fail.
 
-**Classification:** G. Incomplete implementation — stubs, not real Win32 CreateProcess.
+**Classification:** G. Incomplete implementation, stubs, not real Win32 CreateProcess.
 
-**Severity:** P2 — functional gap, no crash
+**Severity:** P2, functional gap, no crash
 
 ### Remaining: random_lib (1 failure)
 
 | Test | Exit Code | Classification |
 |------|-----------|----------------|
-| r03_seed_zero_treated_as_one | assertion fail | B. Ecosystem bug — seed=0 edge case |
+| r03_seed_zero_treated_as_one | assertion fail | B. Ecosystem bug, seed=0 edge case |
 
 **Root cause:** `emit_random_seed` stores the seed value but doesn't handle seed=0 correctly (xorshift64* requires non-zero state).
 
 **Classification:** B. Ecosystem implementation bug
 
-**Severity:** P3 — edge case
+**Severity:** P3, edge case
 
-## 6. Cross-Library Root Cause Analysis
+## 6. Cross-Library root cause analysis
 
 **Shared root cause #1 (FIXED): Missing emitter registration**
 - Affected: filesystem_lib (33 tests)
@@ -238,20 +238,20 @@ Session docs (51-70), ecosystem architecture docs, audit reports.
 - Root cause: Segfault in crypto_random_bytes/crypto_random_int emitters
 - Fix needed: Correct the emitter code
 
-## 7. Fixes Performed
+## 7. Fixes performed
 
 | Fix | Files Changed | Tests Recovered |
 |-----|---------------|-----------------|
 | Register 13 missing Fs*/ToCstr/FreeCstr emitters | src/backend/emit/runtime.rs | +23 (filesystem) |
 
-## 8. Commits Created
+## 8. Commits created
 
 | Commit | Message | Files |
 |--------|---------|-------|
-| `d626a1e` | chore: recovery checkpoint — preserve all Sessions 49-70 ecosystem work | 212 (on recovery/eco-work branch) |
+| `d626a1e` | chore: recovery checkpoint, preserve all Sessions 49-70 ecosystem work | 212 (on recovery/eco-work branch) |
 | `bf9576c` | fix: register 13 missing filesystem/string-conversion runtime service emitters | 1 (src/backend/emit/runtime.rs) |
 
-## 9. Push Verification
+## 9. Push verification
 
 ```
 HEAD: bf9576c
@@ -269,20 +269,20 @@ In sync: ✓
 | process_lib | 16 | Stubs return dummy values (need real Win32 calls) | P2 |
 | random_lib | 1 | seed=0 edge case | P3 |
 
-## 11. Exact Next Recovery Session Recommendation
+## 11. Exact next recovery session recommendation
 
-**Session 71 — Ecosystem Recovery Phase 2**
+**Session 71, Ecosystem Recovery Phase 2**
 
 Priority order:
-1. **P0:** Fix emit_vec_remove codegen bug (collections crash)
-2. **P0:** Fix crypto_random emitters (segfault in crypto tests)
-3. **P1:** Fix HMAC build error (undefined function reference)
-4. **P2:** Implement real Win32 CreateProcess for process_run (16 tests depend on it)
-5. **P2:** Implement real Win32 filesystem calls for remaining 10 filesystem tests
-6. **P3:** Fix random seed=0 edge case
+1. P0: Fix emit_vec_remove codegen bug (collections crash)
+2. P0: Fix crypto_random emitters (segfault in crypto tests)
+3. P1: Fix HMAC build error (undefined function reference)
+4. P2: Implement real Win32 CreateProcess for process_run (16 tests depend on it)
+5. P2: Implement real Win32 filesystem calls for remaining 10 filesystem tests
+6. P3: Fix random seed=0 edge case
 
 Do NOT add new libraries. Focus only on fixing existing failures.
 
 ## 12. GO / CONDITIONAL GO / NO-GO
 
-**CONDITIONAL GO** — The committed baseline (v1.0.0 at aaf8866) is stable. The ecosystem work is safely preserved on `recovery/eco-work` and partially working on main. 37 remaining failures are documented with clear root causes. The most critical fix (filesystem emitter registration) has been applied. Further recovery requires targeted fixes for each remaining root cause.
+**CONDITIONAL GO**, The committed baseline (v1.0.0 at aaf8866) is stable. The ecosystem work is safely preserved on `recovery/eco-work` and partially working on main. 37 remaining failures are documented with clear root causes. The most critical fix (filesystem emitter registration) has been applied. Further recovery requires targeted fixes for each remaining root cause.

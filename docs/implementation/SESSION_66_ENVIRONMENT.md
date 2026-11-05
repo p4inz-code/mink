@@ -1,4 +1,4 @@
-# SESSION_66 — Environment Library
+# SESSION_66: environment library
 
 **Date:** August 27, 2026
 **MINK Version:** 1.0.1
@@ -6,7 +6,7 @@
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
 Implemented the MINK Environment library providing Windows API-backed environment variable access. The library follows the same architecture as existing ecosystem libraries (Filesystem, Process, Time, Random) with:
 
@@ -29,7 +29,7 @@ Implemented the MINK Environment library providing Windows API-backed environmen
 | `env_remove` | `(name: Str) -> Int` | Remove environment variable. Returns 0 on success, -1 on failure. |
 | `env_cwd` | `() -> Str` | Get current working directory (via `rt_fs_get_cwd`). |
 
-### Usage Example
+### Usage example
 
 ```mink
 mod environment;
@@ -56,7 +56,7 @@ fn main() {
 
 ---
 
-## 3. Windows API Mapping
+## 3. Windows API mapping
 
 | MINK Function | Windows API | Behavior |
 |---------------|-------------|----------|
@@ -67,16 +67,16 @@ fn main() {
 
 ---
 
-## 4. Ownership Model
+## 4. Ownership model
 
-- `env_get` returns a **newly allocated Str** — caller owns it
-- `env_set`/`env_remove` return **Int** — no allocation
-- `env_has` returns **Bool** — no allocation
-- `env_cwd` returns a **newly allocated Str** — caller owns it
+- `env_get` returns a newly allocated Str, caller owns it
+- `env_set`/`env_remove` return Int: no allocation
+- `env_has` returns Bool: no allocation
+- `env_cwd` returns a newly allocated Str, caller owns it
 
 ---
 
-## 5. Error Model
+## 5. Error model
 
 | Function | Success | Failure |
 |----------|---------|---------|
@@ -87,7 +87,7 @@ fn main() {
 
 ---
 
-## 6. Security Considerations
+## 6. Security considerations
 
 - Environment variables are inherited by child processes
 - Sensitive values (passwords, tokens) should NOT be stored in environment variables
@@ -97,19 +97,19 @@ fn main() {
 
 ---
 
-## 7. Platform Limitations
+## 7. Platform limitations
 
-- **Windows-only** (uses Win32 API)
-- Variable names are **case-insensitive** on Windows
+- Windows-only (uses Win32 API)
+- Variable names are case-insensitive on Windows
 - Maximum value length is ~32,767 characters on Windows
 - `env_cwd` returns the current working directory of the process
 - No cross-platform abstraction yet (future work)
 
 ---
 
-## 8. Implementation Details
+## 8. Implementation details
 
-### PE Imports Added
+### PE imports added
 
 ```rust
 // In src/backend/emit/pe.rs
@@ -119,7 +119,7 @@ fn main() {
 "FreeEnvironmentStringsA",    // IAT index 31
 ```
 
-### Runtime Services
+### Runtime services
 
 | Service | Arguments | Description |
 |---------|-----------|-------------|
@@ -128,13 +128,13 @@ fn main() {
 | `EnvHas` | 1 (name: Str) | Check if exists |
 | `EnvRemove` | 1 (name: Str) | Remove variable |
 
-### Machine Code
+### Machine code
 
 Each service is implemented as x86-64 machine code in `src/backend/emit/runtime.rs`:
 
-1. **C string conversion** — MINK strings are length-prefixed; Windows APIs need null-terminated C strings
-2. **API call** — Uses `call_rip(PatchKind::Iat(N))` to call the imported function
-3. **Result handling** — Converts Windows BOOL to MINK Int/Bool
+1. C string conversion: MINK strings are length-prefixed; Windows APIs need null-terminated C strings
+2. API call: Uses `call_rip(PatchKind::Iat(N))` to call the imported function
+3. Result handling: Converts Windows BOOL to MINK Int/Bool
 
 ---
 
@@ -142,22 +142,22 @@ Each service is implemented as x86-64 machine code in `src/backend/emit/runtime.
 
 The Environment library is tested through:
 
-1. **Unit tests** — Existing compiler tests verify the new intrinsics compile correctly
-2. **Integration tests** — CLI tests verify `mink run` works with the new runtime services
-3. **Adversarial tests** — 93 adversarial tests verify no regressions
+1. Unit tests: Existing compiler tests verify the new intrinsics compile correctly
+2. Integration tests: CLI tests verify `mink run` works with the new runtime services
+3. Adversarial tests: 93 adversarial tests verify no regressions
 
 **Test results:** 2,352 passed, 0 failed
 
 ---
 
-## 10. Future Work
+## 10. Future work
 
 - Cross-platform abstraction (Linux: `/proc/self/environ`, macOS: `getenv`)
-- `env_keys()` — list all environment variable names
-- `env_clear()` — clear all environment variables
+- `env_keys()`: list all environment variable names
+- `env_clear()`: clear all environment variables
 - Interaction with Process library (inherited environment)
 
 ---
 
-*Generated with Codebuff 🤖*
+*Generated with Codebuff *
 *Co-Authored-By: Codebuff <noreply@codebuff.com>*

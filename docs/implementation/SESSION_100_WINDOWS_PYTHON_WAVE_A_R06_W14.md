@@ -1,19 +1,19 @@
-# Session 100 — Windows Python Parity Wave A: R06 Error Locations + W14 Home Dir
+# Session 100: Windows Python parity wave A: R06 error locations + W14 home dir
 
 ## 1. Session identity
 
 - Starting commit: `9ed9f52` (Session 99 final, clean tree)
 - Final commit: `d490c86`
 - MINK version: 1.0.1
-- Target: Windows x86_64 only. **Linux remains FROZEN** — no Linux behavior modified.
+- Target: Windows x86_64 only. Linux remains FROZEN, no Linux behavior modified.
 - Baseline test count (Session 99): 2560 passed / 0 failed
 
 ## 2. Capabilities implemented
 
 | # | Capability | Matrix row | Status | Evidence |
 |---|---|---|---|---|
-| 1 | Runtime error-location metadata | R06 | **VERIFIED** | `[test] tests/session100.rs` (9 tests), `[exec] examples/runtime_error_report/` |
-| 2 | Home-directory discovery | W14 | **VERIFIED** | `[test] tests/session100.rs` (5 tests), native runs in 4 env scenarios |
+| 1 | Runtime error-location metadata | R06 | VERIFIED | `[test] tests/session100.rs` (9 tests), `[exec] examples/runtime_error_report/` |
+| 2 | Home-directory discovery | W14 | VERIFIED | `[test] tests/session100.rs` (5 tests), native runs in 4 env scenarios |
 
 ## 3. R06 implementation architecture
 
@@ -22,25 +22,25 @@ instead of only the generic `mink: runtime error[E-Rxx]: msg` line.
 
 Design (smallest correct mechanism):
 
-1. **BSS `fail_loc` cell** (`src/runtime/abi.rs`): an 8-byte runtime cell.
+1. BSS `fail_loc` cell (`src/runtime/abi.rs`): an 8-byte runtime cell.
    Generated code stores a location-table index into it immediately before
    every operation that can raise a runtime error (generated bounds checks
    and runtime-intrinsic calls). `0` means "no location recorded".
-2. **Fail-site instrumentation** (`src/backend/emit/runtime.rs`,
+2. Fail-site instrumentation (`src/backend/emit/runtime.rs`,
    `src/backend/emit/x86_64.rs`): the PE emitter resolves each instrumented
    span against the compilation's `SourceMap` and records a
    `(file-path-offset, line)` entry. `emit()` now receives the
-   `SourceMap` (`src/backend/emit/mod.rs`, `src/backend/mod.rs`) — the ELF
+   `SourceMap` (`src/backend/emit/mod.rs`, `src/backend/mod.rs`), the ELF
    path is untouched.
-3. **Embedded location table**: file path strings + a compact per-site
+3. Embedded location table: file path strings + a compact per-site
    table live in the image's `.data`; they survive into the standalone
    `.exe` (no source files needed at run time).
-4. **`rt_fail` printing** (`src/backend/emit/runtime.rs`): after printing
+4. `rt_fail` printing (`src/backend/emit/runtime.rs`): after printing
    the error line, reads `fail_loc`; when non-zero it prints
    `  at <file>:<line>`. Errors not tied to one user operation (e.g. the
    exit-time leak scan) clear the cell first, so the runtime never
    fabricates a location.
-5. **Determinism contract**: the image embeds the source path exactly as
+5. Determinism contract: the image embeds the source path exactly as
    given to the compiler (like debug info). Four byte-identical golden
    tests that previously compiled from two *different* unique temp paths
    now compile twice from the *same* fixed path (`tests/backend.rs` ×2,
@@ -50,11 +50,11 @@ Design (smallest correct mechanism):
 Verified behaviors (native execution):
 
 - Runtime fault reports exact file and line (E-R10 at `main.mink:20`).
-- A failing function reports its **own** line, not the caller's line.
+- A failing function reports its own line, not the caller's line.
 - The location survives: build → copy executable to empty directory → run
   (no source files, no cwd dependency).
 - Paths containing spaces are reported intact.
-- Leak-check failures print no location (correctly — no single site owns
+- Leak-check failures print no location (correctly. No single site owns
   the leak).
 - Success paths print nothing.
 - Repeated execution is deterministic (same exit code, same stderr).
@@ -73,10 +73,10 @@ emitted in `src/backend/emit/runtime.rs` (`emit_home_dir`):
 Bugs found and fixed during native verification (these were real defects
 in the first draft, found only by executing generated PEs):
 
-1. **Missing `test rax,rax`** after the `GetEnvironmentVariableA` fallback
-   queries — the `je` relied on ZF left by kernel32 (undefined). With
+1. Missing `test rax,rax` after the `GetEnvironmentVariableA` fallback
+   queries, the `je` relied on ZF left by kernel32 (undefined). With
    `HOMEDRIVE` missing, `rax=0` but ZF was stale → `StrAlloc(-1)` → E-R08.
-2. **Dead copy loops** — `jmp` guards jumped *past* the loop condition, so
+2. Dead copy loops: `jmp` guards jumped *past* the loop condition, so
    the drive/path payload copies never executed → all-NUL results in the
    HOMEDRIVE/HOMEPATH branches.
 
@@ -91,7 +91,7 @@ Verified scenarios (native, via `env -u` / `rt_env_set`-driven tests):
 
 ## 5. Tests added
 
-`tests/session100.rs` — 14 tests (9 R06 + 5 W14), all native-execution
+`tests/session100.rs`: 14 tests (9 R06 + 5 W14), all native-execution
 tests that build real MINK programs, run the generated `.exe`, and assert
 stdout/stderr/exit codes:
 
@@ -126,13 +126,13 @@ the W14 tests switch environment branches **mid-process** via
 
 ## 7. Quality gates
 
-- `cargo fmt --check`: **clean**
-- `cargo clippy --all-targets`: **0 errors, 0 new warnings** (lib baseline
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets`: 0 errors, 0 new warnings (lib baseline
   54 warnings confirmed identical to HEAD via stash comparison)
-- Full suite: **2574 passed / 0 failed** (2560 baseline + 14 new). Run
+- Full suite: 2574 passed / 0 failed (2560 baseline + 14 new). Run
   per-binary single-threaded; the two documented parallel-load loopback
   flakes (Session 98 finding) are avoided, all green.
-- `cargo build`: clean · `cargo build --release`: **clean** (50 pre-existing
+- `cargo build`: clean · `cargo build --release`: clean (50 pre-existing
   lib warnings, unchanged)
 - Git tree: clean after commit; scratch files (`tests/zz_elf_probe.rs`,
   generated `main.exe`) removed before commit.
@@ -141,10 +141,10 @@ the W14 tests switch environment branches **mid-process** via
 
 `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md`:
 
-- R06: PARTIAL → **VERIFIED** (test + exec refs; remaining limitation:
-  no call stack — documented V1 contract).
-- W14: MISSING → **VERIFIED** (test refs; APPDATA/known-folders via
-  SHGetKnownFolderPath still MISSING — downgraded to P2, Wave H).
+- R06: PARTIAL → VERIFIED (test + exec refs; remaining limitation:
+  no call stack, documented V1 contract).
+- W14: MISSING → VERIFIED (test refs; APPDATA/known-folders via
+  SHGetKnownFolderPath still MISSING, downgraded to P2, Wave H).
 - Wave A completion row updated: "13 (+5 shared, all landed S99/S100)".
 
 ## 9. P0/P1/P2/P3 status
@@ -176,10 +176,10 @@ ELF path ignores it and Linux emission output is byte-for-byte unchanged
 
 ## 12. Status
 
-- **WINDOWS BASE = COMPLETE / STABLE**
-- **WINDOWS PYTHON PARITY = PARTIAL** (Wave A fully landed; 43 P1 blockers
+- WINDOWS BASE = COMPLETE / STABLE
+- WINDOWS PYTHON PARITY = PARTIAL (Wave A fully landed; 43 P1 blockers
   remain in later waves)
-- **LINUX = FROZEN** (untouched)
+- LINUX = FROZEN (untouched)
 
 ## 13. Recommended Session 101 objective
 

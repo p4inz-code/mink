@@ -1,10 +1,10 @@
-# Session 115 — Deref place records and stale parser-hardening claims
+# Session 115: Deref place records and stale parser-hardening claims
 
 **Parity blockers closed:** none (defect fix + stale-test correction)
-**Parity-blocking set:** 5 (S62, P04, P05, P06, P09) — unchanged
+**Parity-blocking set:** 5 (S62, P04, P05, P06, P09), unchanged
 **Linux:** frozen.
 
-## Defect 1 — `*r` places kept reading as `unknown`
+## Defect 1: `*r` places kept reading as `unknown`
 
 **Symptom.** `tests/typecheck.rs::references_flow_through_calls` failed:
 
@@ -17,7 +17,7 @@ assertion `left == right` failed: type of `*p`
 
 The failure reproduced on clean `ae1aeba` with the Session 114 work stashed,
 so it was a long-standing defect (the test has been red since the deferred
-re-type pass landed), not an async regression. No error was reported — only
+re-type pass landed), not an async regression. No error was reported, only
 the recorded expression type was wrong.
 
 **Root cause.** Two independent problems in the same place
@@ -33,7 +33,7 @@ the recorded expression type was wrong.
 2. `resolve_deferred_expr` recomputed a subtree's type but only wrote it back
    for the `Try`, `Group` and `Tuple` arms. `recorded_ty` and
    `expr_type_exact` match the **first** entry for a span, so the forward
-   pass's stale entry shadowed every later, correct entry — the recomputed
+   pass's stale entry shadowed every later, correct entry. The recomputed
    type was visible to callers of `resolve_deferred_expr` but not to anyone
    reading the recorded table (which is what HIR lowering and the tests use).
 
@@ -58,10 +58,10 @@ the recorded expression type was wrong.
 `optimization` 38, `parser` 98, `source` 12, `scalar_types` 27, `runtime` 24,
 `smoke` 13, `strings` 63, `session99` 13, `session100` 14, `aggregate` 59,
 `release` 68, `cli` 74 (1 ignored), `packages` 5, `s69_hardening` 11,
-`test_runner` 12, `cargo test --lib` 62 — all green. The previously failing
+`test_runner` 12, `cargo test --lib` 62, all green. The previously failing
 test is the permanent regression for defect 1.
 
-## Defect 2 — stale parser-hardening claims about `async` / `await`
+## Defect 2: stale parser-hardening claims about `async` / `await`
 
 `tests/parser_hardening.rs` asserted that `async` and `await` are *excluded*
 keywords that must be rejected, which Session 114 made false: they are real
@@ -82,7 +82,7 @@ deleted:
 
 ## Final state
 
-- Parity-blocking set: **5** (S62, P04, P05, P06, P09) — unchanged by this
+- Parity-blocking set: 5 (S62, P04, P05, P06, P09), unchanged by this
   session; the fix is a correctness fix on the shared typechecker, not a new
   capability.
 - `cargo fmt --check` clean.

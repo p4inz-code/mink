@@ -3,11 +3,11 @@
 **Date:** August 25, 2026
 **Version:** MINK 1.0.0 (tag: v1.0.0, commit aaf8866)
 **Scope:** Architecture/foundation audit for post-V1 ecosystem construction
-**Status:** Read-only audit — no code changes
+**Status:** Read-only audit, no code changes
 
 ---
 
-> **HISTORICAL — v1.0.0 snapshot (commit `aaf8866`, 25 Aug 2026).** This audit records the
+> **HISTORICAL, v1.0.0 snapshot (commit `aaf8866`, 25 Aug 2026).** This audit records the
 > state of MINK 1.0.0 and its "163 unit tests". It predates the entire post-V1 program: the
 > module/package system, the 26-module standard library, concurrency/threads and
 > async/await, the `mink repl` session, TLS, SQLite, ZIP/deflate, and the whole Windows
@@ -18,7 +18,7 @@
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
 MINK 1.0.0 is shipped. The repository is clean, tests pass (163 unit tests, all green), the tag `v1.0.0` is committed, and the working tree is clean.
 
@@ -26,25 +26,25 @@ MINK 1.0.0 is shipped. The repository is clean, tests pass (163 unit tests, all 
 
 **What MINK needs for the ecosystem:** The V1 architecture is a strong foundation for a *language* but has architectural constraints that block ecosystem construction. The critical gaps are:
 
-1. **No module/package system** — modules are file-based (`mod name;`) but flatten into a single compilation unit. No packages, no dependencies, no registry.
-2. **No standard library** — only `rt_*` intrinsics and two MINK source files (`Option<T>`, `Result<T,E>`).
-3. **Single target** — x86_64-windows-pe only. No cross-platform foundation.
-4. **Single-threaded runtime** — no concurrency primitives.
-5. **Fixed 1 MiB heap** — no dynamic heap, no OS-level allocation.
-6. **No FFI boundary** — no stable C ABI, no calling convention for external code.
-7. **No package manager, no registry** — no build system beyond `mink build <file>`.
+1. No module/package system: modules are file-based (`mod name;`) but flatten into a single compilation unit. No packages, no dependencies, no registry.
+2. No standard library: only `rt_*` intrinsics and two MINK source files (`Option<T>`, `Result<T,E>`).
+3. Single target: x86_64-windows-pe only. No cross-platform foundation.
+4. Single-threaded runtime: no concurrency primitives.
+5. Fixed 1 MiB heap: no dynamic heap, no OS-level allocation.
+6. No FFI boundary: no stable C ABI, no calling convention for external code.
+7. No package manager, no registry: no build system beyond `mink build <file>`.
 
 **Go/No-Go Decision: CONDITIONAL GO.** MINK's V1 architecture is sufficient to *begin* ecosystem construction IF the following Category-A changes are made first:
 
-- **A-1:** Define a stable C ABI as the FFI foundation (can be designed now, implemented incrementally).
-- **A-2:** Design the package/module architecture (design freeze before implementation).
-- **A-3:** Design the cross-platform target model (design freeze before implementation).
+- A-1: Define a stable C ABI as the FFI foundation (can be designed now, implemented incrementally).
+- A-2: Design the package/module architecture (design freeze before implementation).
+- A-3: Design the cross-platform target model (design freeze before implementation).
 
 These are *design* decisions, not rewrites. The V1 compiler pipeline, type system, ownership model, and runtime are architecturally sound and do not need modification.
 
 ---
 
-## 2. Current Architecture Map
+## 2. Current architecture map
 
 ```
 Source (.mink files)
@@ -102,48 +102,48 @@ Native Executable (.exe)
 
 | Subsystem | Owns | Stable API |
 |-----------|------|------------|
-| **Lexer** | Tokenization, spans, lexical errors | `LexError`, `Token`, `Span` |
-| **Parser** | AST construction, error recovery | `ParseOutput`, `ParseError`, `Ast` |
-| **AST** | All language syntax nodes | Public struct/enum fields |
-| **Monomorphizer** | Generic → concrete, closure desugaring | `monomorphize(&mut Ast)` |
-| **Semantic Analysis** | Name resolution, scope, symbol table | `SemanticResult`, `SymbolTable` |
-| **Type Checking** | Type inference, unification, type validation | `TypeResult`, `TypeTable`, `TypeId` |
-| **Ownership** | Move semantics, borrow checking | `OwnershipResult` |
-| **HIR** | Typed, resolved tree | `HirProgram` |
-| **MIR** | Control-flow IR | `MirProgram` |
-| **Backend** | Code generation, image assembly | `BProgram`, `Target`, `Image` |
-| **Runtime** | ABI, heap, intrinsics | `RuntimeLayout`, `Intrinsic`, `MemoryLayout` |
-| **Module** | Multi-file compilation (V1) | `ModuleTree`, `ModuleRegistry` |
-| **Source** | File loading, spans, line indexing | `SourceMap`, `SourceFile`, `Span` |
-| **Diagnostics** | Placeholder (structured engine deferred) | None |
+| Lexer | Tokenization, spans, lexical errors | `LexError`, `Token`, `Span` |
+| Parser | AST construction, error recovery | `ParseOutput`, `ParseError`, `Ast` |
+| AST | All language syntax nodes | Public struct/enum fields |
+| Monomorphizer | Generic → concrete, closure desugaring | `monomorphize(&mut Ast)` |
+| Semantic Analysis | Name resolution, scope, symbol table | `SemanticResult`, `SymbolTable` |
+| Type Checking | Type inference, unification, type validation | `TypeResult`, `TypeTable`, `TypeId` |
+| Ownership | Move semantics, borrow checking | `OwnershipResult` |
+| HIR | Typed, resolved tree | `HirProgram` |
+| MIR | Control-flow IR | `MirProgram` |
+| Backend | Code generation, image assembly | `BProgram`, `Target`, `Image` |
+| Runtime | ABI, heap, intrinsics | `RuntimeLayout`, `Intrinsic`, `MemoryLayout` |
+| Module | Multi-file compilation (V1) | `ModuleTree`, `ModuleRegistry` |
+| Source | File loading, spans, line indexing | `SourceMap`, `SourceFile`, `Span` |
+| Diagnostics | Placeholder (structured engine deferred) | None |
 
 ---
 
-## 3. Current Strengths
+## 3. Current strengths
 
-1. **Clean pipeline architecture.** Every stage has a clear input/output contract. Stages are ordered and gated: ownership errors suppress HIR, type errors suppress ownership, etc.
+1. Clean pipeline architecture. Every stage has a clear input/output contract. Stages are ordered and gated: ownership errors suppress HIR, type errors suppress ownership, etc.
 
-2. **Zero dependencies.** The compiler is entirely self-contained. No external crate for parsing, CLI, or code generation. This is unusual and valuable for a language compiler.
+2. Zero dependencies. The compiler is entirely self-contained. No external crate for parsing, CLI, or code generation. This is unusual and valuable for a language compiler.
 
-3. **Sound ownership foundation.** Move semantics with compile-time use-after-move detection (E-S10), immutable-mutation rejection (E-S11), borrow checking (E-S12/E-S13/E-S14), and lexical lifetimes. Conservative by design.
+3. Sound ownership foundation. Move semantics with compile-time use-after-move detection (E-S10), immutable-mutation rejection (E-S11), borrow checking (E-S12/E-S13/E-S14), and lexical lifetimes. Conservative by design.
 
-4. **Deterministic compilation.** Identical source → identical output. No HashMap iteration order leakage, no non-deterministic passes.
+4. Deterministic compilation. Identical source → identical output. No HashMap iteration order leakage, no non-deterministic passes.
 
-5. **Structured diagnostics.** Every error has a stable code (E-L01, E-T05, E-S10, E-R05, E-B07, etc.), source spans, and related locations. The diagnostic model is already machine-readable.
+5. Structured diagnostics. Every error has a stable code (E-L01, E-T05, E-S10, E-R05, E-B07, etc.), source spans, and related locations. The diagnostic model is already machine-readable.
 
-6. **Three-tier IR.** AST → HIR → MIR → Backend IR. Each tier has appropriate abstraction: AST for syntax, HIR for types/symbols, MIR for control flow, Backend IR for machine operations.
+6. Three-tier IR. AST → HIR → MIR → Backend IR. Each tier has appropriate abstraction: AST for syntax, HIR for types/symbols, MIR for control flow, Backend IR for machine operations.
 
-7. **Self-contained code generation.** No external toolchain (no C compiler, assembler, or linker). The backend emits complete PE executables directly.
+7. Self-contained code generation. No external toolchain (no C compiler, assembler, or linker). The backend emits complete PE executables directly.
 
-8. **Monomorphization works.** Generics, closures (desugared to named functions), and module flattening all work correctly.
+8. Monomorphization works. Generics, closures (desugared to named functions), and module flattening all work correctly.
 
-9. **Ownership through the full pipeline.** Ownership analysis runs early, gates HIR lowering, and the backend preserves ownership semantics (moves are compile-time fiction; runtime is safety backstop).
+9. Ownership through the full pipeline. Ownership analysis runs early, gates HIR lowering, and the backend preserves ownership semantics (moves are compile-time fiction; runtime is safety backstop).
 
-10. **163 tests, all green.** The test suite covers lexer, parser, semantics, typecheck, HIR, MIR, backend, ownership, references, modules, generics, closures, pattern matching, tuples, aggregates, strings, and end-to-end compilation.
+10. 163 tests, all green. The test suite covers lexer, parser, semantics, typecheck, HIR, MIR, backend, ownership, references, modules, generics, closures, pattern matching, tuples, aggregates, strings, and end-to-end compilation.
 
 ---
 
-## 4. Current Architectural Constraints
+## 4. Current architectural constraints
 
 ### Windows-specific assumptions:
 - Target is `x86_64-windows-pe` only. PE container builder, Windows API calls (GetStdHandle, WriteFile), calling convention (Microsoft x64 ABI).
@@ -182,33 +182,33 @@ Native Executable (.exe)
 
 ---
 
-## 5. Ecosystem Layer Model
+## 5. Ecosystem layer model
 
 After evaluating the current architecture and the requirements for a cross-platform, interoperable ecosystem, here is the recommended layering:
 
 | Layer | Name | Scope |
 |-------|------|-------|
-| **L0** | Language | Syntax, semantics, type system, ownership model |
-| **L1** | Compiler | Frontend (lexer → parser → AST → semantic → typecheck → ownership → HIR → MIR), optimizer, backend |
-| **L2** | Runtime | ABI, heap, intrinsics, platform abstraction, startup/shutdown |
-| **L3** | Core Library | `Option<T>`, `Result<T,E>`, primitive operations, error types — compiler-provided |
-| **L4** | Standard Library | Collections, strings, I/O, networking, concurrency, serialization, time |
-| **L5** | Module System | Package identity, module declarations, visibility, imports/exports |
-| **L6** | Package Manager | Dependency resolution, lockfile, build, test, run, publish |
-| **L7** | Registry | Package hosting, versioning, integrity, signing, discovery |
-| **L8** | FFI/Interop | C ABI, language bridges (Python, C++, C#, Rust) |
-| **L9** | Developer Tooling | LSP, formatter, linter, debugger, AI diagnostics |
-| **L10** | Domain Libraries | Web, database, crypto, AI/ML, gaming |
-| **L11** | AI Integration | Machine-readable metadata, deterministic builds, structured errors |
+| L0 | Language | Syntax, semantics, type system, ownership model |
+| L1 | Compiler | Frontend (lexer → parser → AST → semantic → typecheck → ownership → HIR → MIR), optimizer, backend |
+| L2 | Runtime | ABI, heap, intrinsics, platform abstraction, startup/shutdown |
+| L3 | Core Library | `Option<T>`, `Result<T,E>`, primitive operations, error types, compiler-provided |
+| L4 | Standard Library | Collections, strings, I/O, networking, concurrency, serialization, time |
+| L5 | Module System | Package identity, module declarations, visibility, imports/exports |
+| L6 | Package Manager | Dependency resolution, lockfile, build, test, run, publish |
+| L7 | Registry | Package hosting, versioning, integrity, signing, discovery |
+| L8 | FFI/Interop | C ABI, language bridges (Python, C++, C#, Rust) |
+| L9 | Developer Tooling | LSP, formatter, linter, debugger, AI diagnostics |
+| L10 | Domain Libraries | Web, database, crypto, AI/ML, gaming |
+| L11 | AI Integration | Machine-readable metadata, deterministic builds, structured errors |
 
-**Key design principle:** Layers must not create circular dependencies. Domain libraries (L10) must not depend on compiler internals (L1). FFI (L8) must not depend on the standard library (L4) — it must work with L2 (runtime) alone.
+**Key design principle:** Layers must not create circular dependencies. Domain libraries (L10) must not depend on compiler internals (L1). FFI (L8) must not depend on the standard library (L4). It must work with L2 (runtime) alone.
 
 ---
 
-## 6. Standard Library Architecture
+## 6. Standard library architecture
 
 ### What belongs in the compiler (cannot be written in MINK):
-- `Option<T>`, `Result<T,E>` — these are already compiler-provided (session 39, monomorphized before semantic analysis)
+- `Option<T>`, `Result<T,E>`: these are already compiler-provided (session 39, monomorphized before semantic analysis)
 - Primitive operations (arithmetic, comparisons, boolean logic)
 - Memory management (allocation, deallocation, bounds checking)
 - Type representation (struct layout, enum discriminants)
@@ -229,11 +229,11 @@ After evaluating the current architecture and the requirements for a cross-platf
 - Range utilities
 
 ### What belongs in the standard library (MINK source packages):
-- **Core:** `collections` (Vec, HashMap, HashSet, etc.), `strings` (UTF-8, formatting), `math`, `time`, `encoding`
-- **System:** `fs`, `process`, `env`, `thread`, `sync`
-- **Network:** `net` (TCP, UDP), `http`, `dns`, `tls`
-- **Data:** `json`, `toml`, `csv`, `serialization`
-- **Dev:** `testing`, `logging`, `cli`
+- Core: `collections` (Vec, HashMap, HashSet, etc.), `strings` (UTF-8, formatting), `math`, `time`, `encoding`
+- System: `fs`, `process`, `env`, `thread`, `sync`
+- Network: `net` (TCP, UDP), `http`, `dns`, `tls`
+- Data: `json`, `toml`, `csv`, `serialization`
+- Dev: `testing`, `logging`, `cli`
 
 ### What belongs in external packages:
 - Database drivers, web frameworks, game engines, ML inference, specialized crypto
@@ -248,7 +248,7 @@ use mink_json;  // external package
 
 ---
 
-## 7. Cross-Platform Architecture
+## 7. Cross-Platform architecture
 
 ### Target triple format:
 ```
@@ -304,7 +304,7 @@ fn platform_impl() { ... }
 
 ---
 
-## 8. Module Architecture
+## 8. Module architecture
 
 ### Current state:
 - `mod name;` loads `name.mink` from the same directory
@@ -343,11 +343,11 @@ fn platform_impl() { ... }
 - Pros: Simple for small projects
 - Cons: Runtime resolution, less compile-time safety
 
-**CHOSEN: Approach A (Rust-style).** MINK is a compiled language with compile-time type checking. Rust's module model maps naturally to MINK's existing `mod`/`use`/`pub` syntax and provides strong compile-time guarantees. The existing V1 module system is already 80% of this — it needs separate compilation, not redesign.
+**CHOSEN: Approach A (Rust-style).** MINK is a compiled language with compile-time type checking. Rust's module model maps naturally to MINK's existing `mod`/`use`/`pub` syntax and provides strong compile-time guarantees. The existing V1 module system is already 80% of this. It needs separate compilation, not redesign.
 
 ---
 
-## 9. Package Architecture
+## 9. Package architecture
 
 ### Package identity:
 ```toml
@@ -411,7 +411,7 @@ my-project/
 
 ---
 
-## 10. Package Manager Architecture
+## 10. Package manager architecture
 
 ### CLI commands (minimal coherent set):
 ```
@@ -432,11 +432,11 @@ mink explain <error-code> # explain diagnostic
 ```
 
 ### Core architecture:
-- **Dependency resolver:** SAT-solver-based semver resolution
-- **Lockfile:** `mink.lock` with exact versions and content hashes
-- **Cache:** `~/.mink/cache/` with integrity verification
-- **Build system:** Delegates to compiler with dependency context
-- **Registry client:** HTTP/HTTPS with retry, caching, integrity checks
+- Dependency resolver: SAT-solver-based semver resolution
+- Lockfile: `mink.lock` with exact versions and content hashes
+- Cache: `~/.mink/cache/` with integrity verification
+- Build system: Delegates to compiler with dependency context
+- Registry client: HTTP/HTTPS with retry, caching, integrity checks
 
 ### Security model:
 - All packages verified by content hash before use
@@ -446,7 +446,7 @@ mink explain <error-code> # explain diagnostic
 
 ---
 
-## 11. Registry Architecture
+## 11. Registry architecture
 
 ### Package naming:
 - `lowercase-name` (like npm/crates.io)
@@ -473,7 +473,7 @@ mink explain <error-code> # explain diagnostic
 
 ---
 
-## 12. FFI Architecture
+## 12. FFI architecture
 
 ### Critical decision: Stable C ABI as universal bridge
 
@@ -526,16 +526,16 @@ fn mink_add(a: Int, b: Int) -> Int {
 - Zero-overhead for language-specific interop
 - Cons: N implementations for N languages, maintenance burden
 
-**CHOSEN: Approach A (C ABI as primary).** The complexity of maintaining native ABI bridges for every language is not justified at this stage. C ABI covers 95% of use cases and can be optimized later. MINK's strategy is to work *with* existing stacks, not replace them — C ABI is the universal adapter.
+**CHOSEN: Approach A (C ABI as primary).** The complexity of maintaining native ABI bridges for every language is not justified at this stage. C ABI covers 95% of use cases and can be optimized later. MINK's strategy is to work *with* existing stacks, not replace them, C ABI is the universal adapter.
 
 ---
 
-## 13. Python Integration Architecture
+## 13. Python integration architecture
 
 ### Integration points:
-1. **MINK → Python:** MINK compiled library callable from Python
-2. **Python → MINK:** Python calling MINK functions (via C ABI)
-3. **Buffer sharing:** NumPy arrays, byte buffers passed between languages
+1. MINK → Python: MINK compiled library callable from Python
+2. Python → MINK: Python calling MINK functions (via C ABI)
+3. Buffer sharing: NumPy arrays, byte buffers passed between languages
 
 ### Model: CPython extension module
 
@@ -562,7 +562,7 @@ mink_python/
 
 ---
 
-## 14. C/C++ Integration Architecture
+## 14. C/C++ integration architecture
 
 ### MINK → C:
 - Export functions with `#[export]` attribute
@@ -592,7 +592,7 @@ mink bind --target c++ src/lib.mink > lib.hpp
 
 ---
 
-## 15. C# Integration Architecture
+## 15. C# integration architecture
 
 ### Model:
 ```
@@ -621,7 +621,7 @@ C# P/Invoke / source generation
 
 ---
 
-## 16. Rust Interoperability Architecture
+## 16. Rust interoperability architecture
 
 ### Model: C ABI bridge
 
@@ -653,7 +653,7 @@ extern "C" {
 
 ---
 
-## 17. Zero-Copy Strategy
+## 17. Zero-Copy strategy
 
 ### Truthful capability model:
 
@@ -668,26 +668,26 @@ extern "C" {
 | Struct value across FFI | Conditional | Blittable layout guarantee |
 
 ### Safety rules:
-1. **Zero-copy requires explicit lifetime contracts** — the receiving language must not use the data after the source releases it
-2. **Ownership transfer always requires a copy** — unless both languages agree on a shared allocator
-3. **Borrowed data must be read-only** — mutable shared data requires synchronization
-4. **MINK verifies safety at compile time** — the borrow checker prevents dangling references within MINK; cross-language lifetimes are documented but not compiler-enforced
+1. Zero-copy requires explicit lifetime contracts: the receiving language must not use the data after the source releases it
+2. Ownership transfer always requires a copy: unless both languages agree on a shared allocator
+3. Borrowed data must be read-only: mutable shared data requires synchronization
+4. MINK verifies safety at compile time: the borrow checker prevents dangling references within MINK; cross-language lifetimes are documented but not compiler-enforced
 
 ---
 
-## 18. AI-Native Architecture
+## 18. AI-Native architecture
 
 ### What makes MINK good for AI agents:
 
-1. **Machine-readable diagnostics.** Every error has a stable code, exact location, root cause, and suggested fix. AI agents can parse these programmatically.
+1. Machine-readable diagnostics. Every error has a stable code, exact location, root cause, and suggested fix. AI agents can parse these programmatically.
 
-2. **Deterministic builds.** Same source → same output. AI agents can verify their changes produce consistent results.
+2. Deterministic builds. Same source → same output. AI agents can verify their changes produce consistent results.
 
-3. **Strong type system.** Type errors are precise and localized. AI agents can fix them systematically.
+3. Strong type system. Type errors are precise and localized. AI agents can fix them systematically.
 
-4. **Ownership model.** Move/borrow errors are caught at compile time. AI agents can understand and fix ownership issues.
+4. Ownership model. Move/borrow errors are caught at compile time. AI agents can understand and fix ownership issues.
 
-5. **Structured project metadata.** `mink.toml` provides machine-readable project configuration.
+5. Structured project metadata. `mink.toml` provides machine-readable project configuration.
 
 ### AI tooling commands:
 ```
@@ -713,7 +713,7 @@ mink test --json           # Structured test results
 
 ---
 
-## 19. Developer Experience Architecture
+## 19. Developer experience architecture
 
 ### Project workflow:
 ```bash
@@ -741,13 +741,13 @@ my-project/
 ```
 
 ### Build profiles:
-- `dev` — fast compilation, debug info
-- `release` — optimized, no debug info
-- `test` — optimized + test assertions enabled
+- `dev`: fast compilation, debug info
+- `release`: optimized, no debug info
+- `test`: optimized + test assertions enabled
 
 ---
 
-## 20. Security/Supply-Chain Architecture
+## 20. Security/Supply-Chain architecture
 
 ### Package integrity:
 - SHA-256 content hashes for every package version
@@ -767,60 +767,60 @@ my-project/
 
 ---
 
-## 21. Library Category Map
+## 21. Library category map
 
 | Category | Standard Library | Official Libraries | Community |
 |----------|-----------------|-------------------|-----------|
-| **Collections** | Vec, HashMap, HashSet | BTreeMap, PriorityQueue | Custom collections |
-| **Strings** | Str, formatting | Unicode, regex | NLP libraries |
-| **Math** | Int arithmetic | BigNum, statistics | Scientific computing |
-| **Time** | Basic duration | DateTime, timezone | Calendar libraries |
-| **Filesystem** | File, Directory | Watcher, temp files | — |
-| **Process** | spawn, env | Orchestration | — |
-| **Networking** | TCP, UDP | HTTP, WebSocket, DNS | Protocol libraries |
-| **Data** | Serialization | JSON, TOML, CSV | Protocol buffers |
-| **Security** | Hashing | TLS, crypto | Auth libraries |
-| **Concurrency** | Thread, Mutex | Channel, async | Actor frameworks |
-| **Testing** | assert, test runner | Property testing | Mocking |
-| **CLI** | Args parsing | Progress bars, colors | — |
-| **AI/ML** | — | Tensor, inference | ML frameworks |
-| **Game** | — | ECS, physics | Game engines |
+| Collections | Vec, HashMap, HashSet | BTreeMap, PriorityQueue | Custom collections |
+| Strings | Str, formatting | Unicode, regex | NLP libraries |
+| Math | Int arithmetic | BigNum, statistics | Scientific computing |
+| Time | Basic duration | DateTime, timezone | Calendar libraries |
+| Filesystem | File, Directory | Watcher, temp files | — |
+| Process | spawn, env | Orchestration | — |
+| Networking | TCP, UDP | HTTP, WebSocket, DNS | Protocol libraries |
+| Data | Serialization | JSON, TOML, CSV | Protocol buffers |
+| Security | Hashing | TLS, crypto | Auth libraries |
+| Concurrency | Thread, Mutex | Channel, async | Actor frameworks |
+| Testing | assert, test runner | Property testing | Mocking |
+| CLI | Args parsing | Progress bars, colors | — |
+| AI/ML | — | Tensor, inference | ML frameworks |
+| Game | — | ECS, physics | Game engines |
 
 ---
 
-## 22. Official Library Quality Standard
+## 22. Official library quality standard
 
 Every official MINK library must satisfy:
 
-1. **Cross-platform:** Works on Windows, Linux, macOS (at minimum)
-2. **Documentation:** Every public API documented with purpose, params, returns, errors, examples
-3. **Tests:** ≥90% code coverage, all tests pass
-4. **Benchmarks:** Performance-critical APIs have benchmarks
-5. **API stability:** Semantic versioning, deprecation policy
-6. **Error handling:** All errors use `Result<T,E>`, no panics in library code
-7. **Ownership correctness:** No memory leaks, no use-after-free
-8. **Thread safety:** Documented thread safety guarantees
-9. **Security review:** Security-sensitive APIs reviewed
-10. **Fuzzing:** Parser/serialization libraries fuzz-tested
-11. **Examples:** Working examples for major APIs
-12. **AI discoverability:** Metadata machine-readable
-13. **Dependency minimization:** Minimal external dependencies
-14. **Deterministic builds:** Reproducible compilation
+1. Cross-platform: Works on Windows, Linux, macOS (at minimum)
+2. Documentation: Every public API documented with purpose, params, returns, errors, examples
+3. Tests: ≥90% code coverage, all tests pass
+4. Benchmarks: Performance-critical APIs have benchmarks
+5. API stability: Semantic versioning, deprecation policy
+6. Error handling: All errors use `Result<T,E>`, no panics in library code
+7. Ownership correctness: No memory leaks, no use-after-free
+8. Thread safety: Documented thread safety guarantees
+9. Security review: Security-sensitive APIs reviewed
+10. Fuzzing: Parser/serialization libraries fuzz-tested
+11. Examples: Working examples for major APIs
+12. AI discoverability: Metadata machine-readable
+13. Dependency minimization: Minimal external dependencies
+14. Deterministic builds: Reproducible compilation
 
 ---
 
-## 23. Versioning/Compatibility Model
+## 23. Versioning/Compatibility model
 
 ### Language versions:
-- `MINK 1.0` — current, frozen
-- `MINK 1.1` — backward-compatible additions
-- `MINK 2.0` — potentially breaking changes (rare)
+- `MINK 1.0`: current, frozen
+- `MINK 1.1`: backward-compatible additions
+- `MINK 2.0`: potentially breaking changes (rare)
 
 ### Compiler versions:
 - Semantic versioning: `MAJOR.MINOR.PATCH`
-- `MAJOR` — incompatible compiler output (ABI break)
-- `MINOR` — new features, backward compatible
-- `PATCH` — bug fixes
+- `MAJOR`: incompatible compiler output (ABI break)
+- `MINOR`: new features, backward compatible
+- `PATCH`: bug fixes
 
 ### Standard library versions:
 - Independent from compiler version
@@ -839,71 +839,71 @@ Every official MINK library must satisfy:
 
 ---
 
-## 24. Two-Approach Decisions
+## 24. Two-Approach decisions
 
-### Module/Package Model
+### Module/Package model
 
 | | Approach A: Rust-style | Approach B: Python-style |
 |---|---|---|
-| **Pros** | Compile-time safety, proven at scale, familiar | Simple, flexible, dynamic |
-| **Cons** | More complex implementation | Runtime resolution, less safety |
-| **Risk** | Over-engineering for V1 | Insufficient for large projects |
-| **Complexity** | Medium-High | Low-Medium |
-| **CHOSEN** | ✅ | |
+| Pros | Compile-time safety, proven at scale, familiar | Simple, flexible, dynamic |
+| Cons | More complex implementation | Runtime resolution, less safety |
+| Risk | Over-engineering for V1 | Insufficient for large projects |
+| Complexity | Medium-High | Low-Medium |
+| CHOSEN | Yes | |
 
-### Package Manager Architecture
+### Package manager architecture
 
 | | Approach A: Cargo-inspired | Approach B: Go-module-inspired |
 |---|---|---|
-| **Pros** | Mature, handles features/platforms/workspaces | Simple, fast, less config |
-| **Cons** | Complex feature resolution | Less flexible, fewer options |
-| **Risk** | Feature resolution bugs | Missing needed features |
-| **Complexity** | High | Medium |
-| **CHOSEN** | ✅ | |
+| Pros | Mature, handles features/platforms/workspaces | Simple, fast, less config |
+| Cons | Complex feature resolution | Less flexible, fewer options |
+| Risk | Feature resolution bugs | Missing needed features |
+| Complexity | High | Medium |
+| CHOSEN | Yes | |
 
-### Cross-Platform Architecture
+### Cross-Platform architecture
 
 | | Approach A: Compile-time selection | Approach B: Runtime-vtable |
 |---|---|---|
-| **Pros** | Zero overhead, matches current model | Single binary, runtime detection |
-| **Cons** | Different binaries per platform | Indirection overhead |
-| **Risk** | Binary size (one per platform) | Init complexity |
-| **Complexity** | Medium | Medium-High |
-| **CHOSEN** | ✅ | |
+| Pros | Zero overhead, matches current model | Single binary, runtime detection |
+| Cons | Different binaries per platform | Indirection overhead |
+| Risk | Binary size (one per platform) | Init complexity |
+| Complexity | Medium | Medium-High |
+| CHOSEN | Yes | |
 
-### FFI Foundation
+### FFI foundation
 
 | | Approach A: C ABI primary | Approach B: Native ABI bridges |
 |---|---|---|
-| **Pros** | Universal, proven, every language supports it | Zero-overhead per language |
-| **Cons** | Some overhead for complex types | N implementations for N languages |
-| **Risk** | Performance for hot paths | Maintenance burden |
-| **Complexity** | Low-Medium | High |
-| **CHOSEN** | ✅ | |
+| Pros | Universal, proven, every language supports it | Zero-overhead per language |
+| Cons | Some overhead for complex types | N implementations for N languages |
+| Risk | Performance for hot paths | Maintenance burden |
+| Complexity | Low-Medium | High |
+| CHOSEN | Yes | |
 
-### Python Integration
+### Python integration
 
 | | Approach A: CPython extension | Approach B: PyO3-like model |
 |---|---|---|
-| **Pros** | No Rust dependency, direct C ABI | Rich Rust-Python interop |
-| **Cons** | Manual marshaling | Requires Rust toolchain |
-| **Risk** | Binding maintenance | Dependency on PyO3 |
-| **Complexity** | Medium | Medium |
-| **CHOSEN** | ✅ (Phase A, simpler) | Phase B if needed |
+| Pros | No Rust dependency, direct C ABI | Rich Rust-Python interop |
+| Cons | Manual marshaling | Requires Rust toolchain |
+| Risk | Binding maintenance | Dependency on PyO3 |
+| Complexity | Medium | Medium |
+| CHOSEN | (Phase A, simpler) | Phase B if needed |
 
-### Standard Library Boundary
+### Standard library boundary
 
 | | Approach A: Minimal core + packages | Approach B: Large stdlib |
 |---|---|---|
-| **Pros** | Fast compiler builds, clear boundaries | Everything available immediately |
-| **Cons** | Users must install packages for basics | Slow builds, bloated |
-| **Risk** | Fragmentation | Stagnation |
-| **Complexity** | Low | High |
-| **CHOSEN** | ✅ | |
+| Pros | Fast compiler builds, clear boundaries | Everything available immediately |
+| Cons | Users must install packages for basics | Slow builds, bloated |
+| Risk | Fragmentation | Stagnation |
+| Complexity | Low | High |
+| CHOSEN | Yes | |
 
 ---
 
-## 25. 10-Persona Audit
+## 25. 10-Persona audit
 
 ### 1. Language Architect
 **Strengths:** Clean syntax, strong ownership model, sound type system, pattern matching, generics via monomorphization.
@@ -912,63 +912,63 @@ Every official MINK library must satisfy:
 **Migration risks:** Adding traits later requires careful backward compatibility.
 **Recommended changes:** None for V1. Traits are a V2 language feature.
 
-### 2. Compiler Engineer
+### 2. Compiler engineer
 **Strengths:** Clean pipeline, zero dependencies, deterministic output, three-tier IR.
 **Risks:** Single-crate structure limits parallel compilation. No incremental compilation. Monomorphization is AST-level (not HIR/MIR-level).
 **Missing foundations:** Incremental compilation, parallel compilation, workspace support.
 **Migration risks:** Splitting into workspace crates requires interface stabilization.
 **Recommended changes:** Design workspace crate split (Category B), but don't implement yet.
 
-### 3. Runtime Engineer
+### 3. Runtime engineer
 **Strengths:** Deterministic heap, structured errors, leak detection, clean ABI.
 **Risks:** Fixed 1 MiB heap. No OS-level allocation. Single-threaded. Windows-specific runtime services.
 **Missing foundations:** Dynamic heap, platform abstraction, threading support.
 **Migration risks:** Changing runtime ABI requires recompilation of all binaries.
 **Recommended changes:** Design platform abstraction layer (Category A for design, C for implementation).
 
-### 4. Library Designer
+### 4. Library designer
 **Strengths:** Strong type system enables safe library APIs. Ownership prevents resource leaks.
 **Risks:** No package system means no libraries yet. No `Option`/`Result` methods. No iteration traits.
 **Missing foundations:** Package system, standard library architecture, API conventions.
 **Migration risks:** API stability requires careful design from the start.
 **Recommended changes:** Design package system (Category A), design stdlib architecture (Category B).
 
-### 5. Package Manager Engineer
+### 5. Package manager engineer
 **Strengths:** Clean separation of concerns in the compiler. Deterministic compilation enables reproducible builds.
 **Risks:** No package identity, no dependency resolution, no lockfile, no registry.
 **Missing foundations:** Everything in this category.
 **Migration risks:** Package format changes after packages exist are costly.
 **Recommended changes:** Design package format early (Category A).
 
-### 6. FFI/Interoperability Engineer
+### 6. FFI/Interoperability engineer
 **Strengths:** Clean runtime ABI. No external dependencies. Self-contained code generation.
 **Risks:** No stable C ABI. No `extern` syntax. No type representation for FFI. Windows-specific calling convention.
 **Missing foundations:** C ABI design, type mapping, export/import syntax.
 **Migration risks:** Changing C ABI after libraries depend on it is extremely costly.
 **Recommended changes:** Design and freeze C ABI before any FFI work (Category A).
 
-### 7. Cross-Platform Engineer
+### 7. Cross-Platform engineer
 **Strengths:** Target abstraction exists (`Target` enum). Backend is target-independent up to emission.
 **Risks:** Only x86_64-windows-pe implemented. Runtime uses Windows APIs directly. No platform abstraction.
 **Missing foundations:** ELF/Mach-O emission, platform-specific runtime services, conditional compilation.
 **Migration risks:** Adding platforms after ecosystem libraries assume Windows is costly.
 **Recommended changes:** Design platform model (Category A), implement Linux target (Category B).
 
-### 8. Security/Supply-Chain Engineer
+### 8. Security/Supply-Chain engineer
 **Strengths:** No external dependencies (supply chain is clean). Deterministic builds. Structured errors.
 **Risks:** No package signing, no integrity verification, no sandbox model.
 **Missing foundations:** Package security model, build script sandbox, dependency auditing.
 **Migration risks:** Adding security after packages exist is reactive, not proactive.
 **Recommended changes:** Design security model before package system implementation (Category B).
 
-### 9. Developer-Experience Engineer
+### 9. Developer-Experience engineer
 **Strengths:** Clean CLI (`mink build`, `mink check`). Good error messages with stable codes.
 **Risks:** No formatter, no linter, no LSP, no IDE support, no `mink run`/`mink test`.
 **Missing foundations:** Everything in this category except the basic CLI.
 **Migration risks:** Tooling that doesn't match the package system is wasted work.
 **Recommended changes:** Design tooling after package system is designed (Category C).
 
-### 10. AI-Agent/Tooling Engineer
+### 10. AI-Agent/Tooling engineer
 **Strengths:** Stable error codes, source spans, deterministic builds, structured project metadata.
 **Risks:** No JSON output mode, no machine-readable diagnostics, no project introspection API.
 **Missing foundations:** JSON diagnostic output, project inspection commands, documentation metadata.
@@ -977,57 +977,57 @@ Every official MINK library must satisfy:
 
 ---
 
-## 26. Root-Cause Analysis
+## 26. Root-Cause analysis
 
 ### Risk 1: No package system
-- **Root cause:** V1 focused on language features, not ecosystem infrastructure.
-- **If ignored:** No libraries can be shared. Every project reinvents everything.
-- **Blocks libraries:** Yes, completely.
-- **Blocks cross-platform:** Partially (platform-specific code needs package-level conditional compilation).
-- **Blocks FFI:** No (FFI can work without packages).
-- **Blocks AI tooling:** Partially (no dependency graph to inspect).
-- **Requires compiler changes:** No (package system is external to compiler).
-- **Requires runtime changes:** No.
+- Root cause: V1 focused on language features, not ecosystem infrastructure.
+- If ignored: No libraries can be shared. Every project reinvents everything.
+- Blocks libraries: Yes, completely.
+- Blocks cross-platform: Partially (platform-specific code needs package-level conditional compilation).
+- Blocks FFI: No (FFI can work without packages).
+- Blocks AI tooling: Partially (no dependency graph to inspect).
+- Requires compiler changes: No (package system is external to compiler).
+- Requires runtime changes: No.
 
 ### Risk 2: Single target (Windows)
-- **Root cause:** V1 built on the developer's platform.
-- **If ignored:** MINK can only be used on Windows. No cross-platform ecosystem.
-- **Blocks libraries:** Yes for platform-specific libraries.
-- **Blocks cross-platform:** Yes, completely.
-- **Blocks FFI:** Partially (C ABI is cross-platform but emission is not).
-- **Blocks AI tooling:** No.
-- **Requires compiler changes:** Yes (new backends).
-- **Requires runtime changes:** Yes (platform-specific runtime services).
+- Root cause: V1 built on the developer's platform.
+- If ignored: MINK can only be used on Windows. No cross-platform ecosystem.
+- Blocks libraries: Yes for platform-specific libraries.
+- Blocks cross-platform: Yes, completely.
+- Blocks FFI: Partially (C ABI is cross-platform but emission is not).
+- Blocks AI tooling: No.
+- Requires compiler changes: Yes (new backends).
+- Requires runtime changes: Yes (platform-specific runtime services).
 
 ### Risk 3: No stable C ABI
-- **Root cause:** V1 has no FFI requirements.
-- **If ignored:** Cannot integrate with Python, C++, C#, Rust, or any other language.
-- **Blocks libraries:** No (MINK-to-MINK libraries work).
-- **Blocks cross-platform:** No.
-- **Blocks FFI:** Yes, completely.
-- **Blocks AI tooling:** No.
-- **Requires compiler changes:** Yes (export/import syntax, ABI definition).
-- **Requires runtime changes:** Yes (C-callable entry points).
+- Root cause: V1 has no FFI requirements.
+- If ignored: Cannot integrate with Python, C++, C#, Rust, or any other language.
+- Blocks libraries: No (MINK-to-MINK libraries work).
+- Blocks cross-platform: No.
+- Blocks FFI: Yes, completely.
+- Blocks AI tooling: No.
+- Requires compiler changes: Yes (export/import syntax, ABI definition).
+- Requires runtime changes: Yes (C-callable entry points).
 
 ### Risk 4: Fixed 1 MiB heap
-- **Root cause:** V1 runtime is deterministic and simple.
-- **If ignored:** Real-world programs cannot run (memory exhaustion at 1 MiB).
-- **Blocks libraries:** Yes (any non-trivial library needs dynamic memory).
-- **Blocks cross-platform:** No.
-- **Blocks FFI:** No.
-- **Blocks AI tooling:** No.
-- **Requires compiler changes:** No.
-- **Requires runtime changes:** Yes (dynamic allocator, OS memory API).
+- Root cause: V1 runtime is deterministic and simple.
+- If ignored: Real-world programs cannot run (memory exhaustion at 1 MiB).
+- Blocks libraries: Yes (any non-trivial library needs dynamic memory).
+- Blocks cross-platform: No.
+- Blocks FFI: No.
+- Blocks AI tooling: No.
+- Requires compiler changes: No.
+- Requires runtime changes: Yes (dynamic allocator, OS memory API).
 
 ### Risk 5: Single-threaded runtime
-- **Root cause:** V1 focuses on correctness, not concurrency.
-- **If ignored:** Cannot build servers, UIs, or any concurrent application.
-- **Blocks libraries:** Yes for concurrent libraries.
-- **Blocks cross-platform:** No.
-- **Blocks FFI:** No.
-- **Blocks AI tooling:** No.
-- **Requires compiler changes:** No.
-- **Requires runtime changes:** Yes (threading primitives, scheduler).
+- Root cause: V1 focuses on correctness, not concurrency.
+- If ignored: Cannot build servers, UIs, or any concurrent application.
+- Blocks libraries: Yes for concurrent libraries.
+- Blocks cross-platform: No.
+- Blocks FFI: No.
+- Blocks AI tooling: No.
+- Requires compiler changes: No.
+- Requires runtime changes: Yes (threading primitives, scheduler).
 
 ---
 
@@ -1048,33 +1048,33 @@ Every official MINK library must satisfy:
 
 ---
 
-## 28. Required Foundation Changes
+## 28. Required foundation changes
 
-### Category A — Must change before ecosystem implementation:
+### Category A: Must change before ecosystem implementation:
 
-1. **A-1: C ABI design.** Define the stable C ABI, type mapping, calling conventions, and export/import syntax. This is a *design* document, not a code change. Must be frozen before any FFI work.
+1. A-1: C ABI design. Define the stable C ABI, type mapping, calling conventions, and export/import syntax. This is a *design* document, not a code change. Must be frozen before any FFI work.
 
-2. **A-2: Package architecture design.** Define `mink.toml` format, package identity, dependency declaration, module system semantics, and lockfile format. This is a *design* document. Must be frozen before package manager implementation.
+2. A-2: Package architecture design. Define `mink.toml` format, package identity, dependency declaration, module system semantics, and lockfile format. This is a *design* document. Must be frozen before package manager implementation.
 
-3. **A-3: Cross-platform design.** Define target triple format, platform abstraction model, conditional compilation syntax, and platform detection. This is a *design* document. Must be frozen before multi-target implementation.
+3. A-3: Cross-platform design. Define target triple format, platform abstraction model, conditional compilation syntax, and platform detection. This is a *design* document. Must be frozen before multi-target implementation.
 
-### Category B — Should change before ecosystem implementation:
+### Category B: Should change before ecosystem implementation:
 
-4. **B-1: Dynamic heap allocator.** Replace the fixed 1 MiB arena with an OS-level allocator (mmap/VirtualAlloc). This is a runtime change, not a compiler change.
+4. B-1: Dynamic heap allocator. Replace the fixed 1 MiB arena with an OS-level allocator (mmap/VirtualAlloc). This is a runtime change, not a compiler change.
 
-5. **B-2: JSON diagnostic output.** Add `--json` flag to `mink check` and `mink build` for machine-readable diagnostics. Small compiler change.
+5. B-2: JSON diagnostic output. Add `--json` flag to `mink check` and `mink build` for machine-readable diagnostics. Small compiler change.
 
-6. **B-3: Standard library architecture.** Define module naming, namespace conventions, and the boundary between compiler-provided and package-provided functionality. Design document.
+6. B-3: Standard library architecture. Define module naming, namespace conventions, and the boundary between compiler-provided and package-provided functionality. Design document.
 
-7. **B-4: Security model design.** Define package integrity, build script sandboxing, and dependency trust model. Design document.
+7. B-4: Security model design. Define package integrity, build script sandboxing, and dependency trust model. Design document.
 
-8. **B-5: Error code documentation.** Document every existing error code (E-L01 through E-B12, E-S10 through E-S14, E-R01 through E-R10, E-T01 through E-T41) with explanation, examples, and suggested fixes.
+8. B-5: Error code documentation. Document every existing error code (E-L01 through E-B12, E-S10 through E-S14, E-R01 through E-R10, E-T01 through E-T41) with explanation, examples, and suggested fixes.
 
 ---
 
-## 29. Deferred Work
+## 29. Deferred work
 
-### Category C — Can be implemented alongside ecosystem work:
+### Category C: Can be implemented alongside ecosystem work:
 - Formatter (C-1)
 - Linter (C-2)
 - `mink run` command (C-3)
@@ -1084,7 +1084,7 @@ Every official MINK library must satisfy:
 - Dynamic heap implementation (C-7, after design)
 - Thread support (C-8, after design)
 
-### Category D — Postponed:
+### Category D: postponed:
 - Incremental compilation (D-1)
 - Parallel compilation (D-2)
 - Workspace/crate split (D-3)
@@ -1093,7 +1093,7 @@ Every official MINK library must satisfy:
 - Async/await syntax (D-6)
 - Trait system (D-7)
 
-### Category E — V2/V3 language features:
+### Category E: V2/V3 language features:
 - Non-lexical lifetimes (E-1)
 - Traits/interfaces (E-2)
 - Async/await (E-3)
@@ -1101,34 +1101,34 @@ Every official MINK library must satisfy:
 - Const generics (E-5)
 - Pattern matching on structs (E-6, partially implemented)
 
-### Category F — Explicitly rejected:
+### Category F: Explicitly rejected:
 - Garbage collection (F-1, ownership model is the safety strategy)
 - Exception-based error handling (F-2, Result<T,E> is the model)
 - Runtime reflection (F-3, compile-time analysis preferred)
 
 ---
 
-## 30. Recommended Architecture
+## 30. Recommended architecture
 
 The recommended architecture for MINK's ecosystem is:
 
-1. **Keep the V1 compiler pipeline unchanged.** It is sound and does not need modification for ecosystem construction.
+1. Keep the V1 compiler pipeline unchanged. It is sound and does not need modification for ecosystem construction.
 
-2. **Add a C ABI layer** as the FFI foundation. This is the most critical missing piece for MINK's strategic goal of interoperability.
+2. Add a C ABI layer as the FFI foundation. This is the most critical missing piece for MINK's strategic goal of interoperability.
 
-3. **Add a package system** (Cargo-inspired) as the distribution mechanism. This enables library sharing and dependency management.
+3. Add a package system (Cargo-inspired) as the distribution mechanism. This enables library sharing and dependency management.
 
-4. **Add cross-platform support** (Linux, then macOS) as the deployment foundation. This enables MINK to be used beyond Windows.
+4. Add cross-platform support (Linux, then macOS) as the deployment foundation. This enables MINK to be used beyond Windows.
 
-5. **Add a dynamic heap allocator** as the runtime foundation. This enables real-world programs.
+5. Add a dynamic heap allocator as the runtime foundation. This enables real-world programs.
 
-6. **Design but defer** advanced features (traits, async, NLL, incremental compilation) to V2.
+6. Design but defer advanced features (traits, async, NLL, incremental compilation) to V2.
 
 The architecture preserves MINK's strengths (deterministic compilation, sound ownership, zero dependencies, structured diagnostics) while enabling the ecosystem to grow.
 
 ---
 
-## 31. Implementation Dependency Graph
+## 31. Implementation dependency graph
 
 ```
 A-1 (C ABI design)
@@ -1161,9 +1161,9 @@ B-4 (Security model)
 
 ---
 
-## 32. Post-V1 Roadmap
+## 32. Post-V1 roadmap
 
-### Phase A: Foundation Design (Next Session)
+### Phase A: foundation design (next session)
 - Design C ABI (A-1)
 - Design package architecture (A-2)
 - Design cross-platform model (A-3)
@@ -1171,76 +1171,76 @@ B-4 (Security model)
 - Design security model (B-4)
 - Document all error codes (B-5)
 
-### Phase B: Core Infrastructure
+### Phase B: core infrastructure
 - Implement dynamic heap allocator (B-1)
 - Implement `mink.toml` parsing (A-2 foundation)
 - Implement JSON diagnostic output (B-2)
 - Implement `mink run` and `mink test` (C-3, C-4)
 
-### Phase C: Package System
+### Phase C: package system
 - Implement module system with separate compilation (A-2)
 - Implement dependency resolver
 - Implement lockfile
 - Implement `mink init`, `mink add`, `mink build` (with dependencies)
 
-### Phase D: Cross-Platform
+### Phase D: cross-platform
 - Implement x86_64-linux-elf target (C-5)
 - Implement platform abstraction layer
 - Implement aarch64-linux-elf target
 - Implement aarch64-apple-darwin target
 
-### Phase E: FFI Foundation
+### Phase E: FFI foundation
 - Implement C ABI export/import
 - Implement `extern "C"` syntax
 - Implement header generation
 - Implement `mink bind` tool
 
-### Phase F: Standard Library
+### Phase F: standard library
 - Implement core module (collections, strings, math)
 - Implement system module (fs, process, env)
 - Implement network module (TCP, UDP, HTTP)
 
-### Phase G: Python Integration
+### Phase G: Python integration
 - Implement CPython extension module bridge
 - Implement buffer sharing
 - Implement `mink-bind` for Python
 
-### Phase H: Developer Tooling
+### Phase H: developer tooling
 - Implement formatter
 - Implement linter
 - Implement LSP (basic)
 
-### Phase I: C/C++ Integration
+### Phase I: C/C++ integration
 - Implement C++ header generation
 - Implement RAII wrappers
 
-### Phase J: C#/.NET Integration
+### Phase J: C#/.NET integration
 - Implement P/Invoke bindings
 - Implement SafeHandle wrappers
 
 ---
 
-## 33. Exact Next Milestone
+## 33. Exact next milestone
 
 **Immediate next milestone: Design Session**
 
 In the next session, produce the following design documents:
 
-1. **C ABI Specification** — type mapping, calling conventions, export/import syntax, struct layout rules, string representation, error handling across the boundary.
+1. C ABI Specification: type mapping, calling conventions, export/import syntax, struct layout rules, string representation, error handling across the boundary.
 
-2. **Package Architecture Specification** — `mink.toml` format, package identity, module system semantics, dependency declaration, lockfile format, workspace model.
+2. Package Architecture Specification: `mink.toml` format, package identity, module system semantics, dependency declaration, lockfile format, workspace model.
 
-3. **Cross-Platform Specification** — target triple format, platform abstraction model, conditional compilation syntax, platform detection, runtime services per platform.
+3. Cross-Platform Specification: target triple format, platform abstraction model, conditional compilation syntax, platform detection, runtime services per platform.
 
-4. **Standard Library Architecture** — module naming, namespace conventions, compiler-provided vs. package-provided functionality, API conventions.
+4. Standard Library Architecture: module naming, namespace conventions, compiler-provided vs. package-provided functionality, API conventions.
 
-5. **Security Model** — package integrity, build script sandboxing, dependency trust, supply chain verification.
+5. Security Model: package integrity, build script sandboxing, dependency trust, supply chain verification.
 
 These are all *design* documents, not code. They freeze the architecture before implementation begins.
 
 ---
 
-## 34. Final Go/No-Go Decision
+## 34. Final go/No-go decision
 
 ### Decision: CONDITIONAL GO
 

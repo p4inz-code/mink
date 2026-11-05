@@ -1,10 +1,10 @@
-# MINK — Systems-Readiness Audit (Windows x86_64)
+# MINK: Systems-Readiness Audit (Windows x86_64)
 
-**Status:** Final audit. Windows x86_64 remains **FROZEN**.
-**Platform evaluated:** Windows x86_64 only. **Linux: FROZEN** — untouched by this audit.
-**Starting commit:** `74131ff` · **Ending commit:** the commit carrying this record.
+**Status:** Final audit. Windows x86_64 remains FROZEN.
+**Platform evaluated:** Windows x86_64 only. Linux: FROZEN, untouched by this audit.
+**Starting commit:** `74131ff` · Ending commit: the commit carrying this record.
 **Regression at close:** 2957 passed · 0 failed · 3 ignored (2952 before this audit; five
-hashing regressions added — see §6).
+hashing regressions added, see §6).
 
 This record answers one question with executed evidence rather than test counts:
 
@@ -43,7 +43,7 @@ repeat runs diff cleanly.
 | Optional header | `0x20B` (PE32+) |
 | Subsystem | `3` (WINDOWS_CUI) |
 | Sections | `.text`, `.bss`, `.idata`, `.reloc` |
-| Imports | **`kernel32.dll` only** |
+| Imports | `kernel32.dll` only |
 | Size | 187,392 bytes |
 
 Winsock is reached through dynamically resolved entry points (`rt_sys_load_lib` /
@@ -122,12 +122,12 @@ root-caused, fixed in `stdlib/hashing.mink` (mirrored byte-for-byte into
 `npm/mink/stdlib/`, guarded by `tests/release.rs`) and covered by five new permanent
 regressions in `tests/hashing_lib.rs`.
 
-1. **`hash_sha256` faulted with `E-R05` for any input ≥ 256 bytes.** The 0x80 padding byte
+1. `hash_sha256` faulted with `E-R05` for any input ≥ 256 bytes. The 0x80 padding byte
    was written in every block whose offset was non-negative, so an earlier block computed
    a message-schedule word index past the end of the 1024-byte workspace. The guard now
    also requires `byte_pos < 64`. Digests were subsequently checked against Python
-   `hashlib` for 28 lengths from 0 to 10,000 bytes — all match.
-2. **The hashing entry points leaked an owned `Str` input.** `hash_fnv1a`, `hash_djb2` and
+   `hashlib` for 28 lengths from 0 to 10,000 bytes. All match.
+2. The hashing entry points leaked an owned `Str` input. `hash_fnv1a`, `hash_djb2` and
    `hash_sha256` move their input (the caller's binding is dead afterwards, so the caller
    cannot free it) but never released it, so hashing a heap buffer leaked (`E-R06`) with no
    workaround. They now release the input, matching the existing `zlib` convention. A
@@ -135,23 +135,23 @@ regressions in `tests/hashing_lib.rs`.
 
 ## 7. Known limitations (do not overclaim)
 
-* **Input ownership is incomplete across the standard library.** The §6.2 pattern —
-  consuming an owned `Str` without releasing it — also exists in `encoding` and `strings`
+* Input ownership is incomplete across the standard library. The §6.2 pattern
+  consuming an owned `Str` without releasing it, also exists in `encoding` and `strings`
   (`hex_encode`, `base64_encode`, `str_trim`, … leak a heap input, `E-R06`). The affected
   suites tolerate exit 106, which is why it persisted. This audit fixed the hashing path
   because a real utility needed it; the broader module-wide change was not made here.
-* **Unicode.** `Str` is a byte buffer with a UTF-8 code-point layer but no non-ASCII case
+* Unicode. `Str` is a byte buffer with a UTF-8 code-point layer but no non-ASCII case
   operations and no Unicode database. Command-line arguments and filesystem entries use
   the ANSI Windows APIs, so non-ASCII argv/entries are limited.
-* **Graceful precondition misuse in `network`.** Calling a `net_*` function before
+* Graceful precondition misuse in `network`. Calling a `net_*` function before
   `net_init()` returns the failure convention (`-1`; `net_resolve`/`net_hostname`
   return an empty string) rather than faulting, verified on 1.0.2. An earlier
   revision of this audit recorded an access violation, which no longer reproduces.
-* **Hash naming precision.** `hash_fnv1a` / `hash_djb2` are 64-bit-register variants (they
+* Hash naming precision. `hash_fnv1a` / `hash_djb2` are 64-bit-register variants (they
   do not truncate to 32 bits), so their values diverge from the classic 32-bit algorithms
   for longer inputs. `hash_sha256` matches the standard exactly.
-* **No long-running/soak evidence**, and **no integrated debugger or profiler**.
-* Linux is frozen and is **not** a supported platform; macOS is not supported.
+* No long-running/soak evidence, and no integrated debugger or profiler.
+* Linux is frozen and is not a supported platform; macOS is not supported.
 
 ## 8. Claim boundary
 
@@ -170,7 +170,7 @@ deterministic behaviour and process exit.
 Must **not** be claimed: cross-platform support, Linux or macOS support; full C/C++
 ecosystem or C ABI compatibility; unrestricted FFI; "memory-safe" as an absolute; mature
 debugger/profiler tooling; real-time or deterministic-latency guarantees; complete Unicode
-support; "production-ready"; or any performance comparison against C/C++ — no benchmarks
+support; "production-ready"; or any performance comparison against C/C++. No benchmarks
 were run.
 
 ## 9. Verdict
@@ -179,4 +179,4 @@ MINK can implement real, non-trivial native Windows systems-oriented software to
 the capability list in §8 is supported by executed evidence. The claim boundary reflects
 the fixed defects, the residual standard-library ownership gap, the Unicode/ANSI limits,
 and the absence of long-running, debugger/profiler and benchmark evidence. Windows
-remains **FROZEN**; Linux remains **FROZEN**.
+remains **FROZEN**; Linux remains FROZEN.

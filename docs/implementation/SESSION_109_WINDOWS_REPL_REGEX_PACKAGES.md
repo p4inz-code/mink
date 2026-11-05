@@ -1,11 +1,11 @@
-# Session 109 — Windows Python Parity: REPL, Regex, Directory Packages
+# Session 109: Windows Python parity: REPL, regex, directory packages
 
 **Date:** September 17, 2026
 **Platform:** Windows x86_64 (Linux frozen)
 **MINK version:** 1.0.1
 **Starting commit:** `0ed300e` (Session 108 close)
 **Ending commit:** `bd96921`
-**Phase:** Windows Python Official Capability Parity — completion push
+**Phase:** Windows Python Official Capability Parity, completion push
 
 ---
 
@@ -25,7 +25,7 @@
 
 ## 2. Delivered capabilities
 
-### 2.1 `mink repl` — interactive compile-eval session (R01/T04)
+### 2.1 `mink repl`: interactive compile-eval session (R01/T04)
 
 `src/cli.rs` adds `run_repl`/`repl_eval`/`parse_repl` and helpers. Declarations
 (`fn`/`struct`/`enum`/`use`/`mod`/`const`) accumulate in a session buffer; bare
@@ -35,7 +35,7 @@ trampoline). Commands: `:help`, `:show`, `:clear`, `:quit`/`:q`. An optional pat
 pre-loads that file's declarations. Bare expressions print via `rt_print_int` first
 and fall back to `rt_print_str` (no runtime reflection exists).
 
-### 2.2 `stdlib/re.mink` — self-contained regex engine (S02)
+### 2.2 `stdlib/re.mink`: self-contained regex engine (S02)
 
 A dependency-free backtracking engine. Pattern and subject are pre-read into
 `Ptr<Int>` arenas (the JSON library's architecture) so recursive matching is not
@@ -49,7 +49,7 @@ pathological backtracking (verified with a `(a+)+b` probe).
 ### 2.3 Directory packages (L68/P03)
 
 `src/driver.rs` `resolve_module_path` now also resolves `mod name;` to
-`name/mod.mink` (the package root — MINK's `__init__` equivalent) when `name.mink`
+`name/mod.mink` (the package root, MINK's `__init__` equivalent) when `name.mink`
 is absent, in both the declaring directory and the stdlib roots. Child modules are
 named by their `mod` declaration, so the package root is known as `name` (matching
 `use name::item`). Nested packages (`name/sub/mod.mink`) compose; a flat
@@ -63,15 +63,15 @@ named by their `mod` declaration, so the package root is known as `name` (matchi
 modules failed to build with `E-M04 cannot lower: identifier has no corresponding
 local`.
 
-- **Root cause:** declaration-name lookups in `src/hir/lower.rs`,
+- Root cause: declaration-name lookups in `src/hir/lower.rs`,
   `src/typecheck/checker.rs` (both the `decls` and `fn_info` maps), and
   `src/ownership/mod.rs` were keyed by byte offset alone. Byte offsets repeat across
   source files, so two modules whose declarations share an offset collapsed onto one
   symbol; one module's items became unreachable. Confirmed by instrumentation:
   `geo_double`'s call site resolved to `SymbolId(109)` while both function items
   received `SymbolId(110)`.
-- **Fix:** all four maps are keyed by `(SourceFile, byte offset)`.
-- **Regression:** `tests/packages.rs::l68_two_sibling_modules_resolve_distinct_symbols`
+- Fix: all four maps are keyed by `(SourceFile, byte offset)`.
+- Regression: `tests/packages.rs::l68_two_sibling_modules_resolve_distinct_symbols`
   with the minimal reproduction fixture `tests/packages/siblings/` (two modules whose
   functions both start at offset 7).
 
@@ -104,7 +104,7 @@ leak check runs at exit.
 | `aggregate_returns` | 52 passed, 0 failed |
 | `json` | 61 passed, 0 failed |
 | `scalar_types` | 27 passed, 0 failed |
-| `strings_lib` | 83 passed, **2 failed — spawn failure, see §4 note** |
+| `strings_lib` | 83 passed, 2 failed, spawn failure, see §4 note |
 | `cargo fmt --check` | clean |
 | `cargo clippy --all-targets` | exit 0; no new warnings from this session's changes |
 
@@ -119,7 +119,7 @@ failures panic at `tests/strings_lib.rs:46:43`:
 let run = Command::new(&exe).output().unwrap();   // line 46
 ```
 
-That is a **spawn failure, not an assertion failure** — the build step is reported
+That is a **spawn failure, not an assertion failure**. The build step is reported
 successful and the executable is then gone.
 
 Decisive reproduction (a probe program written to `%TEMP%`):
@@ -140,7 +140,7 @@ and for freshly linked harness binaries in `target/debug/deps`
 is removed or locked at link time).
 
 **Classification:** test-infrastructure, not product. MINK's compiler, runtime and
-stdlib are unaffected — the artifacts build correctly and are removed by an
+stdlib are unaffected, the artifacts build correctly and are removed by an
 external agent. The affected capability is therefore *not* marked VERIFIED on the
 strength of a failing run; it also is not recorded as a product defect.
 
@@ -187,7 +187,7 @@ P1 blockers remain, all of them large subsystems.
 | ahead/behind | 0/0 |
 | Working tree | clean |
 | Commits created | 5 (`202ee6f`, `b31432a`, `a9c65b5`, `039481b`, `bd96921`) |
-| Linux | **FROZEN** — untouched this session |
+| Linux | FROZEN, untouched this session |
 
 Pass 2 (aggregate recomputation, fmt, clippy, regression of the touched stages) was
 performed on the state above. No Linux work was started.

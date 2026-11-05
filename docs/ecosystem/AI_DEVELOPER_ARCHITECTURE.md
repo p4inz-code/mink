@@ -1,27 +1,27 @@
-# MINK AI Developer Architecture
+# MINK AI developer architecture
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY, not implemented
 **Scope:** AI-first tooling infrastructure for the MINK ecosystem
 
 ---
 
 ## 1. Goals
 
-1. **Agent-friendly by design.** MINK's tooling is designed so that AI coding agents can use it effectively, not as an afterthought.
+1. Agent-friendly by design. MINK's tooling is designed so that AI coding agents can use it effectively, not as an afterthought.
 
-2. **Machine-readable everything.** Diagnostics, project metadata, dependency graphs, and API documentation are all machine-readable.
+2. Machine-readable everything. Diagnostics, project metadata, dependency graphs, and API documentation are all machine-readable.
 
-3. **Deterministic behavior.** Same input → same output. AI agents can verify their changes produce consistent results.
+3. Deterministic behavior. Same input → same output. AI agents can verify their changes produce consistent results.
 
-4. **Fast feedback loops.** Compilation, testing, and linting are fast enough for interactive agent use.
+4. Fast feedback loops. Compilation, testing, and linting are fast enough for interactive agent use.
 
-5. **Not a gimmick.** The AI tooling is real infrastructure that makes MINK objectively easier for agents to generate and maintain.
+5. Not a gimmick. The AI tooling is real infrastructure that makes MINK objectively easier for agents to generate and maintain.
 
 ---
 
-## 2. Machine-Readable Compiler Diagnostics
+## 2. Machine-Readable compiler diagnostics
 
 ### Current state (V1)
 - Every error has a stable code (`E-L01`, `E-T05`, `E-S10`, etc.)
@@ -110,7 +110,7 @@ mink check main.mink --json
 
 ---
 
-## 3. Stable Error Codes
+## 3. Stable error codes
 
 ### Error code documentation
 
@@ -174,7 +174,7 @@ Documentation: https://mink.dev/docs/errors/E-T05
 
 ---
 
-## 4. Structured JSON Diagnostics
+## 4. Structured JSON diagnostics
 
 ### All compiler commands support `--json`
 
@@ -248,7 +248,7 @@ mink deps --json
 
 ---
 
-## 5. Compiler Introspection
+## 5. Compiler introspection
 
 ### AST/HIR/MIR inspection interfaces
 
@@ -260,11 +260,11 @@ mink backend main.mink --json # Dump backend IR as JSON
 ```
 
 ### Use cases for AI agents
-1. **Code understanding.** Parse the AST to understand program structure.
-2. **Code generation.** Generate MINK code by constructing AST nodes.
-3. **Refactoring.** Transform AST/HIR/MIR to refactor code.
-4. **Debugging.** Inspect intermediate representations to understand compilation.
-5. **Testing.** Verify that generated code compiles correctly.
+1. Code understanding. Parse the AST to understand program structure.
+2. Code generation. Generate MINK code by constructing AST nodes.
+3. Refactoring. Transform AST/HIR/MIR to refactor code.
+4. Debugging. Inspect intermediate representations to understand compilation.
+5. Testing. Verify that generated code compiles correctly.
 
 ### AST JSON format
 
@@ -298,7 +298,7 @@ mink backend main.mink --json # Dump backend IR as JSON
 
 ---
 
-## 6. Package Metadata
+## 6. Package metadata
 
 ### Machine-readable package metadata
 
@@ -342,7 +342,7 @@ mink metadata --json
 
 ---
 
-## 7. API Documentation Format
+## 7. API documentation format
 
 ### Machine-readable API documentation
 
@@ -398,7 +398,7 @@ mink doc --format markdown # Generate Markdown documentation
 
 ---
 
-## 8. Examples Discoverable by Agents
+## 8. Examples discoverable by agents
 
 ### Example index
 
@@ -447,7 +447,7 @@ mink doc --package mink-json --examples --json
 
 ---
 
-## 9. Deterministic Builds
+## 9. Deterministic builds
 
 ### Guarantees
 1. Same source + same compiler version → same output
@@ -467,7 +467,7 @@ mink build main.mink --verify-deterministic
 
 ---
 
-## 10. Deterministic Tests
+## 10. Deterministic tests
 
 ### Test ordering
 - Tests run in a deterministic order (alphabetical by default)
@@ -481,7 +481,7 @@ mink build main.mink --verify-deterministic
 
 ---
 
-## 11. Fast Compile/Test Loops
+## 11. Fast compile/Test loops
 
 ### Compilation speed targets
 - Single file: < 100ms
@@ -501,7 +501,7 @@ mink build main.mink --verify-deterministic
 
 ---
 
-## 12. Dependency Discovery
+## 12. Dependency discovery
 
 ### Dependency graph as JSON
 
@@ -550,7 +550,7 @@ mink deps --impact mink-std --json
 
 ---
 
-## 13. Automated API Documentation
+## 13. Automated API documentation
 
 ### Documentation generation from source
 
@@ -583,7 +583,7 @@ mink doc --format markdown --output docs/
 
 ---
 
-## 14. Generated Bindings
+## 14. Generated bindings
 
 ### Binding generation for all target languages
 
@@ -612,7 +612,7 @@ mink bind --target java src/lib.mink > bindings/MinkNative.java
 
 ---
 
-## 15. Code-Generation Support
+## 15. Code-Generation support
 
 ### MINK source generation
 
@@ -631,7 +631,7 @@ mink generate --template impl --type Point > point_impl.mink
 
 ---
 
-## 16. Safe Compiler Invocation
+## 16. Safe compiler invocation
 
 ### Compiler as a library
 
@@ -661,11 +661,11 @@ pub fn mir(source: &str) -> MirProgram;
 ## 17. Agent-Friendly CLI
 
 ### CLI design principles
-1. **Deterministic output.** Same input → same output.
-2. **Machine-readable.** `--json` flag on all commands.
-3. **Fast.** Sub-second response for most commands.
-4. **Informative.** Error messages include context and suggestions.
-5. **Non-interactive.** No prompts or interactive input required.
+1. Deterministic output. Same input → same output.
+2. Machine-readable. `--json` flag on all commands.
+3. Fast. Sub-second response for most commands.
+4. Informative. Error messages include context and suggestions.
+5. Non-interactive. No prompts or interactive input required.
 
 ### CLI commands for agents
 
@@ -684,7 +684,7 @@ pub fn mir(source: &str) -> MirProgram;
 
 ---
 
-## 18. Machine-Readable Project Metadata
+## 18. Machine-Readable project metadata
 
 ### Project introspection
 
@@ -720,35 +720,35 @@ mink info --json
 
 ---
 
-## 19. Two-Approach Analysis
+## 19. Two-Approach analysis
 
 ### Approach A: Real infrastructure for AI agents (CHOSEN)
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Objectively useful, durable, benefits all developers, not just AI |
-| **Cons** | More upfront design, requires implementation effort |
-| **Complexity** | Medium |
-| **Performance** | Good (JSON serialization is fast) |
-| **Security** | Good (read-only inspection, no code execution) |
-| **Compatibility** | Excellent — standard tools work with JSON |
-| **Maintainability** | Good — JSON schemas are stable |
-| **Ecosystem impact** | Maximum — makes MINK the most AI-friendly language |
+| Pros | Objectively useful, durable, benefits all developers, not just AI |
+| Cons | More upfront design, requires implementation effort |
+| Complexity | Medium |
+| Performance | Good (JSON serialization is fast) |
+| Security | Good (read-only inspection, no code execution) |
+| Compatibility | Excellent, standard tools work with JSON |
+| Maintainability | Good — JSON schemas are stable |
+| Ecosystem impact | Maximum, makes MINK the most AI-friendly language |
 
 ### Approach B: AI gimmick (e.g., natural language interface)
 
 | Criterion | Assessment |
 |-----------|------------|
-| **Pros** | Easy to demo, impressive initially |
-| **Cons** | Fragile, unreliable, not useful for real work, becomes technical debt |
-| **Complexity** | High (LLM integration, prompt engineering) |
-| **Performance** | Poor (network calls, latency) |
-| **Security** | Poor (prompt injection, data leakage) |
-| **Compatibility** | Poor — requires specific LLM versions |
-| **Maintainability** | Poor — breaks with LLM updates |
-| **Ecosystem impact** | Negative — embarrasses the project when it fails |
+| Pros | Easy to demo, impressive initially |
+| Cons | Fragile, unreliable, not useful for real work, becomes technical debt |
+| Complexity | High (LLM integration, prompt engineering) |
+| Performance | Poor (network calls, latency) |
+| Security | Poor (prompt injection, data leakage) |
+| Compatibility | Poor, requires specific LLM versions |
+| Maintainability | Poor, breaks with LLM updates |
+| Ecosystem impact | Negative, embarrasses the project when it fails |
 
-### Decision: **Approach A**
+### Decision: **approach A**
 
 **Reasoning:** AI agents need reliable, fast, deterministic tooling. Natural language interfaces are fragile and unreliable. The right approach is to make MINK's existing tooling machine-readable: JSON output, stable error codes, structured metadata. This benefits ALL developers (human and AI) and is durable over time.
 

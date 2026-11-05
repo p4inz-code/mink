@@ -1,4 +1,4 @@
-# MINK — Standard Library Architecture
+# MINK: standard library architecture
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -9,7 +9,7 @@ The MINK standard library must provide the essential capabilities required to bu
 
 It must remain cohesive, portable, well-documented, secure, performant, and stable.
 
-## 2. Design Principles
+## 2. Design principles
 
 The standard library should prioritize:
 
@@ -25,7 +25,7 @@ The standard library should prioritize:
 
 The standard library must not become an unstructured collection of unrelated features.
 
-## 3. Core Modules
+## 3. Core modules
 
 The initial standard library should provide coherent modules for:
 
@@ -65,7 +65,7 @@ Likely foundations include:
 
 Collections should expose predictable performance characteristics.
 
-## 5. Strings and Text
+## 5. Strings and text
 
 Text functionality should support Unicode correctly.
 
@@ -125,7 +125,7 @@ Filesystem APIs should provide portable abstractions for:
 
 Platform-specific functionality may be exposed through explicit extensions.
 
-## 9. Processes and Environment
+## 9. Processes and environment
 
 The library should provide controlled APIs for:
 
@@ -169,7 +169,7 @@ Potential primitives include:
 
 Unsafe concurrency mechanisms should require explicit boundaries.
 
-## 12. Async Runtime
+## 12. Async runtime
 
 MINK should provide an official asynchronous execution model.
 
@@ -205,7 +205,7 @@ Applications should not be encouraged to implement cryptographic algorithms them
 
 High-level secure APIs should be preferred over raw primitives when possible.
 
-## 15. Error Handling
+## 15. Error handling
 
 Standard-library APIs must use the MINK error model consistently.
 
@@ -213,7 +213,7 @@ Expected operational failures should be representable through explicit result/er
 
 Errors should preserve useful context and machine-readable information.
 
-## 16. Logging and Diagnostics
+## 16. Logging and diagnostics
 
 The library should provide structured logging and diagnostic facilities.
 
@@ -226,7 +226,7 @@ Logging should support:
 - Filtering
 - Machine-readable output
 
-## 17. Testing Support
+## 17. Testing support
 
 Testing should be a first-class standard-library capability.
 
@@ -240,7 +240,7 @@ It should support:
 - Benchmarks where appropriate
 - Structured test results
 
-## 18. Platform Abstraction
+## 18. Platform abstraction
 
 Portable APIs should hide unnecessary operating-system differences.
 
@@ -248,7 +248,7 @@ Platform-specific capabilities should remain accessible through explicit APIs wh
 
 The standard library must not pretend that meaningful platform differences do not exist.
 
-## 19. FFI and Native Integration
+## 19. FFI and native integration
 
 The standard library must cooperate with MINKs native interoperability system.
 
@@ -262,7 +262,7 @@ Hot-path abstractions should avoid unnecessary allocations, copies, synchronizat
 
 Correctness and safety must not be sacrificed for micro-optimizations.
 
-## 21. API Stability
+## 21. API stability
 
 Standard-library APIs should receive stronger compatibility guarantees than experimental third-party packages.
 
@@ -282,13 +282,13 @@ Every public standard-library API must have documentation covering:
 
 Documentation must be accessible to both humans and tooling.
 
-## 23. AI Compatibility
+## 23. AI compatibility
 
 Standard-library APIs should expose machine-readable metadata suitable for IDEs and AI coding agents.
 
 AI tooling should be able to discover API signatures, documentation, constraints, errors, examples, and deprecation information.
 
-## 24. Dependency Policy
+## 24. Dependency policy
 
 The core standard library should minimize external dependencies.
 
@@ -316,7 +316,7 @@ Standard-library versioning must remain synchronized with the MINK language/tool
 
 The compiler and standard library must have a clearly defined compatibility relationship.
 
-## 27. Open Architecture Decisions
+## 27. Open architecture decisions
 
 The following must be finalized before architecture freeze:
 

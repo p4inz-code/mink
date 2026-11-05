@@ -1,4 +1,4 @@
-# Module System / Multi-File Compilation — Session 34
+# Module system / multi-file compilation: session 34
 
 ## Overview
 
@@ -8,19 +8,19 @@ system enables real multi-file MINK projects for the first time.
 
 ## Architecture
 
-### Flatten-and-Compile Approach
+### Flatten-and-Compile approach
 
 The multi-module pipeline uses a **flatten-and-compile** strategy:
 
-1. **Module discovery**: `discover_modules` recursively follows `mod name;`
+1. Module discovery: `discover_modules` recursively follows `mod name;`
    declarations from the root file, loading each child module from the
    filesystem as `name.mink` in the same directory as the parent.
 
-2. **AST flattening**: All items from child modules are collected and
+2. AST flattening: All items from child modules are collected and
    appended to the root module's item list. `mod` and `use` declarations
    are stripped from the combined AST.
 
-3. **Single-compilation-unit analysis**: The combined AST is run through
+3. Single-compilation-unit analysis: The combined AST is run through
    the standard single-module pipeline: semantic analysis, type checking,
    ownership analysis, HIR lowering, MIR lowering, and optimization.
 
@@ -28,7 +28,7 @@ This approach avoids the complexity of cross-module SymbolId and TypeId
 merging by treating all modules as a single compilation unit. Each
 module's items become top-level declarations in the root scope.
 
-### Why Not Separate Compilation?
+### Why not separate compilation?
 
 Cross-module compilation requires unified symbol tables and type tables.
 Independent per-module semantic analysis creates different SymbolIds for
@@ -37,7 +37,7 @@ these across compilation boundaries requires deep changes to every
 compiler stage. The flatten approach achieves correct multi-file semantics
 without invasive pipeline changes.
 
-### Module Discovery
+### Module discovery
 
 ```
 Root file (main.mink)
@@ -67,7 +67,7 @@ Root file (main.mink)
 - Resolved by the semantic analyzer via the cross-module registry.
 - `use` declarations are stripped from the combined AST during flattening.
 
-## Files Changed
+## Files changed
 
 | File | Changes |
 |------|---------|
@@ -85,7 +85,7 @@ Root file (main.mink)
 | `src/ownership/mod.rs` | `Pub` item handling |
 | `src/typecheck/ty.rs` | `TypeTable::merge_from` for type table merging |
 
-## Pipeline Flow
+## Pipeline flow
 
 ```
 Source files
@@ -109,19 +109,19 @@ MIR lowering + optimization
 Backend compilation → native executable
 ```
 
-## Test Results
+## Test results
 
 - 1,603 tests passing (1,596 pre-existing + 7 new module tests)
 - All quality gates clean (fmt, clippy, test, build, release)
 
-## Known Limitations
+## Known limitations
 
-- **Module paths in expressions**: `module::item` syntax in expression
+- Module paths in expressions: `module::item` syntax in expression
   context is not supported (only `use` imports bring names into scope).
-- **Nested inline modules**: `mod name { ... }` with inline blocks is
+- Nested inline modules: `mod name { ... }` with inline blocks is
   not supported; only file-based `mod name;` is implemented.
-- **Private access enforcement**: V1 does not enforce private-vs-public
+- Private access enforcement: V1 does not enforce private-vs-public
   access across module boundaries. All items from all modules are
   included in the flattened AST.
-- **`pub use` re-exports**: Re-exporting imported items via `pub use`
+- `pub use` re-exports: Re-exporting imported items via `pub use`
   is not yet supported.

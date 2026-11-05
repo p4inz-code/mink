@@ -37,13 +37,13 @@ Working only under the coding-agent environment is not enough.
 A capability may only be called VERIFIED when evidence supports the claim.
 
 ======================================================================
-1. CURRENT PROJECT STATE — WINDOWS x86_64 FROZEN
+1. CURRENT PROJECT STATE: WINDOWS x86_64 FROZEN
 ======================================================================
 
 Verified at the final cleanup (base commit 86c28de; this record is carried by the
 commit that freezes Windows):
 
-* Windows x86_64 base: COMPLETE / STABLE — FROZEN. No further feature development,
+* Windows x86_64 base: COMPLETE / STABLE, FROZEN. No further feature development,
   parity expansion, runtime expansion or Windows roadmap work. Only critical
   maintenance, security and regression fixes may reopen the frozen state.
 * Windows Python official capability parity: GATE PASSED (P0 = 0, P1 = 0); the remaining
@@ -53,7 +53,7 @@ commit that freezes Windows):
 * Current P0 introduced by active Windows work: 0
 * Current P1 introduced by active Windows work: 0
 * Standard library: 26 modules.
-* Systems readiness: **supported** for Windows x86_64. A real native utility
+* Systems readiness: supported for Windows x86_64. A real native utility
   (`mink-sysinfo`) verified native OS access, memory/ownership, filesystem, process,
   concurrency, TCP/UDP networking and binary/compression/crypto on a standalone PE whose
   only import is `kernel32.dll`. The audit also fixed two `stdlib/hashing.mink` defects
@@ -68,9 +68,9 @@ commit that freezes Windows):
   streaming); array/Vec slicing is function-form only (no slice views or step).
 * Known intentional CLI behavior: bare REPL expressions are compiled and run, session
   declarations accumulate, and no value bindings persist between lines. REPL input ends at
-  EOF — the end of piped input, or `Ctrl-Z` then `Enter` at a Windows console — or with
+  EOF, the end of piped input, or `Ctrl-Z` then `Enter` at a Windows console, or with
   `:quit`. `mink build --help` is reported as an unknown option (documented as such).
-* Public npm artifact: `@p4inz-code/mink@1.0.2` — published and independently verified.
+* Public npm artifact: `@p4inz-code/mink@1.0.2`: published and independently verified.
   The registry's `latest` tag points at `1.0.2` (verified: `npm view @p4inz-code/mink
   version` → `1.0.2`, `npm view @p4inz-code/mink@1.0.2 version` → `1.0.2`). The published
   tarball carries 28 files (`bin/mink.exe` + 26 `stdlib/` modules), and its compiler

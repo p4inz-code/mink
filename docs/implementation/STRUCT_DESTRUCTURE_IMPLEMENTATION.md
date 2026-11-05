@@ -1,8 +1,8 @@
-# MINK — Struct Destructuring in Let Bindings Implementation
+# MINK: struct destructuring in let bindings implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 32 — struct destructuring in let bindings
+**Session:** 32, struct destructuring in let bindings
 
 ## 1. Overview
 
@@ -15,7 +15,7 @@ The implementation covers the full compiler pipeline: parser, AST, semantic
 analysis, type checking, HIR, MIR, ownership analysis, backend, and native
 execution.
 
-## 2. Grammar Additions
+## 2. Grammar additions
 
 ```
 LetBinding  := 'let' 'mut'? LetPattern (':' Type)? '=' Expr ';'
@@ -28,12 +28,12 @@ See `docs/language/CORE_GRAMMAR.md` §25 for the full specification.
 
 ## 3. Parser
 
-- **Detection:** `parse_let` checks if the token after `let [mut]` is `Ident`
+- Detection: `parse_let` checks if the token after `let [mut]` is `Ident`
   followed by `{`. If so, it dispatches to `parse_let_struct_destructure`;
   otherwise it falls through to tuple destructuring or simple bindings.
-- **Field parsing:** `parse_struct_pattern_field` parses each field as
+- Field parsing: `parse_struct_pattern_field` parses each field as
   `name` (shorthand) or `name: pattern` (explicit binding).
-- **Backward compatibility:** The `name` field of `LetItem` is set to the
+- Backward compatibility: The `name` field of `LetItem` is set to the
   first binding's identifier for backward compatibility.
 
 ## 4. AST
@@ -43,14 +43,14 @@ See `docs/language/CORE_GRAMMAR.md` §25 for the full specification.
 - `StructPatternField` holds `name: Ident`, `binding: Option<Pattern>`,
   and `span: Span`.
 
-## 5. Type System
+## 5. Type system
 
 **New error codes:**
-- `E-T39` (`UnknownStructFieldInPattern`) — the pattern names a field the
+- `E-T39` (`UnknownStructFieldInPattern`): the pattern names a field the
   struct does not declare.
-- `E-T40` (`MissingStructFieldInPattern`) — the pattern omits a declared
+- `E-T40` (`MissingStructFieldInPattern`): the pattern omits a declared
   field.
-- `E-T41` (`StructPatternTypeMismatch`) — the pattern's struct name does
+- `E-T41` (`StructPatternTypeMismatch`): the pattern's struct name does
   not match the initializer's type.
 
 **Type checking rules:**
@@ -106,16 +106,16 @@ The initializer is not consumed by destructuring.
 | E-T40  | Missing field in struct destructuring pattern |
 | E-T41  | Struct pattern type mismatch |
 
-## 11. Known Limitations
+## 11. Known limitations
 
-- **Match-arm struct patterns:** `match p { Point { x, y } => { .. } }` is
+- Match-arm struct patterns: `match p { Point { x, y } => { .. } }` is
   not yet supported. Struct patterns in let-destructuring only.
-- **Const struct destructuring:** `const Point { x, y } = p;` remains
+- Const struct destructuring: `const Point { x, y } = p;` remains
   deferred.
-- **Nested struct destructuring in native backend:** deeply nested struct
+- Nested struct destructuring in native backend: deeply nested struct
   patterns work at the type-checking level but the backend handles them
   through repeated member access lowering.
-- **Or-patterns and guards in struct let:** remain deferred.
+- Or-patterns and guards in struct let: remain deferred.
 
 ## 12. Tests
 

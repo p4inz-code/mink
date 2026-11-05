@@ -3,7 +3,7 @@
 A **diagnostic** example: `main.mink` intentionally triggers a runtime
 failure so the reported source location can be verified end-to-end. It is
 the Session 100 proof application for R06 (runtime error-location
-metadata). It is **not** a template for normal programs — it deliberately
+metadata). It is **not** a template for normal programs. It deliberately
 crashes with exit code 110 on every run.
 
 ## What it demonstrates
@@ -37,7 +37,7 @@ This produces exactly one standalone executable: `main.exe`.
 
 ## Run
 
-Run `main.exe` directly — no arguments, no stdin, no source files:
+Run `main.exe` directly: no arguments, no stdin, no source files:
 
 ```text
 main.exe

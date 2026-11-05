@@ -1,4 +1,4 @@
-# MINK Enum Types Implementation
+# MINK enum types implementation
 
 **Status:** Implemented (Session 17)
 **Version:** 0.1.0
@@ -9,9 +9,9 @@ variant-construction paths (`Direction::North`), nominal enum typing,
 single-word discriminant layout, enum equality, and native x86-64
 execution. It builds directly on the aggregate foundation of Session 14
 (`docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`) and the
-ownership/move and reference/borrowing foundations of Sessions 15–16, and
+ownership/move and reference/borrowing foundations of Sessions 15-16, and
 deliberately does **not** introduce data-carrying variants, generics, or
-implicit conversions. (Pattern matching over enums landed in Session 18 —
+implicit conversions. (Pattern matching over enums landed in Session 18
 see `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`.)
 
 ## 1. Frozen Session 17 rules
@@ -48,13 +48,13 @@ see `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`.)
 
 ### 1.3 Enum values
 
-- An enum value is a **single machine word** holding its variant's
+- An enum value is a single machine word holding its variant's
   discriminant (0 for the first variant, 1 for the second, …). Layout is
-  `(8, 8)` — the same word class as `Int`/`Bool`/pointers — so enums are
+  `(8, 8)`, the same word class as `Int`/`Bool`/pointers, so enums are
   scalars: they copy freely, are never heap-allocated, and are never
   subject to ownership/move analysis.
 - Enum values are comparable with `==` and `!=`; the result is `Bool`.
-  Equality requires the **same nominal enum type** — comparing `E::A ==
+  Equality requires the **same nominal enum type**, comparing `E::A ==
   F::A` is `E-T02`, because the discriminants alone do not identify the
   type.
 - There is no ordering (`<`, `>`) between enum values this session, no
@@ -99,69 +99,69 @@ code generation.
 
 ### 1.7 Deliberately absent (later sessions)
 
-- Data-carrying variants (`enum Option { Some(Int), None }`) —
+- Data-carrying variants (`enum Option { Some(Int), None }`)
   **implemented in Session 19**; see
   `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.
-- Explicit discriminants (`enum E { A = 5 }`) — **implemented in Session
+- Explicit discriminants (`enum E { A = 5 }`): **implemented in Session
   20**; see `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`.
 - `Int`/enum conversion, enum iteration, or deriving.
 - Generics over enums.
 
 ## 2. Design boundaries
 
-- **Enums are closed, nominal types.** Each declaration is a distinct
+- Enums are closed, nominal types. Each declaration is a distinct
   type; `E::A == F::A` fails because the types differ, not because the
   discriminants differ.
-- **Enums are scalars.** A single word holds the discriminant; there is
+- Enums are scalars. A single word holds the discriminant; there is
   no tag+payload representation, no heap allocation, and no alignment
   beyond word alignment.
-- **No implicit conversions.** An enum is never silently coerced to
+- No implicit conversions. An enum is never silently coerced to
   `Int` or back.
-- **No unsafe Rust.** Everything is safe Rust plus emitted machine code.
-- **Deterministic.** Identical sources produce byte-identical images and
+- No unsafe Rust. Everything is safe Rust plus emitted machine code.
+- Deterministic. Identical sources produce byte-identical images and
   identical runtime behavior.
 
 ## 3. Implementation architecture
 
-- `src/ast/mod.rs` — `ItemKind::Enum(EnumItem)`, `EnumItem`, `EnumVariant`,
+- `src/ast/mod.rs`: `ItemKind::Enum(EnumItem)`, `EnumItem`, `EnumVariant`,
   and `ExprKind::EnumVariant { name, variant }` (both names `Box`ed so the
-  `Expr` node stays 80 bytes — the same size as before enums, preserving
+  `Expr` node stays 80 bytes. The same size as before enums, preserving
   the parser's documented deep-nesting stack budget).
-- `src/parser/mod.rs` — `parse_enum` (variant list, trailing comma,
+- `src/parser/mod.rs`: `parse_enum` (variant list, trailing comma,
   recovery via `skip_to_variant_boundary`), `parse_type` untouched
   (enums are named types), and the `Ident :: Ident` expression arm that
   produces `ExprKind::EnumVariant` or records `E-P22`.
-- `src/parser/error.rs` — `ParseErrorKind::ExpectedVariant` (`E-P22`).
-- `src/semantics/analyzer.rs` — `register_enum` under the shared
+- `src/parser/error.rs`: `ParseErrorKind::ExpectedVariant` (`E-P22`).
+- `src/semantics/analyzer.rs`: `register_enum` under the shared
   `register_type` type-namespace machinery: `E-S15` for duplicate enum
   names, `E-S16` for duplicate variants. Struct names and enum names
   share one type namespace (both declarations register through the same
   `types` map), so `struct E` + `enum E` duplicates are also rejected
   (with the later declaration's duplicate kind).
-- `src/typecheck/ty.rs` — `TypeKind::Enum(EnumId)`, `EnumId`,
+- `src/typecheck/ty.rs`: `TypeKind::Enum(EnumId)`, `EnumId`,
   `EnumInfo` (name + variants with deterministic discriminants),
   `TypeTable::register_enum` / `enum_info` / `enums` / `enum_id`, and
   `display` rendering (`E` for the enum type).
-- `src/typecheck/checker.rs` — enums are registered (and their variant
+- `src/typecheck/checker.rs`: enums are registered (and their variant
   tables resolved) before struct fields are typed, so `struct T { c:
   Color }` resolves; variant expressions type as the enum type
   (`E-T23` unknown variant, `E-T22` non-enum path); equality unifies the
   same nominal enum type (`E-T02` on mismatch).
-- `src/typecheck/error.rs` — `TypeErrorKind::NotAnEnum` (`E-T22`),
+- `src/typecheck/error.rs`: `TypeErrorKind::NotAnEnum` (`E-T22`),
   `UnknownVariant` (`E-T23`).
-- `src/runtime/layout.rs` — `TypeKind::Enum(_)` classifies as
+- `src/runtime/layout.rs`: `TypeKind::Enum(_)` classifies as
   `(WORD_SIZE, WORD_SIZE)` in `scalar_layout`/`scalar_size_align`.
-- `src/ownership/mod.rs` — enum values are `Immutable`/copyable: variant
+- `src/ownership/mod.rs`: enum values are `Immutable`/copyable: variant
   expressions and enum-typed operands never move, so no ownership rule
   applies (there is nothing to own).
-- `src/hir/mod.rs`, `src/hir/lower.rs` — `HirItemKind::Enum(HirEnum)` and
+- `src/hir/mod.rs`, `src/hir/lower.rs`: `HirItemKind::Enum(HirEnum)` and
   `HirExprKind::EnumVariant { enum_id, variant }`.
-- `src/mir/mod.rs`, `src/mir/lower.rs` — `MirConstantKind::Enum {
+- `src/mir/mod.rs`, `src/mir/lower.rs`: `MirConstantKind::Enum {
   variant }` carries the compiler-computed discriminant; enum variant
   expressions lower to a `Use(Constant(Enum { .. }))` rvalue. `validate`
   and `optimize` treat it as a plain word constant (no source-text
-  decoding needed — the discriminant is already the value).
-- `src/backend/ir.rs`, `src/backend/lower.rs`, `src/backend/verify.rs` —
+  decoding needed, the discriminant is already the value).
+- `src/backend/ir.rs`, `src/backend/lower.rs`, `src/backend/verify.rs`
   `BType::Enum` (single word, like `Int`/`Bool`/pointers); variant
   constants decode to `DecodedConstant::Word(discriminant)`; the verifier
   accepts enum-typed word operands for `LoadConst`, comparisons, calls,
@@ -169,20 +169,20 @@ code generation.
 
 ## 4. Conservative decisions and known limitations
 
-- **No payloads in Session 17.** Variants carried no data; Session 19
+- No payloads in Session 17. Variants carried no data; Session 19
   added data-carrying variants and tagged-union layout (see
   `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`).
-- **Pattern matching is variant-exhaustive.** `match` over enums (session
+- Pattern matching is variant-exhaustive. `match` over enums (session
   18) requires every variant to be covered or a catch-all arm; a missing
   arm is `E-T24` and an unreachable one is `E-T25`. Programs can also
   still test equality (`e == E::V`).
-- **No explicit discriminants in Session 17.** Values were assigned by
+- No explicit discriminants in Session 17. Values were assigned by
   declaration order; Session 20 added `= n` syntax and implicit
   continuation (see `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`).
-- **Empty enums are legal but useless.** `enum Empty {}` compiles (and
+- Empty enums are legal but useless. `enum Empty {}` compiles (and
   its layout is still a word), but no value of that type can be
   constructed, so `E::V` paths into it are `E-T23`.
-- **Enum vs struct names share the type namespace.** A struct and an enum
+- Enum vs struct names share the type namespace. A struct and an enum
   may not share a name; the later declaration reports its own duplicate
   kind (`E-S08`/`E-S15`).
 
@@ -213,7 +213,7 @@ fn main() {
 
 ## 6. Validation
 
-- `tests/enums.rs` (25 tests) — enum declaration parsing (including
+- `tests/enums.rs` (25 tests): enum declaration parsing (including
   trailing comma and empty enums), variant-path parsing, structured
   parser errors and recovery, `E-S15`/`E-S16` duplicates, nominal enum
   typing, `E-T22`/`E-T23`, enum equality across/within enums, enum in
@@ -222,15 +222,15 @@ fn main() {
   discriminant survival through optimization, and native end-to-end
   programs (equality, copies, function parameters/returns, struct/array
   composition, and a 300-variant enum) with exact output and exit codes.
-- `tests/parser.rs` (+3) — enum declarations as items, `E::V` variant
+- `tests/parser.rs` (+3): enum declarations as items, `E::V` variant
   paths, `E-P22` with no variant name.
-- `tests/semantics.rs` (+3) — `E-S15` duplicate enum, shared
+- `tests/semantics.rs` (+3): `E-S15` duplicate enum, shared
   enum/struct type namespace (`E-S08`/`E-S15`), `E-S16` duplicate
   variant.
-- `tests/typecheck.rs` (+7) — variant expressions typed as the enum,
+- `tests/typecheck.rs` (+7): variant expressions typed as the enum,
   nominal distinctness, `E-T23`/`E-T22`, enum assignment mismatch,
   equality/inequality typing, enums in struct fields.
-- `tests/backend.rs` (+2) — enum locals lower to word-sized
+- `tests/backend.rs` (+2): enum locals lower to word-sized
   `BType::Enum`, discriminant values survive lowering and folding.
 - Existing suite (878 tests) remained green; full suite after session 17:
   **919 tests**, all passing; after session 18 (pattern matching) it is

@@ -1,4 +1,4 @@
-# Session 92 — Linux Crypto Runtime + Network/Env Ownership Hardening
+# Session 92: Linux crypto runtime + network/Env ownership hardening
 
 Date: 2026-09-03. Branch `main`, starting commit `1c972f3`. MINK v1.0.1.
 
@@ -34,7 +34,7 @@ Linux. Re-investigation proved the Linux exit code and leak scan were always
 correct: `strace` showed `exit(7)`, Python subprocess reported returncode 7,
 and an isolated WSL script reported `LEAK_EXIT=105`. The earlier `echo $?`
 measurements were polluted because the outer (Windows) shell expanded `$?`
-before WSL executed — every nested `bash -c "...echo $?..."` read the outer
+before WSL executed, every nested `bash -c "...echo $?..."` read the outer
 shell's status (0), not the MINK process's. Correct methodology: measure exit
 codes through Rust `Command` (as the test harness does) or via script files
 run with `wsl -- bash file.sh`, never via `echo $?` inside `wsl bash -c`.
@@ -48,7 +48,7 @@ catalogued E-R06 use error number 6 → exit **106**. Fixed by calling
 
 Root cause of the reported "net_recv ownership problem": **no language bug
 existed**. Both platforms' `rt_net_recv` allocate a fresh heap Str (length
-prefix + bytes) on every path — success, close, and error (`StrAlloc(0)`).
+prefix + bytes) on every path, success, close, and error (`StrAlloc(0)`).
 Session 91's tests merely *avoided* net_recv ("no recv to avoid leak
 checker"), hiding that the correct usage is `recv` then `rt_str_free`.
 
@@ -60,7 +60,7 @@ Chosen model (smallest, architecturally consistent):
   behavior is unchanged (its E-R06 leak tests still pass).
 - Updated the stale `stdlib/network.mink` docstring that claimed net_recv
   returns a pointer into a fixed BSS buffer that is overwritten each call.
-- Fixed a real latent leak on **both** platforms: `http_recv_all` never freed
+- Fixed a real latent leak on both platforms: `http_recv_all` never freed
   its per-chunk `net_recv` results (up to 1024 chunks). Restructured with a
   single textual `rt_str_free(data)` per iteration (MINK V1 move semantics
   forbid freeing in an early-exit branch and then using the value again).
@@ -126,10 +126,10 @@ algorithm the MINK code under test uses, so it stays deterministic.
 
 ## Quality gates (all pass)
 
-- `cargo fmt --check` — clean
-- `cargo clippy --all-targets --all-features` — no warnings in changed files
-- `cargo test` — all 56 test binaries pass (Windows + Linux-in-WSL)
-- `cargo build` / `cargo build --release` — clean
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets --all-features`: no warnings in changed files
+- `cargo test`: all 56 test binaries pass (Windows + Linux-in-WSL)
+- `cargo build` / `cargo build --release`: clean
 
 ## Remaining Linux gaps (accurate)
 
@@ -137,4 +137,4 @@ algorithm the MINK code under test uses, so it stays deterministic.
 - HTTP has no live end-to-end Linux test yet (http_recv_all leak now fixed;
   parsing-level http tests pass on Windows).
 - Crypto service coverage: crypto_secure_zero has no direct stdlib consumer
-  (secure zero is a MINK byte loop) — implementation exists for parity.
+  (secure zero is a MINK byte loop), implementation exists for parity.

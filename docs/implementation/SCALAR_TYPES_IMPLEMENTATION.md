@@ -10,14 +10,14 @@ HIR → MIR) fully supported them: literals, typing rules, and constant
 representations all existed. This session completes the milestone by
 making all three first-class native types:
 
-- **Float** — a 64-bit IEEE-754 double: SSE2 arithmetic (`+ - * / %`),
+- Float: a 64-bit IEEE-754 double: SSE2 arithmetic (`+ - * / %`),
   six comparisons and equality, unary negation, constants in every
   literal notation (decimal, scientific), function parameters/returns,
   locals, struct fields, array elements, and exact decimal printing with
   17 significant digits (shortest round-trip for `f64`).
-- **Char** — a single byte (layout `(1, 1)`), printable via the new
+- Char: a single byte (layout `(1, 1)`), printable via the new
   `rt_print_char` intrinsic, passable through functions.
-- **Null** — a word-sized unit-like value (layout `(8, 8)`), usable in
+- Null: a word-sized unit-like value (layout `(8, 8)`), usable in
   locals and returns.
 
 `main` may still not *return* any of these (`E-B09`): the entry stub
@@ -80,10 +80,10 @@ Both are registered in the typechecker's intrinsic table
     comparisons are false with NaN, `!=` is true).
 - Unary negation of a float operand flips the sign bit
   (`movabs rax, 0x8000…`; `xor`).
-- **Encoding fixes found while bringing the path up:** `movq xmmN, rax`
-  requires `REX.W` (`66 48 0F 6E`) — without it the CPU treats the
+- Encoding fixes found while bringing the path up: `movq xmmN, rax`
+  requires `REX.W` (`66 48 0F 6E`), without it the CPU treats the
   instruction as the 32-bit `movd`, silently truncating every constant;
-  the ModRM `reg` field (bits 3–5) holds the xmm destination, not the
+  the ModRM `reg` field (bits 3-5) holds the xmm destination, not the
   low bits. `movq rax, xmmN` is the mirrored `66 48 0F 7E`. The
   `%` path also had two latent bugs (the exponent mask was `0x7F`
   instead of `0x7FF`, and the shift count never reached `cl`), and the
@@ -162,7 +162,7 @@ net +5 with the converted tests).
 
 ## 11. Known limitations (unchanged)
 
-- `main` may not return `Float`/`Char`/`Null` (or any aggregate) — `E-B09`.
+- `main` may not return `Float`/`Char`/`Null` (or any aggregate), `E-B09`.
 - Tagged-union equality (`E-T30`), enum→`Int` conversion, struct/array
   destructuring/ranges/or-patterns, tuples, generics remain future
   milestones.

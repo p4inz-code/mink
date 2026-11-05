@@ -1,4 +1,4 @@
-# MINK String + Memory Type Implementation
+# MINK string + memory type implementation
 
 **Status:** Implemented (Session 13)
 **Version:** 0.1.0
@@ -7,30 +7,30 @@ This document describes the first real memory-backed aggregate foundation
 of the MINK language: the `Str` type, string literals as immutable byte
 data, typed pointers (`Ptr<Int>` in the current language), and the
 intrinsic operations that read and write them. It deliberately does **not**
-introduce arbitrary raw-pointer syntax or generics/closures — those are
+introduce arbitrary raw-pointer syntax or generics/closures. Those are
 future sessions. (Structs/arrays arrived in session 14 and compile-time
-move semantics for heap-owning values in session 15 — see
+move semantics for heap-owning values in session 15. See
 `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md` and
 `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`.)
 
 ## 1. Design boundaries
 
-- **One pointer type.** The runtime memory model has exactly one pointer
+- One pointer type. The runtime memory model has exactly one pointer
   type today: `Ptr<Int>`, a single 64-bit word holding a byte address.
   `TypeKind::Ptr<T>` is generic in the type system, but the only instantiated
   element is `Int` (the word the raw `rt_mem_*` intrinsics read/write).
-- **Strings are not pointers.** `Str` is a distinct type: a single word
+- Strings are not pointers. `Str` is a distinct type: a single word
   holding the address of a **length-prefixed UTF-8 byte blob**. The type
   checker forbids `Str` from flowing into the raw memory intrinsics and
   forbids pointers from flowing into the string intrinsics. No implicit
-  conversions exist — the only coercion is the null-pointer constant.
-- **Move semantics (session 15).** Explicit allocation and deallocation
+  conversions exist, the only coercion is the null-pointer constant.
+- Move semantics (session 15). Explicit allocation and deallocation
   (`rt_alloc`/`rt_free`, `rt_str_alloc`/`rt_str_free`) is the whole
   runtime model; at compile time an Owned `Str` moves on transfer
   (use-after-move is `E-S10`), literals copy freely, and mutating an
   Immutable string is `E-S11` (see `OWNERSHIP_IMPLEMENTATION.md`).
-- **No unsafe Rust.** Everything is safe Rust plus emitted machine code.
-- **Deterministic.** Identical sources produce byte-identical images and
+- No unsafe Rust. Everything is safe Rust plus emitted machine code.
+- Deterministic. Identical sources produce byte-identical images and
   identical runtime behavior; every runtime error has a stable code and
   exit status (`E-R09` for string index out of range).
 
@@ -45,13 +45,13 @@ word:    [ length (8 bytes, little-endian) ] [ data byte 0 ] [ data byte 1 ] ...
 
 - The length prefix is the blob's byte length (excluding the prefix).
 - Data is raw UTF-8 bytes; the language does not validate UTF-8 well-formedness
-  beyond the lexer's escape decoding — strings are byte sequences.
-- **String literals** are immutable blobs emitted into the image's `.text`
+  beyond the lexer's escape decoding, strings are byte sequences.
+- String literals are immutable blobs emitted into the image's `.text`
   string-data region (see §6). The runtime records the region's bounds in
   `.bss` at `rt_init` so the string intrinsics can validate that a literal
   string's address lies inside the immutable region and read its length
   prefix from the image.
-- **`rt_str_alloc(n)`** allocates a heap block of `8 + n` bytes (through
+- `rt_str_alloc(n)` allocates a heap block of `8 + n` bytes (through
   the validated `rt_alloc` path, so all `E-R02/03/08` rules apply) and
   writes the length prefix `n`. Fresh bumps are zero-filled; free-list
   reuse retains old contents, exactly like word allocations.
@@ -62,13 +62,13 @@ word:    [ length (8 bytes, little-endian) ] [ data byte 0 ] [ data byte 1 ] ...
 - `rt_free(p: Ptr<Int>)`, `rt_mem_load(p: Ptr<Int>) -> Int`, and
   `rt_mem_store(p: Ptr<Int>, v: Int)` consume typed pointers. The runtime
   still validates alignment and bounds at every access (`E-R07`, `E-R05`).
-- **Byte-addressed arithmetic:** `p + n`, `n + p`, `p - n` (with `n: Int`)
+- Byte-addressed arithmetic: `p + n`, `n + p`, `p - n` (with `n: Int`)
   advance the address by `n` bytes and produce `Ptr<Int>`. `p + q`,
   `p - q`, and `p + true` are invalid (`E-T02`). This is the session's
-  minimal addition — pointer subtraction is deliberately not specified.
-- **Equality:** `p == q` and `p != q` compare two pointers and produce
+  minimal addition, pointer subtraction is deliberately not specified.
+- Equality: `p == q` and `p != q` compare two pointers and produce
   `Bool`. Pointer/`Int` equality is rejected.
-- **Null pointer constant:** the integer literal `0`, and only the literal
+- Null pointer constant: the integer literal `0`, and only the literal
   `0`, is accepted in pointer-typed **argument positions** (intrinsic and
   user-function calls). A computed `Int` value is never a pointer, and
   `let p = 0` still types `p` as `Int`. The type checker plumbs the source
@@ -78,9 +78,9 @@ word:    [ length (8 bytes, little-endian) ] [ data byte 0 ] [ data byte 1 ] ...
 
 ## 4. Type system changes
 
-- `TypeKind::Ptr(TypeId)` — canonical, interned, structurally unified
+- `TypeKind::Ptr(TypeId)`: canonical, interned, structurally unified
   (`Ptr<Int>` unifies with `Ptr<Int>`; display is `Ptr<Int>`).
-- `TypeKind::Unit` — the result type of `rt_free`, `rt_str_*` mutators,
+- `TypeKind::Unit`: the result type of `rt_free`, `rt_str_*` mutators,
   `rt_print_*`, and `rt_exit`; the type checker already had a `Unit`
   notion for functions without results, now shared with intrinsic results.
 - `IntrinsicType` gained `Ptr` and `Str` variants used in the intrinsic
@@ -144,10 +144,10 @@ string-data region. A bad index is the new `E-R09`:
 
 `src/runtime/allocator.rs` is the executable specification:
 
-- `alloc_string(size)` — mirrors the machine `StrAlloc`, including the
+- `alloc_string(size)`: mirrors the machine `StrAlloc`, including the
   negative-size guard (`E-R08`), zero-fill on fresh bumps, and free-list
   reuse semantics.
-- `string_len(s)` / `string_byte(s, i)` / `set_string_byte(s, i, v)` —
+- `string_len(s)` / `string_byte(s, i)` / `set_string_byte(s, i, v)`
   mirror the machine routines; bad pointers are `E-R05`, bad indexes are
   `E-R09`. Block kinds are deliberately not tracked: the type checker is
   what keeps strings and word blocks apart, so a word block read as a
@@ -162,10 +162,10 @@ string-data region. A bad index is the new `E-R09`:
 - No explicit borrow syntax, lifetimes, or GC. Since session 15,
   compile-time move semantics apply to heap-owning values: an Owned `Str`
   moves on transfer (use-after-move is `E-S10`), literals copy freely,
-  and mutating an Immutable string is `E-S11` — see
+  and mutating an Immutable string is `E-S11`. See
   `docs/implementation/OWNERSHIP_IMPLEMENTATION.md`.
 - No arbitrary raw-pointer syntax (`&`, casts, address-of).
-- No generics or closures. (Structs and arrays arrived in session 14 — see
+- No generics or closures. (Structs and arrays arrived in session 14. See
   `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`.)
 - No string concatenation, slicing, or mutation of literals.
 - No pointer subtraction (`p - p`), pointer/pointer arithmetic, or
@@ -177,7 +177,7 @@ string-data region. A bad index is the new `E-R09`:
   copies; they never flow through the `rt_mem_*` intrinsics, which
   operate on raw 8-byte words at typed `Ptr<Int>` addresses. A struct or
   array value is never a `Ptr<Int>` and vice versa (`E-T01`).
-- A struct **field** may be of type `Str` or `Ptr<Int>`: the field holds
+- A struct field may be of type `Str` or `Ptr<Int>`: the field holds
   the single-word value exactly as a local would, and reading the field
   yields a value that can be passed to the string/pointer intrinsics or
   compared/arithmetic'd exactly like a local of the same type. Strings and
@@ -219,10 +219,10 @@ The backend lowering detects `Eq`/`Ne` on `BType::Str` operands and emits a
 the `StrEq` result is negated with a `Not` unary operation.
 
 This means:
-- Two heap-allocated strings with identical content compare **equal**.
+- Two heap-allocated strings with identical content compare equal.
 - A string literal and a heap-allocated string with the same content
   compare **equal**.
-- Two different heap-allocated strings compare **not-equal**.
+- Two different heap-allocated strings compare not-equal.
 
 `rt_str_eq` remains available as an explicit intrinsic for non-operator
 call-site comparisons.

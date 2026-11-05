@@ -1,4 +1,4 @@
-# MINK — AI and Developer Tooling Architecture
+# MINK: AI and developer tooling architecture
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -9,11 +9,11 @@ MINK must provide first-class tooling support for modern IDEs, developer tools, 
 
 AI compatibility must improve developer productivity without weakening security, correctness, privacy, or developer control.
 
-## 2. Tooling Principle
+## 2. Tooling principle
 
 The compiler should expose structured semantic information instead of forcing tools to parse human-readable terminal output.
 
-## 3. Language Server
+## 3. Language server
 
 MINK should provide an official Language Server Protocol implementation powered by the compiler semantic engine.
 
@@ -33,13 +33,13 @@ The linter should detect correctness issues, suspicious patterns, maintainabilit
 
 Compiler diagnostics must have stable machine-readable identifiers, source spans, severity, explanations, related locations, and suggested fixes.
 
-## 7. AI Interface
+## 7. AI interface
 
 MINK tooling should expose structured information to AI agents including project structure, symbols, types, dependencies, diagnostics, build commands, tests, configuration, and documentation.
 
 AI agents should be able to understand the project without reconstructing its semantics from raw text alone.
 
-## 8. Safe AI Changes
+## 8. Safe AI changes
 
 AI-generated modifications must remain reviewable, deterministic where possible, and reversible.
 
@@ -57,7 +57,7 @@ Refactoring operations should be compiler-aware rather than text-based wherever 
 
 Supported operations should eventually include rename, extraction, import management, API migration, type migration, and automated modernization.
 
-## 11. Project Inspection
+## 11. Project inspection
 
 The toolchain should provide structured project inspection for both humans and AI agents.
 
@@ -70,17 +70,17 @@ Examples may include:
 
 Exact commands remain subject to CLI design.
 
-## 12. Documentation Integration
+## 12. Documentation integration
 
 Public APIs should expose documentation through compiler and language-server tooling.
 
 Documentation must be accessible to IDEs and AI systems through structured metadata.
 
-## 13. Testing Integration
+## 13. Testing integration
 
 AI and IDE tooling should be able to discover and execute relevant tests based on changed symbols and dependencies.
 
-## 14. Build Integration
+## 14. Build integration
 
 Tooling should expose structured build information including targets, profiles, dependencies, compiler version, and configuration.
 
@@ -94,7 +94,7 @@ The toolchain must never expose secrets merely because an AI agent requests broa
 
 Tool outputs should be deterministic wherever practical so AI agents can reliably interpret results and reproduce fixes.
 
-## 17. Open Architecture Decisions
+## 17. Open architecture decisions
 
 The following must be finalized before architecture freeze:
 

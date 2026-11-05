@@ -3,10 +3,10 @@ MINK v1.0.4 Release
 
 Release Identity
 -----------------
-- Tag: v1.0.4 (annotated; created locally — not pushed, see "Registry state")
+- Tag: v1.0.4 (annotated; created locally. Not pushed, see "Registry state")
 - Branch: main
 - Platform: x86-64 Windows PE (Windows x86_64 is the frozen baseline)
-- npm: `@p4inz-code/mink@1.0.4` — **prepared and independently verified, publish pending a
+- npm: `@p4inz-code/mink@1.0.4`: **prepared and independently verified, publish pending a
   valid token**. The registry still serves 1.0.3 (`npm dist-tag ls` → `latest: 1.0.3`).
 - npm tarball: 28 files (`bin/mink.exe`, `package.json`, and all 26 `stdlib/*.mink`
   modules); `p4inz-code-mink-1.0.4.tgz`, 1348748 bytes (4332882 unpacked)
@@ -66,7 +66,7 @@ One wrong layer, three symptoms:
    `vec_min` / `vec_max` stayed unresolved for the whole program.
 3. The backend classified unresolved `Infer` as `BType::Unit` (`src/backend/lower.rs`,
    `classify`), and the backend verifier requires `Int` operands for `Lt/Le/Gt/Ge`
-   (`src/backend/verify.rs`) — hence `E-B07` for a function the program never called.
+   (`src/backend/verify.rs`), hence `E-B07` for a function the program never called.
 
 The first incorrect layer is the type checker's contract: unresolved operands must not
 reach the backend as `unit`. The fix is placed there.
@@ -108,19 +108,19 @@ Full Regression
 ---------------
 Run on the fixed source, all 71 integration targets plus the unit tests:
 
-- **2973 passed · 0 failed · 1 ignored** — 2852 integration passes over all 71 test
+- 2973 passed · 0 failed · 1 ignored: 2852 integration passes over all 71 test
   targets, plus 121 unit tests. The one ignored test
   (`s62_system_store_public_https`) requires public internet access and says so.
 - `tests/process_lib.rs` needs `NoDefaultCurrentDirectoryInExePath` unset on this
   machine: with it set, `cmd.exe` refuses a bare executable name from the current
-  directory and 8 of its 80 tests fail — identically under the shipped 1.0.3 binary, so
+  directory and 8 of its 80 tests fail, identically under the shipped 1.0.3 binary, so
   this is an environment property, not a compiler behaviour. With the variable unset the
   target is 80 passed · 0 failed.
 - After the version-only bump to 1.0.4, the version-sensitive and defect-adjacent targets
   were re-run: 11 targets, 483 passed · 0 failed.
 - `cargo build --release` clean; `cargo fmt --check` clean; `cargo clippy --all-targets`
   reports exactly the pre-existing baseline warning count (89 with the fix, 89 with the
-  fix stashed — no new warnings).
+  fix stashed, no new warnings).
 
 Verified From the Exact Tarball
 -------------------------------

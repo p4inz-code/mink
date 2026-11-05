@@ -1,4 +1,4 @@
-# Closures / Lambdas Implementation
+# Closures / lambdas implementation
 
 **Session:** 37  
 **Status:** Implemented  
@@ -23,7 +23,7 @@ ClosureParam  = Identifier [ ":" Type ] ;
 No-argument closures use `| |` (two pipes with a space). The parser
 recognises `| <params> |` as a closure expression.
 
-## 3. AST Representation
+## 3. AST representation
 
 ```rust
 ExprKind::Closure {
@@ -34,22 +34,22 @@ ExprKind::Closure {
 
 `ClosureParam` mirrors `Param` but uses the expression-level `Ident`.
 
-## 4. Monomorphization / Desugaring
+## 4. Monomorphization / desugaring
 
 The monomorphizer processes closures in Phase 3 (after generic
 function instantiation):
 
-1. **Capture discovery** — free variables are collected from the closure
+1. Capture discovery: free variables are collected from the closure
    body by walking identifiers and excluding parameters.
-2. **Function generation** — a synthetic `__closure_N` function is
+2. Function generation: a synthetic `__closure_N` function is
    created with:
    - Captured variables as leading sorted parameters.
    - Explicit closure parameters as trailing parameters.
    - The body wrapped in a `return` statement.
-3. **Variable rewriting** — a post-pass (Phase 3.5) finds
+3. Variable rewriting: a post-pass (Phase 3.5) finds
    `let x = __closure_N` bindings and rewrites `x(args)` to
    `__closure_N(captured..., args)`.
-4. **Item injection** — generated functions are appended to the AST
+4. Item injection: generated functions are appended to the AST
    as top-level items.
 
 All synthetic spans use `self.next_span()` to avoid collisions with
@@ -59,12 +59,12 @@ hand out, so a synthetic span can never equal a real declaration span: a
 collision used to replace `main`'s registered type with a captured
 parameter's, which is why a capturing closure in a file that started with
 one blank line failed with `E-H03`. Literal expressions are deliberately
-excluded from span reassignment — the AST stores no literal text, the
+excluded from span reassignment, the AST stores no literal text, the
 backend recovers a literal's value from source through its span, and a
 literal's type is fixed by its form, so clones share the original span
 (reassigning it made a monomorphized body's integer literal silently `0`)
 
-## 5. Type System
+## 5. Type system
 
 Closures have function type `Fn(params) -> ReturnType` where
 - parameter types come from annotations (or inference where supported).
@@ -75,22 +75,22 @@ carries function pointer semantics.
 
 ## 6. Backend
 
-- **FnPtr BType** — added to represent function pointer values.
-- **LoadFnPtr** — loads the address of a named function.
-- **IndirectCall** — performs an indirect call through a register.
-- **call_rax** — new emitter method for `call rax` (0xFF 0xD0).
+- FnPtr BType: added to represent function pointer values.
+- LoadFnPtr: loads the address of a named function.
+- IndirectCall: performs an indirect call through a register.
+- call_rax: new emitter method for `call rax` (0xFF 0xD0).
 
 When a closure variable is used as a value, the backend resolves it
 to a `LoadFnPtr` of the desugared function. Indirect calls are
 emitted via `IndirectCall`.
 
-## 7. Capture Semantics
+## 7. Capture semantics
 
 | Aspect | V1 Behavior |
 |--------|-------------|
 | Capture mode | By value (copy for `Int`/`Bool`/`Float`/`Char`, move otherwise) |
-| Mutable capture | Not supported — captured values are immutable |
-| Escaping | Limited — borrowing closures that outlive scope are rejected |
+| Mutable capture | Not supported, captured values are immutable |
+| Escaping | Limited, borrowing closures that outlive scope are rejected |
 | Ordering | Deterministic: captures sorted alphabetically, as leading parameters and at call sites (an earlier revision prepended them one at a time, which reversed the order and silently swapped the captured values) |
 
 ## 8. Limitations
@@ -105,7 +105,7 @@ emitted via `IndirectCall`.
 - Closures cannot be stored in structs/arrays (no indirect call through
   aggregates yet).
 
-## 9. Bug Fix
+## 9. Bug fix
 
 Session 37 also fixed a pre-existing bug in `analyze_block`: trailing
 result expressions in blocks were not analyzed by the semantic

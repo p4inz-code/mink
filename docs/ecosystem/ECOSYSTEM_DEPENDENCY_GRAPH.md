@@ -1,13 +1,13 @@
-# MINK Ecosystem Dependency Graph
+# MINK ecosystem dependency graph
 
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
-**Status:** DESIGN ONLY — not implemented
+**Status:** DESIGN ONLY, not implemented
 **Scope:** Dependency graph, implementation boundary, and staged roadmap
 
 ---
 
-## 1. Ecosystem Layer Dependency Graph
+## 1. Ecosystem layer dependency graph
 
 ### Complete dependency map
 
@@ -95,51 +95,51 @@
 
 ---
 
-## 2. What Must Exist Before Each Layer
+## 2. What must exist before each layer
 
-### L0 (Language) — EXISTS (V1.0.0)
-- ✅ Syntax
-- ✅ Semantics
-- ✅ Type system
-- ✅ Ownership model
-- ✅ Pattern matching
-- ✅ Generics (monomorphization)
-- ✅ Closures
+### L0 (language): EXISTS (V1.0.0)
+- Syntax
+- Semantics
+- Type system
+- Ownership model
+- Pattern matching
+- Generics (monomorphization)
+- Closures
 
-### L1 (Compiler) — EXISTS (V1.0.0)
-- ✅ Lexer
-- ✅ Parser
-- ✅ AST
-- ✅ Monomorphizer
-- ✅ Semantic analysis
-- ✅ Type checking
-- ✅ Ownership analysis
-- ✅ HIR lowering
-- ✅ MIR lowering
-- ✅ MIR optimization
-- ✅ Backend lowering
-- ✅ x86_64 code generation
-- ✅ PE container builder
-- ✅ Runtime embedding
+### L1 (compiler): EXISTS (V1.0.0)
+- Lexer
+- Parser
+- AST
+- Monomorphizer
+- Semantic analysis
+- Type checking
+- Ownership analysis
+- HIR lowering
+- MIR lowering
+- MIR optimization
+- Backend lowering
+- x86_64 code generation
+- PE container builder
+- Runtime embedding
 
-### L2 (Runtime) — EXISTS (V1.0.0)
-- ✅ ABI (internal)
-- ✅ Heap (fixed 1 MiB arena)
-- ✅ Intrinsics (rt_alloc, rt_free, rt_mem_*, rt_str_*, rt_vec_*)
+### L2 (runtime): EXISTS (V1.0.0)
+- ABI (internal)
+- Heap (fixed 1 MiB arena)
+- Intrinsics (rt_alloc, rt_free, rt_mem_*, rt_str_*, rt_vec_*)
 - ⬜ Dynamic heap (needs design + implementation)
 - ⬜ Platform abstraction (needs design + implementation)
 
-### L3 (Core Library) — PARTIALLY EXISTS
-- ✅ Option<T> (type only, no methods)
-- ✅ Result<T,E> (type only, no methods)
-- ✅ Vec<T> (runtime intrinsics only, no methods)
-- ✅ String operations (runtime intrinsics)
+### L3 (core library): PARTIALLY EXISTS
+- Option<T> (type only, no methods)
+- Result<T,E> (type only, no methods)
+- Vec<T> (runtime intrinsics only, no methods)
+- String operations (runtime intrinsics)
 - ⬜ Option methods (needs implementation)
 - ⬜ Result methods (needs implementation)
 - ⬜ Vec methods (needs implementation)
 - ⬜ String formatting (needs implementation)
 
-### L4 (Standard Library) — NOT STARTED
+### L4 (standard library): NOT STARTED
 - ⬜ Collections (HashMap, HashSet)
 - ⬜ Strings (extended operations)
 - ⬜ Math
@@ -150,26 +150,26 @@
 - ⬜ Networking
 - ⬜ Concurrency
 
-### L5 (Module System) — NOT STARTED
+### L5 (module system): NOT STARTED
 - ⬜ Package identity (mink.toml)
 - ⬜ Module declarations
 - ⬜ Visibility rules
 - ⬜ Import/export system
 - ⬜ Separate compilation
 
-### L6 (Package Manager) — NOT STARTED
+### L6 (package manager): NOT STARTED
 - ⬜ Dependency resolution
 - ⬜ Lockfile
 - ⬜ Build system
 - ⬜ CLI commands (init, add, build, test, run)
 
-### L7 (Registry) — NOT STARTED
+### L7 (registry): NOT STARTED
 - ⬜ Package hosting
 - ⬜ Version management
 - ⬜ Integrity verification
 - ⬜ Search
 
-### L8 (FFI/Interop) — NOT STARTED
+### L8 (FFI/Interop): NOT STARTED
 - ⬜ C ABI specification
 - ⬜ Export/import syntax
 - ⬜ Header generation
@@ -178,19 +178,19 @@
 - ⬜ C# integration
 - ⬜ Rust integration
 
-### L9 (Developer Tooling) — NOT STARTED
+### L9 (developer tooling): NOT STARTED
 - ⬜ Formatter
 - ⬜ Linter
 - ⬜ LSP
 - ⬜ Debugger
 
-### L10 (Domain Libraries) — NOT STARTED
+### L10 (domain libraries): NOT STARTED
 - ⬜ JSON library
 - ⬜ Web framework
 - ⬜ Database drivers
 - ⬜ ML inference
 
-### L11 (AI Infrastructure) — NOT STARTED
+### L11 (AI infrastructure): NOT STARTED
 - ⬜ JSON diagnostic output
 - ⬜ Structured error codes
 - ⬜ Machine-readable metadata
@@ -198,7 +198,7 @@
 
 ---
 
-## 3. Circular Dependency Prevention
+## 3. Circular dependency prevention
 
 ### Rules
 1. Each layer may only depend on layers below it
@@ -222,28 +222,28 @@ L0 ← L1 ← L2 ← L3 ← L4 ← L5 ← L6 ← L7
 - L8 does NOT depend on L4 (standard library)
 - This ensures FFI works without the full standard library
 
-### Exception: AI Infrastructure (L11)
+### Exception: AI infrastructure (L11)
 - L11 depends on L1 (compiler) for diagnostics
 - L11 does NOT depend on L4 (standard library)
 - This ensures AI tooling works with minimal dependencies
 
 ---
 
-## 4. Implementation Boundary
+## 4. Implementation boundary
 
-### IMPLEMENT NOW (Session 51+)
+### IMPLEMENT NOW (session 51+)
 None. This session is design-only.
 
 ### DESIGN ONLY (This session)
-- ✅ C ABI specification
-- ✅ Package architecture
-- ✅ Cross-platform architecture
-- ✅ Standard library architecture
-- ✅ Security architecture
-- ✅ Interoperability roadmap
-- ✅ AI developer architecture
-- ✅ Library priority framework
-- ✅ Ecosystem dependency graph
+- C ABI specification
+- Package architecture
+- Cross-platform architecture
+- Standard library architecture
+- Security architecture
+- Interoperability roadmap
+- AI developer architecture
+- Library priority framework
+- Ecosystem dependency graph
 
 ### AFTER PACKAGE FOUNDATION
 - Module system implementation
@@ -299,7 +299,7 @@ None. This session is design-only.
 
 ---
 
-## 5. Critical Path
+## 5. Critical path
 
 ```
 V1.0.0 (exists)
@@ -355,20 +355,20 @@ V1.0.0 (exists)
 
 ---
 
-## 6. Staged Roadmap
+## 6. Staged roadmap
 
-### STAGE 0: Architecture Foundation (THIS SESSION)
-- Design C ABI specification ✅
-- Design package architecture ✅
-- Design cross-platform architecture ✅
-- Design standard library architecture ✅
-- Design security architecture ✅
-- Design interoperability roadmap ✅
-- Design AI developer architecture ✅
-- Design library priority framework ✅
-- Design ecosystem dependency graph ✅
+### STAGE 0: architecture foundation (THIS SESSION)
+- Design C ABI specification
+- Design package architecture
+- Design cross-platform architecture
+- Design standard library architecture
+- Design security architecture
+- Design interoperability roadmap
+- Design AI developer architecture
+- Design library priority framework
+- Design ecosystem dependency graph
 
-### STAGE 1: Required Infrastructure (Sessions 51-56)
+### STAGE 1: required infrastructure (sessions 51-56)
 - Implement Option/Result/Vec methods
 - Implement string formatting
 - Implement dynamic heap allocator
@@ -377,7 +377,7 @@ V1.0.0 (exists)
 - Add JSON diagnostic output
 - Add error code documentation
 
-### STAGE 2: Library #1 — JSON (Sessions 57-60)
+### STAGE 2: library #1: JSON (sessions 57-60)
 - Implement JSON parser (recursive descent, zero-copy)
 - Implement JSON serializer (streaming, efficient)
 - Implement C ABI export/import syntax
@@ -385,7 +385,7 @@ V1.0.0 (exists)
 - Add JSON to standard library
 - Document, test, benchmark, security audit
 
-### STAGE 3: Library #2 — Filesystem + Strings (Sessions 61-66)
+### STAGE 3: library #2: filesystem + strings (sessions 61-66)
 - Implement Path type
 - Implement File operations
 - Implement directory operations
@@ -394,7 +394,7 @@ V1.0.0 (exists)
 - Implement package manager
 - Document, test, benchmark, security audit
 
-### STAGE 4: Library #3 — Collections + Math (Sessions 67-72)
+### STAGE 4: library #3: collections + math (sessions 67-72)
 - Implement HashMap<K,V>
 - Implement HashSet<T>
 - Implement basic math operations
@@ -403,7 +403,7 @@ V1.0.0 (exists)
 - Implement testing framework
 - Document, test, benchmark, security audit
 
-### STAGE 5: Library #4 — Cross-Platform + Interop (Sessions 73-78)
+### STAGE 5: library #4: cross-platform + interop (sessions 73-78)
 - Implement macOS ARM64 target
 - Implement Linux ARM64 target
 - Implement Python integration
@@ -411,7 +411,7 @@ V1.0.0 (exists)
 - Implement C# integration
 - Document, test, benchmark, security audit
 
-### STAGE 6: Library #5 — Application Libraries (Sessions 79-84)
+### STAGE 6: library #5: application libraries (sessions 79-84)
 - Implement time library
 - Implement encoding (Base64, hex, TOML)
 - Implement networking (TCP, UDP)
@@ -419,13 +419,13 @@ V1.0.0 (exists)
 - Implement registry
 - Document, test, benchmark, security audit
 
-### STAGE 7: Ecosystem Maturity (Sessions 85+)
+### STAGE 7: ecosystem maturity (sessions 85+)
 - Implement developer tooling (formatter, linter, LSP)
 - Implement domain libraries (web, database, ML)
 - Implement AI infrastructure
 - Ecosystem growth and community
 
-### STAGE 8: Language Evolution (V2+)
+### STAGE 8: language evolution (V2+)
 - Traits/interfaces
 - Async/await
 - Non-lexical lifetimes
@@ -434,7 +434,7 @@ V1.0.0 (exists)
 
 ---
 
-## 7. No Circular Dependencies
+## 7. No circular dependencies
 
 ### Verified dependency order
 

@@ -1,4 +1,4 @@
-# MINK — Type System Specification
+# MINK: type system specification
 
 **Status:** Planning / Specification
 **Version:** 0.1.0
@@ -17,7 +17,7 @@ The type system must balance:
 - Interoperability
 - Developer ergonomics
 
-## 2. Type Inference
+## 2. Type inference
 
 MINK should infer types whenever the compiler can determine the result unambiguously.
 
@@ -25,7 +25,7 @@ Explicit annotations remain available when they improve readability, API clarity
 
 Inference must never silently change the semantic meaning of a program.
 
-## 3. Primitive Types
+## 3. Primitive types
 
 MINK should provide well-defined primitive types for:
 
@@ -38,7 +38,7 @@ MINK should provide well-defined primitive types for:
 
 The exact widths and aliases will be finalized with the runtime and ABI specification.
 
-## 4. Numeric Safety
+## 4. Numeric safety
 
 Numeric conversions should be explicit when they can lose information, overflow, or change interpretation.
 
@@ -46,7 +46,7 @@ The compiler should detect statically provable numeric errors where practical.
 
 Runtime arithmetic behavior must be defined rather than silently relying on undefined behavior.
 
-## 5. Composite Types
+## 5. Composite types
 
 MINK must support user-defined composite types.
 
@@ -86,8 +86,8 @@ discriminant** (`A = 5`, Session 20); otherwise the discriminant is the
 previous variant's value plus one, starting at 0. A unit-only enum value
 occupies a single word, copies freely, and never participates in
 ownership/move analysis; an enum with a data-carrying variant (Session
-19) is a tagged union — a discriminant word plus a payload area sized for
-the largest variant — whose payloads may own heap values and therefore
+19) is a tagged union, a discriminant word plus a payload area sized for
+the largest variant, whose payloads may own heap values and therefore
 move on transfer. Enum equality (`==`/`!=`) requires the same enum type
 and produces `Bool` for unit-only enums; tagged-union equality is
 `E-T30`. There is no ordering, arithmetic, or `Int` conversion. Enum
@@ -103,13 +103,13 @@ duplicate discriminant `E-T31`, discriminant overflow `E-T32`. See
 **Deferred:** enum-to-`Int` conversion, deriving, and generics over
 enums.
 
-## 8. Sum Types
+## 8. Sum types
 
 MINK should provide a type-safe mechanism for representing values that may belong to one of several alternatives.
 
 **Implemented (session 19):** data-carrying enum variants are the
 mechanism: `enum Option { Some(Int), None }` declares a closed set of
-alternatives, exactly one of which a value holds at a time — the
+alternatives, exactly one of which a value holds at a time. The
 compiler-computed discriminant word selects the active variant and a
 shared payload area holds its payload. Construction is `Option::Some(5)`;
 pattern matching integrates directly with compiler exhaustiveness
@@ -118,10 +118,10 @@ covered, `E-T24`/`E-T25`); owned payloads participate in ownership/move
 analysis. See `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.
 
 **Deferred:** tuple payloads (multiple payload values) and tagged-union
-equality. (Explicit discriminants are implemented — session 20, see
+equality. (Explicit discriminants are implemented, session 20, see
 `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`.)
 
-## 9. Optional Types
+## 9. Optional types
 
 Absence is represented explicitly by an optional type.
 
@@ -131,7 +131,7 @@ The compiler should diagnose unsafe unwrapping whenever statically possible.
 
 Optional handling should have concise syntax so safe code remains ergonomic.
 
-## 10. Result Types
+## 10. Result types
 
 MINK should provide a standard result abstraction for operations that may succeed or fail.
 
@@ -152,7 +152,7 @@ The compiler should select an implementation strategy appropriate to the target 
 
 The implementation must avoid unnecessary runtime overhead where specialization or other safe optimization is possible.
 
-## 12. Generic Constraints
+## 12. Generic constraints
 
 MINK should support constraints on generic parameters.
 
@@ -160,7 +160,7 @@ Constraints must allow generic code to express the operations and capabilities i
 
 The final constraint mechanism may use interfaces, traits, protocols, or another equivalent abstraction.
 
-## 13. Interfaces and Traits
+## 13. Interfaces and traits
 
 MINK should provide a mechanism for describing shared capabilities across unrelated concrete types.
 
@@ -174,7 +174,7 @@ The mechanism must support:
 
 The final implementation model remains an architecture decision.
 
-## 14. Type Aliases
+## 14. Type aliases
 
 MINK should support aliases for existing types where aliases improve API readability or domain modeling.
 
@@ -194,7 +194,7 @@ Example conceptual use cases include:
 - Network ports
 - Database identifiers
 
-## 16. Function Types
+## 16. Function types
 
 Functions are values and may be stored, passed, returned, and composed.
 
@@ -202,7 +202,7 @@ Function types must include their parameter and result types.
 
 Closures must be able to capture values according to the language memory/resource model.
 
-## 17. Type Compatibility
+## 17. Type compatibility
 
 Two types should be compatible only when their relationship is explicitly defined by the type system.
 
@@ -210,7 +210,7 @@ Structural compatibility, nominal compatibility, or a combination may be used wh
 
 The final model must prioritize predictability and long-term maintainability.
 
-## 18. Implicit Conversions
+## 18. Implicit conversions
 
 Implicit conversions must be conservative.
 
@@ -218,7 +218,7 @@ Conversions that may lose information or introduce ambiguity should require expl
 
 Safe, obvious conversions may be implicitly supported if doing so improves ergonomics without weakening type safety.
 
-## 19. Type Narrowing
+## 19. Type narrowing
 
 The compiler should be able to refine a value type after proven checks.
 
@@ -226,7 +226,7 @@ For example, checking an optional value for presence should allow subsequent cod
 
 Type narrowing must remain sound across branches, loops, closures, and asynchronous boundaries.
 
-## 20. Pattern Matching
+## 20. Pattern matching
 
 Pattern matching is a core type-system feature.
 
@@ -244,20 +244,20 @@ The compiler should detect non-exhaustive matches when exhaustive analysis is po
 **Implemented (sessions 18, 19, and 27):** `match` dispatches on `Int`,
 `Bool`, and enum scrutinees with literal, binding, wildcard, variant, and
 payload patterns (sessions 18/19). Session 27 adds **or-patterns**
-(`1 | 2 | 3`, `E::A(x) | E::B(x)` — alternatives must bind the same
+(`1 | 2 | 3`, `E::A(x) | E::B(x)`, alternatives must bind the same
 names with the same types, `E-T34` on mismatch, and share one binding),
 **range patterns** (`1..=5` inclusive, `1..5` exclusive, with negated
 endpoints; well-typed only on `Int` scrutinees, and coverage is tracked
 as integer intervals so partial `Int` coverage is reported precisely by
 `E-T25`), and **guards** (`pat if expr =>`; the guard must be `Bool`,
 `E-T09` on mismatch, is evaluated after the pattern matches with the
-pattern's bindings in scope, and a guarded arm commits no coverage — the
+pattern's bindings in scope, and a guarded arm commits no coverage. The
 uncovered space is still reported). See
 `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md` (Session 18),
 `docs/implementation/SUM_TYPES_IMPLEMENTATION.md` (Session 19), and
 `docs/implementation/RICHER_PATTERNS_IMPLEMENTATION.md` (Session 27).
 
-## 21. Type Safety and Runtime Checks
+## 21. Type safety and runtime checks
 
 MINK should reject statically provable invalid operations at compile time.
 
@@ -265,7 +265,7 @@ Runtime type checks remain available when information is unavailable statically,
 
 Runtime checks must produce structured failures rather than undefined behavior.
 
-## 22. Type Erasure and Dynamic Values
+## 22. Type Erasure and dynamic values
 
 MINK may provide controlled dynamic-value mechanisms for interoperability, reflection, serialization, scripting boundaries, and external data.
 
@@ -281,13 +281,13 @@ The compiler must prevent unsafe substitution of generic types.
 
 The exact variance model will be finalized alongside the generic implementation strategy.
 
-## 24. Type Reflection
+## 24. Type reflection
 
 MINK should provide controlled type metadata capabilities where useful for serialization, tooling, debugging, dependency injection, and framework development.
 
 Reflection must not impose unavoidable overhead on programs that do not use it.
 
-## 25. ABI and FFI Interaction
+## 25. ABI and FFI interaction
 
 Foreign-function interfaces must provide explicit type mappings between MINK and external representations.
 
@@ -295,7 +295,7 @@ Unsafe or lossy mappings must be visible and diagnosable.
 
 The C ABI will be a primary interoperability boundary.
 
-## 26. Type Diagnostics
+## 26. Type diagnostics
 
 Type errors are a major part of the MINK diagnostic experience.
 
@@ -311,7 +311,7 @@ Diagnostics should identify:
 
 When multiple errors share one root cause, the compiler should identify the root error and suppress or group misleading cascading errors where possible.
 
-## 27. Type-System Performance
+## 27. Type-System performance
 
 Type checking must remain scalable for large codebases.
 
@@ -319,13 +319,13 @@ The compiler architecture should support incremental analysis and caching where 
 
 Complex generic code should not cause disproportionate compile-time costs without clear diagnostics.
 
-## 28. Type-System Stability
+## 28. Type-System stability
 
 Type semantics are part of MINKs long-term compatibility contract.
 
 Once stabilized, fundamental type behavior should evolve conservatively.
 
-## 29. Open Technical Decisions
+## 29. Open technical decisions
 
 The following remain architecture-level decisions:
 

@@ -1,8 +1,8 @@
-# Session 103 — Windows Complete Feature Audit
+# Session 103: Windows complete feature audit
 
 **Status:** audit completed, evidence-backed classification recorded.
 **Session type:** verification hardening + repository truth (NOT a new-language-feature wave).
-**Linux status:** FROZEN — no Linux targets touched.
+**Linux status:** FROZEN, no Linux targets touched.
 
 ---
 
@@ -19,7 +19,7 @@ This is the Session 102 commit. It already contains the Session 101 Wave B work
 (Map/Set/Vec-typed-runtime in the emitter, descriptor tables, typed-element layout,
 `for`-loop collection iteration). The on-disk parity matrix on disk at
 `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md` is still the stale
-Session 98 matrix and does **not** describe this work — that is itself an audit finding.
+Session 98 matrix and does **not** describe this work. That is itself an audit finding.
 
 **Ending HEAD:** `1c4b1df` + `00a8466`  
 **Ending message:** `docs: SESSION_103_WINDOWS_COMPLETE_FEATURE_AUDIT.md`  
@@ -30,10 +30,10 @@ Session 98 matrix and does **not** describe this work — that is itself an audi
 
 ## 2. What changed in this session
 
-- `src/runtime/intrinsics.rs` — corrected the `rt_map_new` intrinsic signature in the
+- `src/runtime/intrinsics.rs`: corrected the `rt_map_new` intrinsic signature in the
   documentation-only catalog to match the emitter/lower reality (0 source-level args,
   hidden descriptor ids appended during lowering). No runtime semantics changed.
-- `docs/implementation/SESSION_103_WINDOWS_COMPLETE_FEATURE_AUDIT.md` — this file.
+- `docs/implementation/SESSION_103_WINDOWS_COMPLETE_FEATURE_AUDIT.md`: this file.
 
 That is the complete diff for the commit.
 
@@ -46,13 +46,13 @@ That is the complete diff for the commit.
 | `cargo fmt --check` | PASS (fmt was already clean; confirmed) |
 | `cargo build` (debug) | PASS |
 | `cargo build --release` | PASS |
-| `mink` (no args) | PASS — prints usage, no panic/hang |
-| `mink version` | PASS — `mink 1.0.1` |
-| `mink --version` | PASS — `mink 1.0.1` |
-| `mink -v` | PASS — `mink 1.0.1` |
-| `mink -V` | PASS — `mink 1.0.1` |
+| `mink` (no args) | PASS, prints usage, no panic/hang |
+| `mink version` | PASS, `mink 1.0.1` |
+| `mink --version` | PASS, `mink 1.0.1` |
+| `mink -v` | PASS, `mink 1.0.1` |
+| `mink -V` | PASS, `mink 1.0.1` |
 
-`cargo clippy` was NOT run this session in order to finish fast. The session 100/101
+`cargo clippy` was NOT run this session to finish fast. The session 100/101
 work already passed clippy in its own session, and the only source change here is a
 documentation-only intrinsics.rs edit plus a new markdown file. A full clippy run is
 recommended before the next push if time permits; it is not a blocker for this audit's
@@ -75,7 +75,7 @@ core conclusion.
 - Leak-free execution confirmed when `rt_vec_free` is called before `rt_exit(0)`.
 - Without `rt_vec_free`, the runtime correctly reports `E-R06: memory leak: live
   allocations remain at exit` and exits with code 106. That confirms the leak scanner
-  still catches Vec leaks on Windows — matches the Session 102 E-R04 regression intent.
+  still catches Vec leaks on Windows, matches the Session 102 E-R04 regression intent.
 
 ### 4.3 Strings (native PE execution)
 
@@ -87,7 +87,7 @@ core conclusion.
 
 ### 4.4 Map (native PE execution)
 
-**Result: PARTIAL — compiler-facing type/system work exists; public-use service not yet wired.**
+**Result: PARTIAL, compiler-facing type/system work exists; public-use service not yet wired.**
 
 - `mink build ./tmp/map_probe.mink` fails with `E-T05: expected 0 arguments, found 1`
   on `rt_map_new(8)`.
@@ -116,7 +116,7 @@ core conclusion.
 
 ### 4.5 Set (native PE execution)
 
-**Result: PARTIAL — same class of issue as Map.**
+**Result: PARTIAL, same class of issue as Map.**
 
 - Same intrinsics-catalog/contact story: `rt_set_new` expects hidden descriptor ids appended
   by the emitter; the catalog signature must match the public-facing call shape for handwritten
@@ -136,7 +136,7 @@ cover Map or Set.
 
 ---
 
-## 5. The Map/Set situation — precisely stated
+## 5. The Map/Set situation: precisely stated
 
 The Session 102 commit already contains Map/Set as compiler-and-emitter work. The previous
 note in the session brief that "Map is currently reported as potentially broken" was too vague.
@@ -149,7 +149,7 @@ The real state is:
 - The intrinsics catalog entry for `rt_map_new` (and `rt_set_new`) is out of sync with the
   emitter's calling convention for bare-source calls.
 - No MINK source anywhere in the repository exercises Map or Set through the public intrinsics.
-- Therefore Map/Set are **PARTIAL**, not BROKEN in the "crashes on Windows" sense.
+- Therefore Map/Set are PARTIAL, not BROKEN in the "crashes on Windows" sense.
 
 The fix is narrowly scoped: make the intrinsics catalog arity match the emitter/lower reality
 and add at least one `.mink` probe (insert + get + has + len + free) exercised as a native
@@ -305,9 +305,9 @@ remains a next-tranche item.
 
 ## 8. What is PARTIAL this session (Windows)
 
-- **Map** — compiler/emitter work exists; public intrinsics catalog arity is wrong for bare
+- Map: compiler/emitter work exists; public intrinsics catalog arity is wrong for bare
   `rt_map_new(8)` source calls; no `.mink` source exercises Map on Windows end-to-end.
-- **Set** — same class as Map.
+- Set: same class as Map.
 
 Both are PARTIAL with a precise, non-critical, fixable root cause. They are **not** BROKEN in
 the "crashes on Windows" sense.
@@ -363,11 +363,11 @@ No ownership bug was discovered this session. The leak scanner continues to work
 
 ## 13. Diagnostics findings
 
-- `E-T01 expected Int found Bool` — correctly produced when `Bool` passed to `rt_print_int`.
-- `E-T05 expected 0 arguments found 1` — correctly produced for `rt_map_new(8)` with the
+- `E-T01 expected Int found Bool`: correctly produced when `Bool` passed to `rt_print_int`.
+- `E-T05 expected 0 arguments found 1`: correctly produced for `rt_map_new(8)` with the
   current (wrong) catalog signature.
-- `E-S02 duplicate definition` — correctly produced when probe used `let m = ...` twice.
-- `E-R06 memory leak` — correctly produced and exited 106.
+- `E-S02 duplicate definition`: correctly produced when probe used `let m = ...` twice.
+- `E-R06 memory leak`: correctly produced and exited 106.
 
 The diagnostic machinery is healthy.
 
@@ -417,15 +417,15 @@ a next-tranche item; not a blocker for the current classification.
 
 ## 19. P0 / P1 / P2 / P3
 
-### P0 — none this session
+### P0: none this session
 No Windows feature compiles and then crashes or produces wrong output on native execution.
 
-### P1 — one item
-- **P1 (Map/Set useability):** `rt_map_new`/`rt_set_new` bare-source calls fail with `E-T05`
+### P1: one item
+- P1 (Map/Set useability): `rt_map_new`/`rt_set_new` bare-source calls fail with `E-T05`
   because the intrinsics catalog arity is wrong. Fix: align the catalog with the emitter/lower
   convention and add at least one Windows-native Map probe test. This blocks real Map/Set use.
 
-### P2 — several items
+### P2: several items
 - Add a minimal Windows-native Map probe (insert, get, has, len, free) as a Rust integration
   test or `.mink`+shim test.
 - Add a minimal Windows-native Set probe.
@@ -436,7 +436,7 @@ No Windows feature compiles and then crashes or produces wrong output on native 
 - Verify standalone executable execution in a clean directory.
 - Run representative real applications end-to-end on Windows.
 
-### P3 — documentation and polish
+### P3: documentation and polish
 - Refresh the parity matrix at `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md`
   to reflect Session 101 Wave B work (Map/Set/Vec-typed/runtime must no longer be described
   against the stale Session 98 matrix).
@@ -451,11 +451,11 @@ The parity matrix on disk is stale (Session 98). This session does not increase 
 parity percentage; it establishes the ground truth for the already-implemented Session 101 Wave B
 work. The parity impact is:
 
-- **Vec:** remains VERIFIED; evidence strengthened (native leak-free + leak-detected both confirmed).
-- **Map:** should be reclassified from whatever stale matrix says to PARTIAL until the catalog fix
+- Vec: remains VERIFIED; evidence strengthened (native leak-free + leak-detected both confirmed).
+- Map: should be reclassified from whatever stale matrix says to PARTIAL until the catalog fix
   + native probe lands.
-- **Set:** same as Map.
-- **CLI version forms:** all four confirmed VERIFIED on Windows.
+- Set: same as Map.
+- CLI version forms: all four confirmed VERIFIED on Windows.
 
 Do not inflate the parity percentage based on the stale matrix. The matrix must be refreshed
 against this audit.
@@ -480,11 +480,11 @@ session. This audit covers Windows only.
 
 ## 23. Remaining Windows blockers
 
-1. **P1:** Fix `rt_map_new`/`rt_set_new` intrinsics catalog arity so bare-source calls compile,
+1. P1: Fix `rt_map_new`/`rt_set_new` intrinsics catalog arity so bare-source calls compile,
    then add at least one Windows-native Map probe and one Set probe and run them.
-2. **P2:** Refresh the parity matrix to reflect Session 101 Wave B.
-3. **P2:** Run clippy before next push.
-4. **P2:** Verify temp dir, CLI path edge cases, npm clean install, standalone clean-directory
+2. P2: Refresh the parity matrix to reflect Session 101 Wave B.
+3. P2: Run clippy before next push.
+4. P2: Verify temp dir, CLI path edge cases, npm clean install, standalone clean-directory
    execution, and representative real applications.
 
 ---
@@ -506,13 +506,13 @@ session. This audit covers Windows only.
 
 Answer, evidence-backed:
 
-- **Yes for the exercised core:** CLI, version reporting, release PE build, Vec, strings,
+- Yes for the exercised core: CLI, version reporting, release PE build, Vec, strings,
   type checker diagnostics, leak scanner, and the existing Vec test suites all work correctly
   on native Windows PE execution.
-- ** PARTIAL for Map/Set:** implemented in compiler/emitter, but the public intrinsics catalog
+-  PARTIAL for Map/Set: implemented in compiler/emitter, but the public intrinsics catalog
   is wrong for bare-source use, and no MINK source exercises them on Windows yet. Not crashing;
   just not usable from handwritten source until the narrow catalog fix lands.
-- **UNTESTED for distribution/CLI-edge/temp-dir/standalone/npm/clean-environment:** implemented
+- UNTESTED for distribution/CLI-edge/temp-dir/standalone/npm/clean-environment: implemented
   or shipped, but no Windows evidence gathered this session.
 
 So the honest answer is: **the exercised core is trustworthy; Map/Set are partially implemented

@@ -1,8 +1,8 @@
-# SESSION 57 — COLLECTIONS LIBRARY + FOUNDATION HARDENING
+# SESSION 57: COLLECTIONS LIBRARY + FOUNDATION HARDENING
 
-## 1. Foundation Improvements
+## 1. Foundation improvements
 
-### Short-Circuit Evaluation (&&, ||)
+### Short-Circuit evaluation (&&, ||)
 **Fixed!** `&&` and `||` now properly short-circuit: the right-hand side is only evaluated if needed.
 
 Before: `len > 0 && rt_str_byte(s, 0) == 47` would crash on empty strings because both sides were always evaluated.
@@ -13,7 +13,7 @@ After: If `len > 0` is false, `rt_str_byte(s, 0)` is never called.
 - `a && b` → evaluate `a`, branch: if false → result=false, else → evaluate `b`, result=`b`
 - `a || b` → evaluate `a`, branch: if true → result=true, else → evaluate `b`, result=`b`
 
-### New Vec Runtime Services (3)
+### New vec runtime services (3)
 | Service | Arity | Purpose |
 |---------|-------|---------|
 | VecSet | 3 | Bounds-checked set: data[index] = value |
@@ -33,14 +33,14 @@ After: If `len > 0` is false, `rt_str_byte(s, 0)` is never called.
 | Aggregates | vec_sum, vec_min, vec_max |
 | Transformations | vec_reverse |
 
-### Memory Model
+### Memory model
 - Vec is a pointer to `[capacity(i64), length(i64), element0, element1, ...]`
 - Initial capacity specified at creation
 - Automatic growth with 2x strategy on push
 - Bounds-checked access (E-R10 for out-of-range)
 - Freed via vec_free → rt_vec_free
 
-## 3. Test Results
+## 3. Test results
 | Suite | Tests | Status |
 |-------|-------|--------|
 | collections_lib | 24 | ALL PASS |
@@ -49,16 +49,16 @@ After: If `len > 0` is false, `rt_str_byte(s, 0)` is never called.
 | encoding_lib | 57 | ALL PASS |
 | math_lib | 106 | ALL PASS |
 | filesystem_lib | 33 | ALL PASS |
-| **Total ecosystem** | **330** | **ALL PASS** |
+| Total ecosystem | 330 | ALL PASS |
 
-## 4. Quality Gates
-- ✅ `cargo fmt --check` — clean
-- ✅ `cargo clippy --all-targets` — 0 new warnings (17 pre-existing)
-- ✅ `cargo test` — 0 failures, 0 regressions
-- ✅ `cargo build` — success
-- ✅ `cargo build --release` — success
+## 4. Quality gates
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets`: 0 new warnings (17 pre-existing)
+- `cargo test`: 0 failures, 0 regressions
+- `cargo build`: success
+- `cargo build --release`: success
 
-## 5. Files Changed
+## 5. Files changed
 | File | Change |
 |------|--------|
 | src/mir/lower.rs | +80 lines: short-circuit desugaring for && and || |
@@ -70,7 +70,7 @@ After: If `len > 0` is false, `rt_str_byte(s, 0)` is never called.
 | tests/collections_lib.rs | 400 lines: 24 tests |
 | docs/implementation/SESSION_57_COLLECTIONS.md | This file |
 
-## 6. Ecosystem Library Status
+## 6. Ecosystem library status
 | Library | Status |
 |---------|--------|
 | JSON | LOCKED |
@@ -80,15 +80,15 @@ After: If `len > 0` is false, `rt_str_byte(s, 0)` is never called.
 | Filesystem | LOCKED |
 | Collections | ECOSYSTEM-READY |
 
-## 7. Known Limitations
-1. **Vec operations only support Int elements** — no generic/heterogeneous collections
-2. **vec_clear is a no-op** — can't modify length field via intrinsics
-3. **No sorting** — would require function values/closures for comparator
-4. **No HashMap** — would require hashing + equality primitives
-5. **No iterator abstraction** — use existing while loops
+## 7. Known limitations
+1. Vec operations only support Int elements: no generic/heterogeneous collections
+2. vec_clear is a no-op: can't modify length field via intrinsics
+3. No sorting: would require function values/closures for comparator
+4. No HashMap: would require hashing + equality primitives
+5. No iterator abstraction: use existing while loops
 
-## 8. Session 57 Key Achievements
-1. **Fixed short-circuit evaluation** — major correctness improvement for the language
-2. **Added 3 new Vec operations** — set, pop, remove
-3. **Built collections library** — 24 functions covering Vec operations
-4. **Zero regressions** — all 330 ecosystem tests pass
+## 8. Session 57 key achievements
+1. Fixed short-circuit evaluation: major correctness improvement for the language
+2. Added 3 new Vec operations: set, pop, remove
+3. Built collections library: 24 functions covering Vec operations
+4. Zero regressions: all 330 ecosystem tests pass

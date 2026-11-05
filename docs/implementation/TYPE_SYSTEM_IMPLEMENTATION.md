@@ -1,8 +1,8 @@
-# MINK — Type System Implementation
+# MINK: type system implementation
 
 **Status:** Implementation
 **Version:** 0.1.0
-**Session:** 06–07 — Type System Foundation & Type Inference
+**Session:** 06-07, Type System Foundation & Type Inference
 
 ## 1. Objective
 
@@ -20,8 +20,8 @@ At the end of this session the following works end to end:
         → Semantic Analysis → Type Analysis → diagnostics
 
 `mink check <path>` now performs lexical, syntactic, **semantic**, and
-**type** analysis. The type result — the type of every expression and every
-symbol, plus type diagnostics — is a durable structure for the future HIR
+**type** analysis. The type result, the type of every expression and every
+symbol, plus type diagnostics, is a durable structure for the future HIR
 stage. No HIR, MIR, code generation, or runtime work was introduced.
 
 ## 2. Architecture
@@ -59,7 +59,7 @@ re-runs name resolution or scope construction. The semantic/type boundary
 is strict: names, scopes, declarations, mutability, and control-flow context
 belong to semantic analysis; the type checker only reads that information.
 
-## 3. Type Representation
+## 3. Type representation
 
 Types live in a small arena ([`TypeTable`]) addressed by stable numeric
 ids ([`TypeId`]). [`TypeKind`] is the kind of a type:
@@ -81,7 +81,7 @@ ids ([`TypeId`]). [`TypeKind`] is the kind of a type:
 
 Concrete types are **interned**: pushing `Int` twice returns the same id,
 so type identity is cheap and two occurrences of the same literal type
-compare equal by identity. Inference variables are never interned — each
+compare equal by identity. Inference variables are never interned. Each
 is a distinct mutable slot.
 
 `TypeTable` is the single owner and exposes the canonical view:
@@ -93,7 +93,7 @@ is a distinct mutable slot.
   `fn(Int) -> Bool`, `unresolved`, `unknown`);
 - `unify(a, b)` is the single authoritative compatibility mechanism (§5).
 
-## 4. Core Types
+## 4. Core types
 
 The core type catalog is exactly what the current milestone requires
 (`docs/language/CORE_LANGUAGE.md` §26). No speculative types were added:
@@ -101,12 +101,12 @@ The core type catalog is exactly what the current milestone requires
 types, ownership types, and every other advanced form in
 `docs/language/TYPE_SYSTEM.md` remain future milestones. Session 14 added
 user-declared **structs** (nominal types, one per declaration) and
-**arrays** (`Array<T, N>`, structural/canonical) — see
+**arrays** (`Array<T, N>`, structural/canonical), see
 `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`. Session 17 added
-user-declared **enums** (nominal types with data-free variants) — see
-`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md` — and Session 19 added
+user-declared **enums** (nominal types with data-free variants). See
+`docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`, and Session 19 added
 **data-carrying variants** (sum types: payload construction, payload
-patterns, tagged-union layout) — see
+patterns, tagged-union layout), see
 `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`.
 
 Type identity is the interned [`TypeId`]; equality is canonical identity
@@ -122,23 +122,23 @@ is the honest type of the literal that exists today, and operations on it
 follow the ordinary rules (only `null == null` / `null != null` are
 well-typed).
 
-## 5. Type Equality, Compatibility, and Unification
+## 5. Type equality, compatibility, and unification
 
 [`TypeTable::unify`] is the single authoritative type-comparison mechanism;
 operators and the checker never scatter ad-hoc comparisons. Unify answers:
 
-- *are these types identical?* — canonical ids equal;
-- *are these types compatible?* — unify succeeds;
-- *can this value be assigned to this type?* — the assignment path unifies
+- *are these types identical?*: canonical ids equal;
+- *are these types compatible?*: unify succeeds;
+- *can this value be assigned to this type?*. The assignment path unifies
   the value with the target's type.
 
 Rules, in order:
 
 1. Identical canonical types unify to themselves.
-2. The **error type absorbs any type**: the result is the error type, and
+2. The error type absorbs any type: the result is the error type, and
    an unconstrained inference variable is linked to the error type so
    later uses of that variable stay silently unknown (cascade control, §8).
-3. An **inference variable adopts the other type** (union-find style);
+3. An inference variable adopts the other type (union-find style);
    two unconstrained variables link to each other.
 4. Structurally equal composite types unify recursively: `Range` against
    `Range` unifies the element types; `Fn` against `Fn` requires the same
@@ -151,7 +151,7 @@ recursion is bounded by type nesting depth, which the current grammar
 cannot make deep (nested ranges are rejected by the range rule, and
 function types do not nest).
 
-## 6. Inference Variables and the Inference Boundary
+## 6. Inference variables and the inference boundary
 
 The current grammar has no type annotations, so the checker performs the
 **minimum inference the language requires** (§28 of the session brief):
@@ -172,7 +172,7 @@ The current grammar has no type annotations, so the checker performs the
   logical operators, whose result is `Bool` regardless of operand types.
 
 Session 07 added the **bidirectional direction** (expected types flowing
-into expressions) where the context determines the answer — see
+into expressions) where the context determines the answer. See
 `docs/implementation/TYPE_INFERENCE_IMPLEMENTATION.md`:
 
 - `if`/`while` conditions are checked against the expected type `Bool`
@@ -191,7 +191,7 @@ Three type states are clearly distinguished:
 | State      | Meaning                                                       |
 | ---------- | ------------------------------------------------------------- |
 | Concrete   | A known type (`Int`, `Float`, …, `Range<Int>`, `fn(Int) -> Bool`) |
-| Unresolved | An unconstrained `Infer(None)` — nothing is known yet         |
+| Unresolved | An unconstrained `Infer(None)`, nothing is known yet         |
 | Error      | Something already went wrong; operations on it stay quiet     |
 
 The full future inference engine (bidirectional inference, generic
@@ -199,7 +199,7 @@ unification with type parameters, constraint solving) is out of scope; the
 variable/unification design deliberately leaves room for it without
 rewriting the checker.
 
-## 7. Type Environment
+## 7. Type environment
 
 The type environment is `symbol_types`, a vector indexed by
 [`SymbolId::raw()`] matching the session-05 [`SymbolTable`]: one type slot
@@ -218,7 +218,7 @@ Expression types are keyed by the expression's exact source span: every
 expression node covers a unique span within a file, so spans are stable
 node identities without mutating the AST.
 
-## 8. The Unknown/Error Type
+## 8. The unknown/Error type
 
 The `Error` type is the cascade-control mechanism:
 
@@ -231,10 +231,10 @@ The `Error` type is the cascade-control mechanism:
 The result: one root error (for example `E-S01` from an unresolved name, or
 a single invalid operator) never cascades into a swarm of meaningless
 secondary diagnostics, while invalid programs can never silently pass
-beyond their actual errors — every *root* violation is still reported, and
+beyond their actual errors, every *root* violation is still reported, and
 dependent constructs are marked unknown for later stages.
 
-## 9. Literal Typing
+## 9. Literal typing
 
 | Literal   | Type    |
 | --------- | ------- |
@@ -249,7 +249,7 @@ The checker answers *"what type does this literal have?"* directly from the
 AST node kind; the literal's raw text is not needed (no decoding, matching
 the AST design). There are no implicit conversions at this stage.
 
-## 10. Declaration Typing
+## 10. Declaration typing
 
 For `let x = e;`, `let mut x = e;`, and `const x = e;` the binding's
 variable unifies with the type of `e`; mutability remains entirely a
@@ -262,15 +262,15 @@ mutually recursive functions type-check.
 `for` variables unify with the iterable's element type (`for i in 0..10`
 makes `i` an `Int`).
 
-## 11. Identifier Typing
+## 11. Identifier typing
 
 An identifier expression is typed through [`SemanticResult::resolve`],
-which maps the identifier's span to its [`SymbolId`] — name resolution is
+which maps the identifier's span to its [`SymbolId`], name resolution is
 never re-run. The type is the symbol's environment slot, so `let x = 10; x;`
 gives the second `x` exactly the type the declaration established, and
 shadowing resolves to the innermost symbol's own slot.
 
-## 12. Expression Typing
+## 12. Expression typing
 
 Every expression is typed and recorded under its span:
 
@@ -288,7 +288,7 @@ Every expression is typed and recorded under its span:
 | Call            | §17                                                             |
 | Member / Index  | §18 (deferred)                                                  |
 
-## 13. Operator Typing
+## 13. Operator typing
 
 The checker groups the frozen operator set into categories with exactly one
 rule each (`docs/language/CORE_LANGUAGE.md` §26):
@@ -313,24 +313,24 @@ operand poisons the result silently (§8).
 
 ### 13.3 Pointers and strings (session 13)
 
-- **Byte-addressed pointer arithmetic** — `p + n`, `n + p`, `p - n` with
+- Byte-addressed pointer arithmetic: `p + n`, `n + p`, `p - n` with
   `p: Ptr<T>` and `n: Int` produce `Ptr<T>`; the address advances by `n`
   bytes. `p + q`, `p - q`, `p + true`, and any other combination are
   `E-T02` invalid-operator errors. Pointer subtraction is deliberately not
   specified.
-- **Pointer equality** — `p == q` / `p != q` (two pointers, any element)
+- Pointer equality: `p == q` / `p != q` (two pointers, any element)
   produce `Bool`; a pointer compared with an `Int` or any other type is
   rejected. The unconstrained operand of a pointer equality adopts the
   pointer type.
-- **Strings are scalar but not numeric** — `Str` participates in equality
+- Strings are scalar but not numeric: `Str` participates in equality
   (`s == s` is `Bool`) and nothing else: `s + 1` is `E-T02`.
-- **Null pointer constant** — the integer literal `0`, and only that
+- Null pointer constant: the integer literal `0`, and only that
   literal, is accepted in pointer-typed argument positions (§17); a
   computed `Int` is never a pointer, and `let p = 0` types `p` as `Int`.
   The checker identifies the literal through the source map (plumbed into
   `check`), so no reinterpretation of arbitrary values occurs.
 
-### 13.1 Numeric mixing — documented decision
+### 13.1 Numeric mixing: documented decision
 
 MINK defines **no implicit numeric conversions at this stage**. Mixed
 integer/float operations (`1 + 2.5`), comparisons, and equality are
@@ -346,7 +346,7 @@ There is **no truthiness**: `&&`, `||`, and `!` require `Bool` operands
 and reject everything else (`1 && true` is an error). This matches
 `CORE_LANGUAGE.md` §26 and avoids inventing truthiness semantics.
 
-## 14. Control-Flow Typing
+## 14. Control-Flow typing
 
 - `if` and `while` conditions are checked against the expected type `Bool`
   (`E-T01` on conflict); an unconstrained condition is **pinned to `Bool`**
@@ -361,7 +361,7 @@ and reject everything else (`1 && true` is an error). This matches
   type.
 - `break`/`continue` are control-flow only; they have no type.
 
-## 15. Assignment Typing
+## 15. Assignment typing
 
 The semantic stage owns target writability (§19 of the session brief) and
 the type checker adds **only** type compatibility:
@@ -376,31 +376,31 @@ the type checker adds **only** type compatibility:
   span as primary, and the target span as a related location);
 - compound assignments (`+= -= *= /= %=`) apply the corresponding binary
   rule and report the **compound** symbol (`E-T02`, e.g. `+=`);
-- member/index targets are deferred (§18) — their base and index
+- member/index targets are deferred (§18). Their base and index
   expressions are still typed.
 
-## 16. Range Typing
+## 16. Range typing
 
 Both endpoints must be the same numeric type (`E-T03` otherwise); the
 result is `Range<endpoint>`. Mixed numeric endpoints (`0..1.5`) and
 non-numeric endpoints (`0.."a"`) are rejected. Open-ended ranges, iterator
 semantics, and collection semantics were deliberately not added.
 
-## 17. Call Typing
+## 17. Call typing
 
 Call checking is real but bounded by what the current type model supports:
 
 - the callee must resolve to a function type, otherwise the call is either
   `E-T04` (a known non-function value, e.g. `x(2)` where `x: Int`), or
-  deferred (an unresolved/unknown callee — the semantic stage already
+  deferred (an unresolved/unknown callee. The semantic stage already
   reports unresolved names, and unknown callees produce a fresh
   unconstrained result instead of a fabricated one);
 - the argument count must match the declared parameter count (`E-T05`);
-- each argument unifies with its parameter (`E-T01` on conflict) — because
+- each argument unifies with its parameter (`E-T01` on conflict). Because
   parameters are inference variables shared with the body, a call can
   conflict with a constraint the body imposed (`fn f(p) { p + 1; }` then
   `f(true)` is an error);
-- **the null pointer constant** — a pointer-typed parameter additionally
+- the null pointer constant: a pointer-typed parameter additionally
   accepts the integer literal `0` (identified via the source map); every
   other value must unify with the pointer type, so `Str` never feeds the
   raw memory intrinsics and `Ptr<Int>` never feeds the string intrinsics;
@@ -423,7 +423,7 @@ a declared member (`E-T08`); the expression types as the field type.
 - Struct literals must name every declared field exactly once (`E-T12`
   unknown, `E-T13` missing, `E-T14` duplicate); array literals must be
   non-empty (`E-T17`) with one common element type.
-- Member/index **assignment** types the stored value against the
+- Member/index assignment types the stored value against the
   field/element type and requires the base binding to be `mut` (a
   semantic `AssignmentToImmutable` error, never doubled by the type
   checker).
@@ -491,7 +491,7 @@ report).
   assignments report two `E-T01`s);
 - lexical or syntax errors suppress semantic and type analysis entirely.
 
-## 20. Semantic Integration
+## 20. Semantic integration
 
 `driver::check` runs type analysis whenever parsing succeeded, whether or
 not semantic analysis reported errors: the checker consumes the semantic
@@ -517,7 +517,7 @@ The CLI success message is now
   amortized near-constant time.
 - No AST mutation, no global state, no unsafe code.
 
-## 22. Security and Robustness
+## 22. Security and robustness
 
 Compiler input is untrusted. The checker:
 
@@ -529,7 +529,7 @@ Compiler input is untrusted. The checker:
 - allocates only in proportion to source size;
 - keeps no global mutable state.
 
-## 23. Known Limitations
+## 23. Known limitations
 
 - No implicit numeric conversions: mixed integer/float operations are
   rejected until a conversion design lands (documented decision, §13.1).
@@ -541,8 +541,8 @@ Compiler input is untrusted. The checker:
   requirement of its first constraint, and the bidirectional directions
   (conditions → `Bool`, iterables → `Range<T>`, boolean/integer operators
   → their operand type) are the only expected-type propagation. Genuinely
-  ambiguous uses — `-`, arithmetic or comparison/equality on two
-  unconstrained operands — stay unresolved until a later constraint or a
+  ambiguous uses, `-`, arithmetic or comparison/equality on two
+  unconstrained operands, stay unresolved until a later constraint or a
   future constraint solver decides (§26 of `TYPE_INFERENCE_IMPLEMENTATION.md`).
 - Equality is allowed for the six scalar types only; range and function
   equality are rejected until their semantics are specified.
@@ -559,39 +559,39 @@ byte-addressed arithmetic, pointer equality, the null-pointer-`0` rule,
 and every rejection path) documented in
 `STRING_MEMORY_IMPLEMENTATION.md`. Categories:
 
-- **Literals**: integer/float/string/char/bool/null typing and expression
+- Literals: integer/float/string/char/bool/null typing and expression
   recording.
-- **Identifiers**: declaration typing, reference typing, nested and
+- Identifiers: declaration typing, reference typing, nested and
   shadowed references, unresolved → error type, module binding visibility.
-- **Declarations**: inferred `let`, `let mut`, `const`, propagation,
+- Declarations: inferred `let`, `let mut`, `const`, propagation,
   module order independence, `for` variable element typing.
-- **Operators**: valid and invalid arithmetic, logical, comparison,
+- Operators: valid and invalid arithmetic, logical, comparison,
   equality, bitwise, shift, and unary operations, including the
   mixed-numeric rejection and no-truthiness rule.
-- **Assignment**: valid, incompatible (`E-T01` with expected/actual/related
+- Assignment: valid, incompatible (`E-T01` with expected/actual/related
   spans), immutable/const single-error behavior, compound assignment,
   chains, member/index assignment typing.
-- **Aggregates (session 14)**: struct/array literal typing (`E-T12`–`E-T17`),
+- Aggregates (session 14): struct/array literal typing (`E-T12`–`E-T17`),
   member/index typing (`E-T07`–`E-T10`), constant-index range checks
   (`E-T11`), recursive/empty/oversized layout rejection (`E-T18`),
-  deferred member resolution through call-site-pinned parameters —
+  deferred member resolution through call-site-pinned parameters
   documented in `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`
   and covered in `tests/aggregate.rs`.
-- **Calls**: valid calls, arity (`E-T05`), non-callable values (`E-T04`),
+- Calls: valid calls, arity (`E-T05`), non-callable values (`E-T04`),
   argument conflicts (`E-T01`), result propagation, recursion, deferred
   unknown callees, unresolved callee silence.
-- **Control flow**: consistent and conflicting returns, condition typing,
+- Control flow: consistent and conflicting returns, condition typing,
   unknown-condition deferral, non-range iterables (`E-T06`).
-- **Ranges**: int/float/inclusive range types, mixed and non-numeric
+- Ranges: int/float/inclusive range types, mixed and non-numeric
   endpoint rejection.
-- **Error cascades**: unknown symbols, unknown symbols inside expressions,
+- Error cascades: unknown symbols, unknown symbols inside expressions,
   multiple independent errors, semantic+type combinations, error-type
   propagation, bounded operator chains.
-- **Type environment**: symbol→type map, identity of equal types, distinct
+- Type environment: symbol→type map, identity of equal types, distinct
   types, inference resolution, expression lookup by span.
-- **Robustness**: deep nesting, 200 functions, 300-term chains, hand-built
-  unusual ASTs, unresolved names everywhere — no panics.
-- **Inference (session 07)**: chained/mutually constrained declarations,
+- Robustness: deep nesting, 200 functions, 300-term chains, hand-built
+  unusual ASTs, unresolved names everywhere. No panics.
+- Inference (session 07): chained/mutually constrained declarations,
   deep 200-link chains, parameter/return inference, recursion, mutual
   recursion, argument-driven and result-driven resolution, conflicting
   returns and incompatible constraints, pinning (conditions, iterables,
@@ -605,7 +605,7 @@ the updated success message; session 07 added inference CLI tests for a
 recursive program, incompatible call constraints, conflicting returns, and
 pinned-condition conflicts.
 
-## 25. Quality Gates
+## 25. Quality gates
 
 As before:
 
@@ -621,24 +621,24 @@ After session 18 (pattern matching, `E-T24`…`E-T26`) it is **963 tests**
 (see `PATTERN_MATCHING_IMPLEMENTATION.md` §6), after session 19
 (data-carrying enum variants, `E-T27`…`E-T30`, tagged-union layout) it is
 **1007 tests** (see `SUM_TYPES_IMPLEMENTATION.md` §5), and after session
-20 (explicit enum discriminants, `E-T31`…`E-T32`) it is **1039 tests**, and after the Session 21 deep audit (enum-borrow E-T19 rejection, deref-rooted assignment E-T33, duplicate E-S10 removal, match-field partial-move alignment; +9 regression tests in `tests/references.rs` / `tests/ownership.rs`) it is **1048 tests**.
+20 (explicit enum discriminants, `E-T31`…`E-T32`) it is **1039 tests**, and after the Session 21 deep audit (enum-borrow E-T19 rejection, deref-rooted assignment E-T33, duplicate E-S10 removal, match-field partial-move alignment; +9 regression tests in `tests/references.rs` / `tests/ownership.rs`) it is 1048 tests.
 (see `DISCRIMINANTS_IMPLEMENTATION.md` §5).
 
-## 26. Later Milestones
+## 26. Later milestones
 
-The type-system foundation (sessions 06–07) deliberately stops before
+The type-system foundation (sessions 06-07) deliberately stops before
 advanced features. Cleanly deferred to later milestones:
 
 - implicit conversions and numeric promotion rules;
 - tuple payloads (a data-carrying variant holds exactly one payload) and
-  tagged-union equality (data-carrying enum variants are implemented —
+  tagged-union equality (data-carrying enum variants are implemented
   session 19, see
   `docs/implementation/SUM_TYPES_IMPLEMENTATION.md`; explicit
-  discriminants are implemented — session 20, see
+  discriminants are implemented, session 20, see
   `docs/implementation/DISCRIMINANTS_IMPLEMENTATION.md`; data-free enums
-  are implemented — session 17, see
+  are implemented, session 17, see
   `docs/implementation/ENUM_TYPES_IMPLEMENTATION.md`; pattern matching
-  over them is implemented — session 18, see
+  over them is implemented, session 18, see
   `docs/implementation/PATTERN_MATCHING_IMPLEMENTATION.md`); tuples;
   generic user-defined types; advanced member/index forms (e.g. indexing
   `Str` and other built-ins);

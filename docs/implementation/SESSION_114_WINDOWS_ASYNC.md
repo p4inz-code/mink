@@ -1,12 +1,12 @@
-# Session 114 — Windows async / event loop (R20, S73)
+# Session 114: Windows async / event loop (R20, S73)
 
 **Parity blockers closed:** R20 `Async / event loop`, S73 `async/await + event
-loop` — MISSING → **VERIFIED**
+loop`, MISSING → **VERIFIED**
 **Parity-blocking set:** 7 → 5 (S62, P04, P05, P06, P09 remain)
 **Linux:** frozen. The Windows-only services live in
 `src/backend/emit/runtime.rs`; the shared changes (`src/runtime/error.rs`,
 `src/runtime/intrinsics.rs`, `src/backend/{ir,lower}.rs`, `src/parser/*`,
-`src/runtime/abi.rs`) recompile the Linux target unchanged — every new
+`src/runtime/abi.rs`) recompile the Linux target unchanged. Every new
 `RuntimeService` variant is emitted only by the Windows runtime, and the
 `async fn` / `await` desugar is a front-end transformation that produces the
 same ordinary call and codegen path.
@@ -22,11 +22,11 @@ same ordinary call and codegen path.
 - The language surface: `async fn name(args) -> T { body }` and `await expr`
   (`src/parser/mod.rs`: `parse_async_fn`, the `await` prefix in `parse_unary`,
   `pub`-qualified async fns handled in `parse_pub_items`).
-- `stdlib/tasks.mink` — `task_spawn`/`task_await`/`task_run`/`task_pending`/
+- `stdlib/tasks.mink`: `task_spawn`/`task_await`/`task_run`/`task_pending`/
   `task_stop` (mirrored into the npm bundle).
-- `tests/async_lib.rs` — 23 permanent tests; each compiles a real Windows PE
+- `tests/async_lib.rs`: 23 permanent tests; each compiles a real Windows PE
   through the `mink build` CLI and executes it.
-- `examples/async_tasks/main.mink` — a small end-to-end proof application.
+- `examples/async_tasks/main.mink`: a small end-to-end proof application.
 - `E-R13` (`AsyncTaskInvalid`) added to the runtime error catalog.
 
 ## Architecture
@@ -49,7 +49,7 @@ scan reports `E-R06` (`r20_uncollected_task_is_a_leak`). A second collect of
 the same handle is a stable error rather than a crash
 (`r20_double_collect_is_a_stable_error`), and awaiting a heap pointer that was
 never produced by `rt_task_spawn` is `E-R13`
-(`r20_await_of_a_non_task_allocation_is_rejected`) — the handle is read through
+(`r20_await_of_a_non_task_allocation_is_rejected`), the handle is read through
 the runtime's validated word load.
 
 **Loop state and locking.** The loop list head and the outstanding-task count
@@ -69,13 +69,13 @@ that silently runs synchronously.
 
 ## Defects found and fixed (all by native execution)
 
-1. **Stale-handle fault.** `await` originally dereferenced its operand as a raw
+1. Stale-handle fault. `await` originally dereferenced its operand as a raw
    pointer, so a stale or bogus handle crashed the process instead of
    reporting. It now goes through the runtime's validated word load, so the
    failure is the stable `E-R05`/`E-R13` path, with a permanent regression
    (`r20_await_of_a_non_task_allocation_is_rejected`,
    `r20_double_collect_is_a_stable_error`).
-2. **Dropped `pub async fn`.** `pub async fn` in a module was parsed as a
+2. Dropped `pub async fn`. `pub async fn` in a module was parsed as a
    single `pub` item whose body was silently discarded, so a module exported
    an async fn that did not exist. `parse_pub_items` now handles the `async`
    modifier after `pub`; `s73_async_across_module_boundaries` covers both the
@@ -115,17 +115,17 @@ runs it as a separate process; a clean exit is also the leak proof, because
 
 ## Documented limits (not defects)
 
-- **One word in, one word out.** A task is `fn(arg: Int) -> Int`; strings and
+- One word in, one word out. A task is `fn(arg: Int) -> Int`; strings and
   aggregates travel as a context pointer, exactly as with R19 threads.
-- **One collector per task.** Two threads must not collect the same task; the
+- One collector per task. Two threads must not collect the same task; the
   second collect is a stable error rather than a coordinated wait.
-- **No readiness-driven wakeup.** S63's non-blocking sockets are usable from
+- No readiness-driven wakeup. S63's non-blocking sockets are usable from
   inside a task, but the loop does not wake a task on I/O readiness.
-- **`async` is a declaration modifier.** There are no async closures or
+- `async` is a declaration modifier. There are no async closures or
   lambdas, and no `async` blocks.
-- **Cooperative cancellation is not implemented.** `task_stop` stills the
+- Cooperative cancellation is not implemented. `task_stop` stills the
   loop's own bookkeeping; a running task is not interrupted.
-- **All tasks share one arena.** A task that exhausts the 1 MiB heap makes
+- All tasks share one arena. A task that exhausts the 1 MiB heap makes
   every other thread fail with `E-R02`.
 
 ## Matrix updates
@@ -137,10 +137,10 @@ mechanically by row scan (232 rows; VERIFIED 95, MISSING 74, PARTIAL 34; P1 5).
 
 ## Final state
 
-- Parity-blocking set: **5** (S62, P04, P05, P06, P09).
+- Parity-blocking set: 5 (S62, P04, P05, P06, P09).
 - `tests/async_lib.rs` 23/23. Regression re-run green for `parser` 98,
   `threads_lib` 17, `zlib_lib` 15, `zip_lib` 10, `sqlite_lib` 16.
-- `tests/typecheck.rs` has **one pre-existing failure**
+- `tests/typecheck.rs` has one pre-existing failure
   (`references_flow_through_calls`: the type of `*p` through a call is
   `unknown` instead of `Int`). It reproduces on clean `ae1aeba` with the
   Session 114 work stashed, so it is not an async regression; it is a real
