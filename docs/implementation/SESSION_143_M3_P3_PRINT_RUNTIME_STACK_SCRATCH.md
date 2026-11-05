@@ -252,9 +252,31 @@ tests.
 
 The fix, the four regressions, the runtime documentation and this record form
 one focused commit on `main`, built from the HEAD blobs plus only this
-session's hunks; the working tree continues to carry the uncommitted Sessions
-128–142 work. The commit hash and the final tree state are recorded here after
-the commit is created.
+session's hunks; no Sessions 128–142 content entered it.
+
+**Commit:** `6e88a7bcd62b0e853967d3625e125657f2ec4f2e` — *runtime: give the print
+paths per-call scratch and atomic lines* (6 files, +581/−63). The archived
+commit tree was checked with `cargo check` before the branch was moved.
+
+Final state:
+
+- HEAD: `6e88a7bcd62b0e853967d3625e125657f2ec4f2e`; `origin/main`
+  `b860837a8a6039f304a503e3d85728a643ab470b`; ahead 6, behind 1.
+- Working tree: 0 staged; the Sessions 128–142 changes remain uncommitted.
+  This record is listed as modified because the hash and state above were
+  added after the commit (the same pattern as Session 142).
+- `git diff --check`: clean. Version **1.0.4**.
+- No push, tag, publish, merge, rebase, reset, clean, stash or amend.
+
+### 10.1 Why the commit contains only this session's hunks
+
+`src/backend/emit/runtime.rs` and `tests/threads_lib.rs` also carry
+uncommitted Session 134/141 work. The commit was built from the HEAD blobs plus
+only the five changed print functions (int/char/float/write/str_from_float) and
+the three appended thread tests, then verified: no `emit_net_wsa_set_last_error`
+and no Session 141 test entered it; the only remaining `print_buf` use is
+HEAD's `emit_str_from_int`, which Session 134's uncommitted fix replaces in the
+working tree. The working tree was not reset, stashed, checked out or cleaned.
 
 ## 11. Remaining M3 work
 

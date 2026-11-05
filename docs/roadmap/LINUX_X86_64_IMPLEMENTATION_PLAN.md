@@ -1,6 +1,6 @@
 # MINK Linux x86_64 Implementation Plan
 
-**Status:** Implementation Blueprint (Session 83) — **INACTIVE: Linux development is FROZEN**
+**Status:** Implementation Blueprint (Session 83) — **INACTIVE: Linux development is FROZEN until the M8 strategic gate**
 **Date:** August 31, 2026
 
 ---
@@ -12,6 +12,11 @@
 > no new Linux behavior is being implemented, and Linux is *not* a supported platform. The
 > supported, completed baseline is Windows x86_64. Preserve this plan's sequencing only;
 > do not treat it as active work.
+>
+> **Roadmap lock (Session 128).** Linux and any additional platform remain **FROZEN until the
+> M8 strategic gate is passed** (see M9 in the canonical locked roadmap:
+> [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md)). No Linux work may
+> start before M8, and this file must not be executed.
 
 ---
 

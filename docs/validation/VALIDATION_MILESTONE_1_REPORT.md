@@ -1,5 +1,13 @@
 # Windows Practical-Parity Validation — Milestone 1 Final Report
 
+> **Roadmap note (Session 128 lock).** This is the evidence record for **M1 — Real
+> Application Validation** in the canonical locked roadmap (10 applications, 228 executable
+> cases, one real semantic defect found and fixed, commit
+> `bb3ff1e3caafdb00004223ff4a5a204ecdf7724d`). The document's "parity" wording is the
+> original framing of the milestone: it measured *practical usability against a Python
+> reference*, not a goal of reaching 100% Python feature parity. MINK does not need 100%
+> Python parity. See [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](../roadmap/IMPLEMENTATION_ROADMAP.md).
+
 # 1. Scope and baseline
 
 Prove Python-parity for realistic applications built with the Windows

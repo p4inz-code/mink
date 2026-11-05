@@ -155,12 +155,13 @@ The full-suite total is Session 141's **3,101** plus these two tests → **3,103
 
 ## 12. Final state
 
-- HEAD `1d6fa24896c106c2ef7213d841e66eb6e3938b76`; `origin/main`
-  `b860837a8a6039f304a503e3d85728a643ab470b`; still ahead 4, behind 1.
-- Working tree: 0 staged; 34 modified tracked files; 20 pre-existing untracked entries plus this
-  record. `git diff --check` clean.
+- HEAD after this session's commit: `27ce9c84d3552eca02f7586569a7378d09eee00c` (the baseline was
+  `1d6fa24896c106c2ef7213d841e66eb6e3938b76`); `origin/main`
+  `b860837a8a6039f304a503e3d85728a643ab470b`; ahead 5, behind 1.
+- Working tree: 0 staged; the Sessions 128–141 work remains uncommitted (the Files changed in
+  §9 now show as modified relative to the new HEAD because the working copies still carry the
+  Session 141 work on top). `git diff --check` clean.
 - Version **1.0.4**.
-- Commit status: see §13.
 
 ## 13. Commit
 
@@ -168,5 +169,7 @@ The fix is runtime-only and independent of Sessions 128–141, so it was isolate
 that contains **only** this session's work: the emitter guard, the two tests and this record (plus
 the one-line standard-library contract comment in both mirrors). The commit was built from the
 HEAD blobs plus those hunks, so no Sessions 128–141 content entered it; the working tree still
-carries all of their uncommitted changes. The exact hash and the final `git status` are in the
-session handoff.
+carries all of their uncommitted changes.
+
+**Commit:** `27ce9c84d3552eca02f7586569a7378d09eee00c` — *runtime: guard net_last_error against
+use before net_init* (5 files, +232/−2). No push, tag or publish.

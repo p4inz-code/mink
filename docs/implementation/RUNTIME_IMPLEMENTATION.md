@@ -100,10 +100,18 @@ The `.text` entry-point stub:
 | `Fail`             | `rt_fail(number)`                 | write diagnostic, exit `100 + number`  |
 | `WriteStdout`      | `write(buf, len)`                 | cached handle through `WriteFile`      |
 | `WriteStderr`      | `write(buf, len)`                 | cached handle through `WriteFile`      |
+| `ThreadLocalGet`   | `rt_thread_local_get() -> word`   | calling thread's scratch cell (0 in a fresh thread) |
+| `ThreadLocalSet`   | `rt_thread_local_set(value)`      | write the calling thread's scratch cell |
 
-Printing has no initialization dependency. `rt_print_int`, `rt_print_float`
-and `rt_print_char` format their text in per-call stack scratch and write the
-text and its CRLF with one `WriteStdout` call. They read no cell written by
+Printing of numeric and character values has no initialization dependency.
+`rt_print_int`, `rt_print_float` and `rt_print_char` format their text in
+per-call stack scratch and write the text and its CRLF with one `WriteStdout`
+call. `rt_print_str` also writes one complete line at a time: it copies the
+payload into per-call storage, appends CRLF, and performs one `WriteStdout`.
+Lines up to 4,062 bytes use a 4,064-byte stack buffer; longer lines use a
+temporary validated-heap block that is freed after the write (the string path
+already requires `rt_init` for literal validation). Neither path truncates,
+translates embedded CR/LF, nor splits a line across writes. They read no cell written by
 `rt_init` (the image's `.bss` is loader-zeroed, and the stdout handle is
 fetched and cached on first use), so the first print needs no `rt_init`.
 There is no print init flag, no print cleanup, and no allocation. Because the
@@ -112,6 +120,26 @@ cannot overwrite each other's digits or split each other's lines; no lock or
 thread-local state is involved. `rt_str_from_float` still formats through the
 same float writer, but its write redirect stores the arming thread's id, so a
 print on another thread cannot be captured into the formatter's sink.
+
+### Per-thread runtime scratch (Session 144)
+
+`rt_thread_local_get() -> Int` / `rt_thread_local_set(value: Int)` expose one
+word of runtime state **per thread**. On Windows the `.bss` cell `tls_slot`
+holds `TlsAlloc()`'s index + 1: `rt_init` allocates the index once, before
+`main`, so the first access cannot race, and the loader-zeroed 0 means "not
+allocated" (TLS index 0 is a valid index, hence the tag). The getter and
+setter call `TlsGetValue`/`TlsSetValue`; when the slot was never allocated
+(or `TlsAlloc` failed), the getter answers 0 and the setter is a no-op, so
+they are safe before `Init` and never pass an invalid index. Every thread —
+including one created by `rt_thread_spawn` — starts at 0. On Linux, whose
+runtime is frozen and has no thread-local mechanism, the cell is one
+process-global word, i.e. the pre-Session 144 behavior.
+
+The first user is `stdlib/http.mink`: `http_last_error()` is the calling
+thread's most recent HTTP outcome, so a request on one thread cannot
+overwrite the reason another thread observes. The cell is not heap-managed
+and has no cleanup; the TLS index lives for the process. No lock is needed:
+the slot index is written once by `rt_init` and only read afterwards.
 
 The intrinsics are predeclared as `SymbolKind::Intrinsic` module symbols
 (`rt_alloc`, `rt_free`, `rt_mem_load`, `rt_mem_store`, `rt_str_alloc`,
@@ -126,6 +154,32 @@ string-data region (bounds recorded into `.bss` at `rt_init`);
 `rt_str_alloc` creates heap blobs through the validated allocator. The
 string intrinsics validate their pointer argument first (`E-R05`) and
 bounds-check every index (`E-R09`).
+
+### Bounded socket operations (Session 145)
+
+`rt_net_so_error(sock) -> Int` exposes
+`getsockopt(sock, SOL_SOCKET, SO_ERROR, &optval, &optlen)` on the existing
+`getsockopt` pointer in the extended ws2_32 table (resolved since Session
+125, so no import or `.bss` change). It returns the pending socket error (0
+when there is none), or -1 when the query fails or networking is not
+initialized. The stdlib uses it to confirm a non-blocking connect: `WSAPoll`
+reports a completed and a failed handshake alike as writable, and SO_ERROR is
+the actual result.
+
+`stdlib/network.mink`'s `net_recv_timeout` and `net_connect_timeout` add a
+per-call millisecond budget on top of that: a receive waits for readability
+with `WSAPoll` before the existing blocking `recv`; a connect runs
+non-blocking, waits for writability, reads SO_ERROR, and restores blocking
+mode on success. A timeout is reported as WSAETIMEDOUT (10060) through
+`net_last_error()`; the budget is an argument, never socket or process state.
+The ordinary blocking calls are unchanged.
+
+Two readiness defects found while wiring this were fixed in the same
+emitters: `WSAPoll` and `ioctlsocket` return `int`, so their -1 is now
+sign-extended (`cdqe`), and `rt_net_set_nonblocking` tests the `on` argument
+explicitly instead of branching on stale flags, so `on == 0` really restores
+blocking mode. The stdlib's writable event mask no longer contains
+`POLLWRBAND`, which `WSAPoll` rejects with WSAEINVAL.
 
 ## 6. Runtime diagnostics
 

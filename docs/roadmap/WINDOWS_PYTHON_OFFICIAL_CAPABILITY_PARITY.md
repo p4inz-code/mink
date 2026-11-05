@@ -1,5 +1,15 @@
 # MINK — Windows × Official Python Capability Parity Matrix (Master Audit)
 
+> **STRATEGIC FRAMING (Session 128 roadmap lock).** This matrix is a **capability audit**,
+> not the project's goal. It answers one internal question — *what can a Windows developer
+> accomplish with MINK relative to official Python?* — and its parity gate is **passed**.
+> It was a capability-completeness exercise that surfaced real gaps; it is **not** the
+> destination, and MINK does **not** need 100% Python feature parity. The "Blocks parity?"
+> column and the parity gate below are internal bookkeeping only. The canonical strategy is
+> the locked M0–M9 roadmap: [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md).
+> Native compilation and ownership are capabilities, not sufficient competitive
+> differentiators, and no competitive claim is made without comparative evidence.
+
 **Session:** 118 (final Windows completion audit; matrix reconciled through Sessions 116–117, and §2/§3.10/§10/§11 recomputed **from the 232 rows** rather than from prose totals)
 **Starting commit:** `568dc04` (Session 106 close) → `48ed337` (Session 107 start) → `c3b8091` (Session 107 push) → `9abd6f9` (Session 116 close) → `86642b4` (Session 117 close; final-audit start)
 **MINK version:** 1.0.2

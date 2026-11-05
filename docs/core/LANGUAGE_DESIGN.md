@@ -7,7 +7,13 @@
 
 MINK is designed to make serious software development substantially easier without sacrificing the power required for demanding workloads.
 
-> **Python-like ease with C/C++-class power.**
+> **MINK is a systems-oriented programming language and toolchain focused on making native
+> software development simpler while retaining explicit control over the program.**
+
+The earlier shorthand **"Python-like ease with C/C++-class power"** is retired as a statement
+of the goal: native compilation and ownership are capabilities, not sufficient competitive
+differentiators, and the project makes no competitive claim without comparative evidence. See
+the canonical locked roadmap at [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](../roadmap/IMPLEMENTATION_ROADMAP.md).
 
 MINK should take the strongest practical ideas available across programming-language ecosystems and improve upon their weaknesses.
 

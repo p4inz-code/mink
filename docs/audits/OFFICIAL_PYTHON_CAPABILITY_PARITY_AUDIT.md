@@ -22,6 +22,12 @@
 > the "16 library files" count (the compiler now ships **26** stdlib modules, bundled and
 > byte-guarded against the repository copy). The audit's own pipeline description and
 > evidence anchors remain accurate for their time.
+>
+> **Strategic framing (Session 128 roadmap lock).** The classification ladder below ends at
+> "PYTHON-LEVEL OFFICIAL PARITY". That rung is **not** the project's objective and is not a
+> target: MINK does **not** need 100% Python feature parity. This document records how one
+> internal benchmark was scored at a point in time. The canonical strategy is the locked
+> M0–M9 roadmap: [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](../roadmap/IMPLEMENTATION_ROADMAP.md).
 
 ---
 

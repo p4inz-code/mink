@@ -1,5 +1,13 @@
 # MINK — Windows Official-Python Parity: Implementation Plan
 
+> **STRATEGIC FRAMING (Session 128 roadmap lock).** This plan is a **historical, completed**
+> implementation sequence for one internal capability exercise. Its parity gate is **passed**
+> (Session 117) and its wave map is **closed**; it is retained as an evidence trail, not as
+> the current plan. **"Zero P1 gaps" is not the project's objective** — MINK does **not**
+> need 100% Python feature parity. The canonical strategy is the locked M0–M9 roadmap:
+> [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](IMPLEMENTATION_ROADMAP.md). Future work is
+> sequenced by that roadmap (M2 stress validation first), not by this wave map.
+
 **Session:** 98 (with a Session 107 reconciliation note) · **Starting commit:** `a716df4` · **MINK version:** 1.0.1
 **Input:** `docs/roadmap/WINDOWS_PYTHON_OFFICIAL_CAPABILITY_PARITY.md` (the master matrix,
 232 audited capability rows). Session 98 planning baseline: 175 rows requiring work, 44

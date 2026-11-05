@@ -6,7 +6,7 @@
 **Source Extension:** `.mink`
 **License:** Apache License 2.0
 **Creator:** Atharva Patil / p4inz-code
-**Steward:** Northbyte Studios
+**Steward:** P4inz Interactive Labs
 
 ---
 
@@ -20,7 +20,14 @@ It is intended for systems programming, backend development, web development, de
 
 ## 2. Core Positioning
 
-> **Python-like ease with C/C++-class power.**
+> **MINK is a systems-oriented programming language and toolchain focused on making native
+> software development simpler while retaining explicit control over the program.**
+
+This is the locked product thesis; the full strategy is the canonical locked M0–M9 roadmap at
+[`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](../roadmap/IMPLEMENTATION_ROADMAP.md). The earlier
+shorthand **"Python-like ease with C/C++-class power"** is retired as a statement of the goal:
+native compilation and ownership are capabilities, not sufficient competitive
+differentiators, and the project makes no competitive claim without comparative evidence.
 
 Simple software should be extremely easy to create without imposing an artificial ceiling on advanced developers.
 
@@ -144,7 +151,9 @@ If a conflict exists, this document takes precedence and the conflicting documen
 MINK is in the **implementation phase**. The architecture and specification
 foundation in this document and the planning documents under `docs/` was
 reviewed and cross-checked, and implementation proceeds incrementally from
-foundations toward dependent systems per `docs/roadmap/IMPLEMENTATION_ROADMAP.md`.
+foundations toward dependent systems — sequenced by the canonical locked M0–M9 roadmap at
+`docs/roadmap/IMPLEMENTATION_ROADMAP.md` (M2 Windows practical stress validation is next;
+Linux stays frozen until the M8 strategic gate).
 
 As of session 15 the compiler implements the pipeline
 

@@ -1,5 +1,13 @@
 # MINK Library Priority Framework
 
+> **STRATEGIC FRAMING (Session 128 roadmap lock).** This is a design-only scoring framework
+> and is **gated by the locked roadmap**: ecosystem and library work may only begin after M7,
+> i.e. after actual demand is demonstrated and the M8 strategic gate is passed. Its
+> "Performance advantage" scores (for example "MINK can be faster than Python") are
+> **unverified hypotheses, not comparative evidence** — roadmap rule 6 forbids competitive
+> claims without comparative evidence, and MINK is allowed to lose. See the canonical roadmap:
+> [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](../roadmap/IMPLEMENTATION_ROADMAP.md).
+
 **Version:** 0.1.0 (Design Draft)
 **Date:** August 25, 2026
 **Status:** DESIGN ONLY — not implemented

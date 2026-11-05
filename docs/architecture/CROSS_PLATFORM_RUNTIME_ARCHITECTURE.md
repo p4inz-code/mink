@@ -111,7 +111,7 @@ The runtime boundary is the set of intrinsic functions (`rt_*`) that the compile
 | Time | rt_time_now, rt_time_millis, rt_time_ticks, rt_time_freq | GetSystemTimeAsFileTime, QueryPerformanceCounter |
 | Random | rt_random_seed, rt_random_next | xorshift64* (pure algorithm) |
 | Environment | rt_env_get, rt_env_set, rt_env_has, rt_env_remove | GetEnvironmentVariableA, SetEnvironmentVariableA |
-| Network | rt_net_wsa_startup, rt_net_wsa_cleanup, rt_net_wsa_last_error, rt_net_socket, rt_net_connect, rt_net_bind, rt_net_listen, rt_net_accept, rt_net_send, rt_net_recv, rt_net_close, rt_net_shutdown, rt_net_getaddrinfo, rt_net_freeaddrinfo, rt_net_gethostname, rt_net_htons | ws2_32.dll (Winsock2) |
+| Network | rt_net_wsa_startup, rt_net_wsa_cleanup, rt_net_wsa_last_error, rt_net_wsa_set_last_error, rt_net_socket, rt_net_connect, rt_net_bind, rt_net_listen, rt_net_accept, rt_net_send, rt_net_recv, rt_net_close, rt_net_shutdown, rt_net_getaddrinfo, rt_net_freeaddrinfo, rt_net_gethostname, rt_net_htons, rt_net_so_error | ws2_32.dll (Winsock2) |
 | Crypto | rt_crypto_init, rt_crypto_random_bytes, rt_crypto_random_int, rt_crypto_secure_zero | bcryptprimitives.dll (BCryptGenRandom) |
 | C FFI | rt_to_cstr, rt_free_cstr | N/A (conversion helpers) |
 

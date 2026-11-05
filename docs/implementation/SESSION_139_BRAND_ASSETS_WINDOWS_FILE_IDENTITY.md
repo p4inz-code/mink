@@ -263,3 +263,41 @@ snippets, and the artwork ZIP itself (design source, kept out of the repository)
   `tests/` and documentation edits) was neither modified nor removed; the commit carrying this
   record contains only the branding integration, with `README.md` staged for the three hunks
   this session wrote so the unrelated pending README edits stay in the working tree.
+
+## 11. Closure and handoff
+
+**Session 139 is complete.** Brand asset integration, the `.mink` Windows file identity,
+Windows registration/unregistration, package inclusion and their validation are done:
+
+- official artwork integrated in `assets/brand/` (116 files, byte-identical to the supplied
+  package) and shipped kit in `npm/mink/windows/` (published through `files[]`);
+- compiler, runtime and standard library unchanged; **version stays 1.0.4**;
+- nothing published to npm, no tag, no release, no push, no version bump;
+- commit `3b93bdbb834ba2faeb63faf9e22825f279d93416` —
+  *brand: integrate the official MINK artwork and the .mink Windows file identity* — is HEAD
+  and contains only this work (127 files, +2145/−2).
+
+**Two external branding actions remain, both in the GitHub web UI** (GitHub exposes no REST or
+GraphQL endpoint for either; `gh` is authenticated as `p4inz-code` and still cannot do them):
+
+| Action | File to upload | Where |
+| --- | --- | --- |
+| Repository social preview | `assets/brand/web/social/mink-social-preview-dark-1280x640.png` (1280x640, SHA-256 `6d34dbd268b0e7b0996c1730acc2fcc7e184c9efee9ce74310c73b8de6dae26e`) | `github.com/p4inz-code/mink` → *Settings → General → Social preview → Upload an image* |
+| Account avatar | `assets/brand/web/github/mink-avatar-dark-500.png` (500x500, SHA-256 `2957a60e771cb6aa5d525b441f651538441993feaea2637af3e231fa7957223e`) | `github.com/settings/profile` → *Profile picture* (the account `p4inz-code` is a user account; an organisation would take the same file under its own settings) |
+
+Both files are the official supplied artwork (byte-identical to their entries in
+`MINK UI SETS OFFICIAL.zip`), are not previews and are not the rejected app-icon
+alternatives; `-light` variants exist for light backgrounds but the design package designates
+the `-dark` files for these two slots. The repository stays public; no other setting is
+involved.
+
+**Repository state at handoff:** branch `main`, HEAD `3b93bdb`, working tree carrying only
+the pre-existing uncommitted work (plus this handoff note, deliberately uncommitted since no
+new commit was authorised). `git diff --check` clean. `bb3ff1e` and `3b93bdb` are not on the
+remote, and a `git fetch --dry-run` shows the remote has moved on independently
+(`b860837..8b00083  main -> origin/main`); no fetch, merge, rebase or push was performed, so
+reconciling local `main` with `origin/main` (and the duplicated "Northbyte Studios" rename in
+the working tree versus remote commit `b860837`) is a decision for the maintainer.
+
+**No new MINK roadmap milestone** (M3, feature, ecosystem, packaging or platform work) is to
+be started as part of this integration.
