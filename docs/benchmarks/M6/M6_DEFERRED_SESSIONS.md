@@ -2,7 +2,9 @@
 
 **Updated:** 2026-11-05
 **Current milestone:** M6 - external developer usability
-**Status:** M6 COMPLETE (Sessions 182-183 closure); M7, M8, M9 NOT STARTED
+**Status:** M6 repository acceptance COMPLETE (Sessions 182-183);
+published 1.0.4 distribution **BLOCKED** (Sessions 184-185); M7, M8, M9
+NOT STARTED
 
 ## Session status
 
@@ -18,14 +20,53 @@
 | 181 | Cross-cutting usability audit and M6 decision (consolidated; absorbs original 185 decision) | **COMPLETE** |
 | 182 | Defect closure (environment module, zip reader, nested Vec, version) | **COMPLETE** |
 | 183 | M6 final acceptance and closure | **COMPLETE** (decision: COMPLETE) |
-| 184 | Build, packaging and distribution usability | **NOT STARTED** |
-| 185 | Original M6 final audit and closure slot | **SUPERSEDED** by 183 |
+| 184 | Published package, clean installation and distribution integrity | **COMPLETE** (distribution defects verified) |
+| 185 | Windows installation, association and CLI first-run audit (original closure slot remains decided in 183) | **COMPLETE** (association blocked from published package) |
 | 186-197 | M7 tooling and ecosystem demand | **NOT STARTED** |
 | 198-203 | M8 strategic evaluation and decision | **NOT STARTED** |
 | 204-209 | M9 conditional platform expansion evaluation | **NOT STARTED** |
 
 M5 is COMPLETE. Its final report and readiness gate remain authoritative for
 the application evidence used by M6.
+
+## Sessions 184-185 result - published 1.0.4 is not repository HEAD
+
+The published artifact was tested as an external developer receives it. It
+is the tag `v1.0.4` artifact: **28 files**, no `windows/`, and pre-fix
+`strings.mink` / `environment.mink`. The downloaded tarball's SHA-1/SHA-512
+match the registry and the release record, so this is not a corrupt upload.
+
+The package installs cleanly, reports `mink 1.0.4`, and runs an intrinsic-only
+first program from a path with spaces. It does **not** complete the
+standard-library path: `str_trim` over a heap string exits 106 (`E-R06`), and
+`mod environment;` fails `E-P01`. The Session 180 verifier stops at its first
+case; the same binary with the repository stdlib substituted passes **12/12**.
+The repository package has 34 files, includes five `windows/` assets, and
+passes the verifier, but that package is **not published**.
+
+The repository bundle guard was fixed by syncing
+`npm/mink/stdlib/environment.mink` (commit `b67fda4`), so a future pack is
+consistent with `stdlib/`. The already-published 1.0.4 artifact cannot be
+repaired in place.
+
+The Windows association itself is safe: the repository harness passed
+**56/56** checks, uses per-user `HKCU`, installs no default open verb,
+quotes `%1`, and restores the registry on uninstall. The published package
+omits `windows/`, so an npm-only user cannot perform the documented
+association.
+
+**External distribution gate: BLOCKED.** A corrected release with a new
+version must be built from a commit containing the post-tag stdlib and
+Windows assets, installed from its tarball, and re-run through the Session
+180 verifier plus the association harness. Do not publish from the current
+working tree, do not reuse 1.0.4, and do not start M7.
+
+Full evidence:
+[`M6_SESSION_184_DISTRIBUTION_VERIFICATION.md`](M6_SESSION_184_DISTRIBUTION_VERIFICATION.md)
+and
+[`M6_SESSION_185_WINDOWS_FIRST_RUN_AUDIT.md`](M6_SESSION_185_WINDOWS_FIRST_RUN_AUDIT.md).
+Installation guide:
+[`docs/language/WINDOWS_INSTALLATION.md`](../../language/WINDOWS_INSTALLATION.md).
 
 ## Sessions 182-183 result
 
@@ -62,8 +103,7 @@ Full evidence:
 [`M6_SESSION_182_DEFECT_CLOSURE.md`](M6_SESSION_182_DEFECT_CLOSURE.md) and
 [`M6_SESSION_183_FINAL_ACCEPTANCE.md`](M6_SESSION_183_FINAL_ACCEPTANCE.md).
 
-Next session: **184 - build, packaging and distribution usability**. Do not
-advance to M7.
+Next session: **corrected release preparation**. Do not advance to M7.
 
 ## Sessions 178-181 consolidated result
 
