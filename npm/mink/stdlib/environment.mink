@@ -1,13 +1,23 @@
 // MINK Environment Library
-// Session 65 — Environment variable access
+// Session 65 - Environment variable access
+// Session 182 - Repaired the module so `mod environment;` loads.
 //
-// Provides functions to get, set, check, and remove environment variables.
-// All functions use the Windows API (GetEnvironmentVariableA, SetEnvironmentVariableA).
+// Provides functions to get, set, check, and remove environment variables,
+// plus the current working directory. The runtime predeclares the `rt_env_*`
+// and `rt_fs_get_cwd` intrinsics; this module exposes them under the
+// unprefixed names used by the rest of the standard library.
 //
-// Ownership model:
-//   - env_get returns a newly allocated Str (caller owns it)
-//   - env_set/env_remove return Int: 0 on success, -1 on failure
-//   - env_has returns Bool: true if the variable exists
+// API:
+//   env_get(name: Str) -> Str          Owned value; empty when unset.
+//   env_set(name: Str, value: Str) -> Int   0 on success, -1 on failure.
+//   env_has(name: Str) -> Bool         Whether the variable exists.
+//   env_remove(name: Str) -> Int       0 on success, -1 on failure.
+//   env_cwd() -> Str                   Owned current working directory.
+//
+// Ownership:
+//   - env_get and env_cwd return a newly allocated Str (caller owns it).
+//   - Str arguments are consumed by the call, as for every MINK function.
+//   - Int/Bool results are immediates.
 //
 // Security considerations:
 //   - Environment variables are inherited by child processes
@@ -18,25 +28,34 @@
 //   - Variable names are case-insensitive on Windows
 //   - Empty string values are supported
 //   - Maximum variable value length is platform-dependent (~32KB on Windows)
-
-// --- Intrinsic declarations (implemented in the embedded runtime) ---
+//
+// Portability note: the intrinsics have Windows and frozen Linux
+// implementations; this module contains only portable wrappers.
 
 // Get the value of an environment variable.
-// Returns an empty string if the variable does not exist.
-extern fn rt_env_get(name: Str) -> Str;
+// Returns an owned empty string if the variable does not exist.
+fn env_get(name: Str) -> Str {
+    return rt_env_get(name);
+}
 
-// Set an environment variable.
+// Set an environment variable for this process.
 // Returns 0 on success, -1 on failure.
-extern fn rt_env_set(name: Str, value: Str) -> Int;
+fn env_set(name: Str, value: Str) -> Int {
+    return rt_env_set(name, value);
+}
 
-// Check if an environment variable exists.
-// Returns true if the variable exists, false otherwise.
-extern fn rt_env_has(name: Str) -> Bool;
+// Check whether an environment variable exists.
+fn env_has(name: Str) -> Bool {
+    return rt_env_has(name);
+}
 
 // Remove an environment variable.
 // Returns 0 on success, -1 on failure.
-extern fn rt_env_remove(name: Str) -> Int;
+fn env_remove(name: Str) -> Int {
+    return rt_env_remove(name);
+}
 
-// Get the current working directory.
-// Returns the full path of the current working directory.
-extern fn rt_fs_get_cwd() -> Str;
+// Get the current working directory as an owned string.
+fn env_cwd() -> Str {
+    return rt_fs_get_cwd();
+}
