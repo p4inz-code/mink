@@ -258,8 +258,8 @@ program that imported the bundled `collections` module but never called `vec_min
 Root cause: an untyped function parameter is an inference variable, and the checker's
 comparison rule left two unconstrained operands linked but unpinned. With no call site to
 unify them, the operands stayed unresolved; the backend classified the unresolved type as
-`unit`; and the backend verifier. Which requires `Int` operands for `<`, `<=`, `>`, `>=`
-— rejected a function the program never called. The fix pins operator operands that the
+`unit`; and the backend verifier, which requires `Int` operands for `<`, `<=`, `>`, `>=`,
+rejected a function the program never called. The fix pins operator operands that the
 whole program left unconstrained to `Int` at the end of type checking, so unresolved
 operands can no longer reach the backend as `unit`. The standard library is unchanged; the
 monomorphizer and the backend are untouched.
@@ -538,7 +538,7 @@ pass `-D warnings`; the gate is that no change adds a new warning.
 
 ```
 ├── docs/       Language & architecture specifications + implementation records
-├── src/        The compiler (Rust) — lexer, parser, typecheck, hir, mir, backend, runtime
+├── src/        The compiler (Rust): lexer, parser, typecheck, hir, mir, backend, runtime
 ├── stdlib/     Standard library (MINK source)
 ├── examples/   Complete example programs (one directory each)
 ├── tests/      Compiler tests
