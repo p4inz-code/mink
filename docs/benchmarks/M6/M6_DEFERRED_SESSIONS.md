@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-05
 **Current milestone:** M6 - external developer usability
-**Status:** M6 PARTIAL (Sessions 178-181 consolidated); M7, M8, M9 NOT STARTED
+**Status:** M6 COMPLETE (Sessions 182-183 closure); M7, M8, M9 NOT STARTED
 
 ## Session status
 
@@ -16,15 +16,54 @@
 | 179 | Debugging/testing workflow (consolidated; includes diagnostics) | **COMPLETE** |
 | 180 | Cold-start application and verifier (consolidated; absorbs original 182-183) | **COMPLETE** |
 | 181 | Cross-cutting usability audit and M6 decision (consolidated; absorbs original 185 decision) | **COMPLETE** |
-| 182-183 | Original cold-start implementation/audit plan | **SUPERSEDED** by consolidated 180 |
+| 182 | Defect closure (environment module, zip reader, nested Vec, version) | **COMPLETE** |
+| 183 | M6 final acceptance and closure | **COMPLETE** (decision: COMPLETE) |
 | 184 | Build, packaging and distribution usability | **NOT STARTED** |
-| 185 | M6 final audit and closure | **NOT STARTED** (decision recorded in 181; closure deferred) |
+| 185 | Original M6 final audit and closure slot | **SUPERSEDED** by 183 |
 | 186-197 | M7 tooling and ecosystem demand | **NOT STARTED** |
 | 198-203 | M8 strategic evaluation and decision | **NOT STARTED** |
 | 204-209 | M9 conditional platform expansion evaluation | **NOT STARTED** |
 
 M5 is COMPLETE. Its final report and readiness gate remain authoritative for
 the application evidence used by M6.
+
+## Sessions 182-183 result
+
+Session 182 investigated the four blockers and Session 183 judged the result
+independently.
+
+- `stdlib/environment.mink` was repaired: top-level `extern fn` declarations
+  were replaced with wrappers over the predeclared intrinsics. `mod
+  environment;` now loads and the wrappers are covered by
+  `tests/environment_lib.rs`.
+- The ZIP reader "leak" was an unfreed pass-back string in the probe. A
+  seven-case per-call matrix is clean when every owned return is released, and
+  `tests/zip_lib.rs` now pins the full reader ownership contract.
+- The nested `Vec<Str>` "corruption" was a probe that freed the vector, read
+  its length and freed it again. The minimal reproduction shows the stale
+  length and E-R04; the corrected lifecycle is covered in
+  `tests/collections_lib.rs`.
+- The installed 1.0.2 compiler predates the bundled `strings.mink` ownership
+  fixes. The registry now serves 1.0.4, which is the minimum verified version;
+  1.0.2 is explicitly unsupported.
+- README module-loading wording and the collection type list were corrected in
+  an isolated 2-line commit without committing its pre-existing worktree edits.
+
+Focused regression: **60 tests passed** (2 environment, 11 zip, 47
+collections). Session 180 verifier: **12/12** on 1.0.4. README fences 5/5,
+reference fences 12/12, local links 0 broken.
+
+M6 is **COMPLETE**, with accepted and documented limitations: collection
+use-after-free is not diagnosed (unsupported contract), 1.0.2 is unsupported,
+some modules remain source-audited only, and no external developer study was
+performed.
+
+Full evidence:
+[`M6_SESSION_182_DEFECT_CLOSURE.md`](M6_SESSION_182_DEFECT_CLOSURE.md) and
+[`M6_SESSION_183_FINAL_ACCEPTANCE.md`](M6_SESSION_183_FINAL_ACCEPTANCE.md).
+
+Next session: **184 - build, packaging and distribution usability**. Do not
+advance to M7.
 
 ## Sessions 178-181 consolidated result
 
@@ -54,9 +93,10 @@ these concrete acceptance gaps remain:
 Full evidence and file list:
 [`M6_CONSOLIDATED_SESSIONS_178_181.md`](M6_CONSOLIDATED_SESSIONS_178_181.md).
 
-Next session: **182 - defect closure** (environment module, zip reader leak,
-`Vec<Str>` nested-push reproduction, install/version parity), then a closure
-record. Do not advance to M7.
+The remaining gaps were closed in Sessions 182-183. See
+[`M6_SESSION_182_DEFECT_CLOSURE.md`](M6_SESSION_182_DEFECT_CLOSURE.md) and
+[`M6_SESSION_183_FINAL_ACCEPTANCE.md`](M6_SESSION_183_FINAL_ACCEPTANCE.md).
+Do not advance to M7.
 
 ## Session 177 result
 
