@@ -70,6 +70,10 @@ const KERNEL32_IMPORTS: &[&str] = &[
     "GetCurrentThreadId",
     // --- Growable heap (Session 125) ---
     "VirtualAlloc",
+    // --- Per-thread runtime scratch (Session 144) ---
+    "TlsAlloc",
+    "TlsGetValue",
+    "TlsSetValue",
 ];
 
 const K32_COUNT: u32 = KERNEL32_IMPORTS.len() as u32;
@@ -81,7 +85,10 @@ const K32_COUNT: u32 = KERNEL32_IMPORTS.len() as u32;
 const ILT_OFFSET: u32 = 40;
 /// IAT offset: after ILT entries + null
 pub(crate) const IAT_OFFSET: u32 = ILT_OFFSET + (K32_COUNT + 1) * 8;
-pub(crate) const IDATA_SIZE: u32 = 1536;
+// 1792: the 44 kernel32 hint/name entries plus the ILT/IAT pairs need 1561
+// bytes (Session 144 added TlsAlloc/TlsGetValue/TlsSetValue); 1536 would
+// truncate the table.
+pub(crate) const IDATA_SIZE: u32 = 1792;
 
 /// Size of the import directory (1 descriptor + null = 40 bytes).
 const IMPORT_DIR_SIZE: u32 = 40;
@@ -261,6 +268,12 @@ pub(crate) fn build_idata(idata_rva: u32) -> Vec<u8> {
     // Patch DLL name RVA
     bytes[name_pos..name_pos + 4].copy_from_slice(&dll_name_rva.to_le_bytes());
 
+    debug_assert!(
+        bytes.len() <= IDATA_SIZE as usize,
+        "import table overflow: {} > {}",
+        bytes.len(),
+        IDATA_SIZE
+    );
     bytes.resize(IDATA_SIZE as usize, 0);
     debug_assert_eq!(bytes.len(), IDATA_SIZE as usize);
     bytes

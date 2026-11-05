@@ -19,25 +19,33 @@ mod network;
 //   - HTTP/1.1 request construction and serialization
 //   - HTTP/1.1 response parsing
 //   - Content-Length body handling
+//   - Transfer-Encoding: chunked body decoding in http_body (Session 147)
 //   - Case-insensitive header lookup
 //   - Connection: close semantics (no keep-alive)
 //
 // Limits:
 //   - Max body size: 4,194,304 bytes (4 MB, Session 125)
 //   - Max headers: 64
-//   - No chunked transfer encoding (V1)
+//   - Chunked framing is decoded by http_body; chunk extensions and trailer
+//     fields are ignored, and other transfer codings are not decoded
+//   - A non-chunked response that delivers fewer body bytes than its declared
+//     Content-Length is reported as HTTP_ERR_RECV instead of a completed
+//     request (Session 137)
 //   - No HTTPS (TLS is a separate library)
 //
 // Failure model (Session 125): an HTTP response always contains a status
 // line, so an empty string returned by http_client_get/http_client_post
 // never means "successful empty response" — it means the request failed
-// (DNS, connect, send, or an oversized body). The reason is available from
+// (DNS, connect, send, an empty/aborted transfer, or an oversized body). The
+// reason is available from
 // http_last_error(): 0 after a completed request, a Winsock error code
 // after a network failure, or one of the local HTTP_ERR_* codes.
 // ==========================================================================
 
 // --- Constants ---
 
+// The nominal maximum response body. The receive budget is MAX_BODY() + 8 KiB
+// for the whole response, headers included (see http_recv_all).
 fn MAX_BODY() -> Int { return 4194304; }
 
 // Local http_last_error() codes (negative; Winsock codes are positive).
@@ -45,14 +53,21 @@ fn HTTP_ERR_SOCKET() -> Int { return -1; }
 fn HTTP_ERR_CONNECT() -> Int { return -2; }
 fn HTTP_ERR_SEND() -> Int { return -3; }
 fn HTTP_ERR_TOO_LARGE() -> Int { return -4; }
+// The transfer did not complete: either no response bytes arrived (the peer
+// closed or aborted the connection before sending a status line), or a
+// non-chunked response delivered fewer body bytes than the Content-Length it
+// declared (Session 137). An HTTP response always has a status line, so this
+// is a failed request, not a successful empty response.
+fn HTTP_ERR_RECV() -> Int { return -5; }
 
-// The outcome of the most recent http_send: 0 after a completed request,
-// a Winsock error code after a network failure, or an HTTP_ERR_* code.
-let mut http_last_error_code = 0;
-
-// The error code of the most recent HTTP request (0 = it completed).
+// The error code of the most recent HTTP request on the calling thread
+// (0 = it completed). Session 144: this is per-thread runtime state, not a
+// module global — a request on another thread can never overwrite the reason
+// this thread observes. Runtime intrinsics are the storage, so no module
+// binding and no initialization are required: rt_init allocates the slot
+// before main and every thread starts at 0.
 fn http_last_error() -> Int {
-    return http_last_error_code;
+    return rt_thread_local_get();
 }
 
 // True when `response` is a completed HTTP response (non-empty; every
@@ -663,33 +678,318 @@ fn http_status_text(response: Str) -> Str {
     return result;
 }
 
+// --- Chunked transfer decoding (Session 147) ---
+
+// Hexadecimal value of one byte, or -1 when it is not a hex digit. Case does
+// not matter: both "1a" and "1A" are 26.
+fn _http_hex_digit(b: Int) -> Int {
+    if b >= 48 {
+        if b <= 57 { return b - 48; }
+    }
+    if b >= 97 {
+        if b <= 102 { return b - 87; }
+    }
+    if b >= 65 {
+        if b <= 70 { return b - 55; }
+    }
+    return -1;
+}
+
+// True when `b` can appear inside an HTTP token. The transfer-coding search
+// uses it so "chunked" must be a whole token, never part of a longer word.
+fn _http_token_byte(b: Int) -> Bool {
+    if b >= 48 {
+        if b <= 57 { return true; }
+    }
+    if b >= 65 {
+        if b <= 90 { return true; }
+    }
+    if b >= 97 {
+        if b <= 122 { return true; }
+    }
+    if b == 45 { return true; }
+    return false;
+}
+
+// Classify response body framing: 1 when a Transfer-Encoding header carries
+// the "chunked" coding, 0 otherwise (Content-Length, close-delimited, or a
+// coding this client does not decode). Header names and values are compared
+// case-insensitively. Non-consuming: `response` is returned in .1 so the
+// caller keeps its single unconditional release.
+fn _http_encoding(response: Str, len: Int) -> (Int, Str) {
+    let mut kind = 0;
+    // Skip the status line.
+    let mut i = 0;
+    let mut first = 0;
+    while i + 1 < len && first == 0 {
+        if rt_str_byte(response, i) == 13 && rt_str_byte(response, i + 1) == 10 {
+            i = i + 2;
+            first = 1;
+        } else {
+            i = i + 1;
+        }
+    }
+    let mut lines = 0;
+    let mut going = first;
+    while going == 1 && lines < 64 && kind == 0 {
+        if i + 1 >= len {
+            going = 0;
+        } else {
+            if rt_str_byte(response, i) == 13 && rt_str_byte(response, i + 1) == 10 {
+                going = 0;
+            } else {
+                let ls = i;
+                let mut le = i;
+                let mut le_done = 0;
+                while le + 1 < len && le_done == 0 {
+                    if rt_str_byte(response, le) == 13 && rt_str_byte(response, le + 1) == 10 {
+                        le_done = 1;
+                    } else {
+                        le = le + 1;
+                    }
+                }
+                // "Transfer-Encoding" followed by ':'.
+                let mut is_te = 1;
+                let mut k = 0;
+                while k < 17 && is_te == 1 {
+                    if ls + k >= le {
+                        is_te = 0;
+                    } else {
+                        if http_to_lower(rt_str_byte(response, ls + k)) != http_to_lower(rt_str_byte("Transfer-Encoding", k)) {
+                            is_te = 0;
+                        }
+                    }
+                    k = k + 1;
+                }
+                if is_te == 1 {
+                    if ls + 17 >= le {
+                        is_te = 0;
+                    } else {
+                        if rt_str_byte(response, ls + 17) != 58 {
+                            is_te = 0;
+                        }
+                    }
+                }
+                if is_te == 1 {
+                    // Search the value for the whole token "chunked".
+                    let vs = ls + 18;
+                    let mut t = vs;
+                    while t + 7 <= le && kind == 0 {
+                        let mut hit = 1;
+                        let mut m = 0;
+                        while m < 7 {
+                            if http_to_lower(rt_str_byte(response, t + m)) != http_to_lower(rt_str_byte("chunked", m)) {
+                                hit = 0;
+                            }
+                            m = m + 1;
+                        }
+                        if hit == 1 {
+                            let mut bounds = 1;
+                            if t > vs {
+                                if _http_token_byte(rt_str_byte(response, t - 1)) == true {
+                                    bounds = 0;
+                                }
+                            }
+                            if t + 7 < le {
+                                if _http_token_byte(rt_str_byte(response, t + 7)) == true {
+                                    bounds = 0;
+                                }
+                            }
+                            if bounds == 1 {
+                                kind = 1;
+                            }
+                        }
+                        t = t + 1;
+                    }
+                }
+                lines = lines + 1;
+                i = le + 2;
+            }
+        }
+    }
+    return (kind, response);
+}
+
+// Decode a chunked body in response[start..end]. The receive helper has
+// already accumulated the whole response, so framing may cross any number of
+// TCP receives; this walk never assumes a packet boundary. Returns
+// (decoded, response); `response` is not freed, so `http_body` keeps its
+// single release. Malformed framing yields an empty body and HTTP_ERR_RECV
+// unless a more specific error is already present; a chunk that would push
+// the decoded body past MAX_BODY yields HTTP_ERR_TOO_LARGE. Both are bounded
+// by the wire bytes actually received: an attacker-controlled size is never
+// used as an allocation size.
+fn _http_chunked_decode(response: Str, start: Int, end: Int) -> (Str, Str) {
+    let wire = end - start;
+    let mut cap = wire;
+    if cap < 1 {
+        cap = 1;
+    }
+    let temp = rt_str_alloc(cap);
+    let mut pos = start;
+    let mut out = 0;
+    let mut ok = 1;
+    let mut too_large = 0;
+    let mut done = 0;
+    while done == 0 && ok == 1 {
+        // Chunk-size line: at least one hex digit, optional ";extensions"
+        // ignored through CRLF.
+        let mut value = 0;
+        let mut digits = 0;
+        let mut line_done = 0;
+        while pos < end && line_done == 0 {
+            let b = rt_str_byte(response, pos);
+            let hv = _http_hex_digit(b);
+            if hv >= 0 {
+                digits = digits + 1;
+                if value <= MAX_BODY() {
+                    value = value * 16 + hv;
+                }
+                pos = pos + 1;
+            } else {
+                if b == 59 {
+                    while pos < end && rt_str_byte(response, pos) != 13 {
+                        pos = pos + 1;
+                    }
+                    line_done = 1;
+                } else {
+                    if b == 13 {
+                        line_done = 1;
+                    } else {
+                        ok = 0;
+                        line_done = 1;
+                    }
+                }
+            }
+        }
+        let mut crlf_ok = 0;
+        if ok == 1 {
+            if pos + 1 < end {
+                if rt_str_byte(response, pos) == 13 && rt_str_byte(response, pos + 1) == 10 {
+                    crlf_ok = 1;
+                }
+            }
+        }
+        if ok == 1 && crlf_ok == 1 {
+            pos = pos + 2;
+        } else {
+            ok = 0;
+        }
+        if ok == 1 && digits == 0 {
+            ok = 0;
+        }
+        if ok == 1 && value > MAX_BODY() {
+            too_large = 1;
+            ok = 0;
+        }
+        if ok == 1 {
+            if value == 0 {
+                // Last chunk: consume trailer fields up to the blank line.
+                // Trailer bytes are never appended to the body.
+                let mut trailers = 0;
+                while trailers == 0 && ok == 1 {
+                    if pos + 1 >= end {
+                        ok = 0;
+                    } else {
+                        if rt_str_byte(response, pos) == 13 && rt_str_byte(response, pos + 1) == 10 {
+                            pos = pos + 2;
+                            trailers = 1;
+                        } else {
+                            let mut le = pos;
+                            let mut term = 0 - 1;
+                            while le + 1 < end && term < 0 {
+                                if rt_str_byte(response, le) == 13 && rt_str_byte(response, le + 1) == 10 {
+                                    term = le;
+                                } else {
+                                    le = le + 1;
+                                }
+                            }
+                            if term < 0 {
+                                ok = 0;
+                            } else {
+                                pos = term + 2;
+                            }
+                        }
+                    }
+                }
+                done = 1;
+            } else {
+                if out + value > MAX_BODY() {
+                    too_large = 1;
+                    ok = 0;
+                }
+            }
+        }
+        if ok == 1 && value > 0 {
+            if pos + value > end {
+                ok = 0;
+            }
+        }
+        if ok == 1 && value > 0 {
+            let mut k = 0;
+            while k < value {
+                rt_str_set_byte(temp, out + k, rt_str_byte(response, pos + k));
+                k = k + 1;
+            }
+            out = out + value;
+            pos = pos + value;
+            // The CRLF that closes the chunk data.
+            if pos + 1 < end {
+                if rt_str_byte(response, pos) == 13 && rt_str_byte(response, pos + 1) == 10 {
+                    pos = pos + 2;
+                } else {
+                    ok = 0;
+                }
+            } else {
+                ok = 0;
+            }
+        }
+    }
+    let mut result = "";
+    if ok == 1 {
+        if out > 0 {
+            result = rt_str_alloc(out);
+            let mut ri = 0;
+            while ri < out {
+                rt_str_set_byte(result, ri, rt_str_byte(temp, ri));
+                ri = ri + 1;
+            }
+        }
+    } else {
+        if too_large == 1 {
+            rt_thread_local_set(HTTP_ERR_TOO_LARGE());
+        } else {
+            if rt_thread_local_get() == 0 {
+                rt_thread_local_set(HTTP_ERR_RECV());
+            }
+        }
+    }
+    rt_str_free(temp);
+    return (result, response);
+}
+
 // --- Body Extraction ---
 
-// Extract body from HTTP response (after first \r\n\r\n).
+// Extract body from HTTP response (after first \r\n\r\n). A
+// Transfer-Encoding: chunked body is decoded; every other response keeps the
+// previous behavior (raw bytes after the header block).
 fn http_body(response: Str) -> Str {
     let len = rt_str_len(response);
+    let mut resp = response;
     let mut result = "";
     let mut found = 0;
+    let mut body_start = 0;
     let mut i = 0;
     while i < len - 3 && found == 0 {
-        let b1 = rt_str_byte(response, i);
-        let b2 = rt_str_byte(response, i + 1);
-        let b3 = rt_str_byte(response, i + 2);
-        let b4 = rt_str_byte(response, i + 3);
+        let b1 = rt_str_byte(resp, i);
+        let b2 = rt_str_byte(resp, i + 1);
+        let b3 = rt_str_byte(resp, i + 2);
+        let b4 = rt_str_byte(resp, i + 3);
         if b1 == 13 {
             if b2 == 10 {
                 if b3 == 13 {
                     if b4 == 10 {
-                        let body_start = i + 4;
-                        let size = len - body_start;
-                        if size > 0 {
-                            result = rt_str_alloc(size);
-                            let mut bi = 0;
-                            while bi < size {
-                                rt_str_set_byte(result, bi, rt_str_byte(response, body_start + bi));
-                                bi = bi + 1;
-                            }
-                        }
+                        body_start = i + 4;
                         found = 1;
                     }
                 }
@@ -697,16 +997,38 @@ fn http_body(response: Str) -> Str {
         }
         i = i + 1;
     }
-    rt_str_free(response);
+    if found == 1 {
+        let enc = _http_encoding(resp, len);
+        resp = enc.1;
+        if enc.0 == 1 {
+            let dec = _http_chunked_decode(resp, body_start, len);
+            result = dec.0;
+            resp = dec.1;
+        } else {
+            let size = len - body_start;
+            if size > 0 {
+                result = rt_str_alloc(size);
+                let mut bi = 0;
+                while bi < size {
+                    rt_str_set_byte(result, bi, rt_str_byte(resp, body_start + bi));
+                    bi = bi + 1;
+                }
+            }
+        }
+    }
+    rt_str_free(resp);
     return result;
 }
 
 // --- Client ---
 
-// Receive all data from a socket until connection close. On return the
-// module's http_last_error_code is 0 when the transfer completed within
-// the body limit, or HTTP_ERR_TOO_LARGE when the peer produced more than
-// MAX_BODY bytes.
+// Receive all data from a socket until connection close. The receive budget
+// is MAX_BODY() + 8 KiB of response bytes, headers included: the headroom
+// exists so a full MAX_BODY body plus its headers fits. On return the
+// calling thread's http_last_error() is 0 when the transfer completed within that
+// budget, or HTTP_ERR_TOO_LARGE when the peer was still sending at the
+// budget (the received prefix is truncated at the budget, never silently
+// extended).
 fn http_recv_all(sock: Int) -> Str {
     // Start with a small staging buffer and grow it by doubling as the body
     // arrives. The runtime arena can be a fixed 4 MiB bump heap (Linux), so
@@ -720,13 +1042,17 @@ fn http_recv_all(sock: Int) -> Str {
     }
     let mut buf = rt_str_alloc(cap);
     let mut total = 0;
-    let mut chunk_count = 0;
     // open tracks whether the peer is still sending. V1 move semantics
     // forbid freeing `data` in an early-exit branch and then using it
     // again textually, so each chunk is freed exactly once, at the
     // bottom of the loop body.
     let mut open = 1;
-    while total < max_size && open == 1 && chunk_count < 1024 {
+    // Termination is guaranteed without a chunk-count cap: every open chunk
+    // adds at least one byte, so `total` reaches `max_size`, and EOF turns
+    // `open` off. The old `chunk_count < 1024` cap stopped a complete 4 MiB
+    // response early (1024 reads of at most 4096 bytes also have to carry the
+    // headers), truncating it ~4 KiB short and reporting TOO_LARGE.
+    while total < max_size && open == 1 {
         let data = net_recv(sock, 4096);
         let data_len = rt_str_len(data);
         if data_len == 0 {
@@ -762,7 +1088,6 @@ fn http_recv_all(sock: Int) -> Str {
         rt_str_free(data);
         if open == 1 {
             total = total + data_len;
-            chunk_count = chunk_count + 1;
         }
     }
     if open == 1 {
@@ -774,8 +1099,16 @@ fn http_recv_all(sock: Int) -> Str {
         let extra_len = rt_str_len(extra);
         rt_str_free(extra);
         if extra_len > 0 {
-            http_last_error_code = HTTP_ERR_TOO_LARGE();
+            rt_thread_local_set(HTTP_ERR_TOO_LARGE());
         }
+    }
+    // The last chunk can push `total` past the budget. Writes above
+    // `max_size` were clipped and the buffer's capacity is `max_size`, so
+    // clamp the copied length: otherwise the copy reads past the buffer and
+    // an oversized response fails with E-R09 instead of the documented
+    // TOO_LARGE result.
+    if total > max_size {
+        total = max_size;
     }
     // Copy the received bytes into an exact-length result so that
     // rt_str_len(result) equals the number of bytes actually received
@@ -790,6 +1123,186 @@ fn http_recv_all(sock: Int) -> Str {
     return result;
 }
 
+// --- Response completion facts (Session 137) ---
+
+// The completion verdict for a raw response: `result.0` is 1 when the transfer
+// is incomplete, i.e. a non-chunked response delivered fewer body bytes than
+// the Content-Length it declared. `response` is consumed and handed back in
+// `result.1` (the module's V1 ownership style: a helper that must read a `Str`
+// and still leave it live for the caller returns it). `is_head` is 1 when the
+// request method was HEAD. Read with non-consuming intrinsics only.
+//
+// The check is skipped, and the verdict stays 0, when
+//   - a Transfer-Encoding header is present: the body framing is not
+//     Content-Length-delimited, which covers every chunked response;
+//   - no Content-Length header is present or its value is not digits: the
+//     existing protocol behavior accepts such a response;
+//   - the status cannot carry a body (any 1xx, 204 No Content, 304 Not
+//     Modified) or the request method is HEAD: their Content-Length describes
+//     a body that is deliberately not sent;
+//   - the header block never ended: the declared length is then not
+//     comparable, so the receive path's own result stands.
+fn _http_incomplete(response: Str, is_head: Int) -> (Int, Str) {
+    let len = rt_str_len(response);
+    let mut bodyless = 0;
+    // Status line: bytes 9.. to the first space.
+    if len >= 12 {
+        let mut code = 0;
+        let mut ci = 9;
+        let mut code_ok = 1;
+        while ci < len {
+            let b = rt_str_byte(response, ci);
+            if b == 32 {
+                ci = len;
+            } else {
+                if b < 48 || b > 57 {
+                    code_ok = 0;
+                    ci = len;
+                } else {
+                    code = code * 10 + (b - 48);
+                    ci = ci + 1;
+                }
+            }
+        }
+        if code_ok == 1 {
+            if code >= 100 && code < 200 {
+                bodyless = 1;
+            }
+            if code == 204 {
+                bodyless = 1;
+            }
+            if code == 304 {
+                bodyless = 1;
+            }
+        }
+    }
+    if is_head == 1 {
+        bodyless = 1;
+    }
+    // Header block: declared Content-Length or -1, Transfer-Encoding present,
+    // received body length or -1 when the blank line never arrived.
+    let mut cl = 0 - 1;
+    let mut te = 0;
+    let mut body = 0 - 1;
+    let mut i = 0;
+    let mut seen = 0;
+    while i < len - 1 && seen == 0 {
+        if rt_str_byte(response, i) == 13 && rt_str_byte(response, i + 1) == 10 {
+            i = i + 2;
+            seen = 1;
+        } else {
+            i = i + 1;
+        }
+    }
+    let mut lines = 0;
+    let mut going = seen;
+    while going == 1 && lines < 64 {
+        if i + 1 >= len {
+            going = 0;
+        } else {
+            let h1 = rt_str_byte(response, i);
+            let h2 = rt_str_byte(response, i + 1);
+            if h1 == 13 && h2 == 10 {
+                body = len - (i + 2);
+                going = 0;
+            } else {
+                let ls = i;
+                let mut le = i;
+                let mut le_done = 0;
+                while le + 1 < len && le_done == 0 {
+                    if rt_str_byte(response, le) == 13 && rt_str_byte(response, le + 1) == 10 {
+                        le_done = 1;
+                    } else {
+                        le = le + 1;
+                    }
+                }
+                // "Content-Length:" (case-insensitive, exact name then colon).
+                let mut is_cl = 0;
+                if ls + 14 < len {
+                    is_cl = 1;
+                    let mut k = 0;
+                    while k < 14 {
+                        let mut a = rt_str_byte(response, ls + k);
+                        let mut b = rt_str_byte("Content-Length", k);
+                        if a >= 97 && a <= 122 {
+                            a = a - 32;
+                        }
+                        if b >= 97 && b <= 122 {
+                            b = b - 32;
+                        }
+                        if a != b {
+                            is_cl = 0;
+                        }
+                        k = k + 1;
+                    }
+                    if rt_str_byte(response, ls + 14) != 58 {
+                        is_cl = 0;
+                    }
+                }
+                if is_cl == 1 {
+                    let mut vs = ls + 15;
+                    if vs < len && rt_str_byte(response, vs) == 32 {
+                        vs = vs + 1;
+                    }
+                    let mut v = 0;
+                    let mut vd = vs;
+                    let mut good = 1;
+                    while vd < le {
+                        let c = rt_str_byte(response, vd);
+                        if c < 48 || c > 57 {
+                            good = 0;
+                            vd = le;
+                        } else {
+                            v = v * 10 + (c - 48);
+                            vd = vd + 1;
+                        }
+                    }
+                    // A malformed or empty value counts as absent, so a header
+                    // the client cannot interpret never fails a response that
+                    // the previous implementation accepted.
+                    if good == 1 && vs < le {
+                        cl = v;
+                    }
+                }
+                // "Transfer-Encoding:" (any value: framing is not
+                // Content-Length-delimited, which covers chunked).
+                let mut is_te = 0;
+                if ls + 17 < len {
+                    is_te = 1;
+                    let mut k = 0;
+                    while k < 17 {
+                        let mut a = rt_str_byte(response, ls + k);
+                        let mut b = rt_str_byte("Transfer-Encoding", k);
+                        if a >= 97 && a <= 122 {
+                            a = a - 32;
+                        }
+                        if b >= 97 && b <= 122 {
+                            b = b - 32;
+                        }
+                        if a != b {
+                            is_te = 0;
+                        }
+                        k = k + 1;
+                    }
+                    if rt_str_byte(response, ls + 17) != 58 {
+                        is_te = 0;
+                    }
+                }
+                if is_te == 1 {
+                    te = 1;
+                }
+                lines = lines + 1;
+                i = le + 2;
+            }
+        }
+    }
+    let mut verdict = 0;
+    if bodyless == 0 && te == 0 && cl >= 0 && body >= 0 && body < cl {
+        verdict = 1;
+    }
+    return (verdict, response);
+}
+
 // Send an HTTP request and return the complete response.
 // Consumes `request` and `host` (freed on every path). The raw rt_net_*
 // intrinsics below borrow their string arguments, so both parameters stay
@@ -801,7 +1314,7 @@ fn http_recv_all(sock: Int) -> Str {
 // code), or a send failure (HTTP_ERR_SEND). A response that outgrew
 // MAX_BODY is HTTP_ERR_TOO_LARGE (the received prefix is still returned).
 fn http_send(request: Str, host: Str, port: Int) -> Str {
-    http_last_error_code = 0;
+    rt_thread_local_set(0);
     // Initialize Winsock on first use so `http_client_get`/`http_client_post`
     // work in a fresh program: the stdlib client is a complete entry point
     // and callers are not required to call `net_init` themselves. WSAStartup
@@ -821,21 +1334,60 @@ fn http_send(request: Str, host: Str, port: Int) -> Str {
         if conn == 0 {
             sent_ok = 1;
         } else {
-            http_last_error_code = HTTP_ERR_CONNECT();
+            rt_thread_local_set(HTTP_ERR_CONNECT());
         }
     } else {
-        http_last_error_code = HTTP_ERR_SOCKET();
+        rt_thread_local_set(HTTP_ERR_SOCKET());
     }
     if sent_ok == 1 {
         let sent = rt_net_send(sock, request);
         if sent == -1 {
             sent_ok = 0;
-            http_last_error_code = HTTP_ERR_SEND();
+            rt_thread_local_set(HTTP_ERR_SEND());
         }
     }
     let mut response = "";
     if sent_ok == 1 {
         response = http_recv_all(sock);
+        // A peer that closes or resets before sending anything leaves the
+        // receive helper with zero bytes and no local error. That is still a
+        // failed request: without this, such a transfer would report
+        // http_last_error() == 0, which the failure model reserves for a
+        // completed response.
+        if rt_str_len(response) == 0 {
+            rt_thread_local_set(HTTP_ERR_RECV());
+        }
+    }
+    // Session 137: a non-chunked response that declares more body bytes than it
+    // delivered is an incomplete transfer, not a completed request. Checked
+    // only when nothing more specific already failed (an oversized response is
+    // TOO_LARGE, a refused connection is CONNECT, an empty response is RECV
+    // above), and never for a Transfer-Encoding response, whose framing is not
+    // Content-Length-delimited. Responses that cannot carry a body at all
+    // (1xx, 204, 304, or a reply to HEAD) are exempt: their Content-Length
+    // describes the body the client did not ask for.
+    if rt_thread_local_get() == 0 && rt_str_len(response) > 0 {
+        // "HEAD" in the method position, case-insensitively.
+        let mut is_head = 0;
+        if rt_str_len(request) >= 4 {
+            is_head = 1;
+            let mut k = 0;
+            while k < 4 {
+                let mut a = rt_str_byte(request, k);
+                if a >= 97 && a <= 122 {
+                    a = a - 32;
+                }
+                if a != rt_str_byte("HEAD", k) {
+                    is_head = 0;
+                }
+                k = k + 1;
+            }
+        }
+        let check = _http_incomplete(response, is_head);
+        response = check.1;
+        if check.0 == 1 {
+            rt_thread_local_set(HTTP_ERR_RECV());
+        }
     }
     if sock != -1 {
         net_close(sock);

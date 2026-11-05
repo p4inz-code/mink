@@ -276,6 +276,15 @@ pub struct RuntimeLayout {
     /// is zero, which both accessors report as "no sender". Appended last so
     /// every earlier BSS offset is unchanged.
     pub net_sender_sockaddr: u64,
+    // --- Session 144: per-thread runtime scratch ---
+    /// One per-thread word exposed by `rt_thread_local_get/set`. On Windows
+    /// it holds `TlsAlloc()`'s index + 1 (0 = not allocated); `rt_init`
+    /// allocates the slot once, before `main`, so the first access cannot
+    /// race. On Linux — whose runtime is frozen and has no thread-local
+    /// mechanism — it holds the value itself, i.e. the pair is one
+    /// process-global word. Appended last so every earlier BSS offset is
+    /// unchanged.
+    pub tls_slot: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -637,7 +646,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 184,
-    size: 1488
+    tls_slot: 1488
         + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
@@ -656,6 +665,25 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 200,
+    size: 1488
+        + HEAP_BSS_BYTES
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 208,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

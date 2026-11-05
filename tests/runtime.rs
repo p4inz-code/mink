@@ -313,6 +313,66 @@ fn empty_string_literal_prints_crlf() {
 }
 
 #[test]
+fn print_str_binary_bytes_are_preserved() {
+    // `rt_print_str` is byte-oriented and appends CRLF without translation.
+    // Embedded NUL and CR/LF bytes must reach stdout exactly once.
+    let exe = build(
+        "fn main() {
+            let s = rt_str_alloc(4);
+            rt_str_set_byte(s, 0, 0);
+            rt_str_set_byte(s, 1, 255);
+            rt_str_set_byte(s, 2, 13);
+            rt_str_set_byte(s, 3, 10);
+            rt_print_str(s);
+            rt_str_free(s);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, vec![0, 255, 13, 10, 13, 10]);
+}
+
+#[test]
+fn print_str_long_lines_at_and_above_the_stack_boundary() {
+    // The complete line is assembled in a 4,064-byte stack buffer, so the
+    // largest stack-path payload is 4,062 bytes. 4,063 exercises the
+    // temporary-allocation path, and 64 KiB exercises it at a realistic
+    // long-line size. Every byte and exactly one CRLF must be present.
+    let exe = build(
+        "fn fill(n: Int) -> Str {
+            let s = rt_str_alloc(n);
+            let mut i = 0;
+            while i < n {
+                rt_str_set_byte(s, i, (i * 37 + 11) % 251);
+                i = i + 1;
+            }
+            return s;
+        }
+        fn main() {
+            let a = fill(4062);
+            rt_print_str(a);
+            rt_str_free(a);
+            let b = fill(4063);
+            rt_print_str(b);
+            rt_str_free(b);
+            let c = fill(65536);
+            rt_print_str(c);
+            rt_str_free(c);
+            return 0;
+        }",
+    );
+    let (code, stdout) = run(&exe);
+    assert_eq!(code, 0);
+    let mut expected = Vec::new();
+    for n in [4062usize, 4063, 65536] {
+        expected.extend((0..n).map(|i| ((i * 37 + 11) % 251) as u8));
+        expected.extend_from_slice(b"\r\n");
+    }
+    assert_eq!(stdout, expected);
+}
+
+#[test]
 fn str_alloc_len_and_bytes_round_trip() {
     let exe = build(
         "fn main() {

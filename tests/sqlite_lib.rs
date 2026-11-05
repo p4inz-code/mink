@@ -547,3 +547,151 @@ fn s41_unicode_values_survive_round_trip() {
     assert_eq!(r[4], "2");
     assert_eq!(r[5], "\u{65e5}\u{672c}\tx");
 }
+
+// ============================================================================
+// Runtime-built (heap) statements — Session 137 (M2 P8.1)
+// ============================================================================
+//
+// Session 136's M2 P8 record carried a category-E defect: the same 34-byte
+// statement text returned "ERROR: unsupported statement" when the string was
+// built at runtime by `rt_str_concat` instead of written as a literal
+// (`tmp/m2_p8/sql_probe5.mink`). Root cause: the probe called
+// `sql_exec(heap_stmt, db)` while the documented signature is
+// `sql_exec(db, sql)`, so the *database blob* was parsed as SQL — the first
+// keyword of a database blob is the byte 'T' of the schema record, which is
+// not a statement keyword. The engine and the storage classes were correct;
+// `sql_probe7`/`sql_probe8` show literal, heap-built, variable, concatenated,
+// function-produced and cross-function-boundary statements all executing
+// identically. These tests are the permanent fence: they fail if a
+// runtime-built statement ever parses differently from its literal, and they
+// assert real results (row counts and selected values), not just a clean exit.
+//
+// The same statement text is produced five ways, so a divergence in string
+// construction, argument order or the arena copy is caught by the row count.
+
+/// Statement builders used by the heap-statement tests: the number is rendered
+/// at runtime and concatenated in, so the SQL text only exists on the heap.
+const STATEMENT_BUILDERS: &str = r#"
+fn mk_stmt(id: Int) -> Str {
+    let num = rt_str_from_int(id);
+    let mid = rt_str_concat(num, ",'v',7)");
+    rt_str_free(num);
+    let head = rt_str_concat("INSERT INTO items VALUES (", mid);
+    rt_str_free(mid);
+    return head;
+}
+
+fn passthru(s: Str) -> Str {
+    let out = rt_str_concat("", s);
+    rt_str_free(s);
+    return out;
+}
+
+fn pad_stmt(id: Int, pad: Int) -> Str {
+    let num = rt_str_from_int(id);
+    let mid = rt_str_concat(num, ",'v',7) /*");
+    rt_str_free(num);
+    let head = rt_str_concat("INSERT INTO items VALUES (", mid);
+    rt_str_free(mid);
+    let mut xs = rt_str_alloc(0);
+    let mut k = 0;
+    while k < pad {
+        let old = xs;
+        xs = rt_str_concat(old, "x");
+        rt_str_free(old);
+        k = k + 1;
+    }
+    let tail = rt_str_concat(xs, "*/");
+    rt_str_free(xs);
+    let full = rt_str_concat(head, tail);
+    rt_str_free(head);
+    rt_str_free(tail);
+    return full;
+}
+"#;
+
+#[test]
+fn s41_heap_built_statement_matches_its_literal() {
+    // Five storage classes of byte-identical INSERT text, one engine:
+    //   literal, variable holding a literal, function-produced heap string,
+    //   heap variable, concatenated, and a heap string that crossed a second
+    //   function boundary. Every one must append exactly one row.
+    let (code, out) = build_and_run(
+        STATEMENT_BUILDERS,
+        "let mut db = sql_new();\n\
+         db = ex(db, \"CREATE TABLE items (id INT, name STR, qty INT)\");\n\
+         let lit = \"INSERT INTO items VALUES (10,'v',7)\";\n\
+         db = ex(db, lit);\n\
+         db = ex(db, mk_stmt(20));\n\
+         let built = mk_stmt(30);\n\
+         db = ex(db, built);\n\
+         let cat = rt_str_concat(\"INSERT INTO items VALUES (\", \"40,'v',7)\");\n\
+         db = ex(db, cat);\n\
+         db = ex(db, passthru(mk_stmt(50)));\n\
+         db = ex(db, \"SELECT COUNT(*) FROM items\");\n\
+         db = ex(db, \"SELECT * FROM items WHERE id = 30\");\n\
+         db = ex(db, \"SELECT * FROM items WHERE qty = 7\");\n\
+         sql_free(db);\n",
+    );
+    assert_eq!(code, 0, "exit={code}\n{out}");
+    let r = results(&out);
+    assert_eq!(
+        &r[0..6],
+        &["OK", "OK", "OK", "OK", "OK", "OK"],
+        "every storage class must execute: {r:?}"
+    );
+    assert_eq!(r[6], "5", "all five inserts must have landed: {r:?}");
+    assert_eq!(r[7], "30\tv\t7", "the heap-built row must be readable");
+    assert_eq!(
+        r[8], "10\tv\t7\n20\tv\t7\n30\tv\t7\n40\tv\t7\n50\tv\t7",
+        "rows must appear in insertion order: {r:?}"
+    );
+}
+
+#[test]
+fn s41_heap_statement_length_and_repetition_are_stable() {
+    // Statement text is packed eight bytes to an arena word, so a runtime
+    // statement whose length crosses word boundaries exercises the packing on
+    // both sides. 25 growing heap statements (lengths ~35 to ~60 bytes,
+    // including exact multiples of 8) plus 10 repetitions of one statement
+    // must all append exactly one row each.
+    let (code, out) = build_and_run(
+        STATEMENT_BUILDERS,
+        "let mut db = sql_new();\n\
+         db = ex(db, \"CREATE TABLE items (id INT, name STR, qty INT)\");\n\
+         let mut i = 0;\n\
+         while i < 25 {\n\
+             db = ex(db, pad_stmt(i, i));\n\
+             i = i + 1;\n\
+         }\n\
+         db = ex(db, \"SELECT COUNT(*) FROM items\");\n\
+         let mut j = 0;\n\
+         while j < 10 {\n\
+             db = ex(db, pad_stmt(99, 5));\n\
+             j = j + 1;\n\
+         }\n\
+         db = ex(db, \"SELECT COUNT(*) FROM items\");\n\
+         db = ex(db, \"SELECT * FROM items WHERE id = 99\");\n\
+         sql_free(db);\n",
+    );
+    assert_eq!(code, 0, "exit={code}\n{out}");
+    let r = results(&out);
+    // 1 CREATE + 25 inserts, the count, 10 repeats, the count, the row dump.
+    assert_eq!(r.len(), 39, "one result per statement: {r:?}");
+    assert!(
+        r[..26].iter().all(|s| s == "OK"),
+        "every growing heap statement must execute: {r:?}"
+    );
+    assert_eq!(r[26], "25", "growing heap statements: {r:?}");
+    assert!(
+        r[27..37].iter().all(|s| s == "OK"),
+        "every repetition must execute: {r:?}"
+    );
+    assert_eq!(r[37], "35", "repeated heap statement: {r:?}");
+    assert_eq!(
+        r[38],
+        "99\tv\t7\n99\tv\t7\n99\tv\t7\n99\tv\t7\n99\tv\t7\n\
+         99\tv\t7\n99\tv\t7\n99\tv\t7\n99\tv\t7\n99\tv\t7",
+        "every repetition must be a real row: {r:?}"
+    );
+}

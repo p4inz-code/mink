@@ -434,7 +434,23 @@ impl<'a> StmtEval<'a> {
                 // operand position are evaluated for their side effects.
                 match &block.result {
                     Some(result_expr) => self.eval_operand(result_expr),
-                    None => self.literal_operand(expr),
+                    // A block with no trailing expression has the `unit`
+                    // value. This is reachable from a closure whose body is a
+                    // statement block ending in `return` (the desugared
+                    // closure function body is `return <closure body>`, see
+                    // `desugar_closure_to_fn`): the block's own statements
+                    // have already been lowered by `FnBuilder` and the value
+                    // is unit or unreachable, so emit a zero constant rather
+                    // than treating the block as a literal (which panicked).
+                    None => MirOperand {
+                        kind: MirOperandKind::Constant(MirConstant {
+                            kind: MirConstantKind::Bool(false),
+                            span: expr.span,
+                            ty: expr.ty,
+                        }),
+                        span: expr.span,
+                        ty: expr.ty,
+                    },
                 }
             }
             HirExprKind::IfExpr { .. } => {
@@ -650,11 +666,24 @@ impl<'a> StmtEval<'a> {
     /// (`x += v`) loads the target's current value, applies the
     /// corresponding binary operator, and stores the result.
     fn eval_assign(&mut self, expr: &HirExpr) -> MirOperand {
-        let (op, target_expr, value_expr) = match &expr.kind {
-            HirExprKind::Assign { op, target, value } => (*op, target, value),
+        let value_expr = match &expr.kind {
+            HirExprKind::Assign { value, .. } => value,
             _ => unreachable!("eval_assign is only called for assignments"),
         };
         let value = self.eval_operand(value_expr);
+        self.eval_assign_with_value(expr, value)
+    }
+
+    /// Stores an already-evaluated `value` into an assignment target and
+    /// returns the assigned value. Split from [`Self::eval_assign`] so
+    /// `FnBuilder` can evaluate the value through CFG-aware operand lowering
+    /// (an if-expression on the right-hand side) and still share the target
+    /// and compound-assignment logic.
+    fn eval_assign_with_value(&mut self, expr: &HirExpr, value: MirOperand) -> MirOperand {
+        let (op, target_expr, _value_expr) = match &expr.kind {
+            HirExprKind::Assign { op, target, value } => (*op, target, value),
+            _ => unreachable!("eval_assign_with_value is only called for assignments"),
+        };
         let target = match self.place_for_target(target_expr) {
             Ok(target) => target,
             Err(error) => {
@@ -1367,6 +1396,31 @@ impl<'a> FnBuilder<'a> {
                 arms,
                 span,
             } => Some(self.lower_match_expr(scrutinee, arms, result.ty, *span)),
+            HirExprKind::IfExpr {
+                cond,
+                then_block,
+                else_branch,
+                span,
+            } => {
+                // A block whose trailing expression is an if-expression
+                // (`{ if c { a } else { b } }`) needs the same CFG
+                // materialization as any other operand position.
+                self.ensure_current(*span);
+                let local = self.eval.temp(result.ty, *span);
+                self.lower_if_expr_binding(
+                    local,
+                    cond,
+                    then_block,
+                    else_branch,
+                    result.ty,
+                    *span,
+                );
+                Some(MirOperand {
+                    kind: MirOperandKind::Local(local),
+                    span: *span,
+                    ty: result.ty,
+                })
+            }
             _ => None,
         }
     }
@@ -1374,7 +1428,75 @@ impl<'a> FnBuilder<'a> {
     /// Wraps `StmtEval::eval_operand` to intercept while/loop
     /// expressions (session 30). These need CFG lowering that only
     /// `FnBuilder` can provide.
+    /// Whether lowering `expr` needs the CFG-aware operand path: it is a
+    /// control-flow expression itself, or it contains one. A pure operand
+    /// keeps the original single-rvalue `StmtEval` shape, which matters for
+    /// the optimizer (no extra temporaries to fold through).
+    fn needs_cfg(expr: &HirExpr) -> bool {
+        match &expr.kind {
+            HirExprKind::IfExpr { .. }
+            | HirExprKind::WhileExpr { .. }
+            | HirExprKind::LoopExpr { .. }
+            | HirExprKind::MatchExpr { .. } => true,
+            // `?` returns early, so it always needs branch blocks.
+            HirExprKind::Try { .. } => true,
+            HirExprKind::Unary { operand, .. }
+            | HirExprKind::Borrow { operand, .. }
+            | HirExprKind::Deref { operand }
+            | HirExprKind::Member { base: operand, .. } => Self::needs_cfg(operand),
+            HirExprKind::Binary { lhs, rhs, .. } => Self::needs_cfg(lhs) || Self::needs_cfg(rhs),
+            HirExprKind::Assign { target, value, .. } => {
+                Self::needs_cfg(target) || Self::needs_cfg(value)
+            }
+            HirExprKind::Range { start, end, .. } => {
+                Self::needs_cfg(start) || Self::needs_cfg(end)
+            }
+            HirExprKind::Call { callee, args } => {
+                Self::needs_cfg(callee) || args.iter().any(Self::needs_cfg)
+            }
+            HirExprKind::Index { base, index } => {
+                Self::needs_cfg(base) || Self::needs_cfg(index)
+            }
+            HirExprKind::StructLit { fields, .. } => {
+                fields.iter().any(|(_, value)| Self::needs_cfg(value))
+            }
+            HirExprKind::ArrayLit(elems) | HirExprKind::Tuple(elems) => {
+                elems.iter().any(Self::needs_cfg)
+            }
+            HirExprKind::EnumVariant { payload, .. } => {
+                payload.as_ref().is_some_and(|payload| Self::needs_cfg(payload))
+            }
+            HirExprKind::TupleFieldAccess { base, .. } => Self::needs_cfg(base),
+            // A block is always lowered on this path: its statements are
+            // emitted by `FnBuilder`, and an empty-result block (the body of
+            // a statement-bodied closure, which desugars to a `return`) has
+            // no operand the pure `StmtEval` path can produce.
+            HirExprKind::Block(_) => true,
+            HirExprKind::Int
+            | HirExprKind::Float
+            | HirExprKind::Str
+            | HirExprKind::Char
+            | HirExprKind::Bool(_)
+            | HirExprKind::Null
+            | HirExprKind::Var(_)
+            | HirExprKind::Closure { .. } => false,
+        }
+    }
+
     fn eval_operand(&mut self, expr: &HirExpr) -> MirOperand {
+        // A top-level `&&` / `||` is lowered to branch blocks by its own arm
+        // below. Nested logical operators stay on the pure path, which is the
+        // shape they had before the CFG arms existed.
+        let top_level_logical = matches!(
+            &expr.kind,
+            HirExprKind::Binary {
+                op: BinaryOp::And | BinaryOp::Or,
+                ..
+            }
+        );
+        if !top_level_logical && !Self::needs_cfg(expr) {
+            return self.eval.eval_operand(expr);
+        }
         match &expr.kind {
             HirExprKind::WhileExpr { cond, body, span } => {
                 self.lower_while_expr(cond, body, expr.ty, *span)
@@ -1385,6 +1507,35 @@ impl<'a> FnBuilder<'a> {
                 arms,
                 span,
             } => self.lower_match_expr(scrutinee, arms, expr.ty, *span),
+            HirExprKind::IfExpr {
+                cond,
+                then_block,
+                else_branch,
+                span,
+            } => {
+                // An if-expression in operand position (a call argument, a
+                // `return` value, or an operand of a binary expression) is
+                // materialized into a temporary local with the same CFG
+                // lowering used for a binding initializer. Before Session 138
+                // this fell through to `StmtEval`, whose IfExpr arm called
+                // `literal_operand` and panicked ("literal_operand is only
+                // called for literals").
+                self.ensure_current(*span);
+                let result_local = self.eval.temp(expr.ty, *span);
+                self.lower_if_expr_binding(
+                    result_local,
+                    cond,
+                    then_block,
+                    else_branch,
+                    expr.ty,
+                    *span,
+                );
+                MirOperand {
+                    kind: MirOperandKind::Local(result_local),
+                    span: *span,
+                    ty: expr.ty,
+                }
+            }
             HirExprKind::Try {
                 operand,
                 enum_name,
@@ -1406,8 +1557,19 @@ impl<'a> FnBuilder<'a> {
                 if let Some(result) = self.lower_block_trailing_expr(block) {
                     return result;
                 }
-                // Non-loop trailing expression: fall through to StmtEval.
-                self.eval.eval_operand(expr)
+                // The trailing expression is the block's value. Route it
+                // through this CFG-aware path: a composite operand that
+                // contains an if-expression (for example the closure body
+                // `{ if c { y } else { 0 } + 5 }`) needs branch blocks, and
+                // handing the whole block to `StmtEval` would reach its
+                // defensive `literal_operand` call and panic. A pure operand
+                // still lowers through `StmtEval` unchanged.
+                match &block.result {
+                    Some(result) => self.eval_operand(result),
+                    // A block with no trailing expression is a unit block;
+                    // `StmtEval` supplies its constant value.
+                    None => self.eval.eval_operand(expr),
+                }
             }
             HirExprKind::Binary {
                 op: BinaryOp::And,
@@ -1551,6 +1713,187 @@ impl<'a> FnBuilder<'a> {
                     ty: bool_ty,
                 }
             }
+            // Composite operands are lowered here (rather than delegated to
+            // `StmtEval`) so that every sub-expression is evaluated through
+            // this CFG-aware path. That matters for an if-expression used
+            // anywhere inside an operand: `StmtEval` has no way to emit
+            // branch blocks, so it would fall through to its defensive
+            // `literal_operand` call and panic (Session 129 A4).
+            HirExprKind::Unary { op, operand } => {
+                self.ensure_current(expr.span);
+                let operand = self.eval_operand(operand);
+                self.eval
+                    .temp_rvalue(expr, MirRvalueKind::Unary { op: *op, operand })
+            }
+            HirExprKind::Binary { op, lhs, rhs } => {
+                self.ensure_current(expr.span);
+                let lhs = self.eval_operand(lhs);
+                let rhs = self.eval_operand(rhs);
+                self.eval.temp_rvalue(
+                    expr,
+                    MirRvalueKind::Binary {
+                        op: *op,
+                        lhs,
+                        rhs,
+                    },
+                )
+            }
+            HirExprKind::Range {
+                inclusive,
+                start,
+                end,
+            } => {
+                self.ensure_current(expr.span);
+                let start = self.eval_operand(start);
+                let end = self.eval_operand(end);
+                self.eval.temp_rvalue(
+                    expr,
+                    MirRvalueKind::Range {
+                        inclusive: *inclusive,
+                        start,
+                        end,
+                    },
+                )
+            }
+            HirExprKind::Call { callee, args } => {
+                self.ensure_current(expr.span);
+                let callee = self.eval_operand(callee);
+                let args = args.iter().map(|arg| self.eval_operand(arg)).collect();
+                self.eval
+                    .temp_rvalue(expr, MirRvalueKind::Call { callee, args })
+            }
+            HirExprKind::Deref { operand } => {
+                self.ensure_current(expr.span);
+                let operand = self.eval_operand(operand);
+                self.eval
+                    .temp_rvalue(expr, MirRvalueKind::Deref { operand })
+            }
+            HirExprKind::Member { base, member } => {
+                self.ensure_current(expr.span);
+                let base = self.eval_operand(base);
+                self.eval.temp_rvalue(
+                    expr,
+                    MirRvalueKind::Member {
+                        base,
+                        member: MirName {
+                            name: member.name.clone(),
+                            span: member.span,
+                        },
+                    },
+                )
+            }
+            HirExprKind::Index { base, index } => {
+                self.ensure_current(expr.span);
+                let base = self.eval_operand(base);
+                let index = self.eval_operand(index);
+                self.eval
+                    .temp_rvalue(expr, MirRvalueKind::Index { base, index })
+            }
+            HirExprKind::StructLit { name, fields } => {
+                self.ensure_current(expr.span);
+                let fields = fields
+                    .iter()
+                    .map(|(field_name, value)| {
+                        (
+                            MirName {
+                                name: field_name.name.clone(),
+                                span: field_name.span,
+                            },
+                            self.eval_operand(value),
+                        )
+                    })
+                    .collect();
+                let _ = name;
+                self.eval
+                    .temp_rvalue(expr, MirRvalueKind::StructLit { fields })
+            }
+            HirExprKind::ArrayLit(elems) => {
+                self.ensure_current(expr.span);
+                let elems = elems.iter().map(|elem| self.eval_operand(elem)).collect();
+                self.eval
+                    .temp_rvalue(expr, MirRvalueKind::ArrayLit { elems })
+            }
+            HirExprKind::EnumVariant {
+                name,
+                variant,
+                payload,
+            } => match payload {
+                None => {
+                    let discriminant = self
+                        .eval
+                        .enum_variant_discriminant(&name.name, &variant.name)
+                        .unwrap_or(0);
+                    let constant = MirConstant {
+                        kind: MirConstantKind::Enum {
+                            variant: discriminant,
+                        },
+                        span: expr.span,
+                        ty: expr.ty,
+                    };
+                    MirOperand {
+                        kind: MirOperandKind::Constant(constant),
+                        span: expr.span,
+                        ty: expr.ty,
+                    }
+                }
+                Some(payload) => {
+                    self.ensure_current(expr.span);
+                    let discriminant = self
+                        .eval
+                        .enum_variant_discriminant(&name.name, &variant.name)
+                        .unwrap_or(0);
+                    let payload = self.eval_operand(payload);
+                    self.eval.temp_rvalue(
+                        expr,
+                        MirRvalueKind::EnumInit {
+                            discriminant,
+                            payload: Some(payload),
+                        },
+                    )
+                }
+            },
+            HirExprKind::Tuple(elems) => {
+                self.ensure_current(expr.span);
+                let elems = elems.iter().map(|elem| self.eval_operand(elem)).collect();
+                self.eval
+                    .temp_rvalue(expr, MirRvalueKind::TupleLit { elems })
+            }
+            HirExprKind::TupleFieldAccess { base, index, .. } => {
+                self.ensure_current(expr.span);
+                let base_op = self.eval_operand(base);
+                let base_ty = base_op.ty;
+                match base_op.kind {
+                    MirOperandKind::Local(local) => self.eval.load_tuple_field(local, *index, expr),
+                    _ => {
+                        let temp = self.eval.temp(base_ty, base.span);
+                        self.eval.emit(MirStmt {
+                            kind: MirStmtKind::Assign {
+                                target: MirTarget {
+                                    kind: MirTargetKind::Local(temp),
+                                    span: base.span,
+                                    ty: base_ty,
+                                },
+                                rvalue: MirRvalue {
+                                    kind: MirRvalueKind::Use(base_op),
+                                    span: base.span,
+                                    ty: base_ty,
+                                },
+                            },
+                            span: base.span,
+                        });
+                        self.eval.load_tuple_field(temp, *index, expr)
+                    }
+                }
+            }
+            HirExprKind::Assign { .. } => {
+                self.ensure_current(expr.span);
+                let value_expr = match &expr.kind {
+                    HirExprKind::Assign { value, .. } => value,
+                    _ => unreachable!("matched as an assignment"),
+                };
+                let value = self.eval_operand(value_expr);
+                self.eval.eval_assign_with_value(expr, value)
+            }
             _ => self.eval.eval_operand(expr),
         }
     }
@@ -1582,6 +1925,14 @@ impl<'a> FnBuilder<'a> {
                         _ => self.eval_operand(expr),
                     }
                 });
+                // Evaluating the value can terminate the current block when
+                // the value is itself a block that ends in a `return` — the
+                // shape a closure with a statement-block body lowers to
+                // (`return <body block>`, see `desugar_closure_to_fn`). The
+                // enclosing `return` is then unreachable, so emit nothing.
+                if self.current.is_none() {
+                    return;
+                }
                 self.terminate(MirTerminator::Return {
                     value,
                     span: stmt.span,

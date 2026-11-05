@@ -69,8 +69,10 @@ const NET_FUNC_TABLE2: u32 = BSS.net_func_table2 as u32;
 // --- Session 126: unconnected UDP ---
 /// The `sockaddr_in` written by the last `recvfrom` (source of the datagram).
 const NET_SENDER_SOCKADDR: u32 = BSS.net_sender_sockaddr as u32;
-/// Usable bytes in `recv_buf` (4096 bytes, minus the Str length prefix).
-const NET_RECV_DATA: u32 = 4096 - 8;
+/// The largest IPv4 UDP payload: 65,535 minus the 20-byte IP header and the
+/// 8-byte UDP header. A larger receive request buys nothing and is capped
+/// here rather than becoming an unbounded allocation.
+const NET_DATAGRAM_MAX: u32 = 65507;
 // --- Session 125: stdio capture region (stdin / stdout / stderr windows) ---
 const STDIO_CAPTURE: u32 = BSS.stdio_capture_base as u32;
 const STDIO_STDOUT_OFF: u64 = crate::runtime::abi::STDIO_CAPTURE_WINDOW_BYTES;
@@ -98,6 +100,10 @@ const FLOAT_SINK: u32 = BSS.float_sink as u32;
 const FAIL_LOC: u32 = BSS.fail_loc as u32;
 // --- Async / task loop (Session 114, R20/S73) ---
 const TASK_LOOP: u32 = BSS.task_loop as u32;
+// --- Per-thread runtime scratch (Session 144) ---
+/// Holds `TlsAlloc()`'s index + 1 (0 = not allocated). See
+/// [`RuntimeLayout::tls_slot`](crate::runtime::abi::RuntimeLayout::tls_slot).
+const TLS_SLOT: u32 = BSS.tls_slot as u32;
 
 /// The offsets of the machine services within `.text`, plus the labels
 /// the services reference (bound by [`emit_data`] and the emitter's string
@@ -332,6 +338,14 @@ pub(crate) fn emit_services(
         emit_str_from_bool(code)
     });
     // --- Networking (Session 67) ---
+    // --- Per-thread runtime scratch (Session 144) ---
+    emit(code, RuntimeService::ThreadLocalGet, |code, r| {
+        emit_thread_local_get(code, r)
+    });
+    emit(code, RuntimeService::ThreadLocalSet, |code, r| {
+        emit_thread_local_set(code, r)
+    });
+    // --- Networking (Session 67) ---
     emit(code, RuntimeService::NetWsaStartup, |code, _| {
         emit_net_wsa_startup(code)
     });
@@ -340,6 +354,9 @@ pub(crate) fn emit_services(
     });
     emit(code, RuntimeService::NetWsaLastError, |code, _| {
         emit_net_wsa_last_error(code)
+    });
+    emit(code, RuntimeService::NetWsaSetLastError, |code, _| {
+        emit_net_wsa_set_last_error(code)
     });
     emit(code, RuntimeService::NetSocket, |code, _| {
         emit_net_socket(code)
@@ -389,6 +406,9 @@ pub(crate) fn emit_services(
         emit_net_set_nonblocking(code)
     });
     emit(code, RuntimeService::NetPoll, |code, _| emit_net_poll(code));
+    emit(code, RuntimeService::NetSoError, |code, _| {
+        emit_net_so_error(code)
+    });
     // --- Dynamic library call (Session 117, S62) ---
     emit(code, RuntimeService::SysLoadLib, |code, _| {
         emit_sys_load_lib(code)
@@ -705,6 +725,28 @@ fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
     // Initialize RNG state (non-zero seed for xorshift64*)
     code.movabs(Reg::Rax, 1u64);
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(RNG_STATE));
+    // Session 144: allocate the per-thread scratch slot once, before main.
+    // The cell stores index + 1 because TLS index 0 is valid, so the
+    // loader-zeroed 0 means "not allocated". TlsAlloc returning
+    // TLS_OUT_OF_INDEXES (0xFFFFFFFF) leaves the cell 0: get then answers 0
+    // and set is a no-op rather than an invalid-index call. The guard also
+    // makes a second Init harmless (no leaked index, no state reset).
+    let tls_ready = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(TLS_SLOT));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, tls_ready); // jnz — already allocated
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_TLS_ALLOC));
+    code.add_rsp(32);
+    // `mov eax, eax`: zero-extend the DWORD result (the Win64 ABI leaves the
+    // upper half of RAX unspecified). Any index above 0x7FFF_FFFF — the
+    // documented TLS_OUT_OF_INDEXES failure included — is not a usable slot.
+    code.bytes(&[0x89, 0xC0]);
+    code.cmp_r_imm32(Reg::Rax, 0x7FFF_FFFFu32);
+    code.jcc_label(0x87, tls_ready); // ja — out of indices: stay unallocated
+    code.add_r_imm8(Reg::Rax, 1);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(TLS_SLOT));
+    code.bind_label(tls_ready);
     code.leave_ret();
 }
 
@@ -1210,20 +1252,100 @@ fn emit_str_set_byte(code: &mut Code) {
     fail(code, 9); // E-R09
 }
 
+/// The largest string whose complete line is assembled in the per-call
+/// stack buffer. The frame is 4,096 bytes: eight bytes of spills at
+/// `[rbp-8..-32]` and a 4,064-byte buffer at `[rbp-4096..-33]`, so a
+/// 4,062-byte payload plus its CRLF fits exactly. Longer strings use a
+/// temporary runtime heap block instead of truncating or writing the payload
+/// and CRLF separately.
+const PRINT_STR_STACK_CAP: u32 = 4062;
+
 /// `rt_print_str(s)` (s at `[rbp + 16]`): write the bytes of a validated
-/// string plus a CRLF to stdout.
-fn emit_print_str(code: &mut Code, offsets: &RuntimeOffsets) {
+/// string plus a CRLF to stdout as **one** write.
+///
+/// The old path wrote the payload and then the shared CRLF label in two
+/// calls, so concurrent printers could interleave the writes and split each
+/// other's lines. The line is now assembled in per-call storage first:
+///
+/// - `[rbp-8]` length, `[rbp-16]` source data, `[rbp-24]` line buffer,
+///   `[rbp-32]` 0 for the stack buffer / 1 for a heap block;
+/// - `[rbp-4096 .. rbp-33)` is a 4,064-byte stack buffer; lines up to
+///   [`PRINT_STR_STACK_CAP`] bytes use it with no allocation;
+/// - a longer line is allocated from the validated runtime heap (which is
+///   already required to print a `Str`, because `StrValidate` needs the
+///   image region recorded by `rt_init`), filled, and freed here.
+///
+/// No shared scratch, lock, or thread-local buffer is involved. A heap
+/// allocation failure is the existing allocator error (E-R02); no line is
+/// truncated and no half-written line is emitted.
+fn emit_print_str(code: &mut Code, _offsets: &RuntimeOffsets) {
     prologue(code);
-    code.sub_rsp(16);
+    code.sub_rsp(4096);
+
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrValidate));
     code.mov_r_mem(Reg::R8, Reg::Rax, 0); // len
-    code.lea_r_mem(Reg::Rcx, Reg::Rax, 8); // data base
-    code.mov_rr(Reg::Rdx, Reg::R8); // length
+    code.mov_mem_r(Reg::Rbp, -8, Reg::R8);
+    code.lea_r_mem(Reg::R8, Reg::Rax, 8); // data base
+    code.mov_mem_r(Reg::Rbp, -16, Reg::R8);
+
+    let heap_line = code.label();
+    let copy_line = code.label();
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.cmp_r_imm32(Reg::Rax, PRINT_STR_STACK_CAP);
+    code.jcc_label(0x87, heap_line); // ja — longer than the stack buffer
+
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, -4096);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_mem_imm32(Reg::Rbp, -32, 0);
+    code.jmp_label(copy_line);
+
+    code.bind_label(heap_line);
+    // Alloc(len + 2) through the same runtime allocator used by StrAlloc.
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rax, 2);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    code.mov_mem_imm32(Reg::Rbp, -32, 1);
+
+    code.bind_label(copy_line);
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -24); // destination
+    code.mov_r_mem(Reg::R10, Reg::Rbp, -16); // source
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8); // count
+    let copy_loop = code.label();
+    let copied = code.label();
+    code.bind_label(copy_loop);
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, copied); // jz
+    code.movzx_byte(Reg::Rax, Reg::R10, 0);
+    code.mov_mem_r8(Reg::R9, 0, Reg::Rax);
+    code.add_r_imm8(Reg::R9, 1);
+    code.add_r_imm8(Reg::R10, 1);
+    code.sub_r_imm32(Reg::Rdx, 1);
+    code.jmp_label(copy_loop);
+    code.bind_label(copied);
+
+    // Append the CRLF after the payload and write the whole line once.
+    code.mov_mem_imm8(Reg::R9, 0, b'\r');
+    code.mov_mem_imm8(Reg::R9, 1, b'\n');
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -24);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
+    code.add_r_imm8(Reg::Rdx, 2);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
-    code.lea_r_rip(Reg::Rcx, PatchKind::Label(offsets.crlf_label));
-    code.mov_r32_imm32(Reg::Rdx, 2);
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::WriteStdout));
+
+    let done = code.label();
+    code.cmp_mem8_imm8(Reg::Rbp, -32, 0);
+    code.jcc_label(0x84, done); // stack path: nothing to free
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -24);
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::Free));
+    code.add_rsp(16);
+
+    code.bind_label(done);
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
 }
@@ -6095,22 +6217,25 @@ fn emit_str_eq(code: &mut Code) {
 ///
 /// Stack layout:
 /// - `[rbp-8]`  = saved length (across Alloc call)
-/// - `[rbp-16]` = saved data start pointer from print_buf
+/// - `[rbp-16]` = saved data start pointer
+/// - `[rbp-48 ..= rbp-17]` = 32-byte digit scratch
 ///
-/// Strategy: use the 32-byte print_buf as scratch to build digits
-/// backwards (same approach as `emit_print_int`), then allocate a string
-/// of the correct size and copy. The minus sign is written AFTER all
-/// digits so it appears first when reading left-to-right.
+/// Strategy: build the digits backwards in a stack scratch area, then
+/// allocate a string of the correct size and copy. The scratch is per-thread
+/// on purpose: `rt_str_from_int` is called from worker threads (HTTP and
+/// server code format integers into responses), and a shared `.bss` scratch
+/// let two threads overwrite each other's digits, so one thread returned
+/// another thread's number. The minus sign is written AFTER all digits so it
+/// appears first when reading left-to-right.
 fn emit_str_from_int(code: &mut Code) {
     prologue(code);
-    code.sub_rsp(16);
+    code.sub_rsp(48);
 
     // rax = value.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
 
-    // Cursor starts at print_buf + 31.
-    code.lea_r_rip(Reg::R8, PatchKind::Bss(BSS.print_buf as u32));
-    code.add_r_imm8(Reg::R8, 31);
+    // Cursor starts at the last byte of the 32-byte stack scratch.
+    code.lea_r_mem(Reg::R8, Reg::Rbp, -17);
 
     // Handle zero: write '0', decrement cursor, done.
     code.test_rr(Reg::Rax, Reg::Rax);
@@ -6150,10 +6275,9 @@ fn emit_str_from_int(code: &mut Code) {
 
     code.bind_label(build_done);
     // R8 points to one byte before the first character.
-    // Data start = R8 + 1. Length = (print_buf + 31) - R8.
+    // Data start = R8 + 1. Length = (rbp - 17) - R8.
     code.lea_r_mem(Reg::R9, Reg::R8, 1); // data start
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(BSS.print_buf as u32));
-    code.add_r_imm8(Reg::R10, 31);
+    code.lea_r_mem(Reg::R10, Reg::Rbp, -17);
     code.sub_rr(Reg::R10, Reg::R8); // R10 = length (use R8, not R9)
 
     // Save length and data start before alloc (caller-saved).
@@ -6261,6 +6385,16 @@ fn emit_str_from_bool(code: &mut Code) {
 /// Returns 0 on success, -1 on error.
 fn emit_net_wsa_startup(code: &mut Code) {
     prologue(code);
+    // Session 133: serialize first-time initialization. The init sequence
+    // stages the ws2_32 entry-point names and the WSADATA block in the shared
+    // `recv_buf`, so two threads that both enter before `NET_INIT_FLAG` is set
+    // can overwrite each other's names while the other is still calling
+    // GetProcAddress. That stores null function pointers, and the next call
+    // through the table segfaults (observed with 8 threads and implicit
+    // net_init from http_send). The runtime spin lock (the allocator's) makes
+    // the whole sequence one-time and atomic; the second thread sees the flag
+    // set and takes the `already` path.
+    rt_lock_acquire(code);
     // Check if already initialized
     let already = code.label();
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
@@ -6392,16 +6526,19 @@ fn emit_net_wsa_startup(code: &mut Code) {
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
 
     code.bind_label(already);
+    rt_lock_release(code);
     code.xor_rr32(Reg::Rax, Reg::Rax); // return 0
     code.leave_ret();
 
     // WSAStartup failed
     code.bind_label(wsa_fail);
+    rt_lock_release(code);
     code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
     code.leave_ret();
 
     // LoadLibraryA failed
     code.bind_label(dll_fail);
+    rt_lock_release(code);
     code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFEu64); // -2
     code.leave_ret();
 }
@@ -6445,6 +6582,30 @@ fn emit_net_wsa_last_error(code: &mut Code) {
     code.add_rsp(32);
     code.bind_label(skip);
     // Return the integer error code directly
+    code.leave_ret();
+}
+
+/// `rt_net_wsa_set_last_error(code) -> Int`: set the calling thread's
+/// Winsock error code.
+///
+/// `closesocket` clears the thread's last-error, so a helper that has to
+/// close a failed socket after reading the reason republishes it through
+/// `WSASetLastError` here instead of losing it. Returns 0.
+fn emit_net_wsa_set_last_error(code: &mut Code) {
+    prologue(code);
+    // Not initialized: the extended ws2_32 table is still null, so report
+    // the no-op instead of calling through a null pointer.
+    let skip = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, skip); // jz: not initialized
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // code
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE2)); // WSASetLastError
+    code.sub_rsp(32);
+    code.call_rax();
+    code.add_rsp(32);
+    code.bind_label(skip);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
 }
 
@@ -6812,84 +6973,73 @@ fn emit_net_send(code: &mut Code) {
     code.leave_ret();
 }
 
-/// `rt_net_recv(sock, maxlen) -> Str`: Receive data into recv_buf, return as Str.
+/// `rt_net_recv(sock, maxlen) -> Str`: receive into a fresh owned Str.
+///
+/// Session 133: the destination is the allocation itself, never the shared
+/// `recv_buf`. Two threads receiving concurrently used to overwrite each
+/// other's bytes between `recv` and the copy (wrong payloads under concurrent
+/// HTTP), and a `maxlen` of 4096 wrote 8 bytes past the 4096-byte BSS scratch
+/// buffer. Allocating `maxlen` up front and writing the actual byte count into
+/// the length prefix removes both: every call owns its destination and the
+/// receive cannot run past the block.
 fn emit_net_recv(code: &mut Code) {
     prologue(code);
     let ninit = code.label();
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
     code.test_rr(Reg::Rax, Reg::Rax);
-    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
-    code.sub_rsp(16); // [rbp-8] = bytes received, [rbp-16] = saved string ptr
-    code.mov_r_mem(Reg::R10, Reg::Rbp, 16); // sock
-    code.mov_r_mem(Reg::R11, Reg::Rbp, 24); // maxlen
-    // recv(sock, recv_buf+8, maxlen, 0)
-    code.mov_rr(Reg::Rcx, Reg::R10); // sock
-    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(NET_RECV_BUF + 8)); // buffer (skip length prefix)
-    code.mov_rr(Reg::R8, Reg::R11); // maxlen
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> empty Str
+    // Frame: [rbp-8] = bytes received, [rbp-16] = Str ptr, [rbp-24] = maxlen
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // maxlen
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+    let empty = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x8E, empty); // jle: no positive request -> empty Str
+
+    // StrAlloc(maxlen): the block itself is the receive destination.
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax (maxlen)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
+
+    // recv(sock, str+8, maxlen, 0)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
+    code.mov_rr(Reg::Rdx, Reg::Rax);
+    code.add_r_imm8(Reg::Rdx, 8); // skip length prefix
+    code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // maxlen
     code.xor_rr32(Reg::R9, Reg::R9); // flags = 0
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE + 72)); // recv
     code.sub_rsp(32);
     code.call_rax();
     code.add_rsp(32);
     code.cdqe(); // sign-extend EAX to RAX (recv returns int)
-    // RAX = bytes received, 0 on close, SOCKET_ERROR (-1) on error
-    // Store result
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
-    // Check for SOCKET_ERROR
-    code.cmp_r_imm32(Reg::Rax, 0xFFFF_FFFFu32);
-    let is_ok = code.label();
-    let done = code.label();
-    code.jcc_label(0x85, is_ok); // jne: not SOCKET_ERROR
-    // Error: length = 0
-    code.movabs(Reg::Rax, 0);
-    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
-    code.bind_label(is_ok);
-    // Check for negative or zero length
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+
+    // Length prefix = bytes actually received (0 on close or error).
+    let positive = code.label();
     code.test_rr(Reg::Rax, Reg::Rax);
-    code.jcc_label(0x8E, done); // jle: zero or negative → return empty
-    // Positive length: allocate Str and copy data
-    // StrAlloc(length) - RAX already has the recv byte count
-    code.sub_rsp(8); // alignment padding
-    code.u8(0x50); // push rax (= length) as stack arg
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
-    code.add_rsp(16); // pop arg + alignment padding
-    // RAX = allocated string ptr. Save it.
-    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
-    // Copy recv_buf+8 -> string+8
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF + 8)); // source
-    code.add_r_imm8(Reg::Rax, 8); // skip length prefix
-    code.mov_rr(Reg::R8, Reg::Rax); // dest
-    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // count
-    let copy_loop = code.label();
-    let copy_done = code.label();
-    code.bind_label(copy_loop);
-    code.test_rr(Reg::R9, Reg::R9);
-    code.jcc_label(0x84, copy_done);
-    code.movzx_byte(Reg::Rax, Reg::R10, 0);
-    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
-    code.add_r_imm8(Reg::R10, 1);
-    code.add_r_imm8(Reg::R8, 1);
-    code.sub_r_imm32(Reg::R9, 1);
-    code.jmp_label(copy_loop);
-    code.bind_label(copy_done);
-    // Return saved string ptr
+    code.jcc_label(0x8F, positive); // jg
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.bind_label(positive);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
     code.leave_ret();
-    // Empty/error path: return allocated empty string
-    code.bind_label(done);
-    code.sub_rsp(8); // alignment padding
-    code.xor_rr32(Reg::Rax, Reg::Rax); // RAX = 0
-    code.u8(0x50); // push rax (= 0) as stack arg
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
-    code.add_rsp(16); // pop arg + alignment padding
-    // RAX = empty string ptr (length prefix = 0)
-    code.leave_ret();
-    // Not initialized: return empty Str instead of faulting.
-    code.bind_label(ninit);
-    code.sub_rsp(8); // alignment padding
+
+    // Empty/error and not-initialized paths: an owned zero-length Str.
+    code.bind_label(empty);
+    code.sub_rsp(8);
     code.xor_rr32(Reg::Rax, Reg::Rax);
-    code.u8(0x50); // push rax (= 0 length) as stack arg
+    code.u8(0x50);
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.leave_ret();
+
+    code.bind_label(ninit);
+    code.sub_rsp(8);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.u8(0x50);
     code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
     code.add_rsp(16);
     code.leave_ret();
@@ -7165,15 +7315,18 @@ fn emit_net_sendto(code: &mut Code) {
 /// that was never connected, and record its sender in
 /// [`NET_SENDER_SOCKADDR`] for `rt_net_sender_ip` / `rt_net_sender_port`.
 ///
-/// `maxlen` is clamped to the runtime receive buffer (4088 bytes), so a larger
-/// request is a bounded read rather than a buffer overrun. An error, a closed
-/// peer or a timeout returns an owned empty Str — the documented failure value
-/// of every string-returning network intrinsic — with `net_last_error` still
-/// holding the reason.
+/// `maxlen` is the receive buffer, exactly as with `rt_net_recv`: a
+/// non-positive request returns an owned empty Str without waiting, and a
+/// larger request allocates up to the largest IPv4 UDP payload (65,507
+/// bytes). The allocation itself is the receive destination, so there is no
+/// shared runtime scratch and concurrent receives cannot see each other's
+/// bytes. Winsock does not truncate a datagram that does not fit: a too-small
+/// `maxlen` fails with WSAEMSGSIZE, which surfaces as an owned empty Str with
+/// `net_last_error` holding 10040.
 ///
 /// Frame (48 bytes): [rbp-8] bytes received, [rbp-16] the returned Str,
-/// [rbp-24] the 4-byte `fromlen` written by `recvfrom`, [rbp-32] the clamped
-/// `maxlen`.
+/// [rbp-24] the 4-byte `fromlen` written by `recvfrom`, [rbp-32] the
+/// effective `maxlen`.
 fn emit_net_recvfrom(code: &mut Code) {
     prologue(code);
     let ninit = code.label();
@@ -7182,27 +7335,34 @@ fn emit_net_recvfrom(code: &mut Code) {
     code.jcc_label(0x84, ninit); // jz: WSA not initialized -> empty Str
     code.sub_rsp(48);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 24); // maxlen
-    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
-    // Clamp maxlen into [1, NET_RECV_DATA].
-    code.cmp_r_imm32(Reg::Rax, NET_RECV_DATA);
+    // No positive request: an owned empty Str, with no receive and no wait —
+    // the same rule `rt_net_recv` follows.
+    let empty = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x8E, empty); // jle
+    // Cap at the largest IPv4 UDP payload; a larger request buys nothing and
+    // must not become an unbounded allocation.
+    code.cmp_r_imm32(Reg::Rax, NET_DATAGRAM_MAX);
     let fits = code.label();
     code.jcc_label(0x86, fits); // jbe
-    code.mov_r32_imm32(Reg::Rax, NET_RECV_DATA);
-    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
+    code.mov_r32_imm32(Reg::Rax, NET_DATAGRAM_MAX);
     code.bind_label(fits);
-    code.cmp_r_imm32(Reg::Rax, 0);
-    let positive = code.label();
-    code.jcc_label(0x87, positive); // jg
-    code.mov_r32_imm32(Reg::Rax, NET_RECV_DATA);
-    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax);
-    code.bind_label(positive);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // effective maxlen
+
+    // StrAlloc(maxlen): the block itself is the receive destination.
+    code.sub_rsp(8);
+    code.u8(0x50); // push rax (maxlen)
+    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
+    code.add_rsp(16);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
 
     // fromlen = 16 (a 4-byte field the callee updates).
     code.mov_mem_imm32(Reg::Rbp, -24, 16);
 
-    // recvfrom(sock, recv_buf + 8, maxlen, 0, &sender, &fromlen)
+    // recvfrom(sock, str + 8, maxlen, 0, &sender, &fromlen)
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
-    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(NET_RECV_BUF + 8));
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16); // Str ptr
+    code.add_r_imm8(Reg::Rdx, 8); // skip the length prefix
     code.mov_r_mem(Reg::R8, Reg::Rbp, -32); // maxlen
     code.xor_rr32(Reg::R9, Reg::R9); // flags = 0
     code.sub_rsp(48); // 32 shadow + 16 for the two stack arguments
@@ -7215,44 +7375,22 @@ fn emit_net_recvfrom(code: &mut Code) {
     code.add_rsp(48);
     code.cdqe(); // sign-extend EAX to RAX (recvfrom returns int)
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
-    // SOCKET_ERROR is reported as an empty Str, never as garbage bytes.
-    code.cmp_r_imm32(Reg::Rax, 0xFFFF_FFFFu32);
+    // SOCKET_ERROR is a zero-length result, never garbage bytes.
     let got_data = code.label();
-    let empty = code.label();
+    code.cmp_r_imm32(Reg::Rax, 0xFFFF_FFFFu32);
     code.jcc_label(0x85, got_data); // jne: not SOCKET_ERROR
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
     code.bind_label(got_data);
+    // The allocation is the destination: record the datagram's actual length
+    // (zero for an error or a zero-length datagram) and return it.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // Str ptr
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.test_rr(Reg::Rax, Reg::Rax);
-    code.jcc_label(0x8E, empty); // jle — zero bytes: empty Str
-
-    // Positive length: allocate the exact Str and copy the datagram in.
-    code.sub_rsp(8); // alignment padding
-    code.u8(0x50); // push rax (= length) as the stack argument
-    code.call_patch(PatchKind::RuntimeService(RuntimeService::StrAlloc));
-    code.add_rsp(16);
-    code.mov_mem_r(Reg::Rbp, -16, Reg::Rax);
-    code.lea_r_rip(Reg::R10, PatchKind::Bss(NET_RECV_BUF + 8)); // source
-    code.add_r_imm8(Reg::Rax, 8); // skip the length prefix
-    code.mov_rr(Reg::R8, Reg::Rax); // destination
-    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // count
-    let copy_loop = code.label();
-    let copy_done = code.label();
-    code.bind_label(copy_loop);
-    code.test_rr(Reg::R9, Reg::R9);
-    code.jcc_label(0x84, copy_done); // jz
-    code.movzx_byte(Reg::Rax, Reg::R10, 0);
-    code.mov_mem_r8(Reg::R8, 0, Reg::Rax);
-    code.add_r_imm8(Reg::R10, 1);
-    code.add_r_imm8(Reg::R8, 1);
-    code.sub_r_imm32(Reg::R9, 1);
-    code.jmp_label(copy_loop);
-    code.bind_label(copy_done);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax); // length prefix
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
     code.leave_ret();
 
-    // Empty / error: an owned empty Str.
+    // Empty/error and not-initialized paths: an owned zero-length Str.
     code.bind_label(empty);
     code.sub_rsp(8); // alignment padding
     code.xor_rr32(Reg::Rax, Reg::Rax); // length = 0
@@ -9604,6 +9742,10 @@ const IAT_GET_COMMAND_LINE_A: u32 = 36;
 const IAT_CREATE_THREAD: u32 = 37;
 const IAT_EXIT_THREAD: u32 = 38;
 const IAT_GET_CURRENT_THREAD_ID: u32 = 39;
+// --- Per-thread runtime scratch (Session 144) ---
+const IAT_TLS_ALLOC: u32 = 41;
+const IAT_TLS_GET_VALUE: u32 = 42;
+const IAT_TLS_SET_VALUE: u32 = 43;
 // --- Session 125: growable heap ---
 const IAT_VIRTUAL_ALLOC: u32 = 40;
 
@@ -10477,6 +10619,42 @@ fn emit_thread_join(code: &mut Code, _offsets: &RuntimeOffsets) {
     code.leave_ret();
 }
 
+/// `rt_thread_local_get() -> Int`: the calling thread's runtime scratch
+/// word. The slot's index was allocated by `rt_init`; a fresh thread starts
+/// at 0 (Windows zero-initializes every thread's TLS value). If the slot was
+/// never allocated (or TlsAlloc failed), the answer is 0.
+fn emit_thread_local_get(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(TLS_SLOT));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let done = code.label();
+    code.jcc_label(0x84, done); // jz — no slot: 0 (rax already 0)
+    code.sub_r_imm8(Reg::Rax, 1);
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_TLS_GET_VALUE));
+    code.add_rsp(32);
+    code.bind_label(done);
+    code.leave_ret();
+}
+
+/// `rt_thread_local_set(value: Int)`.
+fn emit_thread_local_set(code: &mut Code, _offsets: &RuntimeOffsets) {
+    prologue(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(TLS_SLOT));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    let done = code.label();
+    code.jcc_label(0x84, done); // jz — no slot: nothing to write
+    code.sub_r_imm8(Reg::Rax, 1);
+    code.mov_rr(Reg::Rcx, Reg::Rax);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, 16);
+    code.sub_rsp(32);
+    code.call_rip(PatchKind::Iat(IAT_TLS_SET_VALUE));
+    code.add_rsp(32);
+    code.bind_label(done);
+    code.leave_ret();
+}
+
 /// `rt_thread_id() -> Int`.
 fn emit_thread_id(code: &mut Code, _offsets: &RuntimeOffsets) {
     prologue(code);
@@ -10565,7 +10743,11 @@ fn emit_net_set_nonblocking(code: &mut Code) {
     code.jcc_label(0x84, init_fail); // jz
 
     // mode = (on != 0) ? 1 : 0, stored as a 4-byte long in the scratch area.
+    // The load must be followed by an explicit test: `mov` does not set
+    // flags, so branching on the caller's leftover flags would store 1 for
+    // an `on == 0` request and leave the socket non-blocking.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 24);
+    code.test_rr(Reg::Rax, Reg::Rax);
     let zero = code.label();
     code.jcc_label(0x84, zero); // jz — on == 0
     code.movabs(Reg::Rax, 1);
@@ -10597,6 +10779,8 @@ fn emit_net_set_nonblocking(code: &mut Code) {
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_IOCTL_FN));
     code.call_rax();
     code.add_rsp(32);
+    // `ioctlsocket` returns `int`: sign-extend so -1 is a real -1.
+    code.cdqe();
     code.leave_ret();
 
     code.bind_label(init_fail);
@@ -10651,11 +10835,70 @@ fn emit_net_poll(code: &mut Code) {
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_POLL_FN));
     code.call_rax();
     code.add_rsp(32);
+    // WSAPoll returns `int`; only EAX is defined on return, so SOCKET_ERROR
+    // (-1) would otherwise reach the caller as 0x00000000FFFFFFFF and every
+    // `> 0` / `< 0` test would read the wrong thing.
+    code.cdqe();
     code.leave_ret();
 
     code.bind_label(init_fail);
     code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
 
+    code.leave_ret();
+}
+
+/// `rt_net_so_error(sock: Int) -> Int`.
+///
+/// Reads the socket's pending error with
+/// `getsockopt(sock, SOL_SOCKET, SO_ERROR, &optval, &optlen)`.
+///
+/// A non-blocking `connect` returns WSAEWOULDBLOCK and finishes
+/// asynchronously; `WSAPoll` then reports the socket writable whether the
+/// handshake succeeded or failed. SO_ERROR is the result: 0 for a completed
+/// connection, the stored Winsock failure code (for example 10061,
+/// WSAECONNREFUSED) otherwise. Reading it also clears it, exactly as Winsock
+/// documents. Returns -1 when the query itself fails — the query's Winsock
+/// code is then in `net_last_error` — and before `net_init`, where the
+/// extended table is still null.
+fn emit_net_so_error(code: &mut Code) {
+    prologue(code);
+    let ninit = code.label();
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_INIT_FLAG));
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, ninit); // jz: WSA not initialized -> clean error
+
+    // Frame: [rbp-8] = optval (an int, zero-extended to a word so the load
+    // below cannot read stale bytes), [rbp-16] = optlen, [rbp-24] = result.
+    code.sub_rsp(32);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // optval = 0
+    code.mov_mem_imm32(Reg::Rbp, -16, 4); // optlen = sizeof(int)
+
+    // getsockopt(sock, SOL_SOCKET, SO_ERROR, &optval, &optlen)
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, 16); // sock
+    code.mov_r32_imm32(Reg::Rdx, 0xFFFF); // SOL_SOCKET
+    code.mov_r32_imm32(Reg::R8, 0x1007); // SO_ERROR
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -8); // optval
+    code.sub_rsp(48); // 32 shadow + 16 for the fifth argument
+    code.lea_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.mov_mem_r(Reg::Rsp, 32, Reg::Rax); // optlen
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(NET_FUNC_TABLE2 + 8)); // getsockopt
+    code.call_rax();
+    code.add_rsp(48);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::Rax);
+
+    let failed = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, failed); // jnz: SOCKET_ERROR -> -1
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8); // optval (upper half zeroed above)
+    code.leave_ret();
+
+    code.bind_label(failed);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
+    code.leave_ret();
+
+    code.bind_label(ninit);
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
     code.leave_ret();
 }
 

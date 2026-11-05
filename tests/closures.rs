@@ -410,3 +410,254 @@ fn closure_native_three_levels() {
         42,
     );
 }
+
+// =========================================================================
+// Statement-block closure bodies (M2 P1 regression)
+//
+// A closure whose body is a statement block with **no trailing expression** —
+// the common `|x| { ...; return v; }` shape — used to crash the compiler with
+// an internal error (`literal_operand is only called for literals`) in MIR
+// lowering. The desugared closure function body is `return <closure body>`
+// (see `desugar_closure_to_fn`), so a body block with no trailing expression
+// was placed in operand position and lowered as if it were a literal.
+// =========================================================================
+
+/// A statement-block body ending in an explicit `return` compiles and
+/// returns the right value (would panic before the fix).
+#[test]
+fn closure_native_statement_block_body_ending_in_return() {
+    assert_exit_code(
+        "fn main() -> Int { let g = |y: Int| { return y + 1; }; return g(7); }",
+        8,
+    );
+}
+
+/// `check` must also not panic on the same shape (it used to panic too), and
+/// `check`/`build` must agree.
+#[test]
+fn closure_statement_block_body_checks_and_builds() {
+    let src = "fn main() -> Int { let g = |y: Int| { return y + 1; }; return g(7); }";
+    assert_check_ok(src);
+    assert_exit_code(src, 8);
+}
+
+/// A statement-block body that returns a value computed from a captured
+/// variable.
+#[test]
+fn closure_native_statement_block_body_captures_and_returns() {
+    assert_exit_code(
+        "fn main() -> Int { let base = 30; let g = |y: Int| { let t = y + base; return t; }; return g(12); }",
+        42,
+    );
+}
+
+/// A closure nested inside another closure's statement-block body (no
+/// trailing expression) compiles and runs.
+#[test]
+fn closure_native_statement_block_body_with_nested_closure() {
+    assert_exit_code(
+        "fn main() -> Int { let g = |y: Int| { let h = |z: Int| z + y; return h(10); }; return g(7) + 25; }",
+        42,
+    );
+}
+
+/// Boundary: a closure body that is a statement block **with** a trailing
+/// expression (no explicit `return`) still returns that value.
+#[test]
+fn closure_native_statement_block_body_with_trailing_expression() {
+    assert_exit_code(
+        "fn main() -> Int { let g = |y: Int| { let h = |z: Int| z + 1; h(10) + y - 7 }; return g(7); }",
+        11,
+    );
+}
+
+/// Boundary: a closure whose statement-block body returns nothing is a unit
+/// closure and must build and run (exit 0), not crash the compiler.
+#[test]
+fn closure_native_unit_statement_block_body() {
+    assert_exit_code(
+        "fn main() -> Int { let g = |y: Int| { let t = y + 1; }; g(1); return 0; }",
+        0,
+    );
+}
+
+// =========================================================================
+// Session 138: A4 — if-expressions in operand position
+// =========================================================================
+
+/// An if-expression used as a `return` value is valid MINK and must compile
+/// and produce the taken branch's value. It previously panicked in MIR
+/// lowering (`literal_operand is only called for literals`).
+#[test]
+fn if_expression_in_return_position() {
+    assert_check_ok(
+        "fn f(x: Int) -> Int { return if x > 0 { 11 } else { 22 }; } fn main() -> Int { return f(-1); }",
+    );
+    assert_exit_code(
+        "fn f(x: Int) -> Int { return if x > 0 { 11 } else { 22 }; }
+fn main() -> Int { return f(-1); }",
+        22,
+    );
+}
+
+/// An if-expression used as a call argument must be evaluated before the call.
+#[test]
+fn if_expression_as_call_argument() {
+    assert_exit_code(
+        "fn pick(x: Int) -> Int { return x * 2; }
+fn main() -> Int { return pick(if false { 1 } else { 21 }); }",
+        42,
+    );
+}
+
+/// An if-expression used as a binary operand must produce its value; the
+/// surrounding expression is evaluated after the branch merge.
+#[test]
+fn if_expression_as_binary_operand() {
+    assert_exit_code(
+        "fn main() -> Int { return 1 + if false { 2 } else { 3 }; }",
+        4,
+    );
+}
+
+/// A nested `else if` chain in operand position must take the correct arm.
+#[test]
+fn nested_if_expression_in_operand_position() {
+    assert_exit_code(
+        "fn main() -> Int { return if false { 1 } else if false { 2 } else { 9 }; }",
+        9,
+    );
+}
+
+/// A nested `else if` chain in a binding must assign the taken arm's value.
+/// It previously lowered as a statement `if`, never assigning the result
+/// local, so the binding silently kept its zero initializer.
+#[test]
+fn nested_else_if_expression_in_binding_returns_the_taken_arm() {
+    assert_exit_code(
+        "fn main() -> Int { let x = if false { 1 } else if true { 2 } else { 9 }; return x; }",
+        2,
+    );
+    assert_exit_code(
+        "fn main() -> Int { let x = if false { 1 } else if false { 2 } else { 9 }; return x; }",
+        9,
+    );
+}
+
+/// A block whose trailing expression is an if-expression is itself an
+/// operand; its value must reach the surrounding expression.
+#[test]
+fn if_expression_as_block_trailing_operand() {
+    assert_exit_code(
+        "fn main() -> Int { return { if false { 1 } else { 6 } }; }",
+        6,
+    );
+}
+
+/// An if-expression on the right-hand side of an assignment must store the
+/// taken branch's value (the assignment itself is an operand).
+#[test]
+fn if_expression_as_assignment_value() {
+    assert_exit_code(
+        "fn main() -> Int { let mut x = 0; x = if true { 5 } else { 6 }; return x; }",
+        5,
+    );
+}
+
+/// An if-expression inside an array literal must be evaluated element by
+/// element, not replaced by a placeholder operand.
+#[test]
+fn if_expression_in_array_literal() {
+    assert_exit_code(
+        "fn main() -> Int { let a = [if true { 1 } else { 2 }, 3]; return a[0]; }",
+        1,
+    );
+}
+
+// =========================================================================
+// Session 141: an if-expression operand in a closure's trailing expression
+// =========================================================================
+
+/// A closure whose trailing expression is a binary expression with an
+/// if-expression operand must compile and return the computed value. The
+/// block operand used to fall through to `StmtEval` and panic in MIR
+/// lowering (`literal_operand is only called for literals`).
+#[test]
+fn closure_trailing_binary_with_if_expression_operand() {
+    let src = "fn main() -> Int { let c = true; let f = |y: Int| { if c { y } else { 0 } + 5 }; return f(37); }";
+    assert_check_ok(src);
+    assert_exit_code(src, 42);
+}
+
+/// The mirrored operand order (`5 + if ...`) with the other branch taken.
+#[test]
+fn closure_trailing_binary_with_if_expression_on_the_right() {
+    assert_exit_code(
+        "fn main() -> Int { let c = false; let f = |y: Int| { 5 + if c { y } else { 2 } }; return f(37); }",
+        7,
+    );
+}
+
+/// A parenthesized if-expression operand with a multiplication.
+#[test]
+fn closure_trailing_parenthesized_if_expression_operand() {
+    assert_exit_code(
+        "fn main() -> Int { let c = false; let f = |y: Int| { (if c { y } else { 21 }) * 2 }; return f(0); }",
+        42,
+    );
+}
+
+/// A nested if-expression inside the operand.
+#[test]
+fn closure_trailing_binary_with_nested_if_expression_operand() {
+    assert_exit_code(
+        "fn main() -> Int { let c = true; let d = true; let f = |y: Int| { (if c { if d { y } else { 1 } } else { 0 }) + 5 }; return f(37); }",
+        42,
+    );
+}
+
+/// Branches that read locals rather than only literals.
+#[test]
+fn closure_trailing_if_expression_operand_reads_locals() {
+    assert_exit_code(
+        "fn main() -> Int { let c = true; let f = |y: Int| { let a = y; let b = 0; (if c { a } else { b }) + 5 }; return f(37); }",
+        42,
+    );
+}
+
+/// A block expression nested inside the trailing expression.
+#[test]
+fn closure_trailing_binary_with_block_wrapped_if_expression() {
+    assert_exit_code(
+        "fn main() -> Int { let c = true; let f = |y: Int| { { if c { y } else { 0 } } + 5 }; return f(37); }",
+        42,
+    );
+}
+
+/// The same shape outside a closure: a block in a binding initializer and a
+/// block in `return` position.
+#[test]
+fn block_trailing_binary_with_if_expression_operand_outside_a_closure() {
+    assert_exit_code(
+        "fn main() -> Int { let c = false; let x = { if c { 1 } else { 2 } + 5 }; return x; }",
+        7,
+    );
+    assert_exit_code(
+        "fn main() -> Int { let c = true; return { if c { 37 } else { 0 } + 5 }; }",
+        42,
+    );
+}
+
+/// An ordinary trailing expression and a statement-prefixed trailing
+/// expression keep working (the fix only redirects the trailing expression).
+#[test]
+fn ordinary_and_statement_prefixed_closure_trailing_expressions() {
+    assert_exit_code(
+        "fn main() -> Int { let g = |y: Int| { y + 5 }; return g(37); }",
+        42,
+    );
+    assert_exit_code(
+        "fn main() -> Int { let f = |y: Int| { let t = y; t + 5 }; return f(37); }",
+        42,
+    );
+}

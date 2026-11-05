@@ -927,3 +927,53 @@ fn dangling_local_reference_is_a_validation_error() {
     assert_eq!(errors[0].kind(), MirErrorKind::InvalidLocalReference);
     assert_eq!(errors[0].code(), "E-M08");
 }
+
+#[test]
+fn if_expression_in_operand_position_lowers() {
+    // Session 129's A4 finding: an if-expression used as an operand (call
+    // argument, `return` value, binary operand) fell through to
+    // `literal_operand` and panicked during MIR lowering. It must go through
+    // the same CFG materialization as a binding initializer.
+    let (_hir, mir) = lower_mir(
+        "fn pick(x: Int) -> Int { return x * 2; }\n\
+         fn f(x: Int) -> Int { return if x > 0 { 1 } else { 2 }; }\n\
+         fn g() -> Int { return 1 + if true { 2 } else { 3 }; }\n\
+         fn main() -> Int {\n\
+             let a = pick(if false { 4 } else { 21 });\n\
+             return a + f(1) + g();\n\
+         }",
+    );
+    assert_eq!(mir.items.len(), 4, "every function must lower");
+}
+
+#[test]
+fn block_operand_trailing_binary_with_if_expression_lowers_to_branches() {
+    // Session 141: a block expression in operand position whose trailing
+    // expression is a binary with an if-expression operand fell through to
+    // `StmtEval`, whose IfExpr arm panicked ("literal_operand is only called
+    // for literals"). The trailing expression must be routed through the
+    // CFG-aware path, so the lowered function carries real branch blocks and
+    // the binary consumes the merged value.
+    // `return <block>` is the exact shape closure desugaring produces
+    // (`desugar_closure_to_fn` wraps the body in a return), so this pins the
+    // failing layer without depending on the monomorphizer.
+    let (_hir, mir) = lower_mir(
+        "fn main() -> Int {\n\
+             let c = true;\n\
+             return { if c { 37 } else { 0 } + 5 };\n\
+         }",
+    );
+    let main = mir_fn(&mir, "main");
+    assert!(
+        main.blocks
+            .iter()
+            .any(|block| branch_targets(&block.terminator).is_some()),
+        "the if-expression must lower to a branch"
+    );
+    assert!(
+        main.blocks.len() >= 3,
+        "an if/else and its continuation need at least three blocks, got {}",
+        main.blocks.len()
+    );
+    assert_block_ordering(main);
+}

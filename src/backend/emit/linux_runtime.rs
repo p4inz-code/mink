@@ -2638,6 +2638,13 @@ fn emit_net_wsa_last_error(code: &mut Code) {
     code.leave_ret();
 }
 
+/// `rt_net_wsa_set_last_error(code) -> Int`: No-op on Linux (always returns 0).
+fn emit_net_wsa_set_last_error(code: &mut Code) {
+    prologue(code);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.leave_ret();
+}
+
 /// `rt_net_socket(af, ty, proto) -> Int`: Create a socket via socket(2).
 /// Returns file descriptor on success, -1 on error.
 fn emit_net_socket(code: &mut Code) {
@@ -2946,6 +2953,16 @@ fn emit_net_poll(code: &mut Code) {
     code.leave_ret();
 }
 
+/// `rt_net_so_error()`: Windows-only for now (same reasoning as
+/// `emit_net_set_nonblocking`). Reports -1, the "unsupported" answer every
+/// other Linux socket-readiness stub gives, so the shared stdlib builds for
+/// the frozen ELF target without adding a Linux capability.
+fn emit_net_so_error(code: &mut Code) {
+    prologue(code);
+    code.movabs(Reg::Rax, 0xFFFFFFFFFFFFFFFFu64);
+    code.leave_ret();
+}
+
 /// `rt_net_gethostname() -> Str`: Get local hostname via uname(2).
 fn emit_net_get_host_name(code: &mut Code) {
     prologue(code);
@@ -3130,6 +3147,26 @@ fn emit_stub_str(code: &mut Code) {
 }
 
 // ===========================================================================
+// Per-thread runtime scratch (Session 144)
+// ===========================================================================
+
+/// `rt_thread_local_get() -> Int`: read the process-global scratch word
+/// (the frozen Linux runtime has no thread-local slot).
+fn emit_thread_local_get(code: &mut Code) {
+    prologue(code);
+    code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.tls_slot as u32));
+    code.leave_ret();
+}
+
+/// `rt_thread_local_set(value: Int)`.
+fn emit_thread_local_set(code: &mut Code) {
+    prologue(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.tls_slot as u32));
+    code.leave_ret();
+}
+
+// ===========================================================================
 // Service emission
 // ===========================================================================
 
@@ -3310,10 +3347,19 @@ pub(crate) fn emit_services(
         emit_linux_stub_empty_str(code)
     });
 
+    // --- Per-thread runtime scratch (Session 144) ---
+    // The frozen Linux runtime has no thread-local slot. The scratch cell is
+    // one process-global word, i.e. exactly the behavior before Session 144;
+    // the HTTP last-error defect is closed on the Windows target, whose
+    // runtime owns the TLS slot.
+    emit!(RuntimeService::ThreadLocalGet, emit_thread_local_get);
+    emit!(RuntimeService::ThreadLocalSet, emit_thread_local_set);
+
     // --- Network services (Linux) ---
     emit!(RuntimeService::NetWsaStartup, emit_net_wsa_startup);
     emit!(RuntimeService::NetWsaCleanup, emit_net_wsa_cleanup);
     emit!(RuntimeService::NetWsaLastError, emit_net_wsa_last_error);
+    emit!(RuntimeService::NetWsaSetLastError, emit_net_wsa_set_last_error);
     emit!(RuntimeService::NetSocket, emit_net_socket);
     emit!(RuntimeService::NetConnect, emit_net_connect);
     emit!(RuntimeService::NetBind, emit_net_bind);
@@ -3344,6 +3390,7 @@ pub(crate) fn emit_services(
     emit!(RuntimeService::NetFreeAddrInfo, emit_net_free_addr_info);
     emit!(RuntimeService::NetSetNonblocking, emit_net_set_nonblocking);
     emit!(RuntimeService::NetPoll, emit_net_poll);
+    emit!(RuntimeService::NetSoError, emit_net_so_error);
     emit!(RuntimeService::NetGetHostName, emit_net_get_host_name);
     emit!(RuntimeService::NetHtons, emit_net_htons);
 

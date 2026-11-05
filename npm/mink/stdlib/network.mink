@@ -24,6 +24,9 @@
 //   net_resolve(host, port) -> Str         Resolve host to IPv4 text (owned).
 //   net_hostname() -> Str                  Get local hostname.
 //   net_htons(value) -> Int                Host-to-network byte order.
+//   net_socket_error(sock) -> Int          Pending socket error (SO_ERROR).
+//   net_recv_timeout(sock, maxlen, ms) -> Str   Receive, waiting at most ms.
+//   net_connect_timeout(sock, addr, port, ms) -> Int  Connect, waiting at most ms.
 //
 // Constants:
 //   AF_INET = 2, SOCK_STREAM = 1, SOCK_DGRAM = 2
@@ -70,6 +73,13 @@ fn net_cleanup() -> Int {
 // since no Winsock call can have recorded an error yet.
 fn net_last_error() -> Int {
     return rt_net_wsa_last_error();
+}
+
+// Set the last Winsock error code. This is how a helper that must close a
+// failed socket keeps the failure reason: closesocket clears the thread's
+// last-error, so capture it with net_last_error(), close, then republish it.
+fn net_set_last_error(code: Int) -> Int {
+    return rt_net_wsa_set_last_error(code);
 }
 
 // --- Socket operations ---
@@ -161,10 +171,15 @@ fn net_sendto(sock: Int, data: Str, addr: Str, port: Int) -> Int {
     return r;
 }
 
-// Receive one datagram (blocking). `maxlen` is clamped to the runtime receive
-// buffer (4088 bytes), so a larger request is a bounded read rather than an
-// overrun. Winsock never truncates a datagram that does not fit: a too-small
-// `maxlen` fails with WSAEMSGSIZE (10040), which surfaces as an empty Str.
+// Receive one datagram (blocking). `maxlen` is the receive buffer and is
+// treated exactly like net_recv's: a non-positive request returns an owned
+// empty Str without waiting, and a larger request allocates up to the largest
+// IPv4 UDP payload (65507 bytes). The receive destination is that per-call
+// allocation, never shared runtime scratch, so two sockets or two threads
+// cannot overwrite each other's datagram. Winsock never truncates a datagram
+// that does not fit: a too-small `maxlen` fails with WSAEMSGSIZE (10040),
+// which surfaces as an empty Str. A zero-length datagram is an owned empty
+// Str with net_last_error() == 0.
 // Returns an OWNED Str — empty on error, with net_last_error()
 // holding the reason — which the caller frees with rt_str_free.
 // The sender is available afterwards through net_sender_ip/net_sender_port.
@@ -268,7 +283,11 @@ fn net_dial(addr: Str, port: Int) -> Int {
     }
     let conn_result = net_connect(sock, addr, port);
     if conn_result != 0 {
+        // Capture the connect/resolver failure before cleanup: closesocket
+        // resets WSAGetLastError to 0, which would erase the reason.
+        let err = net_last_error();
         net_close(sock);
+        net_set_last_error(err);
         return -1;
     }
     return sock;
@@ -311,9 +330,12 @@ fn net_listen_on(addr: Str, port: Int, backlog: Int) -> Int {
 // A poll result of 0 means the timeout elapsed with nothing ready, -1 means
 // the call failed (see `net_last_error`).
 
-// Winsock POLL event masks.
+// Winsock POLL event masks. `WSAPoll` rejects POLLWRBAND (0x0020) in the
+// events field with WSAEINVAL, so the writable request is POLLWRNORM
+// (POLLOUT, 0x0010) alone; 0x0030 made every writable wait fail with
+// "invalid argument" while still looking ready to a `> 0` test.
 fn net_pollin() -> Int { return 0x0300; }
-fn net_pollout() -> Int { return 0x0030; }
+fn net_pollout() -> Int { return 0x0010; }
 
 // Error code Windows returns when a non-blocking socket would block.
 fn net_would_block_code() -> Int { return 10035; }
@@ -383,4 +405,139 @@ fn net_can_read(sock: Int) -> Bool {
 // True when `sock` can be written without blocking right now.
 fn net_can_write(sock: Int) -> Bool {
     return net_wait_writable(sock, 0) > 0;
+}
+
+// --- Bounded socket operations (Session 145) -------------------------------
+//
+// `net_recv`, `net_connect` and `net_accept` are blocking: a peer that never
+// answers holds the process for as long as Windows keeps the attempt or the
+// read outstanding. The two operations below bound that wait with the
+// readiness layer above (`WSAPoll`) instead of adding a second timeout
+// mechanism, so they reuse the socket's existing blocking behavior, the
+// existing error channel (`net_last_error`) and the existing socket ownership
+// rules. The timeout belongs to the call, not to the socket: nothing is
+// stored per socket, so two sockets (or two threads) cannot affect each
+// other's budget.
+//
+// `timeout_ms` follows the `net_poll` convention and is normalised by
+// `net_timeout_ms`: a negative value waits indefinitely, 0 polls once without
+// waiting, and a value above the signed 32-bit range `WSAPoll` accepts is
+// capped at 2147483647 ms (~24.8 days).
+//
+// A timeout is reported with Winsock's own WSAETIMEDOUT (10060) through
+// `net_last_error`, so it stays distinguishable from a closed peer (an empty
+// read that leaves the code at 0), a refused connection (10061) and every
+// other failure the blocking calls already report. Both operations clear the
+// last-error at entry — the same rule `http_send` follows — so the code read
+// after the call describes that call.
+
+// WSAETIMEDOUT: the operation did not complete within its budget.
+fn net_timeout_code() -> Int { return 10060; }
+
+// Normalise a caller timeout for `WSAPoll`: negative = no limit, 0 = one
+// non-blocking poll, anything above INT_MAX is capped so the value WSAPoll
+// receives is always in range.
+fn net_timeout_ms(timeout_ms: Int) -> Int {
+    if timeout_ms < 0 { return -1; }
+    if timeout_ms > 2147483647 { return 2147483647; }
+    return timeout_ms;
+}
+
+// The pending error on `sock` (`getsockopt(SOL_SOCKET, SO_ERROR)`), or -1
+// when the query itself fails (the query's code is then in net_last_error).
+// 0 means the socket has no pending error. Reading it clears it, as Winsock
+// documents. This is how a non-blocking connect's outcome is confirmed: a
+// writable socket means the attempt finished, not that it succeeded.
+fn net_socket_error(sock: Int) -> Int {
+    return rt_net_so_error(sock);
+}
+
+// Receive from `sock`, waiting at most `timeout_ms` for data. Returns an
+// OWNED Str (free with rt_str_free), exactly like net_recv: the bytes
+// received, or an empty Str when the wait timed out, the peer closed, or the
+// read failed. On timeout net_last_error() is net_timeout_code(); on a peer
+// close it is 0; on a read failure it is the Winsock code. A socket that is
+// already readable is read immediately, so this never adds a wait when data
+// is present. maxlen <= 0 returns an owned empty Str without waiting.
+fn net_recv_timeout(sock: Int, maxlen: Int, timeout_ms: Int) -> Str {
+    net_set_last_error(0);
+    if maxlen <= 0 {
+        // Nothing was asked for: net_recv's own contract, no wait.
+        return net_recv(sock, 0);
+    }
+    let ready = net_wait_readable(sock, net_timeout_ms(timeout_ms));
+    if ready == 0 {
+        net_set_last_error(net_timeout_code());
+    }
+    if ready <= 0 {
+        // An owned empty Str without a second, blocking receive.
+        return net_recv(sock, 0);
+    }
+    return net_recv(sock, maxlen);
+}
+
+// Connect `sock` to `addr`:`port` (IPv4 literal or host name, resolved like
+// net_connect), waiting at most `timeout_ms` for the TCP handshake. Returns 0
+// on success, -1 on failure or timeout, with net_last_error() holding the
+// reason: net_timeout_code() when the handshake did not finish in time, the
+// resolver code (for example 11001) for a name that cannot be resolved, and
+// the socket code (for example 10061, refused) otherwise.
+//
+// The socket is switched to non-blocking for the attempt and restored to
+// blocking before a successful return and the last-error is 0, so ordinary
+// blocking net_recv/net_send keep working on the result. Name resolution runs
+// before the handshake, so
+// the timeout bounds the connection attempt, not a slow DNS lookup. On a
+// failed or timed-out attempt the socket is left in an indeterminate state:
+// close it and create a new one. This function never closes the caller's
+// socket, and it consumes `addr` like net_connect does.
+fn net_connect_timeout(sock: Int, addr: Str, port: Int, timeout_ms: Int) -> Int {
+    net_set_last_error(0);
+    let mode = net_set_nonblocking(sock, 1);
+    if mode != 0 {
+        rt_str_free(addr);
+        return -1;
+    }
+    // On a non-blocking socket connect returns at once: 0 when the loopback
+    // handshake finished inside the call, -1 with WSAEWOULDBLOCK (10035) when
+    // it is still in progress. net_connect consumes `addr`.
+    let started = net_connect(sock, addr, port);
+    if started == 0 {
+        let restored = net_set_nonblocking(sock, 0);
+        if restored != 0 {
+            return -1;
+        }
+        // The attempt succeeded: do not leave the in-progress code behind.
+        net_set_last_error(0);
+        return 0;
+    }
+    let reason = net_last_error();
+    if reason != net_would_block_code() {
+        // A real failure (resolver, refused, ...): preserve its own code.
+        net_set_last_error(reason);
+        return -1;
+    }
+    let ready = net_wait_writable(sock, net_timeout_ms(timeout_ms));
+    if ready == 0 {
+        net_set_last_error(net_timeout_code());
+        return -1;
+    }
+    if ready < 0 {
+        return -1;
+    }
+    // Writable only means the attempt finished; SO_ERROR is the result.
+    let pending = net_socket_error(sock);
+    if pending < 0 {
+        return -1;
+    }
+    if pending != 0 {
+        net_set_last_error(pending);
+        return -1;
+    }
+    let restored = net_set_nonblocking(sock, 0);
+    if restored != 0 {
+        return -1;
+    }
+    net_set_last_error(0);
+    return 0;
 }

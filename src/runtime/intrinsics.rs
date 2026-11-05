@@ -599,6 +599,12 @@ pub const ALL: &[Intrinsic] = &[
         params: &[],
         result: IntrinsicType::Int,
     },
+    // --- Session 141: preserve the Winsock error across socket cleanup ---
+    Intrinsic {
+        name: "rt_net_wsa_set_last_error",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
     Intrinsic {
         name: "rt_net_socket",
         params: &[IntrinsicType::Int, IntrinsicType::Int, IntrinsicType::Int],
@@ -686,6 +692,17 @@ pub const ALL: &[Intrinsic] = &[
     },
     Intrinsic {
         name: "rt_net_htons",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Int,
+    },
+    // --- Session 145: bounded connect/read ---
+    // The pending error of a socket (`getsockopt(SOL_SOCKET, SO_ERROR)`).
+    // A non-blocking `connect` reports both completion and failure as
+    // "writable", so this is the only way the stdlib can tell a completed
+    // handshake (0) from a failed one (the Winsock code). Returns -1 when the
+    // query itself fails or networking is not initialized.
+    Intrinsic {
+        name: "rt_net_so_error",
         params: &[IntrinsicType::Int],
         result: IntrinsicType::Int,
     },
@@ -832,6 +849,23 @@ pub const ALL: &[Intrinsic] = &[
         name: "rt_int_to_ptr",
         params: &[IntrinsicType::Int],
         result: IntrinsicType::Ptr,
+    },
+    // --- Per-thread runtime scratch (Session 144) ---
+    // One machine word of runtime state that belongs to the calling thread.
+    // `rt_init` allocates the OS thread-local slot before `main` runs, so the
+    // first access never races on initialization; every thread starts at 0,
+    // including threads created later by `rt_thread_spawn`. This is the
+    // storage behind process-wide state that must not leak between threads
+    // (`stdlib/http.mink`'s last-error code is the first user).
+    Intrinsic {
+        name: "rt_thread_local_get",
+        params: &[],
+        result: IntrinsicType::Int,
+    },
+    Intrinsic {
+        name: "rt_thread_local_set",
+        params: &[IntrinsicType::Int],
+        result: IntrinsicType::Unit,
     },
     // --- Non-blocking I/O (Session 113, S63) ---
     Intrinsic {

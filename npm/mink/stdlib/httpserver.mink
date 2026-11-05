@@ -1,0 +1,850 @@
+// ==========================================================================
+// HTTP/1.1 server helpers (session 125)
+//
+// The client half of HTTP lives in `http.mink`; this module is the server
+// half: bind and listen, accept one connection, read a complete request
+// (headers plus a Content-Length body), pull its method/path/headers apart,
+// and build and send a response.
+//
+// Declares its TCP dependency explicitly: `mod network;` (resolved as a
+// sibling module, or from the bundled standard library) provides
+// `net_init`, `net_listen_on`, `net_accept`, `net_recv`, `net_send`,
+// `net_close` and the `net_poll*` readiness helpers. A user only needs
+// `mod httpserver;` — the transitive dependency is discovered by the module
+// loader instead of failing with a missing `net_*` name.
+//
+// IMPORTANT: MINK strings must be explicitly freed with rt_str_free.
+//   User functions with Str parameters CONSUME (move) the argument.
+//   Runtime intrinsics (rt_str_byte, rt_str_len, rt_str_set_byte,
+//   rt_str_concat, rt_str_format) do NOT consume.
+//   A string literal is immortal, so freeing one is a no-op.
+//
+// V1 ownership is not path-sensitive, so every function here frees its
+// consumed `Str` parameters exactly once, on the single exit path, and
+// returns a value the caller owns. Nothing is freed conditionally, and no
+// owned value is read after a call that consumes it — which is why the
+// header-block scans below are written inline against `rt_str_*` rather
+// than factored into a helper: a helper taking a `Str` would consume the
+// very buffer the caller still has to read.
+//
+// Failure convention (matching `http.mink` and `network.mink`):
+//   - `http_server_listen` / `http_server_accept` return -1; the reason is
+//     available from `net_last_error()`.
+//   - `http_server_read_request` returns an empty `Str` when the peer closed
+//     before sending anything, or when the request exceeds the byte cap.
+//   - `http_server_send` returns the byte count, or -1.
+//
+// Limits:
+//   - Request line + headers + body: 64 KiB by default
+//     (see http_server_read_request)
+//   - Max headers honoured while looking for a named header: 64
+//   - No chunked transfer encoding, no keep-alive, no TLS
+// ==========================================================================
+
+// Declares its TCP dependency explicitly, as documented above.
+mod network;
+
+// --- Defaults and limits ---------------------------------------------------
+
+// Pending-connection queue length used by http_server_listen.
+fn http_server_backlog() -> Int { return 16; }
+
+// How long http_server_accept waits for a connection by default.
+fn http_server_timeout_ms() -> Int { return 5000; }
+
+// Bytes requested per recv; the runtime clamps a larger request to its
+// receive buffer, so this is the largest single read available.
+fn http_server_recv_chunk() -> Int { return 4088; }
+
+// Byte cap on one request (request line, headers and body together).
+fn http_server_max_request() -> Int { return 65536; }
+
+// Max header lines honoured while looking for a named header.
+fn http_server_max_headers() -> Int { return 64; }
+
+// The Content-Type sent by http_server_respond and friends. A literal, so
+// the result is immortal and must not be freed.
+fn http_server_text_type() -> Str { return "text/plain; charset=utf-8"; }
+
+// --- Internal helpers ------------------------------------------------------
+
+// True when the byte is an ASCII upper-case letter.
+fn _hs_is_upper(b: Int) -> Bool {
+    if b >= 65 {
+        if b <= 90 {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Lower-case one ASCII byte.
+fn _hs_lower(b: Int) -> Int {
+    if _hs_is_upper(b) == true {
+        return b + 32;
+    }
+    return b;
+}
+
+// Case-insensitive byte comparison, as HTTP header names require.
+fn _hs_eq_ci(a: Int, b: Int) -> Bool {
+    if _hs_lower(a) == _hs_lower(b) {
+        return true;
+    }
+    return false;
+}
+
+// Copy src[start, end) into a fresh owned Str. Consumes `src`, so call it
+// only once `src` itself is no longer needed.
+fn _hs_copy(src: Str, start_in: Int, end_in: Int) -> Str {
+    let len = rt_str_len(src);
+    let mut start = start_in;
+    if start < 0 {
+        start = 0;
+    }
+    let mut end = end_in;
+    if end > len {
+        end = len;
+    }
+    let mut size = end - start;
+    if size < 0 {
+        size = 0;
+    }
+    let mut result = "";
+    if size > 0 {
+        result = rt_str_alloc(size);
+        let mut i = 0;
+        while i < size {
+            rt_str_set_byte(result, i, rt_str_byte(src, start + i));
+            i = i + 1;
+        }
+    }
+    rt_str_free(src);
+    return result;
+}
+
+// Concatenate three strings into a fresh owned one. Consumes all three, so
+// the empty `""` argument below is a literal no-op.
+fn _hs_join3(a: Str, b: Str, c: Str) -> Str {
+    let la = rt_str_len(a);
+    let lb = rt_str_len(b);
+    let lc = rt_str_len(c);
+    let total = la + lb + lc;
+    let result = rt_str_alloc(total);
+    let mut i = 0;
+    while i < la {
+        rt_str_set_byte(result, i, rt_str_byte(a, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < lb {
+        rt_str_set_byte(result, la + i, rt_str_byte(b, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < lc {
+        rt_str_set_byte(result, la + lb + i, rt_str_byte(c, i));
+        i = i + 1;
+    }
+    rt_str_free(a);
+    rt_str_free(b);
+    rt_str_free(c);
+    return result;
+}
+
+// The index one past the first CRLF (the end of the request line) is
+// computed inline by each caller: a helper taking the buffer would consume
+// it, and both callers still have to read the buffer afterwards.
+
+// The Content-Length value inside a complete header block, or -1 when the
+// header is absent or carries no digits. Consumes `head`, which is why
+// every caller builds a throwaway copy first.
+//
+// The header block is walked line by line from the end of the request line:
+// each iteration locates the line's own CRLF, so a line that does not match
+// advances exactly one line rather than resuming a byte-by-byte search for
+// the next CRLF (which would land *after* the following header).
+fn _hs_content_length(head: Str) -> Int {
+    let len = rt_str_len(head);
+    let lit = "content-length";
+    let lit_len = rt_str_len(lit);
+    let mut result = -1;
+    // Skip the request line: stop one byte past its CRLF.
+    let mut i = 0;
+    let mut seen_eol = 0;
+    while i + 1 < len && seen_eol == 0 {
+        if rt_str_byte(head, i) == 13 {
+            if rt_str_byte(head, i + 1) == 10 {
+                i = i + 2;
+                seen_eol = 1;
+            } else {
+                i = i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    let mut headers = 0;
+    let mut done = 0;
+    while i < len && done == 0 && headers < http_server_max_headers() {
+        // An empty line ends the header block.
+        if i + 1 < len {
+            if rt_str_byte(head, i) == 13 {
+                if rt_str_byte(head, i + 1) == 10 {
+                    done = 1;
+                }
+            }
+        }
+        if done == 0 {
+            let mut line_end = i;
+            while line_end < len {
+                if rt_str_byte(head, line_end) == 13 {
+                    break;
+                }
+                line_end = line_end + 1;
+            }
+            let mut colon = i;
+            while colon < line_end {
+                if rt_str_byte(head, colon) == 58 {
+                    break;
+                }
+                colon = colon + 1;
+            }
+            let mut matched = colon - i == lit_len;
+            if matched == true {
+                let mut j = 0;
+                while j < lit_len {
+                    if _hs_eq_ci(rt_str_byte(head, i + j), rt_str_byte(lit, j)) == false {
+                        matched = false;
+                        j = lit_len;
+                    } else {
+                        j = j + 1;
+                    }
+                }
+            }
+            if matched == true {
+                // Parse the digits that follow the colon, up to the CRLF.
+                let mut vs = colon + 1;
+                if vs < line_end {
+                    if rt_str_byte(head, vs) == 32 {
+                        vs = vs + 1;
+                    }
+                }
+                let mut value = 0;
+                let mut digits = 0;
+                while vs < line_end {
+                    let d = rt_str_byte(head, vs) - 48;
+                    if d >= 0 {
+                        if d <= 9 {
+                            value = value * 10 + d;
+                            digits = digits + 1;
+                        }
+                    }
+                    vs = vs + 1;
+                }
+                if digits > 0 {
+                    result = value;
+                }
+                done = 1;
+            } else {
+                headers = headers + 1;
+            }
+            i = line_end + 2;
+        }
+    }
+    rt_str_free(head);
+    return result;
+}
+
+// --- Listening -------------------------------------------------------------
+
+// Bind and listen on `addr`:`port` with the default backlog. Consumes
+// `addr`. Returns the listening socket, or -1 (see net_last_error).
+fn http_server_listen(addr: Str, port: Int) -> Int {
+    return http_server_listen_backlog(addr, port, http_server_backlog());
+}
+
+// Bind and listen with an explicit backlog. Consumes `addr`.
+// Returns the listening socket, or -1 (see net_last_error).
+fn http_server_listen_backlog(addr: Str, port: Int, backlog: Int) -> Int {
+    return net_listen_on(addr, port, backlog);
+}
+
+// Close a listening or accepted socket. Returns 0 on success, -1 on error.
+fn http_server_close(sock: Int) -> Int {
+    return net_close(sock);
+}
+
+// Wait up to `timeout_ms` for a connection. A negative timeout waits
+// forever, and 0 polls. Returns the accepted socket, or -1 when the wait
+// timed out or failed (see net_last_error).
+fn http_server_accept(sock: Int, timeout_ms: Int) -> Int {
+    let fds = net_poll_alloc(1);
+    net_poll_set(fds, 0, sock, net_pollin());
+    let ready = rt_net_poll(fds, 1, timeout_ms);
+    rt_free(fds);
+    if ready <= 0 {
+        return -1;
+    }
+    return net_accept(sock);
+}
+
+// Accept with the default timeout.
+fn http_server_accept_default(sock: Int) -> Int {
+    return http_server_accept(sock, http_server_timeout_ms());
+}
+
+// --- Reading a request -----------------------------------------------------
+
+// Read one complete request from `sock`: the header block, then any
+// Content-Length body. Returns an OWNED Str the caller must free, or an
+// empty Str when the peer closed before sending anything or the request
+// exceeded `maxlen` bytes.
+//
+// Bytes are accumulated into one `maxlen` buffer with a write cursor
+// instead of being re-joined per chunk: `_hs_join3` consumes its operands,
+// and V1 ownership is not path-sensitive, so a `buf = _hs_join3(buf, ...)`
+// self-rebinding leaves the checker unable to prove `buf` is live again.
+// One allocation, one release, one exit.
+fn http_server_read_request(sock: Int, maxlen: Int) -> Str {
+    let mut cap = maxlen;
+    if cap < http_server_recv_chunk() {
+        cap = http_server_recv_chunk();
+    }
+    let acc = rt_str_alloc(cap);
+    let mut used = 0;
+    // 0 = keep reading, 1 = have a request, 2 = gave up.
+    let mut state = 0;
+    while state == 0 {
+        let chunk = net_recv(sock, http_server_recv_chunk());
+        let n = rt_str_len(chunk);
+        if n == 0 {
+            // The peer closed (or the socket is dead). Whatever arrived so
+            // far is still a usable request if it was not empty.
+            if used == 0 {
+                state = 2;
+            } else {
+                state = 1;
+            }
+        } else {
+            let mut copied = n;
+            if used + n > cap {
+                copied = cap - used;
+                state = 2;
+            }
+            let mut i = 0;
+            while i < copied {
+                rt_str_set_byte(acc, used + i, rt_str_byte(chunk, i));
+                i = i + 1;
+            }
+            used = used + copied;
+        }
+        // One release per iteration, on a single path: a conditional free
+        // would leave the checker unable to prove `chunk` is dead.
+        rt_str_free(chunk);
+        if state == 0 {
+            // Index just past the "\r\n\r\n" that ends the headers.
+            let mut h_end = -1;
+            let mut i = 0;
+            while i + 3 < used {
+                if rt_str_byte(acc, i) == 13 {
+                    if rt_str_byte(acc, i + 1) == 10 {
+                        if rt_str_byte(acc, i + 2) == 13 {
+                            if rt_str_byte(acc, i + 3) == 10 {
+                                h_end = i + 4;
+                                i = used;
+                            } else {
+                                i = i + 1;
+                            }
+                        } else {
+                            i = i + 1;
+                        }
+                    } else {
+                        i = i + 1;
+                    }
+                } else {
+                    i = i + 1;
+                }
+            }
+            if h_end > 0 {
+                let head = rt_str_alloc(h_end);
+                let mut k = 0;
+                while k < h_end {
+                    rt_str_set_byte(head, k, rt_str_byte(acc, k));
+                    k = k + 1;
+                }
+                let want = h_end + _hs_content_length(head);
+                if used >= want {
+                    state = 1;
+                }
+            }
+        }
+    }
+    let mut result = "";
+    if state == 1 {
+        result = rt_str_alloc(used);
+        let mut i = 0;
+        while i < used {
+            rt_str_set_byte(result, i, rt_str_byte(acc, i));
+            i = i + 1;
+        }
+    }
+    rt_str_free(acc);
+    return result;
+}
+
+// Read a request with the default 64 KiB cap.
+fn http_server_read_request_default(sock: Int) -> Str {
+    return http_server_read_request(sock, http_server_max_request());
+}
+
+// Accept one connection and read its request in a single step.
+// Returns (client_socket, request); the socket is -1 and the request is an
+// empty Str when no connection arrived within `timeout_ms`. The caller owns
+// the returned request and must free it.
+fn http_server_serve(sock: Int, timeout_ms: Int, maxlen: Int) -> (Int, Str) {
+    let client = http_server_accept(sock, timeout_ms);
+    if client == -1 {
+        return (-1, "");
+    }
+    let request = http_server_read_request(client, maxlen);
+    if rt_str_len(request) == 0 {
+        net_close(client);
+        return (-1, "");
+    }
+    return (client, request);
+}
+
+// Accept and read with the default timeout and cap.
+fn http_server_serve_default(sock: Int) -> (Int, Str) {
+    return http_server_serve(sock, http_server_timeout_ms(), http_server_max_request());
+}
+
+// --- Parsing ---------------------------------------------------------------
+
+// An independent owned copy of the raw request text, byte for byte.
+// Consumes `request` and returns a fresh Str.
+//
+// Every `Str`-taking function in this module consumes its input exactly
+// once, so a caller that needs several parsed fields hands out one copy per
+// field. http_server_parse does that for the common case.
+fn http_server_request_copy(request: Str) -> Str {
+    let len = rt_str_len(request);
+    let result = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        rt_str_set_byte(result, i, rt_str_byte(request, i));
+        i = i + 1;
+    }
+    rt_str_free(request);
+    return result;
+}
+
+// Everything a router normally needs, from one consuming call:
+// (method, path, version, content_length, header `name`, body).
+//
+// `content_length` is the declared Content-Length, or -1 when the header is
+// absent; `header` is the value of `name`, or "" when it is absent; `body`
+// is the bytes that actually arrived. The five strings are owned by the
+// caller.
+fn http_server_parse(request: Str, name: Str) -> (Str, Str, Str, Int, Str, Str) {
+    let len = rt_str_len(request);
+    // One copy per field, allocated inline so `request` stays readable
+    // until the body is taken from it.
+    let c1 = rt_str_alloc(len);
+    let c2 = rt_str_alloc(len);
+    let c3 = rt_str_alloc(len);
+    let c4 = rt_str_alloc(len);
+    let c5 = rt_str_alloc(len);
+    let c6 = rt_str_alloc(len);
+    let mut i = 0;
+    while i < len {
+        let b = rt_str_byte(request, i);
+        rt_str_set_byte(c1, i, b);
+        rt_str_set_byte(c2, i, b);
+        rt_str_set_byte(c3, i, b);
+        rt_str_set_byte(c4, i, b);
+        rt_str_set_byte(c5, i, b);
+        rt_str_set_byte(c6, i, b);
+        i = i + 1;
+    }
+    rt_str_free(request);
+    let method = http_server_method(c1);
+    let path = http_server_path(c2);
+    let version = http_server_version(c3);
+    let declared = http_server_content_length(c4);
+    let header = http_server_header(c5, name);
+    let body = http_server_body(c6);
+    return (method, path, version, declared, header, body);
+}
+
+// The request line, e.g. "GET /index.html HTTP/1.1". Consumes `request`.
+fn http_server_request_line(request: Str) -> Str {
+    let len = rt_str_len(request);
+    let mut end = len;
+    let mut i = 0;
+    while i < len - 1 {
+        if rt_str_byte(request, i) == 13 {
+            if rt_str_byte(request, i + 1) == 10 {
+                end = i;
+                i = len;
+            } else {
+                i = i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    return _hs_copy(request, 0, end);
+}
+
+// The method, e.g. "GET". Consumes `request`.
+fn http_server_method(request: Str) -> Str {
+    let len = rt_str_len(request);
+    let mut end = 0;
+    let mut i = 0;
+    while i < len {
+        if rt_str_byte(request, i) == 32 {
+            end = i;
+            i = len;
+        } else {
+            i = i + 1;
+        }
+    }
+    return _hs_copy(request, 0, end);
+}
+
+// The request target, e.g. "/index.html". Consumes `request`.
+fn http_server_path(request: Str) -> Str {
+    let len = rt_str_len(request);
+    let mut start = 0;
+    let mut end = 0;
+    let mut found = 0;
+    let mut done = 0;
+    let mut i = 0;
+    // The cursor advances on every path — including the branch that records
+    // the first space — so the scan never re-reads the same byte.
+    while i < len && done == 0 {
+        if rt_str_byte(request, i) == 32 {
+            if found == 0 {
+                start = i + 1;
+                found = 1;
+            } else {
+                end = i;
+                done = 1;
+            }
+        } else {
+            if found == 1 {
+                end = i + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return _hs_copy(request, start, end);
+}
+
+// The protocol version, e.g. "HTTP/1.1". Consumes `request`.
+fn http_server_version(request: Str) -> Str {
+    let len = rt_str_len(request);
+    let mut start = 0;
+    let mut end = 0;
+    let mut spaces = 0;
+    let mut i = 0;
+    while i < len {
+        if rt_str_byte(request, i) == 32 {
+            spaces = spaces + 1;
+            if spaces == 2 {
+                start = i + 1;
+            }
+        } else {
+            if spaces >= 2 {
+                if rt_str_byte(request, i) == 13 {
+                    end = i;
+                    i = len;
+                } else {
+                    end = i + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return _hs_copy(request, start, end);
+}
+
+// The value of header `name` (matched case-insensitively), or an empty Str
+// when the header is absent. Consumes both strings.
+//
+// Walks the header block line by line, exactly like _hs_content_length, so
+// a non-matching header advances by one line and the next comparison starts
+// at the next header's first byte.
+fn http_server_header(request: Str, name: Str) -> Str {
+    let len = rt_str_len(request);
+    let name_len = rt_str_len(name);
+    // Single-exit structure (V1 ownership is not path-sensitive): the two
+    // consumed inputs are released once at the bottom.
+    let mut result = "";
+    let mut done = 0;
+    // Skip the request line: stop one byte past its CRLF.
+    let mut i = 0;
+    let mut seen_eol = 0;
+    while i + 1 < len && seen_eol == 0 {
+        if rt_str_byte(request, i) == 13 {
+            if rt_str_byte(request, i + 1) == 10 {
+                i = i + 2;
+                seen_eol = 1;
+            } else {
+                i = i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    let mut headers = 0;
+    while i < len && done == 0 && headers < http_server_max_headers() {
+        // An empty line ends the header block.
+        if i + 1 < len {
+            if rt_str_byte(request, i) == 13 {
+                if rt_str_byte(request, i + 1) == 10 {
+                    done = 1;
+                }
+            }
+        }
+        if done == 0 {
+            let mut line_end = i;
+            while line_end < len {
+                if rt_str_byte(request, line_end) == 13 {
+                    break;
+                }
+                line_end = line_end + 1;
+            }
+            let mut colon = i;
+            while colon < line_end {
+                if rt_str_byte(request, colon) == 58 {
+                    break;
+                }
+                colon = colon + 1;
+            }
+            let mut matched = colon - i == name_len;
+            if matched == true {
+                let mut j = 0;
+                while j < name_len {
+                    if _hs_eq_ci(rt_str_byte(request, i + j), rt_str_byte(name, j)) == false {
+                        matched = false;
+                        j = name_len;
+                    } else {
+                        j = j + 1;
+                    }
+                }
+            }
+            if matched == true {
+                let mut vs = colon + 1;
+                if vs < line_end {
+                    if rt_str_byte(request, vs) == 32 {
+                        vs = vs + 1;
+                    }
+                }
+                let mut vsize = line_end - vs;
+                if vsize < 0 {
+                    vsize = 0;
+                }
+                if vsize > 0 {
+                    result = rt_str_alloc(vsize);
+                    let mut vi = 0;
+                    while vi < vsize {
+                        rt_str_set_byte(result, vi, rt_str_byte(request, vs + vi));
+                        vi = vi + 1;
+                    }
+                }
+                done = 1;
+            } else {
+                headers = headers + 1;
+            }
+            i = line_end + 2;
+        }
+    }
+    rt_str_free(request);
+    rt_str_free(name);
+    return result;
+}
+
+// The declared body length, or -1 when Content-Length is absent.
+// Consumes `request`.
+fn http_server_content_length(request: Str) -> Int {
+    let len = rt_str_len(request);
+    // Locate the end of the header block.
+    let mut h_end = -1;
+    let mut i = 0;
+    while i + 3 < len {
+        if rt_str_byte(request, i) == 13 {
+            if rt_str_byte(request, i + 1) == 10 {
+                if rt_str_byte(request, i + 2) == 13 {
+                    if rt_str_byte(request, i + 3) == 10 {
+                        h_end = i + 4;
+                        i = len;
+                    } else {
+                        i = i + 1;
+                    }
+                } else {
+                    i = i + 1;
+                }
+            } else {
+                i = i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    // Single-exit structure: `request` is released once at the bottom, so
+    // the incomplete-header case cannot leave the checker in doubt.
+    let mut result = -1;
+    if h_end > 0 {
+        let head = rt_str_alloc(h_end);
+        let mut k = 0;
+        while k < h_end {
+            rt_str_set_byte(head, k, rt_str_byte(request, k));
+            k = k + 1;
+        }
+        result = _hs_content_length(head);
+    }
+    rt_str_free(request);
+    return result;
+}
+
+// The body bytes that arrived, or an empty Str when the request had none.
+// Consumes `request`.
+fn http_server_body(request: Str) -> Str {
+    let len = rt_str_len(request);
+    let mut h_end = -1;
+    let mut i = 0;
+    while i + 3 < len {
+        if rt_str_byte(request, i) == 13 {
+            if rt_str_byte(request, i + 1) == 10 {
+                if rt_str_byte(request, i + 2) == 13 {
+                    if rt_str_byte(request, i + 3) == 10 {
+                        h_end = i + 4;
+                        i = len;
+                    } else {
+                        i = i + 1;
+                    }
+                } else {
+                    i = i + 1;
+                }
+            } else {
+                i = i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    let mut body = "";
+    if h_end > 0 {
+        let head = rt_str_alloc(h_end);
+        let mut k = 0;
+        while k < h_end {
+            rt_str_set_byte(head, k, rt_str_byte(request, k));
+            k = k + 1;
+        }
+        let declared = _hs_content_length(head);
+    let available = len - h_end;
+    let mut size = available;
+    if declared >= 0 {
+        if size > declared {
+            size = declared;
+        }
+    }
+        if size > 0 {
+            body = rt_str_alloc(size);
+            let mut j = 0;
+            while j < size {
+                rt_str_set_byte(body, j, rt_str_byte(request, h_end + j));
+                j = j + 1;
+            }
+        }
+    }
+    rt_str_free(request);
+    return body;
+}
+
+// --- Responding ------------------------------------------------------------
+
+// The reason phrase for a status code, or "" when the code is not one of
+// those named here. The result is a string literal, so it is immortal.
+fn http_server_reason(status: Int) -> Str {
+    if status == 200 { return "OK"; }
+    if status == 201 { return "Created"; }
+    if status == 204 { return "No Content"; }
+    if status == 400 { return "Bad Request"; }
+    if status == 403 { return "Forbidden"; }
+    if status == 404 { return "Not Found"; }
+    if status == 405 { return "Method Not Allowed"; }
+    if status == 408 { return "Request Timeout"; }
+    if status == 411 { return "Length Required"; }
+    if status == 413 { return "Payload Too Large"; }
+    if status == 500 { return "Internal Server Error"; }
+    if status == 501 { return "Not Implemented"; }
+    if status == 503 { return "Service Unavailable"; }
+    return "";
+}
+
+// A complete response with an explicit Content-Type. Consumes `reason`,
+// `content_type` and `body`; the result is owned by the caller.
+//
+// `rt_str_format` substitutes at most three `{}` placeholders, so the status
+// line and the header block are formatted separately and then joined.
+fn http_server_response(status: Int, reason: Str, content_type: Str, body: Str) -> Str {
+    let status_text = rt_str_from_int(status);
+    let head = rt_str_format("HTTP/1.1 {} {}\r\n", status_text, reason, "");
+    // `rt_str_format` does not consume its arguments, so the two rendered
+    // integers are released here rather than left live at exit (E-R06).
+    rt_str_free(status_text);
+    let body_len = rt_str_len(body);
+    let len_text = rt_str_from_int(body_len);
+    let meta = rt_str_format(
+        "Content-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        content_type,
+        len_text,
+        ""
+    );
+    rt_str_free(len_text);
+    return _hs_join3(head, meta, body);
+}
+
+// A complete response with the default text/plain Content-Type.
+fn http_server_response_text(status: Int, reason: Str, body: Str) -> Str {
+    return http_server_response(status, reason, http_server_text_type(), body);
+}
+
+// A 200 response with the default Content-Type.
+fn http_server_ok(body: Str) -> Str {
+    return http_server_response_text(200, "OK", body);
+}
+
+// A 404 response with the default Content-Type.
+fn http_server_not_found(body: Str) -> Str {
+    return http_server_response_text(404, "Not Found", body);
+}
+
+// Send a prepared response. Consumes `response`. Returns the number of bytes
+// sent, or -1 on error.
+fn http_server_send(sock: Int, response: Str) -> Int {
+    return net_send(sock, response);
+}
+
+// Build and send a response in one step, then close the connection.
+// Consumes `reason` and `body`. Returns the bytes sent, or -1.
+fn http_server_respond(sock: Int, status: Int, reason: Str, body: Str) -> Int {
+    let response = http_server_response_text(status, reason, body);
+    let sent = net_send(sock, response);
+    net_close(sock);
+    return sent;
+}
+
+// Build and send a 200 response, then close the connection.
+fn http_server_respond_ok(sock: Int, body: Str) -> Int {
+    return http_server_respond(sock, 200, "OK", body);
+}
+
+// Build and send a 404 response, then close the connection.
+fn http_server_respond_not_found(sock: Int, body: Str) -> Int {
+    return http_server_respond(sock, 404, "Not Found", body);
+}

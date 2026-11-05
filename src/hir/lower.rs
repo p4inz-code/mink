@@ -648,8 +648,14 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::IfExpr(inner) => {
                 let else_branch = match &inner.else_branch {
+                    // A nested `else if` of an if-*expression* must stay an
+                    // expression branch. Lowering it as a statement `If`
+                    // (the pre-Session-138 shape) made MIR lower it with
+                    // `lower_if`, which never assigns the expression's
+                    // result local, so `if a { .. } else if b { .. } else
+                    // { .. }` silently produced the zero initializer.
                     ElseBranch::IfExpr(nested) => {
-                        HirElseBranch::If(Box::new(self.lower_if_expr_to_hir_if(nested)))
+                        HirElseBranch::IfExpr(Box::new(self.lower_if_expr_to_hir_if(nested)))
                     }
                     ElseBranch::Block(block) => HirElseBranch::Block(self.lower_block(block)),
                     ElseBranch::If(stmt) => HirElseBranch::If(Box::new(self.lower_if(stmt))),

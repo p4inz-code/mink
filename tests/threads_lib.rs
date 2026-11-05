@@ -647,6 +647,63 @@ fn main() -> Int {
 }
 
 #[test]
+fn s134_concurrent_str_from_int_returns_its_own_value() {
+    // Session 134: `rt_str_from_int` used to build its digits in the shared
+    // `.bss` `print_buf`. Concurrent callers therefore overwrote each other's
+    // digits: a multi-threaded server that formats an integer into a response
+    // (or a log line) could send another thread's number. The digits are now
+    // built on the calling thread's stack, so every call returns its own
+    // value. Each thread round-trips 4,000 distinct values through
+    // `rt_str_from_int` and parses the text back.
+    let decls = r#"
+fn parse(s: Str) -> Int {
+    let n = rt_str_len(s);
+    let mut i = 0;
+    let mut v = 0;
+    while i < n {
+        v = v * 10 + (rt_str_byte(s, i) - 48);
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return v;
+}
+
+fn worker(p: Ptr<Int>) -> Int {
+    let base = rt_mem_load(p);
+    let mut i = 0;
+    let mut fails = 0;
+    while i < 4000 {
+        let v = base * 100000 + i;
+        let s = rt_str_from_int(v);
+        if parse(s) != v { fails = fails + 1; }
+        i = i + 1;
+    }
+    return fails;
+}
+"#;
+    let body = r#"let slots = rt_alloc(64);
+let handles = rt_alloc(64);
+let mut i = 0;
+while i < 8 {
+    rt_mem_store(slots + i * 8, i + 1);
+    rt_mem_store(handles + i * 8, rt_thread_spawn(worker, slots + i * 8));
+    i = i + 1;
+}
+let mut fails = 0;
+i = 0;
+while i < 8 {
+    fails = fails + rt_thread_join(rt_mem_load(handles + i * 8));
+    i = i + 1;
+}
+say_i(fails);
+rt_free(slots);
+rt_free(handles);"#;
+    let (code, out) = build_and_run(decls, body);
+    assert_ok(code, &out);
+    assert_eq!(lines(&out), vec!["0"]);
+}
+
+#[test]
 fn s143_concurrent_print_int_emits_one_intact_line_per_call() {
     // Session 143: `rt_print_int` built its digits in the process-global
     // `.bss` `print_buf` and then wrote the digits and the CRLF with two
@@ -799,6 +856,106 @@ rt_free(cell);"#;
 }
 
 #[test]
+fn s149_concurrent_print_str_emits_one_intact_line_per_call() {
+    // Session 149: `rt_print_str` wrote the payload and the shared CRLF in
+    // two separate WriteFile calls. Eight printers interleaved those writes:
+    // the pre-fix probe produced 11,606 merged/malformed lines and 6,245
+    // empty lines out of 24,000, with each payload appearing about 1,500
+    // times instead of 3,000. The complete line is now assembled per call and
+    // written once, so every observed line must be exactly one expected
+    // payload and each payload must appear exactly 3,000 times.
+    let decls = r#"
+fn worker(p: Ptr<Int>) -> Int {
+    let id = rt_mem_load(p);
+    let line = if id == 1 { "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01" }
+    else if id == 2 { "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB02" }
+    else if id == 3 { "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC03" }
+    else if id == 4 { "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD04" }
+    else if id == 5 { "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEE05" }
+    else if id == 6 { "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFF06" }
+    else if id == 7 { "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGG07" }
+    else { "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH08" };
+    let mut i = 0;
+    while i < 3000 { rt_print_str(line); i = i + 1; }
+    return 0;
+}
+"#;
+    let body = r#"let slots = rt_alloc(64);
+let handles = rt_alloc(64);
+let mut i = 0;
+while i < 8 {
+    rt_mem_store(slots + i * 8, i + 1);
+    rt_mem_store(handles + i * 8, rt_thread_spawn(worker, slots + i * 8));
+    i = i + 1;
+}
+i = 0;
+while i < 8 {
+    rt_thread_join(rt_mem_load(handles + i * 8));
+    i = i + 1;
+}
+rt_free(handles);
+rt_free(slots);"#;
+    let (code, out) = build_and_run(decls, body);
+    assert_ok(code, &out);
+    let mut got = lines(&out);
+    assert_eq!(got.len(), 24000, "one line per rt_print_str call");
+    let expected_literals = [
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01",
+        "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB02",
+        "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC03",
+        "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD04",
+        "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEE05",
+        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFF06",
+        "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGG07",
+        "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH08",
+    ];
+    let mut expected: Vec<String> = expected_literals
+        .iter()
+        .flat_map(|line| std::iter::repeat((*line).to_string()).take(3000))
+        .collect();
+    got.sort();
+    expected.sort();
+    assert_eq!(got, expected, "every string line appears exactly once");
+}
+
+#[test]
+fn s149_concurrent_print_str_repeated_payload_count_is_exact() {
+    // High-contention repeated payload: eight threads print the same complete
+    // line 2,000 times. A torn write would produce an empty or merged line
+    // and break either the exact count or the content check.
+    let decls = r#"
+fn worker(p: Ptr<Int>) -> Int {
+    let mut i = 0;
+    while i < 2000 { rt_print_str("S149-REPEATED-LINE"); i = i + 1; }
+    return 0;
+}
+"#;
+    let body = r#"let slots = rt_alloc(64);
+let handles = rt_alloc(64);
+let mut i = 0;
+while i < 8 {
+    rt_mem_store(slots + i * 8, 0);
+    rt_mem_store(handles + i * 8, rt_thread_spawn(worker, slots + i * 8));
+    i = i + 1;
+}
+i = 0;
+while i < 8 {
+    rt_thread_join(rt_mem_load(handles + i * 8));
+    i = i + 1;
+}
+rt_free(handles);
+rt_free(slots);"#;
+    let (code, out) = build_and_run(decls, body);
+    assert_ok(code, &out);
+    let got = lines(&out);
+    assert_eq!(got.len(), 16000, "exact line count under contention");
+    assert!(
+        got.iter().all(|line| line == "S149-REPEATED-LINE"),
+        "no empty, merged, or partial lines"
+    );
+}
+
+#[test]
 fn r19_example_threaded_work_is_deterministic() {
     // The shipped proof application, run through the real CLI. Four threads
     // accumulate under a lock; the result must match the closed form on
@@ -811,4 +968,38 @@ fn r19_example_threaded_work_is_deterministic() {
         assert!(out.contains("MATCH"), "channel output: {out:?}");
         assert!(out.contains("21413400"), "channel output: {out:?}");
     }
+}
+
+// ============================================================================
+// Session 144 — per-thread runtime scratch (M3 P4)
+// ============================================================================
+
+#[test]
+fn s144_thread_local_word_is_isolated_per_thread() {
+    // The runtime cell behind `rt_thread_local_get/set` is the storage for
+    // `http_last_error()`. A fresh thread must start at 0 even though the
+    // main thread already wrote 5, the worker's write must not be visible to
+    // main, and main's value must survive the spawn/join. `rt_init` allocated
+    // the slot before `main`; this also covers its use by a spawned thread.
+    let decls = r#"
+fn worker(p: Ptr<Int>) -> Int {
+    let before = rt_thread_local_get();
+    rt_mem_store(p, before);
+    rt_thread_local_set(77);
+    return rt_thread_local_get();
+}
+"#;
+    let body = r#"rt_thread_local_set(5);
+let p = rt_alloc(8);
+let t = rt_thread_spawn(worker, p);
+let worker_value = rt_thread_join(t);
+let worker_before = rt_mem_load(p);
+let main_value = rt_thread_local_get();
+say_i(worker_before);
+say_i(worker_value);
+say_i(main_value);
+rt_free(p);"#;
+    let (code, out) = build_and_run(decls, body);
+    assert_ok(code, &out);
+    assert_eq!(lines(&out), vec!["0", "77", "5"]);
 }

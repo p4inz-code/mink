@@ -910,6 +910,11 @@ pub enum RuntimeService {
     NetWsaCleanup,
     /// `rt_net_wsa_last_error() -> Int`: get last Winsock error code.
     NetWsaLastError,
+    /// `rt_net_wsa_set_last_error(code: Int) -> Int`: set the calling
+    /// thread's Winsock error code (0). `closesocket` clears that code, so
+    /// a helper that must close a failed socket republishes the captured
+    /// failure reason with this service.
+    NetWsaSetLastError,
     /// `rt_net_socket(af: Int, ty: Int, proto: Int) -> Int`: create socket (returns socket handle or -1).
     NetSocket,
     /// `rt_net_connect(sock: Int, addr: Str, port: Int) -> Int`: connect to host:port (0=ok, -1=error).
@@ -1026,6 +1031,12 @@ pub enum RuntimeService {
     /// wait for readiness on `count` 16-byte `WSAPOLLFD` entries at `fds`.
     /// Returns the ready count, 0 on timeout, -1 on error.
     NetPoll,
+    /// `rt_net_so_error(sock: Int) -> Int`: the pending error on `sock`
+    /// (`getsockopt(SOL_SOCKET, SO_ERROR)`). A non-blocking `connect`
+    /// reports success and failure alike as writable, so this is how the
+    /// stdlib confirms a completed handshake (0) after waiting. Returns -1
+    /// when the query itself fails or networking is not initialized.
+    NetSoError,
     // --- Async / task loop (Session 114, R20/S73) ---
     /// `rt_task_spawn(fn_ptr: Int, arg: Int) -> Int`: run `fn(arg)` on a
     /// new OS thread as a task of the process-global task loop. Returns a
@@ -1071,6 +1082,13 @@ pub enum RuntimeService {
     /// [`RuntimeService::SysLoad64`], for the 4-byte fields (`cbData`,
     /// `dwError`, an `iPAddress` blob) packed inside those structures.
     SysLoad32,
+    // --- Per-thread runtime scratch (Session 144) ---
+    /// `rt_thread_local_get() -> Int`: the calling thread's runtime scratch
+    /// word (0 in a fresh thread). The slot is allocated once by `rt_init`.
+    ThreadLocalGet,
+    /// `rt_thread_local_set(value: Int)`: write the calling thread's runtime
+    /// scratch word. Threads never observe each other's value.
+    ThreadLocalSet,
 }
 
 impl RuntimeService {
@@ -1163,6 +1181,7 @@ impl RuntimeService {
             | Self::NetWsaLastError
             | Self::NetFreeAddrInfo
             | Self::NetGetHostName => 0,
+            Self::NetWsaSetLastError => 1,
             Self::NetAccept | Self::NetClose | Self::NetHtons => 1,
             Self::NetListen | Self::NetShutdown | Self::NetSend | Self::NetRecv => 2,
             Self::NetSocket | Self::NetConnect | Self::NetBind => 3,
@@ -1187,6 +1206,7 @@ impl RuntimeService {
             Self::PtrToInt | Self::IntToPtr => 1,
             Self::NetSetNonblocking => 2,
             Self::NetPoll => 3,
+            Self::NetSoError => 1,
             Self::TaskSpawn => 2,
             Self::TaskSpawn0 => 1,
             Self::TaskAwait => 1,
@@ -1196,6 +1216,9 @@ impl RuntimeService {
             Self::SysGetProc => 2,
             Self::SysCall => 3,
             Self::SysLoad64 | Self::SysLoad32 => 1,
+            // --- Per-thread runtime scratch (Session 144) ---
+            Self::ThreadLocalGet => 0,
+            Self::ThreadLocalSet => 1,
         }
     }
 
@@ -1289,6 +1312,7 @@ impl RuntimeService {
                 | Self::NetWsaStartup
                 | Self::NetWsaCleanup
                 | Self::NetWsaLastError
+                | Self::NetWsaSetLastError
                 | Self::NetSocket
                 | Self::NetConnect
                 | Self::NetBind
@@ -1328,6 +1352,7 @@ impl RuntimeService {
                 | Self::IntToPtr
                 | Self::NetSetNonblocking
                 | Self::NetPoll
+                | Self::NetSoError
                 | Self::TaskSpawn
                 | Self::TaskSpawn0
                 | Self::TaskAwait
@@ -1339,6 +1364,8 @@ impl RuntimeService {
                 | Self::SysCall
                 | Self::SysLoad64
                 | Self::SysLoad32
+                | Self::ThreadLocalGet
+                | Self::ThreadLocalSet
         )
     }
 }
