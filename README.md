@@ -441,7 +441,7 @@ MINK ships with a growing standard library covering common development needs:
 | `result` | `Result<T, E>` — a value or an error |
 | `assert` | Test assertions: `assert_true`, `assert_false`, and typed `assert_eq_*` / `assert_ne_*` helpers (`_int`, `_str`, `_float`) |
 
-Standard library files live in the `stdlib/` directory and are imported with `use`.
+Standard library files live in the `stdlib/` directory and are loaded with `mod`.
 They are also bundled next to the compiler in the npm package, so `mod`/`use` of
 a standard-library module works in any project without configuration.
 
@@ -449,7 +449,7 @@ a standard-library module works in any project without configuration.
 
 MINK supports a rich feature set for a language built from scratch:
 
-- **Types** — `Int`, `Bool`, `Str`, `Float`, `Char`, `Null`, `Ptr<T>`
+- **Types** — `Int`, `Bool`, `Str`, `Float`, `Char`, `Null`, `Ptr<T>`, `Vec<T>`, `Map<K, V>`, `Set<T>`
 - **Structs** — `struct Point { x: Int, y: Int }` with field access and destructuring
 - **Enums** — unit variants, data-carrying variants, sum types, explicit discriminants
 - **Generics** — `fn id<T>(x: T) -> T` with monomorphization
