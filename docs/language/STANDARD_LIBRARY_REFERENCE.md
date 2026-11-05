@@ -93,7 +93,7 @@ shadows the bundled module.
 | `crypto` | HMAC-SHA256, HKDF-SHA256, secure random | SOURCE |
 | `csv` | RFC 4180 subset row parse/write | EXEC |
 | `encoding` | Hex, Base64/URL-safe Base64, UTF-8, URL encoding, byte classes | PARTIAL |
-| `environment` | Declares `rt_env_*` externs; **cannot be loaded as a module** | EXEC (failure) |
+| `environment` | Wraps the predeclared `rt_env_*` intrinsics as `env_*`; load with `mod environment;` | EXEC |
 | `filesystem` | Paths, file read/write, directories, CWD | EXEC |
 | `hashing` | FNV-1a, djb2, SHA-256, digest equality | SOURCE |
 | `http` | HTTP/1.1 client over TCP | SOURCE |
@@ -672,27 +672,38 @@ fn main() -> Int {
 `rt_stderr_write` does not append a newline, so a diagnostic written with it
 runs into the next stderr output.
 
-### 14.2 Environment intrinsics
+### 14.2 Environment (`mod environment`)
 
-`stdlib/environment.mink` **cannot be loaded**. It contains only
-`extern fn rt_env_*;` declarations at top level, and the module parser rejects
-that form:
-
-```text
-mink: error[E-P01]: expected a top-level declaration (`fn`, `let`, or `const`)
-  --> stdlib/environment.mink:26:1
-```
-
-The `rt_env_*` intrinsics themselves are predeclared and work **without**
-`mod environment;`:
+Sessions 178-181 recorded this module as unloadable: it declared raw
+`extern fn rt_env_*;` items, and the parser accepts only `fn`, `let` and
+`const` at top level (`E-P01`). Session 182 repaired it by wrapping the
+predeclared intrinsics in ordinary functions. `mod environment;` now loads
+and the tests in `tests/environment_lib.rs` pin the module contract.
 
 | Call | Contract | Evidence |
 | --- | --- | --- |
-| `rt_env_get(name: Str) -> Str` | Owned value; empty string when unset | EXEC |
-| `rt_env_set(name: Str, value: Str) -> Int` | `0` success, `-1` failure | EXEC |
-| `rt_env_has(name: Str) -> Bool` | Existence | EXEC |
-| `rt_env_remove(name: Str) -> Int` | `0` success, `-1` failure | EXEC |
-| `rt_fs_get_cwd() -> Str` | Owned current directory | SOURCE |
+| `env_get(name: Str) -> Str` | Owned value; empty string when unset; consumes `name` | EXEC |
+| `env_set(name: Str, value: Str) -> Int` | `0` success, `-1` failure; consumes both strings | EXEC |
+| `env_has(name: Str) -> Bool` | Existence; consumes `name` | EXEC |
+| `env_remove(name: Str) -> Int` | `0` success, `-1` failure; consumes `name` | EXEC |
+| `env_cwd() -> Str` | Owned current directory | EXEC |
+
+The underlying `rt_env_*` and `rt_fs_get_cwd` intrinsics remain predeclared,
+so they also work **without** `mod environment;`. Prefer the module wrappers
+for the unprefixed API used by the rest of the standard library.
+
+```mink
+mod environment;
+
+fn main() -> Int {
+    env_set("MINK_EXAMPLE", "on");
+    let value = env_get("MINK_EXAMPLE");
+    rt_print_str(value);
+    rt_str_free(value);
+    env_remove("MINK_EXAMPLE");
+    return 0;
+}
+```
 
 Windows variable names are case-insensitive; empty values are supported.
 

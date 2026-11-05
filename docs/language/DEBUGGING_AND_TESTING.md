@@ -102,9 +102,11 @@ Module lookup order, first match wins:
 4. `stdlib/name.mink` under the current working directory;
 5. package roots from the active project or environment.
 
-`mod environment;` is currently broken: `stdlib/environment.mink` contains only
-`extern fn` declarations and fails to parse (`E-P01` at line 26). The
-`rt_env_*` intrinsics are predeclared and work without loading the module.
+`mod environment;` loads and exposes `env_get`, `env_set`, `env_has`,
+`env_remove` and `env_cwd`. Before Session 182 the module contained only
+`extern fn` declarations and failed to parse (`E-P01`); that was a defect in
+the module, not in module loading. The `rt_env_*` intrinsics are also
+predeclared and work without loading the module.
 
 ## 4. Reading diagnostics
 
