@@ -1,0 +1,244 @@
+// ============================================================================
+// invsync — deterministic CSV inventory report (M6 Session 180)
+//
+// Usage:  invsync <input.csv>
+//
+// Input format (RFC 4180 subset, comma separated, one record per line):
+//   sku,category,qty,price
+//   bolt,fasteners,40,3
+//
+// Output (stdout, one line per rt_print_* call):
+//   invsync: ok
+//   rows=2 total_qty=42 total_value=126
+//
+// Artifact: report.txt in the working directory.
+//
+// Exit codes:
+//   0  report written
+//   2  usage error (no input path, or more than one)
+//   3  invalid input (empty file, bad header, bad row, negative number)
+//   4  input file cannot be read
+//   5  report.txt cannot be written
+//
+// Ownership notes (verified rules, see STANDARD_LIBRARY_REFERENCE.md):
+//   - User functions consume their Str parameters; each helper frees what it
+//     owns on its single return path.
+//   - `csv_parse_row` consumes its line, so every row text is copied with
+//     rt_str_concat before it is passed in; the vector keeps the original.
+//   - `str_split` consumes the file contents and returns owned part strings.
+//   - Map keys are copied before insertion because `rt_map_insert` moves them.
+// ============================================================================
+
+mod filesystem;
+mod csv;
+mod strings;
+
+fn usage() -> Int {
+    rt_stderr_write("usage: invsync <input.csv>\n");
+    return 2;
+}
+
+// load_input(path): read the file, or report a missing/unreadable one.
+// Consumes `path`. Returns (contents, 0) on success and ("", 4) on failure.
+// The failure path returns a string literal, which is safe to free/no-free.
+fn load_input(path: Str) -> (Str, Int) {
+    let exists = rt_fs_exists(path);
+    let mut content = "";
+    let mut code = 0;
+    if !exists {
+        code = 4;
+    }
+    if exists {
+        content = rt_fs_read(path);
+    }
+    rt_str_free(path);
+    return (content, code);
+}
+
+// append(a, b): concatenate and release both inputs, returning a new string.
+fn append(a: Str, b: Str) -> Str {
+    let r = rt_str_concat(a, b);
+    rt_str_free(a);
+    rt_str_free(b);
+    return r;
+}
+
+// report_bad_row(index): print one invalid-row diagnostic. Windows addresses
+// rows from 1 (the header is row 1), so `index` is already 1-based.
+fn report_bad_row(index: Int) {
+    let s = rt_str_from_int(index);
+    let msg = rt_str_concat("invsync: invalid row ", s);
+    rt_stderr_write(msg);
+    rt_stderr_write("\n");
+    rt_str_free(msg);
+    rt_str_free(s);
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc != 1 {
+        return usage();
+    }
+
+    let loaded = load_input(rt_argv(0));
+    let content = loaded.0;
+    let mut code = loaded.1;
+    if code == 4 {
+        rt_stderr_write("invsync: cannot read input file\n");
+    }
+
+    // str_split consumes `content`; an empty file yields one empty part.
+    let lines = str_split(content, "\n");
+    let total_lines = rt_vec_len(lines);
+
+    let mut rows = 0;
+    let mut total_qty = 0;
+    let mut total_value = 0;
+    let mut categories = rt_map_new(8);
+    let mut report = "";
+
+    if code == 0 {
+        if total_lines == 1 {
+            if rt_str_len(rt_vec_get(lines, 0)) == 0 {
+                code = 3;
+                rt_stderr_write("invsync: input is empty\n");
+            }
+        }
+    }
+
+    if code == 0 {
+        let header = str_trim(rt_str_concat(rt_vec_get(lines, 0), ""));
+        let header_ok = rt_str_eq(header, "sku,category,qty,price");
+        rt_str_free(header);
+        if !header_ok {
+            code = 3;
+            rt_stderr_write("invsync: missing or invalid header\n");
+        }
+    }
+
+    let mut i = 1;
+    while i < total_lines {
+        if code == 0 {
+            let raw = rt_vec_get(lines, i);
+            if rt_str_len(raw) > 0 {
+                let row = csv_parse_row(rt_str_concat(raw, ""));
+                let fields = csv_field_count(row);
+                if fields != 4 {
+                    code = 3;
+                    report_bad_row(i + 1);
+                }
+                if fields == 4 {
+                    let sku = rt_vec_get(row, 0);
+                    let category = rt_vec_get(row, 1);
+                    let (qty, qty_ok) = str_parse_int(rt_str_concat(rt_vec_get(row, 2), ""));
+                    let (price, price_ok) = str_parse_int(rt_str_concat(rt_vec_get(row, 3), ""));
+
+                    let mut valid = true;
+                    if !qty_ok { valid = false; }
+                    if !price_ok { valid = false; }
+                    if qty < 0 { valid = false; }
+                    if price < 0 { valid = false; }
+                    if rt_str_len(sku) == 0 { valid = false; }
+                    if rt_str_len(category) == 0 { valid = false; }
+
+                    if !valid {
+                        code = 3;
+                        report_bad_row(i + 1);
+                    }
+                    if valid {
+                        rows = rows + 1;
+                        total_qty = total_qty + qty;
+                        total_value = total_value + qty * price;
+
+                        // rt_map_insert moves an owned key. Insert a copy and
+                        // release the lookup key unconditionally: the 1.0.2
+                        // checker rejects reusing a key after get/has when it
+                        // is also moved by insert.
+                        let key = rt_str_concat(category, "");
+                        let mut new_qty = qty;
+                        if rt_map_has(categories, key) {
+                            new_qty = rt_map_get(categories, key) + qty;
+                        }
+                        let stored_key = rt_str_concat(key, "");
+                        categories = rt_map_insert(categories, stored_key, new_qty);
+                        rt_str_free(key);
+                    }
+                }
+                rt_vec_free(row);
+            }
+        }
+        i = i + 1;
+    }
+
+    if code == 0 {
+        let s_rows = rt_str_from_int(rows);
+        let s_qty = rt_str_from_int(total_qty);
+        let s_value = rt_str_from_int(total_value);
+        report = rt_str_concat("inventory report\n", "");
+        let summary = rt_str_format("rows={} total_qty={} total_value={}", s_rows, s_qty, s_value);
+        report = append(report, append(summary, rt_str_concat("\n", "")));
+        rt_str_free(s_rows);
+        rt_str_free(s_qty);
+        rt_str_free(s_value);
+
+        // Category order is first-seen order. rt_map_keys is hash order, so
+        // derive the order from the input instead: a category is emitted when
+        // no earlier data row has the same category.
+        let mut r = 1;
+        while r < total_lines {
+            let raw = rt_vec_get(lines, r);
+            if rt_str_len(raw) > 0 {
+                let row = csv_parse_row(rt_str_concat(raw, ""));
+                if csv_field_count(row) == 4 {
+                    let cat = rt_vec_get(row, 1);
+                    let mut seen = false;
+                    let mut j = 1;
+                    while j < r {
+                        let rawj = rt_vec_get(lines, j);
+                        if rt_str_len(rawj) > 0 {
+                            let rowj = csv_parse_row(rt_str_concat(rawj, ""));
+                            if csv_field_count(rowj) == 4 {
+                                let catj = rt_vec_get(rowj, 1);
+                                if rt_str_eq(catj, cat) { seen = true; }
+                            }
+                            rt_vec_free(rowj);
+                        }
+                        j = j + 1;
+                    }
+                    if !seen {
+                        let qty = rt_map_get(categories, cat);
+                        let s_qty2 = rt_str_from_int(qty);
+                        let line = rt_str_format("category={} qty={}{}", cat, s_qty2, "");
+                        report = append(report, append(line, rt_str_concat("\n", "")));
+                        rt_str_free(s_qty2);
+                    }
+                }
+                rt_vec_free(row);
+            }
+            r = r + 1;
+        }
+
+        let written = fs_write("report.txt", report);
+        if written < 0 {
+            code = 5;
+            rt_stderr_write("invsync: cannot write report.txt\n");
+        }
+    }
+
+    if code == 0 {
+        rt_print_str("invsync: ok");
+        let s_rows2 = rt_str_from_int(rows);
+        let s_qty2 = rt_str_from_int(total_qty);
+        let s_value2 = rt_str_from_int(total_value);
+        let summary = rt_str_format("rows={} total_qty={} total_value={}", s_rows2, s_qty2, s_value2);
+        rt_print_str(summary);
+        rt_str_free(summary);
+        rt_str_free(s_rows2);
+        rt_str_free(s_qty2);
+        rt_str_free(s_value2);
+    }
+
+    rt_vec_free(lines);
+    rt_map_free(categories);
+    return code;
+}
