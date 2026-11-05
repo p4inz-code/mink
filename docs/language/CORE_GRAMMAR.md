@@ -782,8 +782,12 @@ ModuleDecl  = "mod" Ident ( ";" | Block ) ;
 ```
 
 A `mod name;` declaration loads `name.mink` from the same directory as
-the declaring file. The module's public items become visible to the
-declaring file via `use` imports.
+the declaring file (or the directory package `name/mod.mink`). Loaded
+modules are compiled into one program: in the current implementation
+every top-level item of every loaded module is callable unqualified from
+the declaring file, without a `use`. `use` does not load a file. See
+`docs/language/LANGUAGE_BASICS.md` section 4 for the practical module
+rules and lookup order.
 
 Inline module blocks (`mod name { ... }`) are parsed but not yet
 supported.
@@ -798,8 +802,10 @@ UsePath     = Ident { "::" Ident } ;
 ```
 
 `use module_name::item_name;` brings `item_name` from `module_name`
-into the current scope. `use module_name;` is a no-op (module paths in
-expressions are a later milestone).
+into the current scope. The module must already be loaded by a `mod`
+declaration; `use` alone does not discover or load files. `use
+module_name;` is a no-op. Qualified names in expressions
+(`module_name::item_name`) are not supported.
 
 ## §30  Public visibility (`pub`)
 
@@ -809,11 +815,11 @@ Session 34.
 PubItem     = "pub" Item ;
 ```
 
-`pub` on a top-level declaration makes it visible to other modules via
-`use` imports. Without `pub`, a declaration is module-private. Currently,
-all items from all modules are included in the combined AST, so private
-items are also accessible (true private-vs-public enforcement is a
-later milestone).
+`pub` on a top-level declaration is parsed and recorded, but visibility
+is not enforced in the current implementation. All items from all loaded
+modules are included in the combined AST, so private items are also
+accessible, both unqualified and through `use`. True private-vs-public
+enforcement is a later milestone.
 
 ## §31  Closures / Lambdas
 

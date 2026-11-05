@@ -359,6 +359,13 @@ freeze.
 
 ## 26. Type-System Decisions (Session 06)
 
+> **Historical scope.** This section records the Session 06 decisions. Later
+> sessions added let, parameter and return type annotations, reference types
+> and borrow expressions, tuples, collections, closures and modules. The
+> statements below about missing annotations or borrow syntax describe the
+> Session 06 milestone, not MINK 1.0.4. `CORE_GRAMMAR.md` and
+> `LANGUAGE_BASICS.md` describe the implemented language.
+
 Resolved in session 06 and authoritative for the implemented milestone; the
 full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
 

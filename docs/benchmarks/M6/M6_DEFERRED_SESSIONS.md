@@ -1,6 +1,6 @@
 # M6-M9 - Programme ledger
 
-**Updated:** 2026-11-04
+**Updated:** 2026-11-05
 **Current milestone:** M6 - external developer usability
 **Status:** M6 IN PROGRESS; M7, M8, M9 NOT STARTED
 
@@ -11,7 +11,7 @@
 | 174 | M6 experiment design and baseline | **COMPLETE** |
 | 175 | Installation and environment validation | **COMPLETE** |
 | 176 | First program and basic language learning | **COMPLETE** |
-| 177 | Language documentation audit | **NOT STARTED** |
+| 177 | Language documentation audit | **COMPLETE** |
 | 178 | Standard-library discoverability | **NOT STARTED** |
 | 179 | Compiler diagnostics and error recovery | **NOT STARTED** |
 | 180 | Testing and debugging workflow | **NOT STARTED** |
@@ -27,19 +27,28 @@
 M5 is COMPLETE. Its final report and readiness gate remain authoritative for
 the application evidence used by M6.
 
-## Starting point for Session 177
+## Session 177 result
+
+Session 177 verified the Session 176 findings against source and execution,
+corrected the module/import grammar, added
+[`docs/language/LANGUAGE_BASICS.md`](../../language/LANGUAGE_BASICS.md), and
+added `benchmarks/m6/session177/verify.py`. The full evidence and deferred
+issues are in
+[`M6_SESSION_177_DOCUMENTATION_AND_LANGUAGE_LEARNING_AUDIT.md`](M6_SESSION_177_DOCUMENTATION_AND_LANGUAGE_LEARNING_AUDIT.md).
+
+## Starting point for Session 178
 
 Read:
 
-- [`M6_SESSION_174_TEST_DESIGN.md`](M6_SESSION_174_TEST_DESIGN.md)
-- [`M6_SESSION_175_INSTALLATION.md`](M6_SESSION_175_INSTALLATION.md)
 - [`M6_SESSION_176_FIRST_PROGRAM_AND_LANGUAGE_LEARNING.md`](M6_SESSION_176_FIRST_PROGRAM_AND_LANGUAGE_LEARNING.md)
-- `docs/language/` and `examples/`
+- [`M6_SESSION_177_DOCUMENTATION_AND_LANGUAGE_LEARNING_AUDIT.md`](M6_SESSION_177_DOCUMENTATION_AND_LANGUAGE_LEARNING_AUDIT.md)
+- [`docs/language/LANGUAGE_BASICS.md`](../../language/LANGUAGE_BASICS.md)
+- `stdlib/*.mink` and `examples/`
 
-Then audit the language documentation against source and test evidence. Use the
-Session 176 findings (line-oriented print, Map typing, module/use wording) as
-reported observations, not as assumptions, and do not correct the README in
-this session.
+Then audit standard-library discoverability and practical API contracts. Keep
+the collection use-after-free defect and the qualified-path diagnostic as
+isolated implementation follow-ups, and correct the README only after its
+pre-existing worktree changes are resolved.
 
 ## Rules for this block
 
