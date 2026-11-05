@@ -1378,3 +1378,33 @@ fn main() -> Int {
     );
     assert_eq!(code, 0, "float min/max through untyped fns: {}", out);
 }
+
+// Session 182: the Session 178-181 "nested Vec<Str> corruption" (length 16
+// for one element, then E-R04) was a probe that freed the vector on its
+// success path and then read its length and freed it again. This test keeps
+// the nested push shape but performs exactly one release; a clean exit and
+// the real contents prove the compiler/runtime lifecycle is sound.
+#[test]
+fn s182_vec_str_nested_push_single_release() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() -> Int {
+    let mut order = rt_vec_new(2);
+    let flag = true;
+    if flag {
+        if !flag {
+            rt_print_str("unreachable");
+        } else {
+            order = rt_vec_push(order, rt_str_concat("fasteners", ""));
+        }
+    }
+    rt_print_int(rt_vec_len(order));
+    rt_print_str(rt_vec_get(order, 0));
+    rt_vec_free(order);
+    return 0;
+}"#,
+    );
+    assert_eq!(code, 0, "nested Vec<Str> lifecycle: {}", out);
+    assert_eq!(all_ints(&out), vec![1], "one nested push: {}", out);
+    assert!(out.contains("fasteners"), "element contents: {}", out);
+}

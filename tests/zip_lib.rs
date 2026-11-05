@@ -242,3 +242,49 @@ fn s44_stress_30_entries_capacity_growth() {
     );
     assert_ok(c, &o);
 }
+
+// Session 182: every reader function returns an owned value. The pass-back
+// functions return a fresh copy of the archive, and the direct readers return
+// a fresh name/payload. Session 178-181 recorded a "zip reader leak" that was
+// actually a probe ignoring one of these returned strings. This test frees
+// each owned return and requires a clean exit (the runtime leak checker turns
+// any missed release into E-R06 / exit 106).
+#[test]
+fn s182_reader_owned_returns_are_all_released() {
+    let (c, o) = build_and_run(
+        r#"
+    let a = zip_add(zip_new(), "a.txt", "hello");
+    let b = zip_add(a, "b.txt", "world");
+    let arc = zip_finish(b);
+
+    let (n, back) = zip_read_count(rt_str_concat(arc, ""));
+    if n != 2 { return 1; }
+    rt_str_free(back);
+
+    let (size, size_back) = zip_entry_size(rt_str_concat(arc, ""), 1);
+    if size != 5 { return 2; }
+    rt_str_free(size_back);
+
+    let (isdir, dir_back) = zip_entry_is_dir(rt_str_concat(arc, ""), 1);
+    if isdir { return 3; }
+    rt_str_free(dir_back);
+
+    let names = zip_list(rt_str_concat(arc, ""));
+    if rt_vec_len(names) != 2 { return 4; }
+    rt_vec_free(names);
+
+    let (name, name_st) = zip_entry_name(rt_str_concat(arc, ""), 1);
+    if name_st != 0 { return 5; }
+    if rt_str_len(name) != 5 { return 6; }
+    rt_str_free(name);
+
+    let (payload, data_st) = zip_entry_data(rt_str_concat(arc, ""), 1);
+    if data_st != 0 { return 7; }
+    if rt_str_len(payload) != 5 { return 8; }
+    rt_str_free(payload);
+
+    rt_str_free(arc);
+    return 0;"#,
+    );
+    assert_ok(c, &o);
+}
