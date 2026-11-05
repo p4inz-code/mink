@@ -11,7 +11,7 @@
 ![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
-Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by Northbyte Studios.
+Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by P4inz Interactive Labs.
 
 </div>
 
@@ -28,7 +28,7 @@ MINK is for programmers writing native Windows tools: utilities that read and wr
 files, spawn and supervise child processes, talk TCP or UDP, run work on OS threads, and
 ship as a single executable with no runtime to install on the target machine.
 
-What makes it different:
+What MINK provides:
 
 - **Natively compiled, end to end.** Its own lexer, parser, type system, HIR, MIR,
   optimizer, x86-64 code generator and runtime. The compiler has zero Rust crate
@@ -118,9 +118,9 @@ and remembers that answer.
 
 ```powershell
 $package = Join-Path (npm root -g) '@p4inz-code\mink'
-powershell -ExecutionPolicy Bypass -File "$package\windowsegister-mink-filetype.ps1"
+powershell -ExecutionPolicy Bypass -File "$package\windows\register-mink-filetype.ps1"
 # remove it again:
-powershell -ExecutionPolicy Bypass -File "$package\windowsegister-mink-filetype.ps1" -Uninstall
+powershell -ExecutionPolicy Bypass -File "$package\windows\register-mink-filetype.ps1" -Uninstall
 ```
 
 Bind one editor immediately with `-Editor "C:\Program Files\Microsoft VS Code\Code.exe"`, or
@@ -393,20 +393,28 @@ MINK 1.0.4 is explicit about its edges:
 
 ## What's Next
 
-MINK targets **Windows x64**, which is the completed, frozen baseline. Linux is frozen:
-a native ELF backend exists in source, but Linux development is paused and Linux is not
-a supported platform.
+Planning is governed by the **canonical locked roadmap** ([`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md)).
+**M1 — Real Application Validation is complete** (10 real applications, 228 executable cases,
+one real semantic defect found and fixed). The **next milestone is M2 — Windows Practical
+Stress Validation**: find where MINK stops being practically usable, with no feature work
+until every failure is classified. Native compilation and ownership are treated as
+**capabilities that must be tested, not as proven differentiators.**
+
+MINK targets **Windows x64**, the completed baseline and the only active platform for
+practical validation. Linux and any additional platform remain **FROZEN until the M8
+strategic gate is passed**; a native ELF backend exists in source but is unmaintained.
 
 | Area | Status |
 | --- | --- |
-| Windows x64 | Available |
+| Windows x64 | Available — the only active platform |
 | npm distribution | Available |
 | Package manager | Available (manifest, resolver, lockfile, environments) |
 | Concurrency / threading | Available (threads, locks, async/await) |
-| Linux | Frozen — native ELF backend exists in source, development paused |
-| macOS | Future / TBD |
+| Linux | **Frozen until M8** — native ELF backend exists in source, unmaintained |
+| macOS | Not supported — future / to be decided after M8 |
 
-The project will continue expanding platform support, ecosystem libraries, and production capabilities. See the [Implementation Roadmap](docs/roadmap/IMPLEMENTATION_ROADMAP.md) for the full plan.
+Ecosystem and tooling work is **gated by the roadmap (M7)**: it begins only after actual
+demand is demonstrated, not speculatively.
 
 ## Standard Library
 
@@ -545,7 +553,7 @@ fn main() {
 - [`docs/language/CORE_GRAMMAR.md`](docs/language/CORE_GRAMMAR.md) — core grammar
 - [`docs/core/`](docs/core/) — master specification and design rules
 - [`docs/runtime/`](docs/runtime/) — runtime, memory, and concurrency model
-- [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md) — implementation roadmap
+- [`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md) — the canonical locked roadmap (M0–M9)
 - [`docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md`](docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md) — brand assets, the `.mink` Windows file type and icon integration
 - [`assets/brand/`](assets/brand/) — official MINK logo, icon and web artwork
 
