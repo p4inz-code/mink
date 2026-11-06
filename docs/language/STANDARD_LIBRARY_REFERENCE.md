@@ -461,6 +461,15 @@ Output: `name`, `mink`, `3`, `{"name":"mink","count":3}`.
 fit. A successful parse returns a non-zero offset; offset `0` can never be a
 valid value because the arena begins with the input bytes.
 
+**Arena vs. returned strings.** The arena is one `rt_alloc` block owned by the
+caller and released with `rt_free(arena)`. The accessors do **not** return views
+into it: `json_as_str`, `json_obj_get_key`, `json_num_str` and `json_to_str`
+each allocate a new heap `Str` with `rt_str_alloc` and copy the bytes out. Those
+results are ordinary owned strings — free each with `rt_str_free` — and they
+stay valid after the arena is released. The exit-time leak scan counts the
+arena and every copied string as separate live blocks, so both must be
+released; otherwise the program exits 106 (`E-R06`).
+
 ## 8. CSV (`mod csv`)
 
 RFC 4180 subset: comma separated, CR/LF/CRLF records, double-quoted fields,
@@ -966,6 +975,8 @@ type vocabulary rather than a ready-made error-handling API.
 | --- | --- |
 | String literal | Immortal; `rt_str_free` on it is a no-op |
 | `rt_str_concat`, `rt_str_format`, `rt_str_from_*`, `fs_read`, `rt_argv` | Return owned strings; free exactly once |
+| `json_as_str`, `json_obj_get_key`, `json_num_str`, `json_to_str` | Return heap copies, not arena views; free each, and they outlive `rt_free(arena)` |
+| JSON arena from `rt_alloc` | One owned block; release with `rt_free(arena)` |
 | `rt_print_str`, `rt_str_len`, `rt_str_byte`, `rt_str_eq` | Borrow; no free |
 | User function with a `Str` parameter | Consumes (moves) the argument |
 | Read-only user call | Pass `&s` and use `*s` in the callee |
