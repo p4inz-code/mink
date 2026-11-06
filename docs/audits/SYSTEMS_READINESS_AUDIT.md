@@ -140,6 +140,13 @@ regressions in `tests/hashing_lib.rs`.
   (`hex_encode`, `base64_encode`, `str_trim`, … leak a heap input, `E-R06`). The affected
   suites tolerate exit 106, which is why it persisted. This audit fixed the hashing path
   because a real utility needed it; the broader module-wide change was not made here.
+  *Dated correction, 2026-11-06 (Session 190):* the named functions no longer leak their
+  input — `hex_encode`, `hex_encode_upper`, `base64_encode` and `base64_url_encode` each
+  call `rt_str_free(s)`, and `str_trim` delegates to `str_sub`, which releases its input.
+  The remaining defect was in the tests, which dropped owned return values. Six suites
+  (`crypto`, `encoding`, `hashing`, `math`, `random`, `time`) now require exit 0, which
+  exposed and fixed two base64 assertions that had never executed. See
+  [`../benchmarks/M6/M6_SESSION_190_LEAK_ENFORCEMENT.md`](../benchmarks/M6/M6_SESSION_190_LEAK_ENFORCEMENT.md).
 * Unicode. `Str` is a byte buffer with a UTF-8 code-point layer but no non-ASCII case
   operations and no Unicode database. Command-line arguments and filesystem entries use
   the ANSI Windows APIs, so non-ASCII argv/entries are limited.
