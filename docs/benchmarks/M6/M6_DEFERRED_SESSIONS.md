@@ -3,8 +3,9 @@
 **Updated:** 2026-11-05
 **Current milestone:** M6 - external developer usability
 **Status:** M6 repository acceptance COMPLETE (Sessions 182-183);
-published 1.0.4 distribution **BLOCKED** (Sessions 184-185); M7, M8, M9
-NOT STARTED
+published 1.0.4 distribution **BLOCKED** (Sessions 184-185, since resolved by the
+2026-09-30 publish of 1.0.4); M6-RC1 repository recovery and 1.0.5 candidate
+**COMPLETE**, candidate **NOT PUBLISHED**; M7, M8, M9 NOT STARTED
 
 ## Session status
 
@@ -22,6 +23,7 @@ NOT STARTED
 | 183 | M6 final acceptance and closure | **COMPLETE** (decision: COMPLETE) |
 | 184 | Published package, clean installation and distribution integrity | **COMPLETE** (distribution defects verified) |
 | 185 | Windows installation, association and CLI first-run audit (original closure slot remains decided in 183) | **COMPLETE** (association blocked from published package) |
+| M6-RC1 | Repository recovery, 1.0.5 candidate preparation, full verification and GitHub synchronization (operation ID, not a session number) | **COMPLETE** (candidate verified from its own tarball; registry still serves 1.0.4) |
 | 186-197 | M7 tooling and ecosystem demand | **NOT STARTED** |
 | 198-203 | M8 strategic evaluation and decision | **NOT STARTED** |
 | 204-209 | M9 conditional platform expansion evaluation | **NOT STARTED** |
@@ -169,3 +171,33 @@ pre-existing worktree changes are resolved.
 - Do not advance to M7 until M6 has a closure decision.
 - Do not push, publish, tag or change the release version.
 - Keep pre-existing M3/M4 worktree changes untouched.
+
+## Recorded deviations (M6-RC1)
+
+The three rules above that constrain distribution were relaxed once, by explicit user
+request for the recovery operation, and only in the ways listed here:
+
+- **Push:** the recovered commits were pushed to the existing `main` of `origin`. No tag
+  was created, moved or deleted, and no force-push was used.
+- **Version:** the manifests were raised to the unpublished candidate 1.0.5. Nothing was
+  published; the registry still serves 1.0.4 on 2026-09-30.
+- **Worktree:** the pre-existing untracked files were preserved, not discarded
+  (`MINK UI SETS OFFICIAL.zip`, the chat export, `nl1.mink`, `nl1.exe`).
+
+Records: [`M6_REPOSITORY_RECOVERY_AUDIT.md`](M6_REPOSITORY_RECOVERY_AUDIT.md),
+[`M6_RELEASE_CANDIDATE_VERIFICATION.md`](M6_RELEASE_CANDIDATE_VERIFICATION.md),
+[`M6_FULL_REGRESSION_AND_RELEASE_AUDIT.md`](M6_FULL_REGRESSION_AND_RELEASE_AUDIT.md),
+[`M6_GITHUB_SYNCHRONIZATION.md`](M6_GITHUB_SYNCHRONIZATION.md).
+
+## Deferred, not completed by M6-RC1
+
+- **File-type association harness** (`validation/windows_filetype/verify_filetype_association.ps1`)
+  was not run: it needs registry access and must not modify a real user's
+  associations without authorization.
+- **`npm install -g`** was not exercised: it writes to the machine-wide global prefix.
+  Installs were verified from the tarball into isolated prefixes instead, including paths
+  with spaces and non-ASCII characters.
+- **Publishing 1.0.5** is a maintainer action requiring a valid npm token; the token
+  stored earlier was rejected by the registry (E401/E404).
+- **Pre-existing `cargo fmt` drift** (49 diffs in files untouched by this operation) was
+  left as found rather than reformatting unrelated code.

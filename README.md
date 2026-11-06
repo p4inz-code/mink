@@ -8,7 +8,7 @@
 **A systems-oriented native programming language for Windows x86_64.**
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-1.0.4-brightgreen)
+![Version](https://img.shields.io/badge/version-1.0.5-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
 Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by P4inz Interactive Labs.
@@ -37,7 +37,7 @@ What MINK provides:
   checking, over a heap that is tracked and leak-checked at exit.
 - **Standalone output.** A generated executable imports only Windows system libraries —
   no CRT DLL and no third-party runtime. Copy it to any Windows 10+ x86_64 machine.
-- **A real standard library.** 26 modules bundled beside the compiler, including
+- **A real standard library.** 27 modules bundled beside the compiler, including
   filesystem, process, network, TLS, SQLite, ZIP/DEFLATE, threads and async.
 
 > **Platform:** Windows x86_64 only. Linux and macOS are not supported yet — see
@@ -48,20 +48,19 @@ What MINK provides:
 **Requires Windows x64** and **Node.js 18 or newer** (which includes npm). MINK is
 distributed through npm.
 
-> **Published package state.** The registry serves **1.0.3** (`npm view
-> @p4inz-code/mink version` → `1.0.3`, `latest: 1.0.3`). The prepared current release is
-> **1.0.4** — the defect closure for the `mod collections;` build failure reported against
-> 1.0.3, listed in [What's New](#whats-new). Its tarball is built and verified (`npm pack`
-> → 28 files, 26 `stdlib/` modules, corrected `bin/mink.exe`, packaged `stdlib/`
-> byte-identical to the repository copy) and proven by a fresh isolated install of exactly
-> that tarball: `mink --version` reports `mink 1.0.4`, the original `mod collections;`
-> repro now builds and runs, and the mink-scout fixture is re-verified (`VERIFY: PASS`,
-> output identical to its 1.0.3 build). Publishing it to the registry is pending: the
-> stored npm token is rejected by the registry (E401/E404), the same condition recorded for
-> 1.0.3. Until a maintainer runs `npm publish ./npm/mink --access public` with a valid
-> token, the registry still serves 1.0.3 — which ships the `mod collections;` `E-B07` build
-> failure — and the corrected 1.0.4 compiler is prepared in this repository as the local
-> tag `v1.0.4` (push it together with the publish).
+> **Published package state.** The registry serves **1.0.4** (`npm view
+> @p4inz-code/mink version` → `1.0.4`, `latest: 1.0.4`, published 2026-09-30). The release
+> candidate prepared in this repository is **1.0.5** — the defect closure described in
+> [What's New](#whats-new). Its tarball is built and verified here (`npm pack` → 35 files:
+> the compiler binary, 27 `stdlib/` modules, 5 `windows/` assets, `package.json` and
+> `LICENSE`, with the packaged `stdlib/` byte-identical to the repository copy), and proven
+> by fresh isolated installs of exactly that tarball — including directories whose paths
+> contain spaces and non-ASCII characters — where `mink --version` reports `mink 1.0.5`,
+> the standard library resolves from the installed package rather than the repository, and
+> the Session 180 `invsync` verifier passes all 12 cases. **1.0.5 is not published.** Until
+> a maintainer runs `npm publish ./npm/mink --access public` with a valid token, the
+> registry keeps serving 1.0.4, so `npm install -g @p4inz-code/mink` installs 1.0.4 and
+> `mink --version` prints `mink 1.0.4`.
 
 ### Already have Node.js / npm?
 
@@ -80,6 +79,9 @@ Expected output:
 ```text
 mink 1.0.4
 ```
+
+(1.0.4 is what the registry currently serves. The 1.0.5 candidate in this repository prints
+`mink 1.0.5`; see the published package state note above.)
 
 ### Don't have Node.js / npm?
 
@@ -279,10 +281,37 @@ mink explain E-T01             # explain a type mismatch error
 
 ## What's New
 
+### MINK 1.0.5
+
+**Release candidate — built and verified locally; not published** (see the note in
+[Install MINK](#install-mink)). The registry still serves 1.0.4. This is a defect-closure
+release: it restores work that had been verified but never committed, and fixes an
+ownership defect found while verifying the package.
+
+Changed in this release (a defect closure; no new features):
+
+- **Recovered work is back in the repository** — the Sessions 140–149 implementation,
+  tests and standard-library changes are committed as one coherent unit, with the suite run
+  against it rather than against a partial tree
+- **`mod environment;` no longer leaks its arguments** — every wrapper consumed its `Str`
+  parameters but released only the temporary C-string copies, so any call given a heap
+  string (`rt_str_concat` and friends) leaked one allocation and aborted at exit with
+  `E-R06: memory leak: live allocations remain at exit`. The defect was invisible to the
+  existing tests because they passed string literals, which are not heap objects. Each
+  wrapper now frees what it consumes
+- **Permanent regressions for both defects** — `tests/environment_lib.rs` builds every
+  argument at run time and requires a balanced allocator at exit, and `tests/release.rs`
+  asserts the package ships the compiler binary, all 27 `stdlib/` modules, the 5 Windows
+  assets and `LICENSE`, with packaged `stdlib/` byte-identical to the repository copy
+- **Windows file identity assets are packaged** — `windows/` (icons, `.rc` resource and the
+  registration script) and `LICENSE` now ship in the npm tarball, which grows from 28 to
+  35 files
+- **Full sweep is green** — **3176 passed · 0 failed · 1 ignored** across 78 test targets;
+  the single ignored test needs public internet access
+
 ### MINK 1.0.4
 
-**Current release — prepared and independently verified; the registry publish is pending a
-valid token (see the note in [Install MINK](#install-mink)).** This is a defect-closure
+**Published release (superseded by the prepared 1.0.5).** This is a defect-closure
 release: it fixes the public `mod collections;` build failure reported against 1.0.3. A
 program that imported the bundled `collections` module but never called `vec_min` or
 `vec_max` passed `mink check` and then failed `mink build` with four `E-B07` diagnostics
@@ -322,18 +351,15 @@ Changed in this release (a defect closure; no new features):
 
 ### MINK 1.0.3
 
-**Previous release (superseded by 1.0.4).** Built, packaged, and verified; the registry copy follows the
-maintainer's `npm publish ./npm/mink --access public` (the stored token was rejected,
-E401 — see the note in [Install MINK](#install-mink)). 1.0.2 remains published but
-superseded: it was cut from an earlier commit, so its compiler binary predates the
-monomorphization and capture fixes below.
+**Older release (superseded by 1.0.4, which the registry serves).** 1.0.2 was cut from an
+earlier commit, so its compiler binary predates the monomorphization and capture fixes
+below; do not pin it.
 
 Changed in this release (a release-distribution correction; no new features):
 
-- **Corrected compiler ready for the registry** — the four monomorphization and capture
-  fixes below are what an installed user receives once 1.0.3 is published. The 1.0.2
-  registry package was published from the pre-fix commit and did not contain them; do
-  not pin 1.0.2.
+- **Corrected compiler** — the four monomorphization and capture fixes below are what an
+  installed user receives with 1.0.3. The 1.0.2 registry package was published from the
+  pre-fix commit and did not contain them; do not pin 1.0.2.
 - **Corrected runtime ownership** — a map replace or set insert that discards an existing
   key or element now releases the replaced value instead of leaking it
 - **Hashing on owned buffers fixed** — `stdlib/hashing.mink` no longer overruns its
