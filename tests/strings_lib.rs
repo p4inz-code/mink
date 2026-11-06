@@ -6,6 +6,9 @@
 //! - After any user function call with Str param, the original variable is consumed
 //! - Allocated strings (from transformations) must be freed via rt_str_free
 //! - To free a string returned from str_index_of etc., use rt_str_free(r.1)
+//! - JSON accessors (`json_as_str`, `json_obj_get_key`) return heap copies
+//!   allocated with `rt_str_alloc`, not views into the parse arena, so they
+//!   must be freed with `rt_str_free` even after the arena is released.
 
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -835,16 +838,15 @@ fn main() {
 // CHAINING TESTS
 // =============================================================================
 
-// NOTE: V1 has no RAII. Chaining transformations (str_to_upper(str_trim(s)))
-// leaks the intermediate string. Each step must be separate.
-// The caller owns all allocations and must free them.
+// Chained transformations consume their input: each call below frees the
+// string it was given, so the intermediate cannot — and must not — be freed
+// again by the caller. Only the final result is caller-owned.
 
 #[test]
 fn s57_chain_trim_upper() {
     // Two-step: trim first, then uppercase the result.
-    // str_trim("  hello  ") returns a new heap string (caller-owned).
-    // str_to_upper consumes it — caller can't free the old one.
-    // This is a V1 limitation; we verify the result is correct even if intermediate leaks.
+    // str_trim("  hello  ") returns a new heap string; str_to_upper consumes
+    // and frees it, so only `r.1` remains caller-owned.
     let test = r#"
 fn main() {
     let t = str_trim("  hello  ");
@@ -857,9 +859,9 @@ fn main() {
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run(test);
-    // V1: exit 106 = memory leak from un-freed intermediate (str_trim result)
-    // This is expected — V1 has no RAII/drop for intermediate string chains.
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    // The intermediate is released by the consuming call; a clean exit is
+    // what proves there is no hidden leak in the chain.
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 #[test]
@@ -874,7 +876,7 @@ fn main() {
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run(test);
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 #[test]
@@ -889,7 +891,7 @@ fn main() {
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run(test);
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 #[test]
@@ -906,7 +908,7 @@ fn main() {
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run(test);
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 #[test]
@@ -921,7 +923,7 @@ fn main() {
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run(test);
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 #[test]
@@ -1051,7 +1053,7 @@ fn main() {
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run(test);
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 // =============================================================================
@@ -1071,15 +1073,14 @@ fn main() {
     let r = str_index_of(s0, "hello");
     rt_print_int(r.0);
     rt_print_int(len);
-    // s0 references arena memory; don't rt_str_free it.
-    // str_index_of consumes s0 but the arena owns it.
+    // `json_as_str` copies the arena bytes into a heap `Str` via
+    // `rt_str_alloc`; `str_index_of` passes that same value back in `r.1`.
+    rt_str_free(r.1);
     rt_free(arena);
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run_with_json(test_body);
-    // V1: str_index_of returns s0 in r.1 but we can't free it (arena owns it)
-    // This may leak depending on whether str_index_of copies
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 #[test]
@@ -1098,7 +1099,7 @@ fn main() {
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run_with_json(test_body);
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 #[test]
@@ -1111,11 +1112,13 @@ fn main() {
     let k0 = json_obj_get_key(arena, v, 0);
     let r = str_index_of(k0, "name");
     rt_print_int(r.0);
+    // `json_obj_get_key` also returns a heap copy, passed back in `r.1`.
+    rt_str_free(r.1);
     rt_free(arena);
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run_with_json(test_body);
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 #[test]
@@ -1133,6 +1136,8 @@ fn main() {
         let s = json_as_str(arena, elem);
         let r = str_index_of(s, "ab");
         if r.0 >= 0 { count = count + 1; }
+        // Each `json_as_str` result is a separate heap allocation.
+        rt_str_free(r.1);
         i = i + 1;
     }
     rt_print_int(count);
@@ -1140,8 +1145,7 @@ fn main() {
     rt_exit(0);
 }"#;
     let (code, _) = build_and_run_with_json(test_body);
-    // V1: str_index_of on arena strings may leak the pass-back tuple
-    assert!(code == 0 || code == 106, "unexpected exit code: {code}");
+    assert_eq!(code, 0, "unexpected exit code: {code}");
 }
 
 // =============================================================================
@@ -1415,4 +1419,96 @@ fn main() {
     let (code, out) = build_and_run(test);
     assert_eq!(code, 0);
     assert_eq!(floats_of(&out), vec![123.0, 1.0]);
+}
+
+// =============================================================================
+// SESSION 192 — JSON arena ownership contract
+// =============================================================================
+//
+// `json_as_str` and `json_obj_get_key` copy the parsed bytes into a fresh
+// `rt_str_alloc` block. They are heap strings, not views into the arena:
+// releasing the arena does not invalidate them, and failing to release them is
+// a real E-R06 leak. The arena itself is one `rt_alloc` block owned by the
+// caller and must be freed with `rt_free`.
+
+/// The returned string stays valid after the arena is freed, which is only
+/// possible because `json_as_str` copied it into its own heap block.
+#[test]
+fn s192_json_as_str_survives_arena_free() {
+    let test = r#"
+fn main() {
+    let arena = rt_alloc(65536);
+    let v = json_parse("\"hello\"", arena);
+    if v == 0 { rt_free(arena); rt_exit(1); }
+    let s = json_as_str(arena, v);
+    let before = rt_str_len(s);
+    rt_free(arena);
+    let after = rt_str_len(s);
+    rt_print_int(before);
+    rt_print_int(after);
+    rt_str_free(s);
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run_with_json(test);
+    assert_eq!(code, 0, "heap copy must outlive the arena: {out:?}");
+    assert_eq!(
+        ints_of(&out),
+        vec![5, 5],
+        "length before and after: {out:?}"
+    );
+}
+
+/// If the accessor result were arena-backed, freeing the arena would release
+/// it and the program would exit 0. It exits 106 instead, proving the result
+/// is a separate allocation the caller still owns.
+#[test]
+fn s192_json_as_str_result_unfreed_is_a_leak() {
+    let test = r#"
+fn main() {
+    let arena = rt_alloc(65536);
+    let v = json_parse("\"hello\"", arena);
+    if v == 0 { rt_free(arena); rt_exit(1); }
+    let s = json_as_str(arena, v);
+    rt_print_int(rt_str_len(s));
+    rt_free(arena);
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run_with_json(test);
+    // Exit 106 is the E-R06 leak report; the report text goes to stderr, which
+    // this helper does not capture. Printing the length and then exiting 106
+    // proves the program ran to completion and left the string live.
+    assert_eq!(
+        code, 106,
+        "unfreed accessor result must leak-check: {out:?}"
+    );
+    assert_eq!(
+        ints_of(&out),
+        vec![5],
+        "length printed before exit: {out:?}"
+    );
+}
+
+/// The arena is a single `rt_alloc` block; releasing the strings it was copied
+/// into does not release it.
+#[test]
+fn s192_json_arena_not_freed_is_a_leak() {
+    let test = r#"
+fn main() {
+    let arena = rt_alloc(65536);
+    let v = json_parse("\"hello\"", arena);
+    if v == 0 { rt_free(arena); rt_exit(1); }
+    let s = json_as_str(arena, v);
+    rt_print_int(rt_str_len(s));
+    rt_str_free(s);
+    rt_exit(0);
+}"#;
+    let (code, out) = build_and_run_with_json(test);
+    // Same stderr note as above: 106 is the leak exit status for the arena
+    // block that the program never released.
+    assert_eq!(code, 106, "unfreed arena must leak-check: {out:?}");
+    assert_eq!(
+        ints_of(&out),
+        vec![5],
+        "length printed before exit: {out:?}"
+    );
 }
