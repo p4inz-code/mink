@@ -147,6 +147,14 @@ regressions in `tests/hashing_lib.rs`.
   (`crypto`, `encoding`, `hashing`, `math`, `random`, `time`) now require exit 0, which
   exposed and fixed two base64 assertions that had never executed. See
   [`../benchmarks/M6/M6_SESSION_190_LEAK_ENFORCEMENT.md`](../benchmarks/M6/M6_SESSION_190_LEAK_ENFORCEMENT.md).
+  *Dated correction, 2026-11-06 (Sessions 191–193):* **this limitation is closed.**
+  All 96 exit-106 tolerances across nine suites are gone — 84 in Session 190, the
+  collections and filesystem pair in Session 191, and the ten strings tolerances in
+  Session 192. Three of those ten were real leaks: JSON accessors return heap copies,
+  not arena views, and the tests had never freed them. Every suite that runs compiled
+  programs now requires exit 0, and the negative tests that assert 106 are checking that
+  the leak checker still fires. See
+  [`../benchmarks/M6/M6_SESSION_193_OWNERSHIP_CLOSURE.md`](../benchmarks/M6/M6_SESSION_193_OWNERSHIP_CLOSURE.md).
 * Unicode. `Str` is a byte buffer with a UTF-8 code-point layer but no non-ASCII case
   operations and no Unicode database. Command-line arguments and filesystem entries use
   the ANSI Windows APIs, so non-ASCII argv/entries are limited.

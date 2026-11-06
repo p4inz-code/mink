@@ -292,6 +292,16 @@ shared fixtures and golden output, before any M4 timing is claimed. M3 is
 closed; M4 compares representative workflows against Python, Rust, Go, and C#
 without adding new language, ecosystem, or platform features.
 
+*Dated status, 2026-11-06 (Sessions 190–193).* M4 and M5 are closed. The
+standard-library ownership work that this roadmap treats as a prerequisite is
+now complete: all 96 exit-106 tolerances across nine suites were removed, every
+suite that runs compiled MINK programs requires exit 0, and the three deferred
+suites (`collections`, `filesystem`, `strings`) are strict and green under a
+tested heap/borrowed/arena contract
+([`M6_SESSION_193_OWNERSHIP_CLOSURE.md`](../benchmarks/M6/M6_SESSION_193_OWNERSHIP_CLOSURE.md)).
+The next open milestone is M6 external developer validation, which requires a
+developer who did not build MINK; M7 remains gated on demonstrated demand.
+
 ---
 
 ## Appendix A — Historical phase plan notice
