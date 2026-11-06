@@ -57,12 +57,7 @@ fn all_ints(output: &str) -> Vec<i64> {
 }
 
 fn assert_success(code: i32, out: &str) {
-    assert!(
-        code == 0 || code == 106,
-        "unexpected exit code: {} — {}",
-        code,
-        out
-    );
+    assert_eq!(code, 0, "unexpected exit code: {} — {}", code, out);
 }
 
 // ============================================================
@@ -76,6 +71,7 @@ fn v01_vec_new_empty() {
 fn main() {
     let v = rt_vec_new(4);
     rt_print_int(rt_vec_len(v));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -91,6 +87,7 @@ fn main() {
     let mut v = rt_vec_new(4);
     v = rt_vec_push(v, 42);
     rt_print_int(rt_vec_len(v));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -108,6 +105,7 @@ fn main() {
     v = rt_vec_push(v, 20);
     v = rt_vec_push(v, 30);
     rt_print_int(rt_vec_len(v));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -129,6 +127,7 @@ fn main() {
     v = rt_vec_push(v, 200);
     rt_print_int(rt_vec_get(v, 0));
     rt_print_int(rt_vec_get(v, 1));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -147,6 +146,7 @@ fn main() {
     v = rt_vec_push(v, 15);
     rt_print_int(rt_vec_get(v, 0));
     rt_print_int(rt_vec_get(v, 2));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -169,6 +169,7 @@ fn main() {
     v = rt_vec_set(v, 0, 99);
     rt_print_int(rt_vec_get(v, 0));
     rt_print_int(rt_vec_get(v, 1));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -191,6 +192,7 @@ fn main() {
     let popped = rt_vec_pop(v);
     rt_print_int(popped);
     rt_print_int(rt_vec_len(v));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -215,6 +217,7 @@ fn main() {
     rt_print_int(rt_vec_len(v));
     rt_print_int(rt_vec_get(v, 0));
     rt_print_int(rt_vec_get(v, 1));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -248,6 +251,7 @@ fn main() {
     rt_print_int(rt_vec_get(v, 0));
     rt_print_int(rt_vec_get(v, 1));
     rt_print_int(rt_vec_get(v, 2));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -270,6 +274,7 @@ fn main() {
     v = rt_vec_push(v, 30);
     if rt_vec_get(v, 1) == 20 { rt_print_int(1); } else { rt_print_int(0); }
     if rt_vec_get(v, 0) == 99 { rt_print_int(1); } else { rt_print_int(0); }
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -296,6 +301,7 @@ fn main() {
         i = i + 1;
     }
     rt_print_int(found);
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -323,6 +329,7 @@ fn main() {
         i = i + 1;
     }
     rt_print_int(total);
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -350,6 +357,7 @@ fn main() {
     }
     rt_print_int(mn);
     rt_print_int(mx);
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -384,6 +392,7 @@ fn main() {
     rt_print_int(rt_vec_get(v, 0));
     rt_print_int(rt_vec_get(v, 1));
     rt_print_int(rt_vec_get(v, 2));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -408,6 +417,7 @@ fn main() {
     v = rt_vec_push(v, 5);
     rt_print_int(rt_vec_len(v));
     rt_print_int(rt_vec_get(v, 4));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -426,6 +436,7 @@ fn v16_vec_empty_len() {
 fn main() {
     let v = rt_vec_new(4);
     rt_print_int(rt_vec_len(v));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -450,6 +461,7 @@ fn main() {
     }
     rt_print_int(rt_vec_len(v));
     rt_print_int(rt_vec_get(v, 49));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -523,6 +535,7 @@ fn main() {
     v = rt_vec_remove(v, 0);
     rt_print_int(rt_vec_len(v));
     rt_print_int(rt_vec_get(v, 0));
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -565,6 +578,7 @@ fn main() {
     } else {
         rt_print_int(0);
     }
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -592,6 +606,7 @@ fn main() {
         i = i + 1;
     }
     rt_print_int(total);
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -633,6 +648,7 @@ fn main() {
         i = i + 1;
     }
     rt_print_int(total_chars);
+    rt_vec_free(v);
     rt_exit(0);
 }"#,
     );
@@ -1407,4 +1423,40 @@ fn main() -> Int {
     assert_eq!(code, 0, "nested Vec<Str> lifecycle: {}", out);
     assert_eq!(all_ints(&out), vec![1], "one nested push: {}", out);
     assert!(out.contains("fasteners"), "element contents: {}", out);
+}
+
+// Session 191: `rt_vec_new` returns an owned handle. Discarding it is a
+// genuine leak, so the checker must report E-R06. This is the defect the old
+// `|| 106` tolerance hid across the whole basic-operations block.
+#[test]
+fn s191_unfreed_vec_is_a_leak() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let v = rt_vec_new(4);
+    rt_print_int(rt_vec_len(v));
+    rt_exit(0);
+}"#,
+    );
+    assert_eq!(code, 106, "unfreed vec must leak-check: {}", out);
+    assert!(out.contains("E-R06"), "expected E-R06 leak report: {}", out);
+}
+
+// `rt_vec_free` owns its elements: the element pushed here is a freshly
+// allocated Str, so exit 0 proves the vector released it rather than only
+// freeing the backing buffer.
+#[test]
+fn s191_vec_free_releases_element_strings() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut v = rt_vec_new(4);
+    v = rt_vec_push(v, rt_str_from_int(11));
+    rt_print_int(rt_vec_len(v));
+    rt_vec_free(v);
+    rt_exit(0);
+}"#,
+    );
+    assert_eq!(code, 0, "vector must release element strings: {}", out);
+    assert_eq!(first_int(&out), 1, "one element: {}", out);
 }

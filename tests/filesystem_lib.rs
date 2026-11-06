@@ -73,12 +73,7 @@ fn all_ints(output: &str) -> Vec<i64> {
 }
 
 fn assert_success(code: i32, out: &str) {
-    assert!(
-        code == 0 || code == 106,
-        "unexpected exit code: {} — {}",
-        code,
-        out
-    );
+    assert_eq!(code, 0, "unexpected exit code: {} — {}", code, out);
 }
 
 // ============================================================
@@ -92,6 +87,7 @@ fn p01_path_join_basic() {
 fn main() {
     let j = path_join("foo", "bar");
     rt_print_int(rt_str_len(j));
+    rt_str_free(j);
     rt_exit(0);
 }"#,
     );
@@ -106,6 +102,7 @@ fn p02_path_join_empty_b() {
 fn main() {
     let j = path_join("hello", "");
     rt_print_int(rt_str_len(j));
+    rt_str_free(j);
     rt_exit(0);
 }"#,
     );
@@ -120,6 +117,7 @@ fn p03_path_join_absolute_b() {
 fn main() {
     let j = path_join("foo", "/bar");
     rt_print_int(rt_str_len(j));
+    rt_str_free(j);
     rt_exit(0);
 }"#,
     );
@@ -134,6 +132,7 @@ fn p04_path_join_trailing_slash() {
 fn main() {
     let j = path_join("foo/", "bar");
     rt_print_int(rt_str_len(j));
+    rt_str_free(j);
     rt_exit(0);
 }"#,
     );
@@ -148,6 +147,7 @@ fn p32_path_join_empty_a() {
 fn main() {
     let j = path_join("", "bar");
     rt_print_int(rt_str_len(j));
+    rt_str_free(j);
     rt_exit(0);
 }"#,
     );
@@ -162,6 +162,7 @@ fn p33_path_join_both_empty() {
 fn main() {
     let j = path_join("", "");
     rt_print_int(rt_str_len(j));
+    rt_str_free(j);
     rt_exit(0);
 }"#,
     );
@@ -174,9 +175,11 @@ fn p34_path_join_deep() {
     let (code, out) = build_and_run(
         r#"
 fn main() {
+    // `a` is consumed by the second path_join, which frees it.
     let a = path_join("a", "b");
     let j = path_join(a, "c");
     rt_print_int(rt_str_len(j));
+    rt_str_free(j);
     rt_exit(0);
 }"#,
     );
@@ -195,6 +198,7 @@ fn p05_path_parent_basic() {
 fn main() {
     let p = path_parent("foo/bar.txt");
     rt_print_int(rt_str_len(p));
+    rt_str_free(p);
     rt_exit(0);
 }"#,
     );
@@ -209,6 +213,7 @@ fn p06_path_parent_no_slash() {
 fn main() {
     let p = path_parent("file.txt");
     rt_print_int(rt_str_len(p));
+    rt_str_free(p);
     rt_exit(0);
 }"#,
     );
@@ -223,6 +228,7 @@ fn p07_path_parent_root() {
 fn main() {
     let p = path_parent("/foo");
     rt_print_int(rt_str_len(p));
+    rt_str_free(p);
     rt_exit(0);
 }"#,
     );
@@ -241,6 +247,7 @@ fn p08_path_filename_basic() {
 fn main() {
     let f = path_filename("foo/bar.txt");
     rt_print_int(rt_str_len(f));
+    rt_str_free(f);
     rt_exit(0);
 }"#,
     );
@@ -255,6 +262,7 @@ fn p09_path_filename_no_slash() {
 fn main() {
     let f = path_filename("file.txt");
     rt_print_int(rt_str_len(f));
+    rt_str_free(f);
     rt_exit(0);
 }"#,
     );
@@ -273,6 +281,7 @@ fn p10_path_extension_basic() {
 fn main() {
     let e = path_extension("foo/bar.txt");
     rt_print_int(rt_str_len(e));
+    rt_str_free(e);
     rt_exit(0);
 }"#,
     );
@@ -287,6 +296,7 @@ fn p11_path_extension_none() {
 fn main() {
     let e = path_extension("Makefile");
     rt_print_int(rt_str_len(e));
+    rt_str_free(e);
     rt_exit(0);
 }"#,
     );
@@ -305,6 +315,7 @@ fn p12_path_stem_basic() {
 fn main() {
     let s = path_stem("foo/bar.txt");
     rt_print_int(rt_str_len(s));
+    rt_str_free(s);
     rt_exit(0);
 }"#,
     );
@@ -366,6 +377,7 @@ fn p16_path_with_extension() {
 fn main() {
     let r = path_with_extension("foo/bar.txt", ".rs");
     rt_print_int(rt_str_len(r));
+    rt_str_free(r);
     rt_exit(0);
 }"#,
     );
@@ -459,11 +471,13 @@ fn p24_fs_write_read_delete() {
 fn main() {
     let data = rt_str_from_int(42);
     rt_fs_write("test_rw.txt", data);
+    rt_str_free(data);
     let sz = rt_fs_file_size("test_rw.txt");
     rt_print_int(sz);
     let content = rt_fs_read("test_rw.txt");
     let len = rt_str_len(content);
     rt_print_int(len);
+    rt_str_free(content);
     rt_fs_remove_file("test_rw.txt");
     let gone = rt_fs_exists("test_rw.txt");
     if gone { rt_print_int(1); } else { rt_print_int(0); }
@@ -499,8 +513,12 @@ fn main() {
         i = i + 1;
     }
     rt_fs_write("test_large.txt", data);
+    rt_str_free(part1);
+    rt_str_free(part2);
+    rt_str_free(data);
     let content = rt_fs_read("test_large.txt");
     rt_print_int(rt_str_len(content));
+    rt_str_free(content);
     rt_fs_remove_file("test_large.txt");
     rt_exit(0);
 }"#,
@@ -516,6 +534,7 @@ fn p26_fs_copy_file() {
 fn main() {
     let data = rt_str_from_int(99);
     rt_fs_write("test_cpy_src.txt", data);
+    rt_str_free(data);
     let c = rt_fs_copy("test_cpy_src.txt", "test_cpy_dst.txt");
     rt_print_int(c);
     let sz = rt_fs_file_size("test_cpy_dst.txt");
@@ -536,6 +555,7 @@ fn p27_fs_move_file() {
 fn main() {
     let data = rt_str_from_int(77);
     rt_fs_write("test_mv_src.txt", data);
+    rt_str_free(data);
     let m = rt_fs_move("test_mv_src.txt", "test_mv_dst.txt");
     rt_print_int(m);
     if rt_fs_exists("test_mv_src.txt") { rt_print_int(1); } else { rt_print_int(0); }
@@ -574,6 +594,7 @@ fn main() {
     let cwd = rt_fs_get_cwd();
     let len = rt_str_len(cwd);
     rt_print_int(len);
+    rt_str_free(cwd);
     rt_exit(0);
 }"#,
     );
@@ -625,16 +646,22 @@ fn p43_fs_write_read_cycles() {
 fn main() {
     let d1 = rt_str_from_int(1);
     rt_fs_write("test_cycles.txt", d1);
+    rt_str_free(d1);
     let r1 = rt_fs_read("test_cycles.txt");
     rt_print_int(rt_str_len(r1));
+    rt_str_free(r1);
     let d2 = rt_str_from_int(22);
     rt_fs_write("test_cycles.txt", d2);
+    rt_str_free(d2);
     let r2 = rt_fs_read("test_cycles.txt");
     rt_print_int(rt_str_len(r2));
+    rt_str_free(r2);
     let d3 = rt_str_from_int(333);
     rt_fs_write("test_cycles.txt", d3);
+    rt_str_free(d3);
     let r3 = rt_fs_read("test_cycles.txt");
     rt_print_int(rt_str_len(r3));
+    rt_str_free(r3);
     rt_fs_remove_file("test_cycles.txt");
     rt_exit(0);
 }"#,
@@ -652,6 +679,7 @@ fn main() {
     let b = path_join(a, "core");
     let c = path_join(b, "main.mink");
     rt_print_int(rt_str_len(c));
+    rt_str_free(c);
     rt_exit(0);
 }"#,
     );
@@ -666,10 +694,12 @@ fn p45_fs_many_operations() {
 fn main() {
     let data = rt_str_from_int(42);
     rt_fs_write("test_many.txt", data);
+    rt_str_free(data);
     let s1 = rt_fs_file_size("test_many.txt");
     rt_print_int(s1);
     let data2 = rt_str_from_int(9999);
     rt_fs_write("test_many.txt", data2);
+    rt_str_free(data2);
     let s2 = rt_fs_file_size("test_many.txt");
     rt_print_int(s2);
     rt_fs_remove_file("test_many.txt");
@@ -1019,5 +1049,25 @@ fn main() {{
     let (code, out) = build_and_run(&body);
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(code, 106, "unclosed handle must leak-check: {out}");
+    assert!(out.contains("E-R06"), "expected E-R06 leak report: {out}");
+}
+
+/// Ownership: `rt_fs_read` returns an owned `Str`. Discarding it must be
+/// reported as E-R06. p24/p25/p43 were leaking exactly this value while the
+/// old `|| 106` tolerance made the suite green.
+#[test]
+fn p46_unfreed_fs_read_result_is_a_leak() {
+    let path = "test_s191_leak.txt";
+    std::fs::write(path, b"abc").unwrap();
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let content = rt_fs_read("test_s191_leak.txt");
+    rt_print_int(rt_str_len(content));
+    rt_exit(0);
+}"#,
+    );
+    let _ = std::fs::remove_file(path);
+    assert_eq!(code, 106, "unfreed read result must leak-check: {out}");
     assert!(out.contains("E-R06"), "expected E-R06 leak report: {out}");
 }
