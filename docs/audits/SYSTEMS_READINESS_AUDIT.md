@@ -230,6 +230,20 @@ passed, 18 server-start failures, 1 ignored). That is an environment
 limitation, not a compiler result. See
 [`M6_SESSION_197_GENERATION_SAFE_HANDLES.md`](../benchmarks/M6/M6_SESSION_197_GENERATION_SAFE_HANDLES.md).
 
+*Dated addendum — Session 198 (2026-11-06).* A resource-lifecycle audit added
+an instrumented suite (`tests/resource_lifecycle.rs`) that samples the child
+process's OS handle count while it runs, with a negative control that proves
+the sampler sees a leak. Measured: 3,000 filesystem cycles (62 → 63 → 62),
+3,000 failing filesystem calls (62 → 62 → 62), 40 process spawns (72 → 72 →
+72), 3,000 thread spawn/join cycles (63 → 63 → 63), 200,000 allocation cycles
+(exit 0, exact total); control 22 → 410 with exit 106. No confirmed defect in
+those paths. One risk is **recorded, not patched**: `emit_fs_read` ignores
+`ReadFile`'s BOOL and byte count and returns a string whose length is the
+requested size, so a short or failed read would surface stale heap bytes; no
+deterministic trigger exists in the current API, so it is documented rather
+than changed. See
+[`M6_SESSION_198_RESOURCE_LIFECYCLE.md`](../benchmarks/M6/M6_SESSION_198_RESOURCE_LIFECYCLE.md).
+
 This addendum raises the reliability evidence for the existing claim boundary. It
 does **not** establish long-running soak behaviour, complete memory safety, or M6
 external validation. Precondition misuse can still fault raw on some paths (§5

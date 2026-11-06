@@ -333,6 +333,20 @@ outstanding, M7 remains gated and Linux remains frozen; this does not change
 the milestone state. See
 [`M6_SESSION_197_GENERATION_SAFE_HANDLES.md`](../benchmarks/M6/M6_SESSION_197_GENERATION_SAFE_HANDLES.md).
 
+*Dated status, 2026-11-06 (Session 198).* Runtime resource lifecycle audited
+across allocation, collections, filesystem, processes, threads and
+concurrency, with a new instrumented suite (`tests/resource_lifecycle.rs`, 7
+tests) that samples the child process's OS handle count while it runs. No
+confirmed defect in the audited paths: 3,000 filesystem cycles, 3,000 failing
+filesystem calls, 40 process spawns, 3,000 thread spawn/join cycles and
+200,000 allocation cycles all ran with a flat handle count and exit 0, and a
+negative control proves the sampler detects a 400-handle leak. One unverified
+code-level risk is recorded, not patched: `rt_fs_read` ignores `ReadFile`'s
+result and byte count, so a short or failed read would return stale heap
+bytes at the requested length (no deterministic trigger exists in the current
+API). See
+[`M6_SESSION_198_RESOURCE_LIFECYCLE.md`](../benchmarks/M6/M6_SESSION_198_RESOURCE_LIFECYCLE.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
