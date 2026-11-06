@@ -200,7 +200,10 @@ Records: [`M6_REPOSITORY_RECOVERY_AUDIT.md`](M6_REPOSITORY_RECOVERY_AUDIT.md),
 - **`npm install -g`** was not exercised: it writes to the machine-wide global prefix.
   Installs were verified from the tarball into isolated prefixes instead, including paths
   with spaces and non-ASCII characters.
-- **Publishing 1.0.5** is a maintainer action requiring a valid npm token; the token
-  stored earlier was rejected by the registry (E401/E404).
+- **Publishing 1.0.5** is a maintainer action requiring a valid npm token. Re-checked
+  on 2026-11-06 (Session 189): `npm whoami` still returns `E401 Unauthorized`, the
+  registry still serves 1.0.4 as `latest`, and 1.0.5 is still unclaimed. The verified
+  tarball (`cfafc7a8…df6f`) is unchanged. Exact procedure:
+  [`M6_1.0.5_MAINTAINER_PUBLICATION_CHECKLIST.md`](M6_1.0.5_MAINTAINER_PUBLICATION_CHECKLIST.md).
 - **Pre-existing `cargo fmt` drift** (49 diffs in files untouched by this operation) was
   left as found rather than reformatting unrelated code.
