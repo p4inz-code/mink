@@ -1460,3 +1460,179 @@ fn main() {
     assert_eq!(code, 0, "vector must release element strings: {}", out);
     assert_eq!(first_int(&out), 1, "one element: {}", out);
 }
+
+// ============================================================================
+// Session 195 — collection use-after-free is diagnosed (E-R05, exit 105)
+// ============================================================================
+
+/// A freed collection handle used by any accessor must fail with the structured
+/// E-R05 error instead of returning stale header bytes.
+fn assert_runtime_error(code: i32, out: &str, expected: i32, needle: &str) {
+    assert_eq!(code, expected, "wrong exit code: {}", out);
+    assert!(out.contains(needle), "expected {}: {}", needle, out);
+}
+
+#[test]
+fn s195_vec_len_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let v = rt_vec_new(4);
+    rt_vec_free(v);
+    rt_print_int(rt_vec_len(v));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_vec_get_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut v = rt_vec_new(4);
+    v = rt_vec_push(v, 77);
+    rt_vec_free(v);
+    rt_print_int(rt_vec_get(v, 0));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_vec_push_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut v = rt_vec_new(4);
+    rt_vec_free(v);
+    v = rt_vec_push(v, 1);
+    rt_print_int(rt_vec_len(v));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_map_get_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, 1, 42);
+    rt_map_free(m);
+    rt_print_int(rt_map_get(m, 1));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_map_len_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, 1, 42);
+    rt_map_free(m);
+    rt_print_int(rt_map_len(m));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_map_keys_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, 1, 42);
+    rt_map_free(m);
+    let k = rt_map_keys(m);
+    rt_vec_free(k);
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_set_has_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut s = rt_set_new(4);
+    s = rt_set_insert(s, 9);
+    rt_set_free(s);
+    if rt_set_has(s, 9) { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_set_len_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut s = rt_set_new(4);
+    s = rt_set_insert(s, 9);
+    rt_set_free(s);
+    rt_print_int(rt_set_len(s));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_set_elements_after_free_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut s = rt_set_new(4);
+    s = rt_set_insert(s, 9);
+    rt_set_free(s);
+    let e = rt_set_elements(s);
+    rt_vec_free(e);
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s195_double_free_still_reports_invalid_free() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let v = rt_vec_new(4);
+    rt_vec_free(v);
+    rt_vec_free(v);
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 104, "E-R04");
+}
+
+#[test]
+fn s195_out_of_bounds_still_reports_110() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut v = rt_vec_new(4);
+    v = rt_vec_push(v, 10);
+    rt_print_int(rt_vec_get(v, 5));
+    rt_vec_free(v);
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 110, "E-R10");
+}

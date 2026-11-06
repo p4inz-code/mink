@@ -3684,6 +3684,47 @@ fn emit_dbg_word8(code: &mut Code) {
     code.leave_ret();
 }
 
+/// Requires the collection handle at `[rbp + 16]` to be the start of a live
+/// allocation, faulting `E-R05` otherwise.
+///
+/// The `Vec`/`Map`/`Set` services read their header (`capacity`, `length`,
+/// descriptor) directly from the handle. Without this check a freed handle
+/// returns stale header bytes — a silent use-after-free — instead of the
+/// structured error every other pointer operation produces. The scan runs
+/// under the runtime lock so it cannot observe a half-written table entry.
+///
+/// Must be called immediately after `prologue`, before any argument is loaded.
+/// Clobbers RAX, RCX, RDX. `Fail` does not return, so control only continues
+/// through the `found` path.
+fn emit_require_live_handle(code: &mut Code) {
+    let scan = code.label();
+    let next = code.label();
+    let found = code.label();
+    let invalid = code.label();
+    let cont = code.label();
+
+    rt_lock_acquire(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.table as u32));
+    code.lea_r_mem(Reg::Rdx, Reg::Rcx, TABLE_BYTES);
+    code.bind_label(scan);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x83, invalid); // jae — table exhausted
+    code.cmp_mem_imm8(Reg::Rcx, 16, 0);
+    code.jcc_label(0x84, next); // je — dead entry, skip
+    code.cmp_r_mem(Reg::Rax, Reg::Rcx, 0);
+    code.jcc_label(0x84, found); // je — start equals the handle
+    code.bind_label(next);
+    code.add_r_imm8(Reg::Rcx, 24);
+    code.jmp_label(scan);
+    code.bind_label(found);
+    rt_lock_release(code);
+    code.jmp_label(cont);
+    code.bind_label(invalid);
+    fail(code, 5); // E-R05: out-of-bounds or use-after-free access
+    code.bind_label(cont);
+}
+
 fn emit_vec_new(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
     code.sub_rsp(32);
@@ -3745,6 +3786,7 @@ fn emit_vec_new(code: &mut Code, offsets: &RuntimeOffsets) {
 ///   [rbp-48]  = scratch (new data ptr during realloc)
 fn emit_vec_push(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(48);
     // Save args.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
@@ -3856,6 +3898,7 @@ fn emit_vec_push(code: &mut Code, offsets: &RuntimeOffsets) {
 /// `rax`; multi-word elements are copied into the caller's return slot.
 fn emit_vec_get(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(16);
     // elem_size from the header descriptor.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
@@ -3908,6 +3951,7 @@ fn emit_vec_get(code: &mut Code, offsets: &RuntimeOffsets) {
 /// so the element being replaced is freed first (descriptor-driven).
 fn emit_vec_set(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(32);
     // rax = data ptr — save it for the return value.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
@@ -3959,6 +4003,7 @@ fn emit_vec_set(code: &mut Code, offsets: &RuntimeOffsets) {
 /// hidden return slot at [rbp + 24].
 fn emit_vec_pop(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(32);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
@@ -4009,6 +4054,7 @@ fn emit_vec_pop(code: &mut Code, offsets: &RuntimeOffsets) {
 /// descriptor-driven. Returns the data pointer (caller reassigns).
 fn emit_vec_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(56);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
@@ -4100,6 +4146,7 @@ fn emit_vec_remove(code: &mut Code, offsets: &RuntimeOffsets) {
 /// Returns the current length of the Vec.
 fn emit_vec_len(code: &mut Code) {
     prologue(code);
+    emit_require_live_handle(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // data ptr
     code.mov_r_mem(Reg::Rax, Reg::Rax, 8); // length from [data+8]
     code.leave_ret();
@@ -4710,6 +4757,7 @@ fn emit_map_new(code: &mut Code, offsets: &RuntimeOffsets) {
 /// Returns the (possibly rebuilt) table pointer.
 fn emit_map_insert(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(112);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
@@ -4896,6 +4944,7 @@ fn emit_map_insert(code: &mut Code, offsets: &RuntimeOffsets) {
 /// raises E-R11.
 fn emit_map_get(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(96);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
@@ -5005,6 +5054,7 @@ fn emit_map_get(code: &mut Code, offsets: &RuntimeOffsets) {
 /// `rt_map_has(map, key) -> Bool`: membership test, no error on absence.
 fn emit_map_has(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(96);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
@@ -5094,6 +5144,7 @@ fn emit_map_has(code: &mut Code, offsets: &RuntimeOffsets) {
 /// Absence is a no-op.
 fn emit_map_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(96);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
@@ -5202,6 +5253,7 @@ fn emit_map_remove(code: &mut Code, offsets: &RuntimeOffsets) {
 /// `rt_map_len(map) -> Int`.
 fn emit_map_len(code: &mut Code) {
     prologue(code);
+    emit_require_live_handle(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_r_mem(Reg::Rax, Reg::Rax, 8); // length
     code.leave_ret();
@@ -5284,6 +5336,7 @@ fn emit_map_free(code: &mut Code, offsets: &RuntimeOffsets) {
 /// empty map yields an empty, usable Vec.
 fn emit_map_keys(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(112);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
@@ -5394,6 +5447,7 @@ fn emit_map_keys(code: &mut Code, offsets: &RuntimeOffsets) {
 /// value (the map keeps its own copies).
 fn emit_map_values(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(112);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // map
@@ -5555,6 +5609,7 @@ fn emit_set_new(code: &mut Code, offsets: &RuntimeOffsets) {
 /// `rt_set_insert(set, elem) -> Set`: insert; duplicates are a no-op.
 fn emit_set_insert(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(112);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
@@ -5711,6 +5766,7 @@ fn emit_set_insert(code: &mut Code, offsets: &RuntimeOffsets) {
 /// `rt_set_has(set, elem) -> Bool`: membership test, no error on absence.
 fn emit_set_has(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(96);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
@@ -5791,6 +5847,7 @@ fn emit_set_has(code: &mut Code, offsets: &RuntimeOffsets) {
 /// element is freed; the bucket becomes a tombstone). Absence is a no-op.
 fn emit_set_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(96);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
@@ -5884,6 +5941,7 @@ fn emit_set_remove(code: &mut Code, offsets: &RuntimeOffsets) {
 /// `rt_set_len(set) -> Int`.
 fn emit_set_len(code: &mut Code) {
     prologue(code);
+    emit_require_live_handle(code);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_r_mem(Reg::Rax, Reg::Rax, 8); // length
     code.leave_ret();
@@ -5950,6 +6008,7 @@ fn emit_set_free(code: &mut Code, offsets: &RuntimeOffsets) {
 /// every element (the set keeps its own copies).
 fn emit_set_elements(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_require_live_handle(code);
     code.sub_rsp(112);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // set
