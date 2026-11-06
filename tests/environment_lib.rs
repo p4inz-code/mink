@@ -93,3 +93,43 @@ fn main() -> Int {
     assert_eq!(out.trim(), "0", "missing value length: {out:?}");
     assert!(err.is_empty(), "unexpected stderr: {err:?}");
 }
+
+// M6-RC1: the wrappers consumed their `Str` parameters but only the temporary
+// C-string copies were released, so every call given a heap string (anything
+// built with `rt_str_concat` and friends) leaked one allocation and tripped
+// E-R06 at exit. String literals hid the defect: they are not heap objects.
+// Each argument below is built at run time, and exit 0 requires the leak
+// checker to see a balanced allocator.
+#[test]
+fn environment_wrappers_release_heap_string_arguments() {
+    let (code, out, err) = build_and_run(
+        r#"
+mod environment;
+
+fn main() -> Int {
+    if env_has(rt_str_concat("MINK_M6_RC_", "HEAP_NAME")) { return 1; }
+
+    let set_ok = env_set(
+        rt_str_concat("MINK_M6_RC_", "HEAP_NAME"),
+        rt_str_concat("heap-", "value")
+    );
+    if set_ok != 0 { return 2; }
+
+    if !env_has(rt_str_concat("MINK_M6_RC_", "HEAP_NAME")) { return 3; }
+
+    let value = env_get(rt_str_concat("MINK_M6_RC_", "HEAP_NAME"));
+    rt_print_str(value);
+    rt_str_free(value);
+
+    if env_remove(rt_str_concat("MINK_M6_RC_", "HEAP_NAME")) != 0 { return 4; }
+    if env_has(rt_str_concat("MINK_M6_RC_", "HEAP_NAME")) { return 5; }
+    return 0;
+}"#,
+    );
+    assert_eq!(code, 0, "exit={code}, stdout={out:?}, stderr={err:?}");
+    assert!(
+        out.contains("heap-value"),
+        "expected the value set through the module: {out:?}"
+    );
+    assert!(err.is_empty(), "unexpected stderr (leak?): {err:?}");
+}

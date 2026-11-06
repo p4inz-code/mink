@@ -32,27 +32,43 @@
 // Portability note: the intrinsics have Windows and frozen Linux
 // implementations; this module contains only portable wrappers.
 
+// The `rt_env_*` intrinsics copy their `Str` arguments into C strings and
+// release those copies, but they do not release the MINK `Str` arguments
+// themselves. Because a `Str` parameter is consumed by the call, each wrapper
+// below frees it explicitly — the same contract the filesystem and strings
+// modules follow. Without this the leak checker reports E-R06 at exit for any
+// call given a heap string.
+
 // Get the value of an environment variable.
 // Returns an owned empty string if the variable does not exist.
 fn env_get(name: Str) -> Str {
-    return rt_env_get(name);
+    let result = rt_env_get(name);
+    rt_str_free(name);
+    return result;
 }
 
 // Set an environment variable for this process.
 // Returns 0 on success, -1 on failure.
 fn env_set(name: Str, value: Str) -> Int {
-    return rt_env_set(name, value);
+    let result = rt_env_set(name, value);
+    rt_str_free(name);
+    rt_str_free(value);
+    return result;
 }
 
 // Check whether an environment variable exists.
 fn env_has(name: Str) -> Bool {
-    return rt_env_has(name);
+    let result = rt_env_has(name);
+    rt_str_free(name);
+    return result;
 }
 
 // Remove an environment variable.
 // Returns 0 on success, -1 on failure.
 fn env_remove(name: Str) -> Int {
-    return rt_env_remove(name);
+    let result = rt_env_remove(name);
+    rt_str_free(name);
+    return result;
 }
 
 // Get the current working directory as an owned string.
