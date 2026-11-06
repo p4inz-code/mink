@@ -47,7 +47,8 @@ use std::collections::HashMap;
 use super::super::ir::RuntimeService;
 use super::x86_64::{Code, PatchKind, Reg};
 use crate::runtime::abi::{
-    BSS, HEAP_BSS_BYTES, HEAP_COMMIT_CHUNK, HEAP_GROWTH_RESERVE, HEAP_MAX_BYTES, MAX_LIVE_ALLOCS,
+    BSS, HANDLE_ADDRESS_MASK, HANDLE_GENERATION_SHIFT, HEAP_BSS_BYTES, HEAP_COMMIT_CHUNK,
+    HEAP_GROWTH_RESERVE, HEAP_MAX_BYTES, LIVE_ENTRY_GENERATION_SHIFT, MAX_LIVE_ALLOCS,
 };
 use crate::runtime::error::RuntimeErrorKind;
 
@@ -933,7 +934,22 @@ fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rcx, 0, Reg::Rax);
     code.mov_r_mem(Reg::Rdx, Reg::Rbp, -8);
     code.mov_mem_r(Reg::Rcx, 8, Reg::Rdx);
-    code.mov_mem_imm32(Reg::Rcx, 16, 1);
+    // Session 197: stamp the slot with a fresh generation. Every allocation
+    // that reuses this block — collection or raw — must invalidate handles
+    // issued for its previous occupant. The previous generation is carried
+    // by the block itself (`emit_free` writes it at `block + 16`, where the
+    // free list has room), so the counter advances even when the slot that
+    // held the previous occupant has since been reused for another block.
+    // The slot value is `(gen << 32) | live`; the live flag is the low byte
+    // and the generation wraps at 16 bits.
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 16); // block lineage
+    code.add_r_imm8(Reg::Rdx, 1);
+    code.movabs(Reg::R8, 0xFFFF);
+    code.and_rr(Reg::Rdx, Reg::R8);
+    code.shl_r_imm8(Reg::Rdx, LIVE_ENTRY_GENERATION_SHIFT);
+    code.movabs(Reg::R8, 1);
+    code.or_rr(Reg::Rdx, Reg::R8);
+    code.mov_mem_r(Reg::Rcx, 16, Reg::Rdx);
     rt_lock_release(code);
     code.leave_ret();
 
@@ -1025,6 +1041,18 @@ fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
     // allocator to check on reuse.
     code.mov_r_mem(Reg::Rdx, Reg::Rcx, 8); // Rdx = slot.size
     code.mov_mem_r(Reg::Rax, 8, Reg::Rdx); // [block+8] = size
+
+    // Session 197: carry the block's generation into its next life. The
+    // lineage word lives at `block + 16`, inside the free list's metadata
+    // area; blocks smaller than that have no generation history and cannot
+    // hold a collection buffer (whose header starts at 24 bytes).
+    let no_lineage = code.label();
+    code.cmp_r_imm32(Reg::Rdx, 24);
+    code.jcc_label(0x82, no_lineage); // jb
+    code.mov_r_mem(Reg::R8, Reg::Rcx, 16);
+    code.shr_r_imm8(Reg::R8, LIVE_ENTRY_GENERATION_SHIFT);
+    code.mov_mem_r(Reg::Rax, 16, Reg::R8);
+    code.bind_label(no_lineage);
 
     // Mark dead and push onto the LIFO free list.
     code.mov_mem_imm32(Reg::Rcx, 16, 0);
@@ -2707,9 +2735,11 @@ fn emit_coll_free_value(code: &mut Code, offsets: &RuntimeOffsets) {
     // --- TAG_VEC: free each element, then the buffer. ---
     code.bind_label(tag_vec);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // vec
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // vec (tagged handle)
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, done); // jz
+    code.movabs(Reg::R11, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::Rax, Reg::R11); // strip the generation tag
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // vec
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
@@ -2748,9 +2778,11 @@ fn emit_coll_free_value(code: &mut Code, offsets: &RuntimeOffsets) {
     // --- TAG_MAP: free every live key and value, then the table. ---
     code.bind_label(tag_map);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // map
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // map (tagged handle)
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, done); // jz
+    code.movabs(Reg::R11, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::Rax, Reg::R11); // strip the generation tag
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // map
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
@@ -2816,9 +2848,11 @@ fn emit_coll_free_value(code: &mut Code, offsets: &RuntimeOffsets) {
     // --- TAG_SET: free every live element, then the table. ---
     code.bind_label(tag_set);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // set
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // set (tagged handle)
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, done); // jz
+    code.movabs(Reg::R11, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::Rax, Reg::R11); // strip the generation tag
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // set
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
@@ -3112,7 +3146,9 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     // --- TAG_VEC: clone the buffer and every element. ---
     code.bind_label(tag_vec);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_vec
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_vec (tagged handle)
+    code.movabs(Reg::R11, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::Rax, Reg::R11); // strip the generation tag
     code.mov_mem_r(Reg::Rbp, -72, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
@@ -3179,15 +3215,18 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(vec_loop);
     code.bind_label(vec_exit);
     // [dst] = new
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    emit_tag_collection_handle(code);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
-    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
-    code.mov_mem_r(Reg::Rcx, 0, Reg::Rdx);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax);
     code.jmp_label(done);
 
     // --- TAG_MAP: clone the table, deep-cloning keys and values. ---
     code.bind_label(tag_map);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_map
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_map (tagged handle)
+    code.movabs(Reg::R11, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::Rax, Reg::R11); // strip the generation tag
     code.mov_mem_r(Reg::Rbp, -72, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
@@ -3334,15 +3373,18 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(map_loop);
     code.bind_label(map_exit);
     // [dst] = new
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    emit_tag_collection_handle(code);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
-    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
-    code.mov_mem_r(Reg::Rcx, 0, Reg::Rdx);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax);
     code.jmp_label(done);
 
     // --- TAG_SET: clone the table, deep-cloning every element. ---
     code.bind_label(tag_set);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
-    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_set
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // src_set (tagged handle)
+    code.movabs(Reg::R11, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::Rax, Reg::R11); // strip the generation tag
     code.mov_mem_r(Reg::Rbp, -72, Reg::Rax);
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // capacity
     code.mov_mem_r(Reg::Rbp, -48, Reg::Rcx);
@@ -3461,9 +3503,10 @@ fn emit_coll_clone_value(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(set_loop);
     code.bind_label(set_exit);
     // [dst] = new
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -104);
+    emit_tag_collection_handle(code);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
-    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -104);
-    code.mov_mem_r(Reg::Rcx, 0, Reg::Rdx);
+    code.mov_mem_r(Reg::Rcx, 0, Reg::Rax);
     code.jmp_label(done);
 
     // --- TAG_STRUCT: copy verbatim, then deep-clone each owned field. ---
@@ -3693,9 +3736,16 @@ fn emit_dbg_word8(code: &mut Code) {
 /// structured error every other pointer operation produces. The scan runs
 /// under the runtime lock so it cannot observe a half-written table entry.
 ///
+/// Session 197: a handle also carries its allocation generation in bits
+/// 48..63 (see [`crate::runtime::abi::HANDLE_GENERATION_SHIFT`]). The scan
+/// requires both a live entry whose start equals the handle's address *and*
+/// a matching generation, so a handle whose block was freed and reused by a
+/// new object is rejected as `E-R05` instead of aliasing the replacement.
+/// On success the untagged address is written back to `[rbp + 16]`, so every
+/// service downstream keeps working with a plain buffer pointer.
+///
 /// Must be called immediately after `prologue`, before any argument is loaded.
-/// Clobbers RAX, RCX, RDX. `Fail` does not return, so control only continues
-/// through the `found` path.
+/// Clobbers RAX, RCX, RDX, R8, R9, R10, R11. `fail` does not return.
 fn emit_require_live_handle(code: &mut Code) {
     let scan = code.label();
     let next = code.label();
@@ -3704,7 +3754,12 @@ fn emit_require_live_handle(code: &mut Code) {
     let cont = code.label();
 
     rt_lock_acquire(code);
-    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16); // tagged handle
+    code.mov_rr(Reg::R11, Reg::Rax);
+    code.movabs(Reg::R9, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::R11, Reg::R9); // R11 = address
+    code.shr_r_imm8(Reg::Rax, HANDLE_GENERATION_SHIFT); // RAX = generation
+    code.mov_rr(Reg::R10, Reg::Rax);
     code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.table as u32));
     code.lea_r_mem(Reg::Rdx, Reg::Rcx, TABLE_BYTES);
     code.bind_label(scan);
@@ -3712,16 +3767,111 @@ fn emit_require_live_handle(code: &mut Code) {
     code.jcc_label(0x83, invalid); // jae — table exhausted
     code.cmp_mem_imm8(Reg::Rcx, 16, 0);
     code.jcc_label(0x84, next); // je — dead entry, skip
-    code.cmp_r_mem(Reg::Rax, Reg::Rcx, 0);
-    code.jcc_label(0x84, found); // je — start equals the handle
+    code.cmp_r_mem(Reg::R11, Reg::Rcx, 0);
+    code.jcc_label(0x84, found); // je — start equals the handle address
     code.bind_label(next);
     code.add_r_imm8(Reg::Rcx, 24);
     code.jmp_label(scan);
     code.bind_label(found);
+    // The block is live; its occupant must be the generation the handle was
+    // issued for. A newer occupant means this handle is stale.
+    code.mov_r_mem(Reg::R8, Reg::Rcx, 16);
+    code.shr_r_imm8(Reg::R8, LIVE_ENTRY_GENERATION_SHIFT);
+    code.cmp_rr(Reg::R10, Reg::R8);
+    code.jcc_label(0x85, invalid); // jne — stale handle
+    code.mov_mem_r(Reg::Rbp, 16, Reg::R11); // hand the service a plain address
     rt_lock_release(code);
     code.jmp_label(cont);
     code.bind_label(invalid);
-    fail(code, 5); // E-R05: out-of-bounds or use-after-free access
+    fail(code, 5); // E-R05: invalid, freed or stale collection handle
+    code.bind_label(cont);
+}
+
+/// Stamps a freshly allocated collection buffer with the generation of the
+/// live entry that owns it. `RAX` holds the buffer address on entry and the
+/// tagged handle on return; clobbers RCX, RDX, R8, R9, R11. If the address
+/// has no live entry the address is returned untagged — the next service
+/// call reports `E-R05` instead of silently accepting it.
+fn emit_tag_collection_handle(code: &mut Code) {
+    let scan = code.label();
+    let next = code.label();
+    let found = code.label();
+    let cont = code.label();
+
+    code.movabs(Reg::R9, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::Rax, Reg::R9);
+    code.mov_rr(Reg::R11, Reg::Rax);
+    rt_lock_acquire(code);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.table as u32));
+    code.lea_r_mem(Reg::Rdx, Reg::Rcx, TABLE_BYTES);
+    code.bind_label(scan);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x83, cont); // jae — not found: leave the raw address
+    code.cmp_mem_imm8(Reg::Rcx, 16, 0);
+    code.jcc_label(0x84, next); // je — dead entry
+    code.cmp_r_mem(Reg::R11, Reg::Rcx, 0);
+    code.jcc_label(0x84, found); // je — live entry for this address
+    code.bind_label(next);
+    code.add_r_imm8(Reg::Rcx, 24);
+    code.jmp_label(scan);
+    code.bind_label(found);
+    code.mov_r_mem(Reg::R8, Reg::Rcx, 16);
+    code.shr_r_imm8(Reg::R8, LIVE_ENTRY_GENERATION_SHIFT);
+    code.shl_r_imm8(Reg::R8, HANDLE_GENERATION_SHIFT);
+    code.or_rr(Reg::R11, Reg::R8);
+    code.bind_label(cont);
+    code.mov_rr(Reg::Rax, Reg::R11);
+    rt_lock_release(code);
+}
+
+/// Unpacks the handle of a collection being released (`[rbp + 16]`) to its
+/// plain address, rejecting a stale handle with `E-R05`. Unlike
+/// [`emit_require_live_handle`] a *dead* entry is not an error here: the
+/// service's own free path must keep reporting a double free as `E-R04`.
+/// A live entry with a newer generation means the block was reused after
+/// this handle was freed, which is a stale handle (`E-R05`).
+///
+/// Clobbers RAX, RCX, RDX, R8, R9, R10, R11.
+fn emit_unpack_handle_for_free(code: &mut Code) {
+    let scan = code.label();
+    let next = code.label();
+    let found = code.label();
+    let no_entry = code.label();
+    let stale = code.label();
+    let cont = code.label();
+
+    rt_lock_acquire(code);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, cont); // jz — null handle: leave it to the service
+    code.mov_rr(Reg::R11, Reg::Rax);
+    code.movabs(Reg::R9, HANDLE_ADDRESS_MASK);
+    code.and_rr(Reg::R11, Reg::R9);
+    code.shr_r_imm8(Reg::Rax, HANDLE_GENERATION_SHIFT);
+    code.mov_rr(Reg::R10, Reg::Rax);
+    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.table as u32));
+    code.lea_r_mem(Reg::Rdx, Reg::Rcx, TABLE_BYTES);
+    code.bind_label(scan);
+    code.cmp_rr(Reg::Rcx, Reg::Rdx);
+    code.jcc_label(0x83, no_entry); // jae — no live entry: let E-R04 decide
+    code.cmp_mem_imm8(Reg::Rcx, 16, 0);
+    code.jcc_label(0x84, next); // je — dead entry, keep looking
+    code.cmp_r_mem(Reg::R11, Reg::Rcx, 0);
+    code.jcc_label(0x84, found); // je
+    code.bind_label(next);
+    code.add_r_imm8(Reg::Rcx, 24);
+    code.jmp_label(scan);
+    code.bind_label(found);
+    code.mov_r_mem(Reg::R8, Reg::Rcx, 16);
+    code.shr_r_imm8(Reg::R8, LIVE_ENTRY_GENERATION_SHIFT);
+    code.cmp_rr(Reg::R10, Reg::R8);
+    code.jcc_label(0x85, stale); // jne — the block was reused
+    code.bind_label(no_entry);
+    code.mov_mem_r(Reg::Rbp, 16, Reg::R11);
+    rt_lock_release(code);
+    code.jmp_label(cont);
+    code.bind_label(stale);
+    fail(code, 5); // E-R05: stale collection handle
     code.bind_label(cont);
 }
 
@@ -3759,6 +3909,7 @@ fn emit_vec_new(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_imm32(Reg::Rax, 8, 0);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, 24);
     code.mov_mem_r(Reg::Rax, 16, Reg::Rcx);
+    emit_tag_collection_handle(code);
 
     code.add_rsp(32);
     code.leave_ret();
@@ -3887,6 +4038,7 @@ fn emit_vec_push(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
     // Return data ptr.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -48);
+    emit_tag_collection_handle(code);
     code.leave_ret();
 }
 
@@ -3990,6 +4142,7 @@ fn emit_vec_set(code: &mut Code, offsets: &RuntimeOffsets) {
     emit_memcpy_words(code, Reg::Rcx, Reg::Rdx, Reg::R8);
     // Return data pointer.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    emit_tag_collection_handle(code);
     code.add_rsp(32);
     code.leave_ret();
 
@@ -4135,6 +4288,7 @@ fn emit_vec_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
     // Return data pointer (caller reassigns v = result).
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    emit_tag_collection_handle(code);
     code.add_rsp(56);
     code.leave_ret();
     code.bind_label(oob);
@@ -4159,6 +4313,7 @@ fn emit_vec_len(code: &mut Code) {
 /// Vec buffer itself.
 fn emit_vec_free(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_unpack_handle_for_free(code);
     code.sub_rsp(48);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.test_rr(Reg::Rax, Reg::Rax);
@@ -4745,6 +4900,7 @@ fn emit_map_new(code: &mut Code, offsets: &RuntimeOffsets) {
     code.add_r_imm8(Reg::Rcx, 1);
     code.jmp_label(clear_loop);
     code.bind_label(clear_done);
+    emit_tag_collection_handle(code);
     code.add_rsp(32);
     code.leave_ret();
     code.bind_label(bad);
@@ -4927,14 +5083,17 @@ fn emit_map_insert(code: &mut Code, offsets: &RuntimeOffsets) {
     code.shl_r_imm8(Reg::Rdx, 1); // new_cap = capacity * 2
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8); // map
     call_service(code, RuntimeService::MapRebuild, &[Reg::Rcx, Reg::Rdx]);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
     code.bind_label(no_grow);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
     code.bind_label(probe_found);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
 }
@@ -5232,6 +5391,7 @@ fn emit_map_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
     code.sub_r_imm32(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    emit_tag_collection_handle(code);
     code.add_rsp(96);
     code.leave_ret();
     code.bind_label(probe_miss);
@@ -5246,6 +5406,7 @@ fn emit_map_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.bind_label(probe_empty);
     // Not present: return the map unchanged.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    emit_tag_collection_handle(code);
     code.add_rsp(96);
     code.leave_ret();
 }
@@ -5262,6 +5423,7 @@ fn emit_map_len(code: &mut Code) {
 /// `rt_map_free(map)`: free every live key and value, then the table.
 fn emit_map_free(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_unpack_handle_for_free(code);
     code.sub_rsp(96);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.test_rr(Reg::Rax, Reg::Rax);
@@ -5439,6 +5601,7 @@ fn emit_map_keys(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(walk_loop);
     code.bind_label(walk_exit);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
 }
@@ -5547,6 +5710,7 @@ fn emit_map_values(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(walk_loop);
     code.bind_label(walk_exit);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
 }
@@ -5600,6 +5764,7 @@ fn emit_set_new(code: &mut Code, offsets: &RuntimeOffsets) {
     code.add_r_imm8(Reg::Rcx, 1);
     code.jmp_label(clear_loop);
     code.bind_label(clear_done);
+    emit_tag_collection_handle(code);
     code.add_rsp(32);
     code.leave_ret();
     code.bind_label(bad);
@@ -5751,14 +5916,17 @@ fn emit_set_insert(code: &mut Code, offsets: &RuntimeOffsets) {
     code.shl_r_imm8(Reg::Rdx, 1);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -8);
     call_service(code, RuntimeService::SetRebuild, &[Reg::Rcx, Reg::Rdx]);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
     code.bind_label(no_grow);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
     code.bind_label(probe_done);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
 }
@@ -5921,6 +6089,7 @@ fn emit_set_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::Rcx, Reg::Rax, 8); // length
     code.sub_r_imm32(Reg::Rcx, 1);
     code.mov_mem_r(Reg::Rax, 8, Reg::Rcx);
+    emit_tag_collection_handle(code);
     code.add_rsp(96);
     code.leave_ret();
     code.bind_label(probe_miss);
@@ -5934,6 +6103,7 @@ fn emit_set_remove(code: &mut Code, offsets: &RuntimeOffsets) {
     code.bind_label(probe_empty);
     // Not present: return the set unchanged.
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    emit_tag_collection_handle(code);
     code.add_rsp(96);
     code.leave_ret();
 }
@@ -5950,6 +6120,7 @@ fn emit_set_len(code: &mut Code) {
 /// `rt_set_free(set)`: free every live element, then the table.
 fn emit_set_free(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
+    emit_unpack_handle_for_free(code);
     code.sub_rsp(80);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     code.test_rr(Reg::Rax, Reg::Rax);
@@ -6099,6 +6270,7 @@ fn emit_set_elements(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jmp_label(walk_loop);
     code.bind_label(walk_exit);
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -64);
+    emit_tag_collection_handle(code);
     code.add_rsp(112);
     code.leave_ret();
 }

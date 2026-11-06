@@ -1636,3 +1636,250 @@ fn main() {
     );
     assert_runtime_error(code, &out, 110, "E-R10");
 }
+
+// ============================================================================
+// Session 197 — generation-safe collection handles
+// ============================================================================
+//
+// A freed handle whose block is reused by a new collection used to alias the
+// replacement and return its contents (exit 0). Handles now carry the
+// allocation generation, so the stale handle is diagnosed as E-R05 while a
+// valid handle for the replacement keeps working.
+
+#[test]
+fn s197_vec_stale_after_reuse_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let v = rt_vec_new(4);
+    rt_vec_push(v, 7);
+    rt_vec_free(v);
+    let w = rt_vec_new(4);
+    rt_vec_push(w, 9);
+    rt_print_int(rt_vec_len(v));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s197_vec_get_stale_after_reuse_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let v = rt_vec_new(4);
+    rt_vec_push(v, 7);
+    rt_vec_free(v);
+    let mut w = rt_vec_new(4);
+    w = rt_vec_push(w, 9);
+    rt_print_int(rt_vec_get(v, 0));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s197_map_stale_after_reuse_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut m = rt_map_new(4);
+    m = rt_map_insert(m, 1, 42);
+    rt_map_free(m);
+    let mut n = rt_map_new(4);
+    n = rt_map_insert(n, 2, 84);
+    rt_print_int(rt_map_get(m, 1));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s197_set_stale_after_reuse_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut s = rt_set_new(4);
+    s = rt_set_insert(s, 9);
+    rt_set_free(s);
+    let mut t = rt_set_new(4);
+    t = rt_set_insert(t, 3);
+    if rt_set_has(s, 9) { rt_print_int(1); } else { rt_print_int(0); }
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s197_free_after_reuse_reports_a_stale_handle() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let v = rt_vec_new(4);
+    rt_vec_free(v);
+    let w = rt_vec_new(4);
+    rt_vec_push(w, 1);
+    rt_vec_free(v);
+    rt_print_int(rt_vec_len(w));
+    rt_exit(0);
+}"#,
+    );
+    // The stale free must not release the replacement object: E-R05, and the
+    // still-live `w` would otherwise be the observable casualty.
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s197_repeated_cycles_keep_valid_handles() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 200 {
+        let mut v = rt_vec_new(2);
+        v = rt_vec_push(v, i);
+        total = total + rt_vec_len(v) + rt_vec_get(v, 0);
+        rt_vec_free(v);
+        i = i + 1;
+    }
+    rt_print_int(total);
+    rt_exit(0);
+}"#,
+    );
+    assert_success(code, &out);
+    // 200 cycles of (len 1 + element i) over i = 0..199.
+    assert_eq!(first_int(&out), 20100, "cycle sum: {}", out);
+}
+
+#[test]
+fn s197_repeated_cycles_then_stale_handle_is_an_error() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let first = rt_vec_new(4);
+    rt_vec_free(first);
+    let mut i = 0;
+    while i < 200 {
+        let v = rt_vec_new(2);
+        rt_vec_free(v);
+        i = i + 1;
+    }
+    rt_print_int(rt_vec_len(first));
+    rt_exit(0);
+}"#,
+    );
+    assert_runtime_error(code, &out, 105, "E-R05");
+}
+
+#[test]
+fn s197_nested_vec_collections_survive_tagging() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let outer = rt_vec_new(2);
+    let inner = rt_vec_new(4);
+    rt_vec_push(inner, 5);
+    rt_vec_push(outer, inner);
+    let got = rt_vec_get(outer, 0);
+    rt_print_int(rt_vec_len(got));
+    rt_print_int(rt_vec_get(got, 0));
+    rt_vec_free(outer);
+    rt_exit(0);
+}"#,
+    );
+    assert_success(code, &out);
+    assert_eq!(all_ints(&out), vec![1, 5], "nested Vec: {}", out);
+}
+
+#[test]
+fn s197_map_vec_values_survive_tagging() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut m = rt_map_new(4);
+    let mut v = rt_vec_new(4);
+    v = rt_vec_push(v, 11);
+    m = rt_map_insert(m, 1, v);
+    let got = rt_map_get(m, 1);
+    rt_print_int(rt_vec_len(got));
+    rt_print_int(rt_vec_get(got, 0));
+    rt_map_free(m);
+    rt_exit(0);
+}"#,
+    );
+    assert_success(code, &out);
+    assert_eq!(all_ints(&out), vec![1, 11], "Map value Vec: {}", out);
+}
+
+#[test]
+fn s197_generation_wraparound_keeps_valid_handles() {
+    let (code, out) = build_and_run(
+        r#"
+fn main() {
+    let mut i = 0;
+    while i < 70000 {
+        let v = rt_vec_new(2);
+        rt_vec_free(v);
+        i = i + 1;
+    }
+    let mut w = rt_vec_new(2);
+    w = rt_vec_push(w, 4);
+    rt_print_int(rt_vec_len(w));
+    rt_vec_free(w);
+    rt_exit(0);
+}"#,
+    );
+    assert_success(code, &out);
+    assert_eq!(first_int(&out), 1, "post-wrap handle: {}", out);
+}
+
+#[test]
+fn s197_concurrent_collection_cycles() {
+    let (code, out) = build_and_run(
+        r#"
+mod threads;
+
+fn worker(p: Ptr<Int>) -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < 100 {
+        let mut v = rt_vec_new(2);
+        v = rt_vec_push(v, i);
+        n = n + rt_vec_len(v);
+        rt_vec_free(v);
+        i = i + 1;
+    }
+    rt_mem_store(p, n);
+    return 0;
+}
+
+fn main() {
+    let p1 = rt_alloc(8);
+    let p2 = rt_alloc(8);
+    let p3 = rt_alloc(8);
+    let p4 = rt_alloc(8);
+    let t1 = thread_spawn(worker, p1);
+    let t2 = thread_spawn(worker, p2);
+    let t3 = thread_spawn(worker, p3);
+    let t4 = thread_spawn(worker, p4);
+    thread_join(t1);
+    thread_join(t2);
+    thread_join(t3);
+    thread_join(t4);
+    rt_print_int(rt_mem_load(p1) + rt_mem_load(p2) + rt_mem_load(p3) + rt_mem_load(p4));
+    rt_free(p1);
+    rt_free(p2);
+    rt_free(p3);
+    rt_free(p4);
+    rt_exit(0);
+}"#,
+    );
+    assert_success(code, &out);
+    // Four workers, 100 iterations each, one element per Vec.
+    assert_eq!(first_int(&out), 400, "concurrent cycles: {}", out);
+}

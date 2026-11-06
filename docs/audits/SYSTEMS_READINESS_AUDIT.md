@@ -208,14 +208,27 @@ confirmed memory-safety defect was fixed and independently verified.
   `tests/collections_lib.rs`.
 * **Verified without changes:** double-free still `E-R04` (104), out-of-bounds
   still `E-R10` (110), leaks still `E-R06` (106), valid operations unchanged.
-* **Still limited:** a freed-then-reused handle aliases the replacement
-  allocation, because the liveness table has no generation counter. This is an
-  explicit caveat, not a resolved issue.
+* **Resolved in Session 197:** a freed-then-reused handle no longer aliases
+  the replacement. Handles carry the allocation generation, so a stale `Vec`,
+  `Map` or `Set` handle faults `E-R05` (105) even after its block has been
+  handed to a new allocation; a plain double free stays `E-R04` (104). The
+  residual bound is a 16-bit generation (65,536 reallocations of one block).
+  Regression: eleven `s197_*` tests in `tests/collections_lib.rs`.
 * **Fresh evidence:** full regression 3,194 passed / 0 failed / 1 ignored / 78
   suites; release build 4,030,976 bytes; `invsync` all cases passed; 13
   use-after-free variants, with 10× repeats on three representative cases;
   bounded stress (20k alloc/free, 50k pushes, 5k collection cycles, 200
   filesystem cycles, 256 KiB I/O, 30 child processes, 5 compiles) clean.
+
+*Dated addendum — Session 197 (2026-11-06).* The residual alias limitation is
+closed. After the generation-safe handle change, the measured regression is
+**3,185 passed / 0 failed / 0 ignored across 75 suites** (every target except
+`tls_lib`; 3,174 + 11 new `s197_*` tests), with the release binary at 4,041,216
+bytes. `tls_lib` could not run on the audit machine: `python3` is the Microsoft
+Store alias stub, so its TLS test server exits before any MINK code runs (2
+passed, 18 server-start failures, 1 ignored). That is an environment
+limitation, not a compiler result. See
+[`M6_SESSION_197_GENERATION_SAFE_HANDLES.md`](../benchmarks/M6/M6_SESSION_197_GENERATION_SAFE_HANDLES.md).
 
 This addendum raises the reliability evidence for the existing claim boundary. It
 does **not** establish long-running soak behaviour, complete memory safety, or M6

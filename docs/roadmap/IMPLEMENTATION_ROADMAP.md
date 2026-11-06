@@ -318,6 +318,21 @@ M7 remains gated. Linux remains frozen. See
 and
 [`M6_SESSION_196_RELIABILITY_CLOSURE.md`](../benchmarks/M6/M6_SESSION_196_RELIABILITY_CLOSURE.md).
 
+*Dated status, 2026-11-06 (Session 197).* The residual collection-handle alias
+limitation recorded above is closed. Handles now carry the allocation
+generation in bits 48..63 of the word, so a freed `Vec`/`Map`/`Set` handle
+whose block is reused by a new allocation faults `E-R05` (105) instead of
+reading the replacement's header; a plain double free remains `E-R04` (104)
+and out-of-bounds remains `E-R10` (110). The MINK ABI is unchanged (8-byte
+opaque handle, same services, same layout). Measured regression is 3,185
+passed / 0 failed / 0 ignored across 75 suites; `tls_lib` is excluded because
+its TLS test server needs `python3`, which is not installed on the verification
+machine. Eleven `s197_*` regressions cover reuse, repeated cycles, nesting,
+wraparound and four-thread concurrency. M6 external validation remains
+outstanding, M7 remains gated and Linux remains frozen; this does not change
+the milestone state. See
+[`M6_SESSION_197_GENERATION_SAFE_HANDLES.md`](../benchmarks/M6/M6_SESSION_197_GENERATION_SAFE_HANDLES.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

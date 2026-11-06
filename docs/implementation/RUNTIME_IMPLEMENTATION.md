@@ -37,7 +37,9 @@ have a stable foundation.
 - The bump cursor is an offset from the arena base (a block lives at
   `arena + offset`). `rt_init` resets the cursor and the free list.
 - Every live allocation occupies one slot of a bounded liveness table
-  ([`MAX_LIVE_ALLOCS`] = 256 entries of 24 bytes: start, size, live flag).
+  ([`MAX_LIVE_ALLOCS`] = 1024 entries of 24 bytes: start, size, and a third
+  word holding the live flag (low byte) and the block's generation (high
+  half)).
 - `rt_free` requires the exact 16-aligned start of a *live* block; a freed
   block's first word becomes the free-list link (LIFO reuse).
 - `rt_mem_load` / `rt_mem_store` require the 8-byte word to lie entirely
@@ -48,6 +50,18 @@ have a stable foundation.
   liveness table for a live entry whose start equals the handle and faults
   `E-R05` otherwise. Without it, a freed handle's stale header bytes were
   returned as data instead of producing a runtime error.
+- Collection handles also carry their allocation generation (Session 197): a
+  handle is `(generation << 48) | address`, because Windows x86-64 user-mode
+  addresses occupy only the low 47 bits. The runtime strips the tag before any
+  header access. `rt_free` writes the block's generation to `block + 16` when
+  the block is at least 24 bytes (the minimum collection-buffer size), and
+  `rt_alloc` increments it and records it in the liveness slot, so every reuse
+  of a block invalidates handles issued for its previous occupant. A handle
+  whose address matches a live entry but whose generation does not is `E-R05`
+  (105); a double free stays `E-R04` (104). The tag is 16 bits, so a block
+  must be reallocated 65,536 times before a stale handle could match again.
+  Tags exist only on collection handles — raw pointers, strings and every
+  other runtime service are unchanged.
 - The pure-Rust reference allocator (`src/runtime/allocator.rs`) mirrors
   the machine runtime exactly and is the executable specification of these
   semantics. Note: in the reference's offset model the first block lives at

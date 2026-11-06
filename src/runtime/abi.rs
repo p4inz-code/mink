@@ -107,11 +107,38 @@ pub const STDIO_CAPTURE_BYTES: u64 = STDIO_CAPTURE_WINDOW_BYTES * 3;
 pub const MAX_LIVE_ALLOCS: usize = 1024;
 
 /// The size of one liveness-table entry: (address `u64`, size `u64`,
-/// live flag `u64`).
+/// live-and-generation `u64`).
+///
+/// The third word carries the live flag in its low byte and the blocking
+/// generation of the current occupant in its high half (Session 197). The
+/// generation is what makes a stale `Vec`/`Map`/`Set` handle distinguishable
+/// from a new object that reuses the same block: see [`HANDLE_GENERATION_SHIFT`].
 pub const LIVE_ENTRY_BYTES: u64 = 24;
 
 /// The bytes of the liveness table (all entries).
 pub const LIVE_TABLE_BYTES: u64 = MAX_LIVE_ALLOCS as u64 * LIVE_ENTRY_BYTES;
+
+/// Bit shift of the generation inside a live entry's third word.
+///
+/// Entry `+16` is `(generation << LIVE_ENTRY_GENERATION_SHIFT) | live`;
+/// the live flag is inspected as a byte at `+16`, so the two fields never
+/// overlap.
+pub const LIVE_ENTRY_GENERATION_SHIFT: u8 = 32;
+
+/// Bit shift of the generation tag inside a collection handle.
+///
+/// A `Vec`/`Map`/`Set` handle is `(generation << HANDLE_GENERATION_SHIFT) |
+/// address`. Windows x86-64 user-mode addresses occupy the low 47 bits, so
+/// bits 48..63 are free for the tag and a 48-bit mask recovers the address.
+/// Handles are opaque words: the runtime is the only component that
+/// dereferences them, and it always strips the tag first (Session 197).
+pub const HANDLE_GENERATION_SHIFT: u8 = 48;
+
+/// Mask that recovers the address from a collection handle.
+pub const HANDLE_ADDRESS_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+/// Generation counter width, in bits (the tag field above).
+pub const HANDLE_GENERATION_BITS: u32 = 16;
 
 /// The exit code base for runtime errors: a runtime error with number `n`
 /// terminates the process with exit code [`EXIT_CODE_BASE`]` + n`.
