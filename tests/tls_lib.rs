@@ -63,26 +63,62 @@ fn artifact_dir() -> PathBuf {
     dir
 }
 
+/// Serialises fixture creation. Fifteen tests share the `"x"` root and run on
+/// parallel threads, so creation must not race: before this lock existed, a
+/// thread could observe `big.bin` while another thread was still writing it,
+/// read a truncated fixture, and panic in the large-transfer test on
+/// `big.len() - 64` ("attempt to subtract with overflow").
+static FIXTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Length of the `big.bin` fixture served to the large-transfer test.
+const BIG_BIN_LEN: u64 = 300_000;
+
+/// Writes `bytes` to `path` only when the contents differ, through a private
+/// temp file and a rename, so a reader never observes a half-written fixture.
+fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if std::fs::read(path).map(|old| old == bytes).unwrap_or(false) {
+        return Ok(());
+    }
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("fixture");
+    let tmp = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, bytes)?;
+    if path.exists() {
+        // Windows `rename` refuses to replace an existing file.
+        std::fs::remove_file(path)?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
 /// A file-server root holding `index.html` with a recognizable marker and a
 /// binary `big.bin` for the large-transfer test.
 ///
 /// One root per marker: tests run in parallel and must not overwrite each
-/// other's `index.html`.
+/// other's `index.html`. Creation is serialised by `FIXTURE_LOCK`, and each
+/// fixture is written atomically, so a concurrent reader always sees either the
+/// previous complete file or the new complete file.
 fn file_root(marker: &str) -> PathBuf {
     let slug: String = marker
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
     let root = artifact_dir().join(format!("tls_root_{slug}"));
+    let _guard = FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::fs::create_dir_all(&root).expect("failed to create TLS test root");
-    std::fs::write(
-        root.join("index.html"),
-        format!("<!doctype html><title>tls</title><p>{marker}</p>\n"),
-    )
-    .expect("failed to write index.html");
-    if !root.join("big.bin").exists() {
-        let big: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
-        std::fs::write(root.join("big.bin"), big).expect("failed to write big.bin");
+    let html = format!("<!doctype html><title>tls</title><p>{marker}</p>\n");
+    write_if_changed(&root.join("index.html"), html.as_bytes())
+        .expect("failed to write index.html");
+    let big_path = root.join("big.bin");
+    let complete = std::fs::metadata(&big_path)
+        .map(|m| m.len() == BIG_BIN_LEN)
+        .unwrap_or(false);
+    if !complete {
+        let big: Vec<u8> = (0..BIG_BIN_LEN as u32).map(|i| (i % 251) as u8).collect();
+        write_if_changed(&big_path, &big).expect("failed to write big.bin");
     }
     root
 }
@@ -622,6 +658,11 @@ fn s62_binary_echo_round_trip_and_partial_reads() {
 fn s62_large_transfer() {
     let root = file_root("x");
     let big = std::fs::read(root.join("big.bin")).unwrap();
+    assert!(
+        big.len() >= 64,
+        "big.bin fixture is too short ({} bytes): fixture creation raced",
+        big.len()
+    );
     let server = start_server("good", &root, -1);
     let body = format!(
         r#"    let r = https_client_get_with("localhost", {}, "/big.bin", "tests/tls/ca.pem");
@@ -646,6 +687,49 @@ fn s62_large_transfer() {
     assert!(
         stdout.windows(needle.len()).any(|w| w == needle),
         "large transfer is corrupted (needle not found)"
+    );
+}
+
+/// Regression for the first-creation fixture race. `big.bin` used to be written
+/// with a truncating write gated only on `exists()`, so a thread that ran while
+/// another was mid-write returned a path to a partial file; `s62_large_transfer`
+/// then panicked on `big.len() - 64` with "attempt to subtract with overflow".
+///
+/// A fresh marker per run keeps this out of the shared `"x"` root and guarantees
+/// the fixture is created while the threads below are racing to create it.
+#[test]
+fn s62_fixture_creation_is_race_free() {
+    // A fresh marker per run, so the fixture is created while the threads race.
+    let marker = format!(
+        "MINK-TLS-RACE-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let marker = marker.clone();
+        handles.push(std::thread::spawn(move || {
+            for _ in 0..40 {
+                let root = file_root(&marker);
+                let len = std::fs::metadata(root.join("big.bin"))
+                    .expect("big.bin missing after file_root")
+                    .len();
+                assert_eq!(
+                    len, BIG_BIN_LEN,
+                    "big.bin was observed while only {len} bytes were on disk"
+                );
+            }
+        }));
+    }
+    for handle in handles {
+        handle.join().expect("fixture thread panicked");
+    }
+    let root = file_root(&marker);
+    assert!(
+        std::fs::read(root.join("index.html"))
+            .expect("index.html missing")
+            .ends_with(b"</p>\n"),
+        "index.html fixture is truncated"
     );
 }
 
