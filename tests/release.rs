@@ -89,6 +89,64 @@ fn s107_npm_stdlib_bundle_matches_repo_stdlib() {
     }
 }
 
+/// The npm package must be complete and internally consistent with the
+/// repository before it can be packed. This guard is intentionally independent
+/// of the pack step: it fails on missing files, a stale version, a manifest that
+/// drops a required entry, a missing license, or absent Windows assets, so a
+/// stale package cannot be produced silently.
+#[test]
+fn m6_rc_package_manifest_is_complete() {
+    let pkg_dir = std::path::Path::new("npm/mink");
+    let manifest_path = pkg_dir.join("package.json");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| panic!("{}: {e}", manifest_path.display()));
+
+    // Version must match the compiler crate, or `mink --version` and the
+    // published package would disagree about what they contain.
+    let crate_version = env!("CARGO_PKG_VERSION");
+    assert!(
+        manifest.contains(&format!("\"version\": \"{crate_version}\"")),
+        "npm/mink/package.json version does not match the crate version {crate_version}"
+    );
+
+    // Every distribution path the manifest promises must exist on disk.
+    for required in ["bin/mink.exe", "stdlib", "windows"] {
+        assert!(
+            manifest.contains(&format!("\"{required}\"")),
+            "package.json `files` is missing {required}"
+        );
+        assert!(
+            pkg_dir.join(required).exists(),
+            "package.json promises {required} but it does not exist"
+        );
+    }
+
+    // The license must travel with the artifact.
+    assert!(
+        pkg_dir.join("LICENSE").exists(),
+        "the package is missing its LICENSE file"
+    );
+
+    // The packaged compiler must exist and be a Windows PE, not an empty stub.
+    let exe = pkg_dir.join("bin/mink.exe");
+    let bytes = std::fs::read(&exe).unwrap_or_else(|e| panic!("{}: {e}", exe.display()));
+    assert!(bytes.len() > 1_000_000, "packaged compiler looks too small");
+    assert_eq!(&bytes[..2], b"MZ", "packaged compiler is not a PE image");
+
+    // The Windows association assets must be present in the package.
+    for asset in [
+        "windows/register-mink-filetype.ps1",
+        "windows/mink-file.ico",
+        "windows/mink-app.ico",
+        "windows/mink.rc",
+    ] {
+        assert!(
+            pkg_dir.join(asset).exists(),
+            "the package is missing the Windows asset {asset}"
+        );
+    }
+}
+
 /// Assert check fails with given error code.
 fn assert_check_err(src: &str, error_code: &str) {
     let path = temp_source("chk.mink", src);
