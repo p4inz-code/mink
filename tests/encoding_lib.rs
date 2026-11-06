@@ -41,7 +41,7 @@ fn run_with_output(source: &str) -> (i32, String) {
 fn assert_int_op(name: &str, expr: &str, expected: i64) {
     let test = format!("fn main() {{ let r = {expr}; rt_print_int(r); rt_exit(0); }}");
     let (code, output) = run_with_output(&test);
-    assert!(code == 0 || code == 106, "{name}: exit {code}");
+    assert!(code == 0, "{name}: exit {code}");
     if code == 0 {
         let val: i64 = output.trim().parse().unwrap_or(-9999);
         assert_eq!(val, expected, "{name}: expected {expected}, got {val}");
@@ -53,7 +53,7 @@ fn assert_bool_op(name: &str, expr: &str, expected: bool) {
         "fn main() {{ let r = {expr}; if r {{ rt_print_int(1); }} else {{ rt_print_int(0); }} rt_exit(0); }}"
     );
     let (code, output) = run_with_output(&test);
-    assert!(code == 0 || code == 106, "{name}: exit {code}");
+    assert!(code == 0, "{name}: exit {code}");
     if code == 0 {
         assert_eq!(
             output.trim() == "1",
@@ -65,10 +65,10 @@ fn assert_bool_op(name: &str, expr: &str, expected: bool) {
 
 fn assert_hex_enc(name: &str, input_bytes: &str, expected: &str) {
     let test = format!(
-        "fn main() {{ let s = {input_bytes}; let h = hex_encode(s); rt_print_str(h); rt_exit(0); }}"
+        "fn main() {{ let s = {input_bytes}; let h = hex_encode(s); rt_print_str(h); rt_str_free(h); rt_exit(0); }}"
     );
     let (code, output) = run_with_output(&test);
-    assert!(code == 0 || code == 106, "{name}: exit {code}");
+    assert!(code == 0, "{name}: exit {code}");
     if code == 0 {
         assert_eq!(output, expected, "{name}");
     }
@@ -76,10 +76,10 @@ fn assert_hex_enc(name: &str, input_bytes: &str, expected: &str) {
 
 fn assert_hex_enc_upper(name: &str, input_bytes: &str, expected: &str) {
     let test = format!(
-        "fn main() {{ let s = {input_bytes}; let h = hex_encode_upper(s); rt_print_str(h); rt_exit(0); }}"
+        "fn main() {{ let s = {input_bytes}; let h = hex_encode_upper(s); rt_print_str(h); rt_str_free(h); rt_exit(0); }}"
     );
     let (code, output) = run_with_output(&test);
-    assert!(code == 0 || code == 106, "{name}: exit {code}");
+    assert!(code == 0, "{name}: exit {code}");
     if code == 0 {
         assert_eq!(output, expected, "{name}");
     }
@@ -87,10 +87,10 @@ fn assert_hex_enc_upper(name: &str, input_bytes: &str, expected: &str) {
 
 fn assert_b64_enc(name: &str, input_bytes: &str, expected: &str) {
     let test = format!(
-        "fn main() {{ let s = {input_bytes}; let h = base64_encode(s); rt_print_str(h); rt_exit(0); }}"
+        "fn main() {{ let s = {input_bytes}; let h = base64_encode(s); rt_print_str(h); rt_str_free(h); rt_exit(0); }}"
     );
     let (code, output) = run_with_output(&test);
-    assert!(code == 0 || code == 106, "{name}: exit {code}");
+    assert!(code == 0, "{name}: exit {code}");
     if code == 0 {
         assert_eq!(output, expected, "{name}");
     }
@@ -98,10 +98,10 @@ fn assert_b64_enc(name: &str, input_bytes: &str, expected: &str) {
 
 fn assert_b64_url_enc(name: &str, input_bytes: &str, expected: &str) {
     let test = format!(
-        "fn main() {{ let s = {input_bytes}; let h = base64_url_encode(s); rt_print_str(h); rt_exit(0); }}"
+        "fn main() {{ let s = {input_bytes}; let h = base64_url_encode(s); rt_print_str(h); rt_str_free(h); rt_exit(0); }}"
     );
     let (code, output) = run_with_output(&test);
-    assert!(code == 0 || code == 106, "{name}: exit {code}");
+    assert!(code == 0, "{name}: exit {code}");
     if code == 0 {
         assert_eq!(output, expected, "{name}");
     }
@@ -121,9 +121,9 @@ fn e02_hex_encode_zero() {
 }
 #[test]
 fn e03_hex_encode_ff() {
-    let test = "fn main() { let s = rt_str_alloc(1); rt_str_set_byte(s, 0, 255); let h = hex_encode(s); rt_print_str(h); rt_exit(0); }";
+    let test = "fn main() { let s = rt_str_alloc(1); rt_str_set_byte(s, 0, 255); let h = hex_encode(s); rt_print_str(h); rt_str_free(h); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "ff");
     }
@@ -138,9 +138,9 @@ fn e05_hex_encode_upper() {
 }
 #[test]
 fn e06_hex_encode_all_bytes() {
-    let test = "fn main() { let s = rt_str_alloc(4); rt_str_set_byte(s, 0, 0); rt_str_set_byte(s, 1, 17); rt_str_set_byte(s, 2, 34); rt_str_set_byte(s, 3, 255); let h = hex_encode(s); rt_print_str(h); rt_exit(0); }";
+    let test = "fn main() { let s = rt_str_alloc(4); rt_str_set_byte(s, 0, 0); rt_str_set_byte(s, 1, 17); rt_str_set_byte(s, 2, 34); rt_str_set_byte(s, 3, 255); let h = hex_encode(s); rt_print_str(h); rt_str_free(h); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "001122ff");
     }
@@ -152,45 +152,45 @@ fn e06_hex_encode_all_bytes() {
 
 #[test]
 fn e07_hex_decode_valid() {
-    let test = "fn main() { let r = hex_decode_alloc(\"4869\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = hex_decode_alloc(\"4869\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "2");
     }
 }
 #[test]
 fn e08_hex_decode_empty() {
-    let test = "fn main() { let r = hex_decode_alloc(\"\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = hex_decode_alloc(\"\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "0");
     }
 }
 #[test]
 fn e09_hex_decode_odd_length() {
-    let test = "fn main() { let r = hex_decode_alloc(\"abc\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = hex_decode_alloc(\"abc\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "-1");
     }
 }
 #[test]
 fn e10_hex_decode_invalid_char() {
-    let test = "fn main() { let r = hex_decode_alloc(\"zz\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = hex_decode_alloc(\"zz\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "-1");
     }
 }
 #[test]
 fn e11_hex_roundtrip() {
-    let test = "fn main() { let s = \"Hello World\"; let h = hex_encode(s); let r = hex_decode_alloc(h); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let s = \"Hello World\"; let h = hex_encode(s); let r = hex_decode_alloc(h); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "11");
     }
@@ -204,7 +204,7 @@ fn e11_hex_roundtrip() {
 fn e12_int_to_hex_0() {
     let test = "fn main() { let h = int_to_hex(0); rt_print_str(h); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106, "exit: {code}");
+    assert!(code == 0, "exit: {code}");
     if code == 0 {
         assert_eq!(output, "0");
     }
@@ -213,7 +213,7 @@ fn e12_int_to_hex_0() {
 fn e13_hex_to_int() {
     let test = "fn main() { let r = hex_to_int(\"ff\"); rt_print_int(r); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "255");
     }
@@ -254,7 +254,9 @@ fn e19_b64_encode_hello() {
 
 #[test]
 fn e20_b64url_encode() {
-    assert_b64_url_enc("b64url", "\"Hello?\"", "SGVsbG8/");
+    // URL-safe alphabet: standard '/' (value 63) is written as '_'.
+    // Verified against Python `base64.urlsafe_b64encode(b"Hello?")`.
+    assert_b64_url_enc("b64url", "\"Hello?\"", "SGVsbG8_");
 }
 
 // ============================================================================
@@ -263,38 +265,36 @@ fn e20_b64url_encode() {
 
 #[test]
 fn e21_b64_decode_abc() {
-    let test =
-        "fn main() { let r = base64_decode_alloc(\"YWJj\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = base64_decode_alloc(\"YWJj\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "3");
     }
 }
 #[test]
 fn e22_b64_decode_empty() {
-    let test = "fn main() { let r = base64_decode_alloc(\"\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = base64_decode_alloc(\"\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "0");
     }
 }
 #[test]
 fn e23_b64_decode_invalid() {
-    let test =
-        "fn main() { let r = base64_decode_alloc(\"!!!invalid\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = base64_decode_alloc(\"!!!invalid\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "-1");
     }
 }
 #[test]
 fn e24_b64_roundtrip() {
-    let test = "fn main() { let s = \"Hello, World!\"; let e = base64_encode(s); let d = base64_decode_alloc(e); rt_print_int(d.1); rt_exit(0); }";
+    let test = "fn main() { let s = \"Hello, World!\"; let e = base64_encode(s); let d = base64_decode_alloc(e); rt_print_int(d.1); rt_str_free(d.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "13");
     }
@@ -306,11 +306,12 @@ fn e24_b64_roundtrip() {
 
 #[test]
 fn e25_b64url_decode() {
-    let test = "fn main() { let r = base64_url_decode_alloc(\"SGVsbG8/\"); rt_print_int(r.1); rt_exit(0); }";
+    // "SGVsbG8/" decodes to "Hello?" — 6 bytes, confirmed against Python.
+    let test = "fn main() { let r = base64_url_decode_alloc(\"SGVsbG8/\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
-        assert_eq!(output.trim(), "7");
+        assert_eq!(output.trim(), "6");
     }
 }
 
@@ -344,7 +345,7 @@ fn e28_utf8_invalid_continuation() {
 fn e29_utf8_2byte() {
     let test = "fn main() { let s = rt_str_alloc(2); rt_str_set_byte(s, 0, 195); rt_str_set_byte(s, 1, 169); if utf8_validate(s) { rt_print_int(1); } else { rt_print_int(0); } rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "1");
     }
@@ -398,7 +399,7 @@ fn e39_str_is_ascii_true() {
 fn e40_str_is_ascii_false() {
     let test = "fn main() { let s = rt_str_alloc(1); rt_str_set_byte(s, 0, 200); if str_is_ascii(s) { rt_print_int(1); } else { rt_print_int(0); } rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "0");
     }
@@ -410,36 +411,39 @@ fn e40_str_is_ascii_false() {
 
 #[test]
 fn e41_url_encode_empty() {
-    let test = "fn main() { let h = url_encode(\"\"); rt_print_str(h); rt_exit(0); }";
+    let test =
+        "fn main() { let h = url_encode(\"\"); rt_print_str(h); rt_str_free(h); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "");
     }
 }
 #[test]
 fn e42_url_encode_safe() {
-    let test = "fn main() { let h = url_encode(\"hello\"); rt_print_str(h); rt_exit(0); }";
+    let test =
+        "fn main() { let h = url_encode(\"hello\"); rt_print_str(h); rt_str_free(h); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "hello");
     }
 }
 #[test]
 fn e43_url_encode_space() {
-    let test = "fn main() { let h = url_encode(\"a b\"); rt_print_str(h); rt_exit(0); }";
+    let test =
+        "fn main() { let h = url_encode(\"a b\"); rt_print_str(h); rt_str_free(h); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "a%20b");
     }
 }
 #[test]
 fn e44_url_encode_special() {
-    let test = "fn main() { let h = url_encode(\"/path?x=1\"); rt_print_str(h); rt_exit(0); }";
+    let test = "fn main() { let h = url_encode(\"/path?x=1\"); rt_print_str(h); rt_str_free(h); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "%2Fpath%3Fx%3D1");
     }
@@ -451,36 +455,36 @@ fn e44_url_encode_special() {
 
 #[test]
 fn e45_url_decode_valid() {
-    let test = "fn main() { let r = url_decode_alloc(\"a%20b\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = url_decode_alloc(\"a%20b\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "3");
     }
 }
 #[test]
 fn e46_url_decode_invalid_hex() {
-    let test = "fn main() { let r = url_decode_alloc(\"%zz\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = url_decode_alloc(\"%zz\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "-1");
     }
 }
 #[test]
 fn e47_url_decode_plus() {
-    let test = "fn main() { let r = url_decode_alloc(\"a+b\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = url_decode_alloc(\"a+b\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "3");
     }
 }
 #[test]
 fn e48_url_roundtrip() {
-    let test = "fn main() { let e = url_encode(\"hello world/100%\"); let d = url_decode_alloc(e); rt_print_int(d.1); rt_exit(0); }";
+    let test = "fn main() { let e = url_encode(\"hello world/100%\"); let d = url_decode_alloc(e); rt_print_int(d.1); rt_str_free(d.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "16");
     }
@@ -500,10 +504,11 @@ fn main() {
     let r = hex_decode_alloc(h);
     // r.1 should be 4 bytes decoded
     rt_print_int(r.1);
+    rt_str_free(r.0);
     rt_exit(0);
 }"#;
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106, "exit: {code}");
+    assert!(code == 0, "exit: {code}");
     if code == 0 {
         assert_eq!(output.trim(), "4");
     }
@@ -517,7 +522,7 @@ fn main() {
 fn e50_hex_int_roundtrip() {
     let test = "fn main() { let h = int_to_hex(255); let v = hex_to_int(h); rt_print_int(v); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "255");
     }
@@ -541,36 +546,36 @@ fn e53_b64_encode_3byte() {
 }
 #[test]
 fn e54_hex_encode_single_byte() {
-    let test = "fn main() { let s = rt_str_alloc(1); rt_str_set_byte(s, 0, 10); let h = hex_encode(s); rt_print_str(h); rt_exit(0); }";
+    let test = "fn main() { let s = rt_str_alloc(1); rt_str_set_byte(s, 0, 10); let h = hex_encode(s); rt_print_str(h); rt_str_free(h); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output, "0a");
     }
 }
 #[test]
 fn e55_url_decode_empty() {
-    let test = "fn main() { let r = url_decode_alloc(\"\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = url_decode_alloc(\"\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "0");
     }
 }
 #[test]
 fn e56_b64_decode_wrong_length() {
-    let test = "fn main() { let r = base64_decode_alloc(\"YQ\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = base64_decode_alloc(\"YQ\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "-1");
     }
 }
 #[test]
 fn e57_hex_decode_all_valid() {
-    let test = "fn main() { let r = hex_decode_alloc(\"0123456789abcdefABCDEF\"); rt_print_int(r.1); rt_exit(0); }";
+    let test = "fn main() { let r = hex_decode_alloc(\"0123456789abcdefABCDEF\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106);
+    assert!(code == 0);
     if code == 0 {
         assert_eq!(output.trim(), "11");
     }

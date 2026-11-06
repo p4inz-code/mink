@@ -49,12 +49,7 @@ fn all_ints(output: &str) -> Vec<i64> {
 }
 
 fn assert_success(code: i32, out: &str) {
-    assert!(
-        code == 0 || code == 106,
-        "unexpected exit code: {} — {}",
-        code,
-        out
-    );
+    assert!(code == 0, "unexpected exit code: {} — {}", code, out);
 }
 
 // ============================================================
@@ -393,14 +388,26 @@ fn _pad2(n: Int) -> Str {
     let ones = n - tens * 10;
     let t = rt_str_from_int(tens);
     let o = rt_str_from_int(ones);
-    return rt_str_concat(t, o);
+    // rt_str_concat copies into a new string and does not consume its inputs.
+    let r = rt_str_concat(t, o);
+    rt_str_free(t);
+    rt_str_free(o);
+    return r;
 }
 
 fn main() {
-    rt_print_str(_pad2(5));
-    rt_print_str(_pad2(42));
-    rt_print_str(_pad2(0));
-    rt_print_str(_pad2(99));
+    let a = _pad2(5);
+    rt_print_str(a);
+    rt_str_free(a);
+    let b = _pad2(42);
+    rt_print_str(b);
+    rt_str_free(b);
+    let c = _pad2(0);
+    rt_print_str(c);
+    rt_str_free(c);
+    let d = _pad2(99);
+    rt_print_str(d);
+    rt_str_free(d);
     rt_exit(0);
 }"#,
     );

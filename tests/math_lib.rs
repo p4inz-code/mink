@@ -43,10 +43,7 @@ fn assert_int_op(name: &str, expr: &str, expected: i64) {
         expr
     );
     let (code, output) = run_with_output(&test);
-    assert!(
-        code == 0 || code == 106,
-        "{name}: unexpected exit code: {code}"
-    );
+    assert!(code == 0, "{name}: unexpected exit code: {code}");
     if code == 0 {
         let val: i64 = output.trim().parse().unwrap_or(-9999);
         assert_eq!(
@@ -62,10 +59,7 @@ fn assert_float_op(name: &str, expr: &str, expected: f64, tol: f64) {
         expr
     );
     let (code, output) = run_with_output(&test);
-    assert!(
-        code == 0 || code == 106,
-        "{name}: unexpected exit code: {code}"
-    );
+    assert!(code == 0, "{name}: unexpected exit code: {code}");
     if code == 0 {
         let val: f64 = output.trim().parse().unwrap_or(f64::NAN);
         let diff = (val - expected).abs();
@@ -82,10 +76,7 @@ fn assert_bool_op(name: &str, expr: &str, expected: bool) {
         expr
     );
     let (code, output) = run_with_output(&test);
-    assert!(
-        code == 0 || code == 106,
-        "{name}: unexpected exit code: {code}"
-    );
+    assert!(code == 0, "{name}: unexpected exit code: {code}");
     if code == 0 {
         let val = output.trim() == "1";
         assert_eq!(val, expected, "{name}: expected {expected}, got {val}");
@@ -602,10 +593,11 @@ fn m102_math_string_concat() {
 fn main() {
     let a = rt_str_from_int(math_abs(-42));
     rt_print_str(a);
+    rt_str_free(a);
     rt_exit(0);
 }"#;
     let (code, output) = run_with_output(test);
-    assert!(code == 0 || code == 106, "exit: {code}");
+    assert!(code == 0, "exit: {code}");
     if code == 0 {
         assert_eq!(output, "42");
     }

@@ -46,7 +46,7 @@ fn all_ints(output: &str) -> Vec<i64> {
 
 fn assert_success(code: i32, out: &str) {
     assert!(
-        code == 0 || code == 106,
+        code == 0,
         "unexpected exit code: {} — {}",
         code,
         out
