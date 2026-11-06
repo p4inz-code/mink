@@ -132,6 +132,13 @@ these concrete acceptance gaps remain:
 6. Collection use-after-free remains undiagnosed (preserved known defect).
 7. No exhaustive standard-library coverage claim is made.
 
+*Dated correction, 2026-11-06 (Session 195):* item 6 is closed. Collection
+handles are validated against the runtime liveness table before their header is
+read, so use after free exits 105 (`E-R05`) instead of returning stale bytes.
+A freed-then-reused handle can still alias the new allocation; that residual is
+documented in the standard-library reference. See
+[`M6_SESSION_195_COLLECTION_UAF_FIX.md`](M6_SESSION_195_COLLECTION_UAF_FIX.md).
+
 Full evidence and file list:
 [`M6_CONSOLIDATED_SESSIONS_178_181.md`](M6_CONSOLIDATED_SESSIONS_178_181.md).
 

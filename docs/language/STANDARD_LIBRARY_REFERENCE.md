@@ -322,9 +322,12 @@ fn main() -> Int {
 - `rt_map_keys` / `rt_map_values` / `rt_set_elements` return owned vectors;
   free them with `rt_vec_free`. Their order is **not** insertion order; treat
   it as unspecified.
-- **Limitation:** use-after-free is not diagnosed for collection handles.
-  `rt_map_free(m); rt_map_get(m, 1);` compiles and runs. Do not do it. This is
-  a preserved known defect, not a supported contract.
+- **Use-after-free is diagnosed (Session 195).** Every `Vec`/`Map`/`Set`
+  accessor validates the handle against the runtime liveness table before
+  reading its header, so `rt_map_free(m); rt_map_get(m, 1);` exits 105
+  (`E-R05`) instead of returning stale bytes. A handle whose block was freed
+  **and then reused by a new allocation** can still alias the new block: the
+  liveness table has no generation counter. Treat freed handles as dead.
 - A `Vec<Str>` built with `rt_vec_push` inside deeply nested `if`/`else` blocks
   produced a corrupted length (16 for one element) and an invalid free in the
   Session 180 application. The same pattern worked at shallower nesting. The
@@ -985,7 +988,7 @@ type vocabulary rather than a ready-made error-handling API.
 | `rt_map_free` / `rt_vec_free` / `rt_set_free` | Releases the handle and its element strings |
 | Leak at exit | `E-R06`, exit code 106; earlier output is kept |
 | Invalid free | `E-R04`, exit code 104 |
-| Collection use-after-free | **Not diagnosed**; treat freed handles as dead |
+| Collection use-after-free | `E-R05`, exit 105 (Session 195); a freed-then-reused handle can alias |
 
 There is no path-sensitive ownership: a value freed inside a conditional is
 treated as moved for the rest of the function. Structure helpers with one

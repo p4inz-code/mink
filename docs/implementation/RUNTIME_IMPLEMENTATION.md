@@ -43,6 +43,11 @@ have a stable foundation.
 - `rt_mem_load` / `rt_mem_store` require the 8-byte word to lie entirely
   inside a **live** allocation; dead entries are skipped, so use-after-free
   is an error (`E-R05`).
+- Collection handles are validated the same way (Session 195): every
+  `rt_vec_*`, `rt_map_*` and `rt_set_*` service except `new`/`free` scans the
+  liveness table for a live entry whose start equals the handle and faults
+  `E-R05` otherwise. Without it, a freed handle's stale header bytes were
+  returned as data instead of producing a runtime error.
 - The pure-Rust reference allocator (`src/runtime/allocator.rs`) mirrors
   the machine runtime exactly and is the executable specification of these
   semantics. Note: in the reference's offset model the first block lives at
