@@ -302,6 +302,22 @@ tested heap/borrowed/arena contract
 The next open milestone is M6 external developer validation, which requires a
 developer who did not build MINK; M7 remains gated on demonstrated demand.
 
+*Dated status, 2026-11-06 (Sessions 194–196).* Windows x86_64 runtime reliability
+was re-audited under bounded stress and one confirmed defect was fixed: collection
+handles are now validated against the liveness table, so using a freed `Vec`,
+`Map` or `Set` faults `E-R05` (105) instead of returning stale bytes and exiting
+0. Double-free (`E-R04`), out-of-bounds (`E-R10`) and leak (`E-R06`) behaviour is
+unchanged. Full regression is 3,194 passed / 0 failed / 1 ignored across 78
+suites; the release build and `invsync` pass. A freed-then-reused handle can
+still alias the replacement block because the table has no generation counter;
+that is recorded as a limitation, not fixed. This work does not satisfy M6: no
+external developer has attempted the predefined tasks, so M6 remains open and
+M7 remains gated. Linux remains frozen. See
+[`M6_SESSION_194_RUNTIME_STRESS_AUDIT.md`](../benchmarks/M6/M6_SESSION_194_RUNTIME_STRESS_AUDIT.md),
+[`M6_SESSION_195_COLLECTION_UAF_FIX.md`](../benchmarks/M6/M6_SESSION_195_COLLECTION_UAF_FIX.md)
+and
+[`M6_SESSION_196_RELIABILITY_CLOSURE.md`](../benchmarks/M6/M6_SESSION_196_RELIABILITY_CLOSURE.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

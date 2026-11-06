@@ -195,3 +195,30 @@ the capability list in §8 is supported by executed evidence. The claim boundary
 the fixed defects, the residual standard-library ownership gap, the Unicode/ANSI limits,
 and the absence of long-running, debugger/profiler and benchmark evidence. Windows
 remains **FROZEN**; Linux remains FROZEN.
+
+## 10. Dated addendum — Sessions 194–196 (2026-11-06)
+
+Windows x86_64 runtime reliability was re-audited with bounded stress and one
+confirmed memory-safety defect was fixed and independently verified.
+
+* **Fixed:** collection services read `length`/`elements` directly from a freed
+  handle. `Vec`, `Map` and `Set` accessors now validate the handle against the
+  liveness table and fault `E-R05` (exit 105); previously they returned
+  deterministic stale values and exited 0. Regression: eleven tests in
+  `tests/collections_lib.rs`.
+* **Verified without changes:** double-free still `E-R04` (104), out-of-bounds
+  still `E-R10` (110), leaks still `E-R06` (106), valid operations unchanged.
+* **Still limited:** a freed-then-reused handle aliases the replacement
+  allocation, because the liveness table has no generation counter. This is an
+  explicit caveat, not a resolved issue.
+* **Fresh evidence:** full regression 3,194 passed / 0 failed / 1 ignored / 78
+  suites; release build 4,030,976 bytes; `invsync` all cases passed; 13
+  use-after-free variants, with 10× repeats on three representative cases;
+  bounded stress (20k alloc/free, 50k pushes, 5k collection cycles, 200
+  filesystem cycles, 256 KiB I/O, 30 child processes, 5 compiles) clean.
+
+This addendum raises the reliability evidence for the existing claim boundary. It
+does **not** establish long-running soak behaviour, complete memory safety, or M6
+external validation. Precondition misuse can still fault raw on some paths (§5
+item 20); M6 remains open, M7 remains gated, and Linux remains frozen. See
+[`../benchmarks/M6/M6_SESSION_196_RELIABILITY_CLOSURE.md`](../benchmarks/M6/M6_SESSION_196_RELIABILITY_CLOSURE.md).
