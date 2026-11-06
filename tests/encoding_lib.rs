@@ -587,8 +587,9 @@ fn e57_hex_decode_all_valid() {
 // These tests are STRICT. The harness (and the runtime) exit 106 on a live
 // allocation (E-R06), so asserting `code == 0` proves each call is leak-free
 // for HEAP-OWNED input as well as for immutable literals. The earlier UTF-8
-// tests (e26-e31) accept `0 || 106` and therefore cannot detect the
-// ownership bug these tests pin down.
+// tests (e26-e31) now follow the same rule (Session 190); originally they
+// accepted `0 || 106` and could not detect the ownership bug these tests pin
+// down.
 // ============================================================================
 
 /// `"h" + U+00E9 + "llo"` — mixed 1-byte and 2-byte code points.
