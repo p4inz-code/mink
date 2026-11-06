@@ -192,8 +192,11 @@ Records: [`M6_REPOSITORY_RECOVERY_AUDIT.md`](M6_REPOSITORY_RECOVERY_AUDIT.md),
 ## Deferred, not completed by M6-RC1
 
 - **File-type association harness** (`validation/windows_filetype/verify_filetype_association.ps1`)
-  was not run: it needs registry access and must not modify a real user's
-  associations without authorization.
+  is no longer deferred: it was run on 2026-11-06 against the **packaged**
+  `npm/mink/windows` assets and passed **56/56** with exit 0, including uninstall
+  restoration, per-user `HKCU` only, and no `HKLM` write. Its own restore pass and
+  independent key queries confirmed every MINK-owned entry was removed afterwards.
+  See [`M6_RC1_INDEPENDENT_REVERIFICATION.md`](M6_RC1_INDEPENDENT_REVERIFICATION.md) §7.
 - **`npm install -g`** was not exercised: it writes to the machine-wide global prefix.
   Installs were verified from the tarball into isolated prefixes instead, including paths
   with spaces and non-ASCII characters.

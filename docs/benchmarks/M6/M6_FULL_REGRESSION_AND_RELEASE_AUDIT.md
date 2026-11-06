@@ -103,3 +103,9 @@ tests or packaging pass.
 | File-type association harness | not run — needs registry access and must not modify a real user's associations | **not verified (deferred)** |
 | `npm install -g` | not run — writes to the machine-wide global prefix | **not verified (deferred)** |
 | Registry publish | intentionally not performed | **not done (by design)** |
+
+> **Current-status note, 2026-11-06.** The two rows above marked deferred are
+> unaffected, but the association harness has since been run against the packaged
+> `npm/mink/windows` assets and passed 56/56 (exit 0). That later result is recorded in
+> [`M6_RC1_INDEPENDENT_REVERIFICATION.md`](M6_RC1_INDEPENDENT_REVERIFICATION.md); the table
+> above remains the accurate record of what this operation itself measured.
