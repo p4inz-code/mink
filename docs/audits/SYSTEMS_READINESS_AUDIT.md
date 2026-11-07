@@ -302,3 +302,18 @@ is undocumented (462 checked, 0 missing). The CLI contract was measured directly
 exit 0; an unknown command and a missing file for `run`/`build`/`check` exit 1
 with a clear message. No code defect was found. See
 [`M6_SESSION_201_STDLIB_DX.md`](../benchmarks/M6/M6_SESSION_201_STDLIB_DX.md).
+
+*Dated addendum — Session 202 (2026-11-07).* Release readiness for the
+six-session programme was verified on the final tree: **3,218 passed / 0 failed
+/ 7 explicitly ignored / 79 suites** (all targets except `tls_lib`), release
+build clean at **4,043,776 bytes**, and release-mode diagnostics (24), bounded
+soak (7) and resource lifecycle (7) suites green. The programme added 51 tests
+and fixed three confirmed defects — generation-safe collection handles (197),
+integer-literal wraparound as `E-T43` (200), and the mangled aggregate
+diagnostic prefix (200). Residual limits stay recorded and unchanged: the
+unpatched `rt_fs_read` short-read risk, the 1 GiB no-coalesce arena ceiling,
+`MAX_LIVE_ALLOCS = 1024`, the 16-bit handle generation, bounded rather than
+open-ended soak evidence, and the absent `python3` that keeps `tls_lib` from
+running. M6 external developer validation remains outstanding, M7 remains
+gated on demonstrated demand, and Linux remains frozen. See
+[`M6_SESSION_202_RELEASE_READINESS.md`](../benchmarks/M6/M6_SESSION_202_RELEASE_READINESS.md).

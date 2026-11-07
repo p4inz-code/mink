@@ -386,6 +386,19 @@ contract was verified correct: `help` and no arguments exit 0; unknown
 commands and missing files exit 1 with clear messages. No code defect. See
 [`M6_SESSION_201_STDLIB_DX.md`](../benchmarks/M6/M6_SESSION_201_STDLIB_DX.md).
 
+*Dated status, 2026-11-07 (Session 202).* Release readiness was verified for the
+six-session reliability programme (197–202): **3,218 passed / 0 failed / 7
+explicitly ignored across 79 suites** (every target except `tls_lib`, whose TLS
+server needs the absent `python3`), release build clean at 4,043,776 bytes, and
+release-mode diagnostics (24), soak (7) and lifecycle (7) suites all green.
+The programme added 51 tests and fixed three confirmed defects (generation-safe
+collection handles, integer-literal wraparound `E-T43`, aggregate diagnostic
+prefix). Residual limits are recorded, including the unpatched `rt_fs_read`
+short-read risk, the 1 GiB no-coalesce arena ceiling and `MAX_LIVE_ALLOCS`.
+M6 external validation remains outstanding, M7 remains gated and Linux remains
+frozen. See
+[`M6_SESSION_202_RELEASE_READINESS.md`](../benchmarks/M6/M6_SESSION_202_RELEASE_READINESS.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
