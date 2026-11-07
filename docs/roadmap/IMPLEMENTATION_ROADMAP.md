@@ -347,6 +347,20 @@ bytes at the requested length (no deterministic trigger exists in the current
 API). See
 [`M6_SESSION_198_RESOURCE_LIFECYCLE.md`](../benchmarks/M6/M6_SESSION_198_RESOURCE_LIFECYCLE.md).
 
+*Dated status, 2026-11-07 (Session 199).* Sustained, bounded workloads were
+soaked in one process with a hard wall-clock budget per run and 10 ms sampling
+of the child's OS handle count and peak working set: 6 compiler builds, 100
+program launches, 400,000 collection cycles, 3,000 filesystem cycles plus five
+1 MiB reads, 100 child processes, 20,000 error-path iterations and three
+200-iteration combined runs (collections + filesystem + threads + process).
+All exited 0 with empty stderr, zero internal check failures and flat handle
+counts; the suite is 7 passed / 0 failed in 8.3 s. No confirmed defect. One
+over-large workload (64 KiB × 12,000) hit the already-documented no-coalesce
+arena ceiling as `E-R02` (102) at iteration 342 with 1027 MiB peak, failing
+loudly; the bounded workload was resized inside that documented limit rather
+than changing the allocator. See
+[`M6_SESSION_199_BOUNDED_SOAK.md`](../benchmarks/M6/M6_SESSION_199_BOUNDED_SOAK.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

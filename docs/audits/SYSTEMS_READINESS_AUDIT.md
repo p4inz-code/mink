@@ -249,3 +249,22 @@ does **not** establish long-running soak behaviour, complete memory safety, or M
 external validation. Precondition misuse can still fault raw on some paths (§5
 item 20); M6 remains open, M7 remains gated, and Linux remains frozen. See
 [`../benchmarks/M6/M6_SESSION_196_RELIABILITY_CLOSURE.md`](../benchmarks/M6/M6_SESSION_196_RELIABILITY_CLOSURE.md).
+
+*Dated addendum — Session 199 (2026-11-07).* Bounded sustained workloads were
+run in one process with a hard wall-clock budget and 10 ms sampling of the
+child's OS handle count and peak working set (`tests/soak.rs`, 7 `--ignored`
+tests): 6 compiler builds (5.2–13.9 ms each), 100 program launches (2.28 ms
+each), 400,000 collection cycles (0.021 ms/iter), 3,000 filesystem cycles plus
+five 1 MiB reads (1.065 ms/iter), 100 child processes (6.874 ms/iter), 20,000
+error-path iterations (0.045 ms/iter) and three 200-iteration combined runs
+(~7.1 ms/iter). Every run exited 0 with empty stderr, a zero internal failure
+counter and flat handle counts (28 → 68/82 → 68/78; peak WS 3.6–31.7 MiB). The
+suite passes 7/7 in 8.3 s; exit codes 104/105/110 reproduced 10/10 times on the
+error paths. No confirmed defect. One over-large workload (65,540 B × 12,000)
+reached the documented 1 GiB no-coalesce arena ceiling — `E-R02` (102) at
+iteration 342, peak WS 1027.1 MiB — failing loudly and deterministically; the
+bounded workload was resized inside the documented limit rather than changing
+the allocator. The `emit_fs_read` short-read risk remains recorded, not
+patched. This is bounded-soak evidence, not long-running stability, and M6
+external validation remains outstanding. See
+[`M6_SESSION_199_BOUNDED_SOAK.md`](../benchmarks/M6/M6_SESSION_199_BOUNDED_SOAK.md).
