@@ -146,6 +146,10 @@ pub enum TypeErrorKind {
     /// equality contract (Session 101, Wave B): only `Int`, `Bool`,
     /// `Char`, `Str`, and unit-only enums are valid keys.
     InvalidCollectionKey,
+    /// An integer literal does not fit in `Int` (64-bit two's complement).
+    /// The minimum value is only reachable as `-9223372036854775808`, a
+    /// negated literal, so the legal range depends on the sign.
+    IntegerLiteralOverflow,
 }
 
 impl TypeErrorKind {
@@ -198,6 +202,7 @@ impl TypeErrorKind {
             Self::MissingStructFieldInPattern => "E-T40",
             Self::StructPatternTypeMismatch => "E-T41",
             Self::InvalidCollectionKey => "E-T42",
+            Self::IntegerLiteralOverflow => "E-T43",
         }
     }
 }
@@ -622,6 +627,17 @@ impl TypeError {
         )
     }
 
+    /// Creates an integer-literal-overflow error at `span` (`E-T43`): the
+    /// literal's value does not fit in a 64-bit two's complement `Int`.
+    pub fn integer_literal_overflow(span: Span, text: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::IntegerLiteralOverflow,
+            span,
+            format!("integer literal `{text}` does not fit in `Int` (64-bit two's complement)"),
+            None,
+        )
+    }
+
     /// Creates an invalid-or-pattern error at `span` (`E-T34`): the
     /// alternatives of an or-pattern must bind exactly the same names, so
     /// the arm binds one value per name. `detail` names the offending
@@ -861,7 +877,8 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::UnknownStructFieldInPattern
             | TypeErrorKind::MissingStructFieldInPattern
             | TypeErrorKind::StructPatternTypeMismatch
-            | TypeErrorKind::InvalidCollectionKey => {
+            | TypeErrorKind::IntegerLiteralOverflow => actual.to_string(),
+            TypeErrorKind::InvalidCollectionKey => {
                 format!("`{expected}` is not a valid key type: {actual}")
             }
         };

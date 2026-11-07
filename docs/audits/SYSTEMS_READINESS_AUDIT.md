@@ -268,3 +268,25 @@ the allocator. The `emit_fs_read` short-read risk remains recorded, not
 patched. This is bounded-soak evidence, not long-running stability, and M6
 external validation remains outstanding. See
 [`M6_SESSION_199_BOUNDED_SOAK.md`](../benchmarks/M6/M6_SESSION_199_BOUNDED_SOAK.md).
+
+*Dated addendum — Session 200 (2026-11-07).* Compiler correctness and
+diagnostics were audited with a new 24-case contract battery
+(`tests/diagnostics.rs`): each malformed program must exit 1, carry the
+expected `E-…` code and a `file:line` location, contain no panic marker, and
+produce byte-identical stderr on a repeat compile. Two confirmed defects were
+fixed. (1) Integer literals that do not fit in `Int` silently wrapped —
+`9223372036854775808` printed `-9223372036854775808` and
+`999999999999999999999999` printed `2003764205206896639`, both exit 0 —
+because both literal decoders used wrapping arithmetic and nothing checked the
+source text. Literals are now decoded with checked arithmetic at type-check
+time and rejected as `E-T43`, in expressions and recursively in match patterns,
+while `-9223372036854775808` remains legal as `Int`'s minimum. (2) Every
+aggregate type diagnostic rendered `` `` is not a valid key type: … ``, the
+`E-T42` prefix, so `E-T11` array-index errors were mislabelled; aggregate kinds
+now print their own message. Verification: 24/24 debug, 24/24 release, and a
+fresh full regression across 78 suites (all targets except `tls_lib`, whose TLS
+server needs the absent `python3`) was run after the shared type-checker
+change. Release builds clean with `CARGO_INCREMENTAL=0`; the default
+incremental path crashed `rustc` with STATUS_ILLEGAL_INSTRUCTION once, an
+environment/toolchain event, not a source defect. See
+[`M6_SESSION_200_COMPILER_DIAGNOSTICS.md`](../benchmarks/M6/M6_SESSION_200_COMPILER_DIAGNOSTICS.md).

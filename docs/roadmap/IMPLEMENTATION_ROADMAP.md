@@ -361,6 +361,20 @@ loudly; the bounded workload was resized inside that documented limit rather
 than changing the allocator. See
 [`M6_SESSION_199_BOUNDED_SOAK.md`](../benchmarks/M6/M6_SESSION_199_BOUNDED_SOAK.md).
 
+*Dated status, 2026-11-07 (Session 200).* Compiler correctness and diagnostics
+were audited with a new 24-case contract battery (`tests/diagnostics.rs`) that
+pins exit code 1, error code, file:line, no panic marker and byte-identical
+stderr across repeated compiles. Two confirmed defects were fixed: integer
+literals that do not fit in `Int` now fail with `E-T43` instead of silently
+wrapping (including negated literals and match patterns, while
+`-9223372036854775808` stays legal), and aggregate type diagnostics no longer
+render the `is not a valid key type` prefix borrowed from `E-T42`. The battery
+passes 24/24 in debug and release; full regression is 78 suites with every
+target except `tls_lib` (its TLS test server needs `python3`, absent on the
+audit machine). M6 external validation remains outstanding and M7 remains
+gated. See
+[`M6_SESSION_200_COMPILER_DIAGNOSTICS.md`](../benchmarks/M6/M6_SESSION_200_COMPILER_DIAGNOSTICS.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

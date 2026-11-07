@@ -34,10 +34,10 @@ use crate::runtime::layout::{self, LayoutError};
 use crate::semantics::{SemanticResult, SymbolId, SymbolKind};
 use crate::source::{SourceMap, Span};
 
-use super::ExternalFnSig;
-use super::TypeResult;
 use super::error::TypeError;
 use super::ty::{EnumId, EnumVariantInfo, StructFieldInfo, StructId, TypeId, TypeKind, TypeTable};
+use super::ExternalFnSig;
+use super::TypeResult;
 
 /// A struct whose field types are still unresolved: the struct's id plus
 /// each declared field's name, span, and (unresolved) type expression.
@@ -2035,6 +2035,7 @@ impl<'a> Checker<'a> {
                 continue;
             }
             let guarded = arm.guard.is_some();
+            self.validate_pattern_literals(&arm.pattern);
             match &arm.pattern {
                 crate::ast::Pattern::Or { alternatives, span } => {
                     self.check_or_arm(alternatives, *span, canon, guarded, &mut coverage);
@@ -2153,6 +2154,7 @@ impl<'a> Checker<'a> {
             // whose pattern an earlier arm already fully covers can never
             // run (E-T25).
             let guarded = arm.guard.is_some();
+            self.validate_pattern_literals(&arm.pattern);
             match &arm.pattern {
                 Pattern::Or { alternatives, span } => {
                     self.check_or_arm(alternatives, *span, canon, guarded, &mut coverage);
@@ -2410,6 +2412,46 @@ impl<'a> Checker<'a> {
             Pattern::Tuple { .. } => None,
             // Struct patterns in payload context: not yet supported.
             Pattern::Struct { .. } => None,
+        }
+    }
+
+    /// Validates every integer literal inside a match pattern, recursively:
+    /// plain literals, range endpoints, or-alternatives, enum payloads and
+    /// tuple/struct element patterns. A negated literal may name exactly
+    /// `Int`'s minimum (`-9223372036854775808`); anything else outside the
+    /// 64-bit range is `E-T43`, matching expression literals.
+    fn validate_pattern_literals(&mut self, pattern: &Pattern) {
+        match pattern {
+            Pattern::Wildcard { .. } | Pattern::Binding(_) | Pattern::Bool { .. } => {}
+            Pattern::Int {
+                negative, literal, ..
+            } => self.check_int_literal(literal.span, *negative),
+            Pattern::Range { lo, hi, .. } => {
+                self.validate_pattern_literals(lo);
+                self.validate_pattern_literals(hi);
+            }
+            Pattern::Or { alternatives, .. } => {
+                for alternative in alternatives {
+                    self.validate_pattern_literals(alternative);
+                }
+            }
+            Pattern::Tuple { elements, .. } => {
+                for element in elements {
+                    self.validate_pattern_literals(element);
+                }
+            }
+            Pattern::Struct { fields, .. } => {
+                for field in fields {
+                    if let Some(binding) = &field.binding {
+                        self.validate_pattern_literals(binding);
+                    }
+                }
+            }
+            Pattern::EnumVariant { payload, .. } => {
+                if let Some(payload) = payload {
+                    self.validate_pattern_literals(payload);
+                }
+            }
         }
     }
 
@@ -3347,7 +3389,10 @@ impl<'a> Checker<'a> {
 
     fn check_expr(&mut self, expr: &Expr) -> TypeId {
         match &expr.kind {
-            ExprKind::Int => self.types.push(TypeKind::Int),
+            ExprKind::Int => {
+                self.check_int_literal(expr.span, false);
+                self.types.push(TypeKind::Int)
+            }
             ExprKind::Float => self.types.push(TypeKind::Float),
             ExprKind::Str => self.types.push(TypeKind::Str),
             ExprKind::Char => self.types.push(TypeKind::Char),
@@ -3358,7 +3403,18 @@ impl<'a> Checker<'a> {
                 None => self.types.push(TypeKind::Error),
             },
             ExprKind::Unary { op, operand } => {
-                let operand_ty = self.expr_type(operand);
+                // A negated integer literal is one literal for range
+                // checking: `-9223372036854775808` is `Int`'s minimum, so
+                // its digits alone (2^63) are legal only here.
+                let operand_ty = match (op, &operand.kind) {
+                    (UnaryOp::Neg, ExprKind::Int) => {
+                        self.check_int_literal(operand.span, true);
+                        let ty = self.types.push(TypeKind::Int);
+                        self.expr_types.push((operand.span, ty));
+                        ty
+                    }
+                    _ => self.expr_type(operand),
+                };
                 self.check_unary(*op, operand_ty, expr.span)
             }
             ExprKind::Borrow { mutable, operand } => {
@@ -4500,6 +4556,62 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// Validates that an integer literal's value fits in `Int` (64-bit two's
+    /// complement) and reports `E-T43` when it does not. The value is decoded
+    /// with overflow detection, so a literal above `u64::MAX` is rejected as
+    /// firmly as one between `i64::MAX` and `u64::MAX`. `allow_min` permits
+    /// exactly 2^63, which is legal only as the digits of a negated literal.
+    fn check_int_literal(&mut self, span: Span, allow_min: bool) {
+        let Some(text) = self
+            .sources
+            .get(span.file())
+            .and_then(|file| file.span_text(span))
+            .map(str::to_string)
+        else {
+            return;
+        };
+        let (radix, digits) =
+            if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+                (16u64, rest)
+            } else if let Some(rest) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
+                (8u64, rest)
+            } else if let Some(rest) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+                (2u64, rest)
+            } else {
+                (10u64, &text[..])
+            };
+        let mut value: u64 = 0;
+        let mut overflow = false;
+        for byte in digits.bytes() {
+            if byte == b'_' {
+                continue;
+            }
+            let digit = match byte {
+                b'0'..=b'9' => u64::from(byte - b'0'),
+                b'a'..=b'f' => u64::from(byte - b'a' + 10),
+                b'A'..=b'F' => u64::from(byte - b'A' + 10),
+                _ => return,
+            };
+            if digit >= radix {
+                return;
+            }
+            match value
+                .checked_mul(radix)
+                .and_then(|value| value.checked_add(digit))
+            {
+                Some(next) => value = next,
+                None => {
+                    overflow = true;
+                    break;
+                }
+            }
+        }
+        let fits = !overflow && (value <= i64::MAX as u64 || (allow_min && value == 1u64 << 63));
+        if !fits {
+            self.push_error(TypeError::integer_literal_overflow(span, &text));
         }
     }
 
