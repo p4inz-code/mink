@@ -143,13 +143,90 @@ fn echo_checksum(bytes: &[u8]) -> i64 {
 struct TlsServer {
     child: Child,
     port: u16,
+    log: PathBuf,
 }
 
 impl Drop for TlsServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // The stderr log is only kept when startup fails (see `fail_server`).
+        let _ = std::fs::remove_file(&self.log);
     }
+}
+
+/// A usable CPython 3 interpreter and the prefix arguments needed to reach it.
+struct PythonInterpreter {
+    program: PathBuf,
+    prefix: Vec<String>,
+}
+
+/// Locate CPython 3 for the TLS test server (Session 205).
+///
+/// `python3` is tried first, but on Windows it is frequently the Microsoft
+/// Store app-execution alias: it spawns a redirector that exits 49 with
+/// "Python was not found" instead of a Python process. A candidate is accepted
+/// only when it exits successfully *and* reports a Python 3 version, so the
+/// alias (and any other non-Python program that happens to be first on PATH)
+/// cannot be mistaken for an interpreter. The real CPython installed as
+/// `python` / `py -3` is then found instead.
+fn python_interpreter() -> &'static PythonInterpreter {
+    static FOUND: std::sync::OnceLock<PythonInterpreter> = std::sync::OnceLock::new();
+    FOUND.get_or_init(|| {
+        const CANDIDATES: [(&str, &[&str]); 3] =
+            [("python3", &[]), ("python", &[]), ("py", &["-3"])];
+        let mut attempts = Vec::new();
+        for (program, prefix) in CANDIDATES {
+            let output = match Command::new(program).args(prefix).arg("--version").output() {
+                Ok(output) => output,
+                Err(error) => {
+                    attempts.push(format!("{program}: {error}"));
+                    continue;
+                }
+            };
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if output.status.success() && text.contains("Python 3") {
+                return PythonInterpreter {
+                    program: PathBuf::from(program),
+                    prefix: prefix.iter().map(|arg| arg.to_string()).collect(),
+                };
+            }
+            attempts.push(format!(
+                "{program} {}: exit {:?}: {}",
+                prefix.join(" "),
+                output.status.code(),
+                text.trim()
+            ));
+        }
+        panic!(
+            "no usable Python 3 interpreter for the TLS test server; tried:\n  {}\n\
+             Install Python 3, or put a real interpreter first on PATH. `python3` on \
+             Windows is often the Microsoft Store alias, which is not a Python.",
+            attempts.join("\n  ")
+        );
+    })
+}
+
+/// Kill and reap a server that never became ready, then panic with its exit
+/// status and captured stderr. Without this the `Child` would be dropped
+/// without being killed (Rust does not kill on drop), leaving a stray process.
+fn fail_server(child: &mut Child, log_path: &Path, reason: &str) -> ! {
+    let status = child.try_wait().ok().flatten();
+    let _ = child.kill();
+    let _ = child.wait();
+    let log = std::fs::read_to_string(log_path).unwrap_or_default();
+    panic!(
+        "TLS test server {reason}{}; server log {}:\n{}",
+        status
+            .map(|status| format!(" (already exited with {status})"))
+            .unwrap_or_default(),
+        log_path.display(),
+        log.trim()
+    );
 }
 
 /// Start `tests/tls/server.py` with the committed `<cert>.pem` /
@@ -157,7 +234,14 @@ impl Drop for TlsServer {
 /// answers with the first chunk it reads; otherwise files under `root` are
 /// served over HTTPS. The port is read from the server's stdout.
 fn start_server(cert: &str, root: &Path, expect: i64) -> TlsServer {
-    let mut child = Command::new("python3")
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let log_path = artifact_dir().join(format!("tls_server_{n}.err"));
+    let log = std::fs::File::create(&log_path)
+        .unwrap_or_else(|error| panic!("cannot create {}: {error}", log_path.display()));
+    let python = python_interpreter();
+    let mut command = Command::new(&python.program);
+    command
+        .args(&python.prefix)
         .arg("tests/tls/server.py")
         .arg("--cert")
         .arg(format!("{cert}.pem"))
@@ -169,9 +253,14 @@ fn start_server(cert: &str, root: &Path, expect: i64) -> TlsServer {
         .arg(expect.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("failed to start python3 (required for the TLS test server)");
+        .stderr(Stdio::from(log));
+    let mut child = command.spawn().unwrap_or_else(|error| {
+        panic!(
+            "failed to start the TLS test server with {}: {error} (log {})",
+            python.program.display(),
+            log_path.display()
+        )
+    });
     let stdout = child.stdout.take().expect("server stdout");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -179,14 +268,27 @@ fn start_server(cert: &str, root: &Path, expect: i64) -> TlsServer {
         let _ = std::io::BufReader::new(stdout).read_line(&mut line);
         let _ = tx.send(line);
     });
-    let line = rx
-        .recv_timeout(Duration::from_secs(30))
-        .expect("TLS test server did not report a port within 30s");
-    let port = line
-        .trim()
-        .parse::<u16>()
-        .unwrap_or_else(|_| panic!("bad port line from TLS test server: {line:?}"));
-    TlsServer { child, port }
+    let line = match rx.recv_timeout(Duration::from_secs(30)) {
+        Ok(line) => line,
+        Err(error) => fail_server(
+            &mut child,
+            &log_path,
+            &format!("did not report a port within 30s ({error})"),
+        ),
+    };
+    let port = match line.trim().parse::<u16>() {
+        Ok(port) => port,
+        Err(_) => fail_server(
+            &mut child,
+            &log_path,
+            &format!("reported a bad port line {line:?}"),
+        ),
+    };
+    TlsServer {
+        child,
+        port,
+        log: log_path,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +426,29 @@ fn handshake_result(stdout: &[u8]) -> (i64, i64, i64) {
         "unexpected transcript: {values:?}"
     );
     (values[0], values[1], values[2])
+}
+
+/// The interpreter prerequisite is explicit: if discovery accepts an alias or
+/// a non-Python program, this test fails before any TLS test can run.
+#[test]
+fn s205_tls_interpreter_is_usable() {
+    let python = python_interpreter();
+    let output = Command::new(&python.program)
+        .args(&python.prefix)
+        .arg("--version")
+        .output()
+        .expect("resolved interpreter must be executable");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "interpreter failed: {text}");
+    assert!(text.contains("Python 3"), "not CPython 3: {text}");
+    assert!(
+        !text.contains("was not found"),
+        "the Microsoft Store alias must never be accepted: {text}"
+    );
 }
 
 // ---------------------------------------------------------------------------

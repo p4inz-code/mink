@@ -428,6 +428,21 @@ encoding is unchanged. Seven tests in `tests/capacity.rs`; full regression
 **3,231 passed / 0 failed / 7 ignored / 81 suites**. See
 [`M6_SESSION_204_CAPACITY_AND_GENERATIONS.md`](../benchmarks/M6/M6_SESSION_204_CAPACITY_AND_GENERATIONS.md).
 
+*Dated status, 2026-11-07 (Session 205).* The `tls_lib` environment failure was
+root-caused: `python3` is the Microsoft Store alias (spawns, then exits 49 with
+"Python was not found"), while CPython 3.11.9 is installed as `python`. The
+harness now probes `python3`, `python` and `py -3`, accepts only a successful
+`Python 3` probe, captures server stderr, reaps the child on startup failure
+and adds `s205_tls_interpreter_is_usable`. The full suite now executes: **21
+passed / 0 failed / 1 ignored**, repeated three times, no leaked processes or
+logs. The ignored test is the opt-in public-internet system-store control. A
+separate environment blocker appeared during verification: `rustc` at
+opt-level 3 crashes with `STATUS_ILLEGAL_INSTRUCTION` /
+`STATUS_HEAP_CORRUPTION` / `STATUS_ACCESS_VIOLATION` on every release build,
+including previously passing targets; debug builds are unaffected and this is
+not a repository defect. Release verification is recorded as not run. See
+[`M6_SESSION_205_TLS_HARNESS.md`](../benchmarks/M6/M6_SESSION_205_TLS_HARNESS.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

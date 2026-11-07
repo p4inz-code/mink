@@ -348,3 +348,20 @@ failed / 7 ignored / 81 suites**. Remaining: the 1 GiB ceiling and 1,024-slot
 table stay as documented limits, retirement consumes dead arena space, and
 `tls_lib` still cannot run without `python3`. See
 [`M6_SESSION_204_CAPACITY_AND_GENERATIONS.md`](../benchmarks/M6/M6_SESSION_204_CAPACITY_AND_GENERATIONS.md).
+
+*Dated addendum — Session 205 (2026-11-07).* The `tls_lib` limitation above is
+resolved. Root cause: `python3` is the Microsoft Store App Execution Alias,
+which spawns successfully and then exits 49 with "Python was not found"; the
+harness discarded stderr, so it could only report a readiness timeout, and it
+did not reap the child. CPython 3.11.9 is installed as `python`. The harness
+now probes `python3`, `python`, `py -3`, accepts only a successful `Python 3`
+probe, captures and reports server stderr, kills and reaps a failed child, and
+tests the prerequisite explicitly. The complete suite executes: **21 passed /
+0 failed / 1 ignored**, repeated three times; the single ignore is the opt-in
+public-internet system-store control. New environment blocker: every
+release-mode `rustc` invocation in this session crashed (varying
+`STATUS_ILLEGAL_INSTRUCTION`, `STATUS_HEAP_CORRUPTION`,
+`STATUS_ACCESS_VIOLATION`) on known-good targets and reduced-codegen flags;
+debug is unaffected. This is a toolchain/machine fault, recorded as not run
+rather than passed. See
+[`M6_SESSION_205_TLS_HARNESS.md`](../benchmarks/M6/M6_SESSION_205_TLS_HARNESS.md).
