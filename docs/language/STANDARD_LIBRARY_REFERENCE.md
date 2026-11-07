@@ -378,7 +378,7 @@ filesystem last-error call.
 | Call | Success | Failure | Evidence |
 | --- | --- | --- | --- |
 | `fs_write(path, data) -> Int` | bytes written (`0` for empty data) | `-1` | EXEC |
-| `fs_read(path) -> Str` | owned contents; empty file gives `""` | `""` | EXEC |
+| `fs_read(path) -> Str` | owned contents; length is the bytes actually read; empty file and failed read give `""` | `""` | EXEC (Session 203) |
 | `fs_file_size(path) -> Int` | bytes (`0` for empty) | `-1` | EXEC |
 | `fs_exists(path) -> Bool` | `true` / `false` | - | EXEC |
 | `fs_create_dir`, `fs_remove_dir`, `fs_remove_file`, `fs_copy_file`, `fs_move`, `fs_set_cwd` | `0` | `1` | EXEC (create/remove/copy/move per Session 177) |
@@ -390,6 +390,14 @@ filesystem last-error call.
 
 `fs_read` cannot distinguish a missing file from an empty file: both return a
 zero-length string. Use `fs_exists` or `fs_file_size` (`-1` vs `0`).
+
+`fs_read` sizes its allocation from `GetFileSize`, then uses the byte count
+`ReadFile` actually transferred as the returned string's length. A failed read
+and a short read therefore return an owned string of exactly the transferred
+bytes (empty on failure); the uninitialised tail of the allocation is never
+exposed. Files at or above 4 GiB are outside the supported range: `GetFileSize`
+reports only the low 32 bits, and the 1 GiB heap ceiling rejects larger
+allocations with `E-R02` (102).
 
 `fs_is_file` returns true when the path exists and its size is non-negative;
 `fs_is_dir` returns true when the path exists and its size is negative. These

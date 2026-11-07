@@ -399,6 +399,21 @@ M6 external validation remains outstanding, M7 remains gated and Linux remains
 frozen. See
 [`M6_SESSION_202_RELEASE_READINESS.md`](../benchmarks/M6/M6_SESSION_202_RELEASE_READINESS.md).
 
+*Dated status, 2026-11-07 (Session 203).* The Session 198 filesystem-read
+finding was confirmed and fixed. `rt_fs_read` discarded `ReadFile`'s BOOL and
+transferred-byte count, so a failed or short read returned a string whose
+length claimed the full file size over uninitialised or stale heap bytes. The
+emitter now records the actual byte count in a per-call stack slot (not the
+shared `.bss` scratch, avoiding a cross-thread length race), returns an owned
+empty string when `ReadFile` fails, and exposes only the bytes transferred. A
+byte-range lock gives a deterministic reproduction: before the fix the program
+reported 4096 bytes for a failing read, after it reports 0, frees the result
+and exits cleanly, and the same executable reads 4096 bytes once the lock is
+released. Six new tests in `tests/fs_read.rs`; full regression **3,224 passed /
+0 failed / 7 ignored / 80 suites**. No ABI change. Files ≥ 4 GiB remain outside
+the supported range. See
+[`M6_SESSION_203_FILESYSTEM_READ.md`](../benchmarks/M6/M6_SESSION_203_FILESYSTEM_READ.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

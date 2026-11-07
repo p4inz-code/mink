@@ -317,3 +317,18 @@ open-ended soak evidence, and the absent `python3` that keeps `tls_lib` from
 running. M6 external developer validation remains outstanding, M7 remains
 gated on demonstrated demand, and Linux remains frozen. See
 [`M6_SESSION_202_RELEASE_READINESS.md`](../benchmarks/M6/M6_SESSION_202_RELEASE_READINESS.md).
+
+*Dated addendum — Session 203 (2026-11-07).* The `rt_fs_read` risk recorded in
+Session 198 was confirmed: the emitter ignored `ReadFile`'s BOOL and byte count
+and returned a string sized by `GetFileSize` over uninitialised/stale memory.
+The fix records the transferred count in a per-call stack slot, sets the
+string length from it, and returns an owned empty string when the read fails.
+A held `LockFile` byte range reproduces the failure deterministically: the
+pre-fix binary reported 4096 bytes, the fixed binary reports 0, frees the
+result, exits 0, and reads the full file after the lock is released. Six tests
+in `tests/fs_read.rs`; debug 6/6 (4 runs), release 6/6, full regression **3,224
+passed / 0 failed / 7 ignored / 80 suites**. Remaining: short reads share the
+fixed path but have no deterministic public-API trigger; `GetFileSize` is a
+32-bit API, so files ≥ 4 GiB stay outside the supported range; `tls_lib` still
+cannot run without `python3`. See
+[`M6_SESSION_203_FILESYSTEM_READ.md`](../benchmarks/M6/M6_SESSION_203_FILESYSTEM_READ.md).

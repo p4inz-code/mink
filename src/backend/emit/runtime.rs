@@ -10098,7 +10098,8 @@ fn emit_fs_read(code: &mut Code) {
     code.mov_r_mem(Reg::Rax, Reg::Rbp, 16);
     to_cstr(code, Reg::Rax);
     // Spill: [rbp-8]=cstr [rbp-16]=handle [rbp-24]=size [rbp-32]=result_ptr
-    code.sub_rsp(32);
+    // [rbp-40]=bytes_read (zeroed before ReadFile: it writes a DWORD)
+    code.sub_rsp(64);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr
     // CreateFileA(cstr, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
     code.sub_rsp(64); // 32 shadow + 24 stack args + 8 pad = 64
@@ -10131,15 +10132,41 @@ fn emit_fs_read(code: &mut Code) {
     code.mov_mem_r(Reg::Rbp, -32, Reg::Rax); // result ptr
     // ReadFile(handle, result+8, size, &bytes_read, NULL)
     // 5 args: 4 reg + 1 stack. Need 32 shadow + 8 stack + 8 pad = 48
+    //
+    // Session 203: the transferred-byte count goes to a stack slot rather
+    // than the shared `BSS.bytes_written` scratch, so concurrent readers
+    // cannot cross their lengths. The slot is zeroed first because ReadFile
+    // writes only a DWORD; the 64-bit load below then has a defined high
+    // half.
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -40, Reg::Rax);
     code.sub_rsp(48);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // handle
-    code.mov_rr(Reg::Rdx, Reg::Rax); // lpBuffer = result
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32); // lpBuffer = result
     code.add_r_imm8(Reg::Rdx, 8); // skip length prefix
     code.mov_r_mem(Reg::R8, Reg::Rbp, -24); // nNumberOfBytesToRead
-    code.lea_r_rip(Reg::R9, PatchKind::Bss(BSS.bytes_written as u32)); // reuse bytes_written for bytes_read
+    code.lea_r_mem(Reg::R9, Reg::Rbp, -40); // &bytes_read
     code.mov_mem_imm32(Reg::Rsp, 32, 0); // lpOverlapped = NULL
     code.call_rip(PatchKind::Iat(IAT_READ_FILE));
     code.add_rsp(48);
+    // Session 203: honour the BOOL and the transferred byte count. A failed
+    // read returns an owned empty Str (the documented "cannot read" result);
+    // a short read returns exactly the bytes transferred, never the
+    // uninitialised tail of the allocation. The length prefix must describe
+    // the data, not the size that was requested at open time.
+    let read_failed = code.label();
+    let read_done = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, read_failed); // jz — ReadFile returned FALSE
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -40); // bytes actually transferred
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32);
+    code.mov_mem_r(Reg::Rdx, 0, Reg::Rax); // Str length = bytes_read
+    code.jmp_label(read_done);
+    code.bind_label(read_failed);
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -32);
+    code.mov_mem_r(Reg::Rdx, 0, Reg::Rax); // owned empty Str
+    code.bind_label(read_done);
     // CloseHandle
     code.sub_rsp(32);
     code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);

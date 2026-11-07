@@ -174,6 +174,18 @@ string-data region (bounds recorded into `.bss` at `rt_init`);
 string intrinsics validate their pointer argument first (`E-R05`) and
 bounds-check every index (`E-R09`).
 
+### Filesystem reads (Session 203)
+
+`rt_fs_read` allocates from `GetFileSize`, then records the count `ReadFile`
+actually transferred as the string's length prefix, and treats `ReadFile`
+returning FALSE as an owned empty string. The count lives in a per-call stack
+slot rather than the shared `.bss` bytes-written scratch, so concurrent reads
+cannot observe each other's lengths. A short read (the file shrank while open,
+or a device delivered fewer bytes) returns exactly the bytes transferred; the
+uninitialised tail of the allocation is never exposed. Files at or above 4 GiB
+remain outside the supported range: `GetFileSize` reports only the low 32 bits,
+and the 1 GiB heap ceiling rejects larger allocations with `E-R02` (102).
+
 ### Bounded socket operations (Session 145)
 
 `rt_net_so_error(sock) -> Int` exposes
