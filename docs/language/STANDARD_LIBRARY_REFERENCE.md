@@ -1026,3 +1026,109 @@ return and unconditional releases rather than freeing in branches.
 - `stdlib/*.mink`: implementation and comments.
 - `examples/`: complete programs.
 - `benchmarks/m6/session180/`: the audit's cold-start application and verifier.
+
+## 26. Complete exported surface (Session 201 appendix)
+
+Sections 4–22 describe the common functions of each module. This appendix
+lists every **public** top-level `fn` exported by `stdlib/*.mink` that those
+sections do not mention, with its source signature. Names beginning with `_`
+are private implementation helpers and are intentionally excluded. Signatures
+are copied from the source; behavior is covered (or not) by the module's tests
+and by the notes in §24.
+
+### 26.1 Byte and character predicates (`mod byte`, `mod strings`)
+
+```
+byte_is_alpha(b: Int) -> Bool
+byte_is_alphanumeric(b: Int) -> Bool
+byte_is_hex(b: Int) -> Bool
+byte_is_lower(b: Int) -> Bool
+byte_is_printable(b: Int) -> Bool
+byte_is_upper(b: Int) -> Bool
+byte_is_whitespace(b: Int) -> Bool
+str_is_space(b: Int) -> Bool
+```
+
+### 26.2 Math (`mod math`)
+
+```
+math_float_acos(x: Float) -> Float
+math_float_asin(x: Float) -> Float
+math_float_atan(x: Float) -> Float
+math_float_atan2(y: Float, x: Float) -> Float
+math_float_ceil(f: Float) -> Float
+math_float_cos(x: Float) -> Float
+math_float_cosh(x: Float) -> Float
+math_float_exp(x: Float) -> Float
+math_float_ln(x: Float) -> Float
+math_float_log(base: Float, x: Float) -> Float
+math_float_log10(x: Float) -> Float
+math_float_log2(x: Float) -> Float
+math_float_max(a: Float, b: Float) -> Float
+math_float_min(a: Float, b: Float) -> Float
+math_float_pow(base: Float, exp: Float) -> Float
+math_float_round(f: Float) -> Float
+math_float_sign(f: Float) -> Float
+math_float_tan(x: Float) -> Float
+math_float_tanh(x: Float) -> Float
+math_float_trunc(f: Float) -> Float
+```
+
+### 26.3 Time (`mod time`)
+
+```
+time_byte_str(b: Int) -> Str
+time_day(ts: Int) -> Int
+time_days_from_civil(y0: Int, m: Int, d: Int) -> Int
+time_digits(hi: Int, lo: Int) -> Int
+time_hour(ts: Int) -> Int
+time_minute(ts: Int) -> Int
+time_month(ts: Int) -> Int
+time_month_abbr(m: Int) -> Str
+time_pad4(n: Int) -> Str
+time_second(ts: Int) -> Int
+time_strftime_directive(ts: Int, c: Int) -> Str
+time_weekday_abbr(w: Int) -> Str
+```
+
+### 26.4 Logging (`mod logging`)
+
+```
+log_critical(msg: Str) -> Int
+log_warning(msg: Str) -> Int
+log_level_debug() -> Int
+log_level_info() -> Int
+log_level_warning() -> Int
+log_level_error() -> Int
+log_level_critical() -> Int
+```
+
+### 26.5 HTTP and networking helpers
+
+```
+http_byte_eq_ci(a: Int, b: Int) -> Bool
+http_is_upper(b: Int) -> Bool
+http_parse_int_from_bytes(s: Str, start: Int, end: Int) -> Int
+http_response_ok(response: Str) -> Bool
+http_server_read_request_default(sock: Int) -> Str
+http_server_request_copy(request: Str) -> Str
+http_server_serve_default(sock: Int) -> (Int, Str)
+http_server_text_type() -> Str
+http_sub_bytes(s: Str, start: Int, end: Int) -> Str
+http_to_lower(b: Int) -> Int
+http_url_host(url: Str) -> Str
+http_url_path(url: Str) -> Str
+http_url_port(url: Str) -> Int
+net_set_last_error(code: Int) -> Int
+```
+
+### 26.6 Runtime string intrinsics re-exported by `mod strings`
+
+```
+rt_str_from_char(b: Int) -> Str
+rt_str_parse_int(s: Str) -> Int
+```
+
+`tests/stdlib_docs.rs` scans `stdlib/*.mink` and fails when a public function
+is missing from this reference, so the appendix stays complete as the surface
+grows.
