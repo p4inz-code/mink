@@ -292,13 +292,13 @@ environment/toolchain event, not a source defect. See
 [`M6_SESSION_200_COMPILER_DIAGNOSTICS.md`](../benchmarks/M6/M6_SESSION_200_COMPILER_DIAGNOSTICS.md).
 
 *Dated addendum — Session 201 (2026-11-07).* The standard-library surface and
-CLI developer experience were reviewed. `stdlib/*.mink` declares 686
-top-level functions: 448 public and 238 `_`-private helpers. The reference
-covered 385 of the 448 public functions (85.9%); the 63 missing are now listed
+CLI developer experience were reviewed. `stdlib/*.mink` declares 700
+top-level declarations: 462 public and 238 `_`-private helpers. The reference
+covered 397 of the 462 public functions (85.9%); the 65 missing are now listed
 with source signatures in §26 of the reference (math 20, http 13, time 12, log
-7, byte 7, rt 2, str 1, net 1), and a new `tests/stdlib_docs.rs` guard scans
-the library and fails when a public function is undocumented (448 checked, 0
-missing). The CLI contract was measured directly: `mink help` and no arguments
+7, byte 7, rt 2, str 1, net 1, network shutdown constants 2), and a new
+`tests/stdlib_docs.rs` guard scans the library and fails when a public function
+is undocumented (462 checked, 0 missing). The CLI contract was measured directly: `mink help` and no arguments
 exit 0; an unknown command and a missing file for `run`/`build`/`check` exit 1
 with a clear message. No code defect was found. See
 [`M6_SESSION_201_STDLIB_DX.md`](../benchmarks/M6/M6_SESSION_201_STDLIB_DX.md).

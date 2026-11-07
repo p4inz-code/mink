@@ -376,9 +376,10 @@ gated. See
 [`M6_SESSION_200_COMPILER_DIAGNOSTICS.md`](../benchmarks/M6/M6_SESSION_200_COMPILER_DIAGNOSTICS.md).
 
 *Dated status, 2026-11-07 (Session 201).* The standard-library surface and CLI
-developer experience were reviewed. Of 686 top-level stdlib functions, 448 are
-public and the reference covered 385 of them (85.9%); the 63 missing
-(math 20, http 13, time 12, log 7, byte 7, rt 2, str 1, net 1) are now listed
+developer experience were reviewed. Of 700 top-level stdlib declarations, 462 are
+public and the reference covered 397 of them (85.9%); the 65 missing
+(math 20, http 13, time 12, log 7, byte 7, rt 2, str 1, net 1, network
+shutdown constants 2) are now listed
 with source signatures in an appendix, and a new guard test scans
 `stdlib/*.mink` so an undocumented public function fails the suite. The CLI
 contract was verified correct: `help` and no arguments exit 0; unknown

@@ -1129,6 +1129,14 @@ rt_str_from_char(b: Int) -> Str
 rt_str_parse_int(s: Str) -> Int
 ```
 
+### 26.7 Networking shutdown constants (`mod network`)
+
+```
+SD_RECEIVE() -> Int   // 0: stop receiving
+SD_SEND() -> Int      // 1: stop sending
+SD_BOTH() -> Int      // 2: stop both directions
+```
+
 `tests/stdlib_docs.rs` scans `stdlib/*.mink` and fails when a public function
 is missing from this reference, so the appendix stays complete as the surface
 grows.

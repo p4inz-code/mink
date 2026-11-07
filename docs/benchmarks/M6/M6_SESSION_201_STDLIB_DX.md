@@ -17,17 +17,17 @@ surface and the CLI contract.
 
 ## 2. Surface census
 
-`stdlib/*.mink` declares **686** top-level functions. Splitting by the naming
+`stdlib/*.mink` declares **700** top-level declarations. Splitting by the naming
 convention used throughout the library:
 
 | Kind | Count |
 | --- | --- |
-| Public (no leading `_`) | **448** |
+| Public (no leading `_`) | **462** |
 | Private helpers (`_`-prefixed) | 238 |
 
 Matching each public name against
 `docs/language/STANDARD_LIBRARY_REFERENCE.md` (whole-word, so `log_log` cannot
-satisfy a search for `log`) found **385 covered (85.9%)** and **63 missing**:
+satisfy a search for `log`) found **397 covered (85.9%)** and **65 missing**:
 
 | Module | Missing public functions |
 | --- | --- |
@@ -39,6 +39,7 @@ satisfy a search for `log`) found **385 covered (85.9%)** and **63 missing**:
 | rt (string intrinsics re-exported by `strings`) | 2 |
 | str (`str_is_space`) | 1 |
 | net (`net_set_last_error`) | 1 |
+| network shutdown constants (`SD_SEND`, `SD_BOTH`) | 2 |
 
 Every one is reachable from a program: a documented API that silently omits
 `math_float_ceil`, `math_float_pow`, `time_hour`, `log_warning`,
@@ -48,7 +49,7 @@ module suites.
 
 ## 3. Fix — appendix plus a permanent guard
 
-* **`docs/language/STANDARD_LIBRARY_REFERENCE.md` §26** now lists all 63 with
+* **`docs/language/STANDARD_LIBRARY_REFERENCE.md` §26** now lists all 65 with
   their source signatures, grouped by module (byte/strings, math, time,
   logging, HTTP/net, runtime string intrinsics). Signatures are copied from
   `stdlib/*.mink`.
@@ -58,7 +59,7 @@ module suites.
   saw more than 400 public functions, so a parsing change cannot make the
   guard pass vacuously.
 
-Result after the fix: **448 checked, 0 missing**.
+Result after the fix: **462 checked, 0 missing**.
 
 ## 4. CLI contract (verified, no change needed)
 
@@ -77,7 +78,7 @@ shows the correct 1. The CLI was never wrong; the measurement was.
 
 ## 5. Verification
 
-* `cargo test --test stdlib_docs`: **1 passed** (448 public functions checked,
+* `cargo test --test stdlib_docs`: **1 passed** (462 public functions checked,
   0 missing).
 * No compiler/runtime/stdlib source changed, so the Session 200 full
   regression still stands; the suite count for the release audit becomes
@@ -101,6 +102,6 @@ cargo test --test stdlib_docs
 
 ## 8. Verdict
 
-**PASS — no code defect; one documentation gap (63 public functions) closed
+**PASS — no code defect; one documentation gap (65 public names) closed
 with an appendix and a permanent guard.** The CLI's help/error contract was
 verified correct.
