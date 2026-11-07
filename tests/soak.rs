@@ -635,6 +635,226 @@ fn main() {{
 }
 
 // ============================================================================
+// 8. Extended mixed soak (Session 207)
+// ============================================================================
+
+/// Recursive size of the artifact directory, for the bounded-disk check.
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                total += dir_size(&path);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+/// Session 207: a longer mixed soak with explicit safety limits.
+///
+/// Limits: wall clock from `MINK_SOAK_SECONDS` (default 300 s, hard cap 900 s);
+/// one MINK child at a time; a 30 s per-launch budget; a single 512-byte file;
+/// compiler and error-path runs every 20 launches; the TLS suite once at the
+/// start and once near the end. Every generated executable is removed after
+/// use, and the whole artifact subdirectory is removed at the end.
+///
+/// Measured: launches and exit-code distribution, peak working set, handle
+/// trend, compiler builds, fatal-error runs, TLS suite runs, disk usage.
+#[test]
+#[ignore = "extended soak: run with --ignored (default 300 s, MINK_SOAK_SECONDS)"]
+fn s207_extended_mixed_soak() {
+    let budget = std::env::var("MINK_SOAK_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(300)
+        .clamp(30, 900);
+    let dir = artifact_dir().join("extended");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("payload.bin");
+    let missing = dir.join("absent.bin");
+    let disk_before = dir_size(&artifact_dir());
+
+    let source = format!(
+        r#"
+fn main() {{
+    let file = "{file}";
+    let miss = "{missing}";
+    let mut bad = 0;
+    let mut i = 0;
+    while i < 25 {{
+        let mut v = rt_vec_new(8);
+        let mut k = 0;
+        while k < 40 {{ v = rt_vec_push(v, k); k = k + 1; }}
+        if rt_vec_len(v) != 40 {{ bad = bad + 1; }}
+        if rt_vec_get(v, 39) != 39 {{ bad = bad + 1; }}
+        rt_vec_free(v);
+        let p = rt_alloc(64);
+        rt_mem_store(p, i);
+        if rt_mem_load(p) != i {{ bad = bad + 1; }}
+        rt_free(p);
+        let s = str_repeat("ab", 256);
+        if fs_write(file, s) != 512 {{ bad = bad + 1; }}
+        let r = fs_read(file);
+        if rt_str_len(r) != 512 {{ bad = bad + 1; }}
+        rt_str_free(r);
+        if fs_file_size(file) != 512 {{ bad = bad + 1; }}
+        let e = fs_read(miss);
+        if rt_str_len(e) != 0 {{ bad = bad + 1; }}
+        rt_str_free(e);
+        if process_run("echo soak") != 0 {{ bad = bad + 1; }}
+        i = i + 1;
+    }}
+    fs_remove_file(file);
+    rt_print_int(bad);
+    rt_exit(0);
+}}
+"#,
+        file = mink_path(&file),
+        missing = mink_path(&missing),
+    );
+    let full = format!(
+        "{}\n{}\n{}\n{source}",
+        read_lib("filesystem"),
+        read_lib("strings"),
+        read_lib("process")
+    );
+    let master = build("extended", &full);
+
+    let err_exe = build(
+        "extended_err",
+        "fn main() { let p = rt_alloc(16); rt_free(p); rt_free(p); rt_exit(0); }",
+    );
+
+    let run_tls = || -> bool {
+        let out = Command::new("cargo")
+            .args(["test", "-q", "--test", "tls_lib"])
+            .output()
+            .expect("cargo test tls_lib did not run");
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("test result: ok")
+    };
+
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(budget);
+    let mut codes = std::collections::BTreeMap::new();
+    let mut launches = 0usize;
+    let mut peak_ws = 0usize;
+    let mut first_handles = Vec::new();
+    let mut last_handles = Vec::new();
+    let mut builds = 0usize;
+    let mut errors = 0usize;
+    let mut tls_runs = 0usize;
+    let mut tls_ok = 0usize;
+
+    assert!(run_tls(), "TLS suite failed at soak start");
+    tls_runs += 1;
+    tls_ok += 1;
+
+    while Instant::now() < deadline {
+        let exe = master.with_extension(format!("run{launches}.exe"));
+        std::fs::copy(&master, &exe).unwrap();
+        let o = run_sampled(&exe, Duration::from_secs(30));
+        assert_eq!(
+            o.code, 0,
+            "extended soak launch {launches} exited {} (stdout={:?} stderr={:?})",
+            o.code, o.stdout, o.stderr
+        );
+        assert_eq!(
+            first_int(&o.stdout),
+            Some(0),
+            "extended soak launch {launches}: checks failed"
+        );
+        *codes.entry(o.code).or_insert(0usize) += 1;
+        if let Some(p) = o.peak_ws {
+            peak_ws = peak_ws.max(p);
+        }
+        let hmax = o.handles.iter().copied().max().unwrap_or(0);
+        if launches < 5 {
+            first_handles.push(hmax);
+        }
+        last_handles.push(hmax);
+        if last_handles.len() > 5 {
+            last_handles.remove(0);
+        }
+        launches += 1;
+
+        if launches % 20 == 0 {
+            let compiled = build("extended_build", &full);
+            let size = std::fs::metadata(&compiled).map(|m| m.len()).unwrap_or(0);
+            assert!(size > 10_000, "compiler produced no PE ({size} bytes)");
+            let _ = std::fs::remove_file(&compiled);
+            builds += 1;
+
+            for _ in 0..3 {
+                let out = Command::new(&err_exe).output().expect("error exe failed");
+                assert_eq!(
+                    out.status.code(),
+                    Some(104),
+                    "double free must stay deterministic under soak"
+                );
+                errors += 1;
+            }
+        }
+
+        if started.elapsed().as_secs() + 45 >= budget && tls_runs == 1 {
+            assert!(run_tls(), "TLS suite failed at soak end");
+            tls_runs += 1;
+            tls_ok += 1;
+        }
+    }
+
+    // A final TLS run if the budget was too short to schedule the late one.
+    if tls_runs == 1 {
+        assert!(run_tls(), "TLS suite failed at soak end");
+        tls_runs += 1;
+        tls_ok += 1;
+    }
+
+    let elapsed = started.elapsed();
+    let disk_after = dir_size(&artifact_dir());
+    let _ = std::fs::remove_file(&master);
+    let _ = std::fs::remove_file(&err_exe);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let base = first_handles.iter().copied().max().unwrap_or(0);
+    let tail = last_handles.iter().copied().max().unwrap_or(0);
+    println!(
+        "extended soak: budget={budget}s elapsed={:.1}s launches={launches} codes={codes:?} \
+         builds={builds} errors={errors} tls={tls_ok}/{tls_runs} peak_ws={} \
+         handles={base}->{tail} disk={}->{}",
+        elapsed.as_secs_f64(),
+        mib(Some(peak_ws)),
+        disk_before,
+        disk_after,
+    );
+
+    assert!(
+        elapsed <= Duration::from_secs(budget + 120),
+        "soak overran its budget"
+    );
+    assert_eq!(codes.get(&0).copied().unwrap_or(0), launches);
+    assert_eq!(errors, builds * 3);
+    assert_eq!(tls_ok, tls_runs);
+    assert!(tls_runs >= 2);
+    assert!(
+        tail <= base + 8 || base == 0,
+        "handle count drifted {base} -> {tail} over {launches} launches"
+    );
+    // The TLS suite's race-free fixture test intentionally creates one fresh
+    // fixture root per run; everything this soak creates is removed. Allow a
+    // small bounded growth rather than requiring byte-for-byte equality.
+    let growth = disk_after.saturating_sub(disk_before);
+    assert!(
+        growth < 8 * 1024 * 1024,
+        "soak left {growth} bytes of artifacts behind"
+    );
+}
+
+// ============================================================================
 // Win32 measurements
 // ============================================================================
 
@@ -679,11 +899,7 @@ mod win {
             let mut count: u32 = 0;
             let ok = GetProcessHandleCount(h, &mut count);
             CloseHandle(h);
-            if ok == 0 {
-                None
-            } else {
-                Some(count)
-            }
+            if ok == 0 { None } else { Some(count) }
         }
     }
 

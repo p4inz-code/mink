@@ -377,3 +377,14 @@ API remains whole-file, so offsets above 4 GiB are not reachable. Five sparse
 tests in `tests/large_file.rs`; red 4 failed / 1 passed, green 5/5. Release
 remains environment-blocked by the `rustc` crash. See
 [`M6_SESSION_206_LARGE_FILES.md`](../benchmarks/M6/M6_SESSION_206_LARGE_FILES.md).
+
+*Dated addendum — Session 207 (2026-11-07).* Extended soak evidence: a bounded
+300-second run (cap 900 s) with one child at a time, a 30-second per-launch
+budget, a 512-byte payload and artifact cleanup. **1,440/1,440 launches exited
+0** across Vec/alloc/string/filesystem/process workloads; **72/72 compiler
+builds** produced a PE; **216/216 double-free runs** exited 104; **2/2 TLS
+suites** passed; peak working set **4.1 MiB**; handle count **73 → 79**; disk
+growth 298 KB, entirely the TLS race test's per-run fixture root; zero
+crashes, hangs or unexpected errors. This is a 5-minute run, not a multi-hour
+soak, and release re-runs remain blocked by the `rustc` environment crash. See
+[`M6_SESSION_207_EXTENDED_SOAK.md`](../benchmarks/M6/M6_SESSION_207_EXTENDED_SOAK.md).

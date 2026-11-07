@@ -457,6 +457,17 @@ index 44 so no earlier index moves. Five sparse-file tests in
 by the environment `rustc` crash. See
 [`M6_SESSION_206_LARGE_FILES.md`](../benchmarks/M6/M6_SESSION_206_LARGE_FILES.md).
 
+*Dated status, 2026-11-07 (Session 207).* Reliability evidence was extended with
+a bounded 300-second mixed soak (`MINK_SOAK_SECONDS`, hard cap 900 s): 1,440
+fresh program launches (Vec, allocate/free, strings, filesystem write/read/
+size/missing-file, child process), 72 compiler builds, 216 deterministic
+double-free runs and two full `tls_lib` suites. Observed: 300.1 s, all 1,440
+launches exit 0, 4.1 MiB peak working set, handle count 73 → 79, 298 KB of
+intentional TLS fixture growth, zero crashes/hangs. The test is `#[ignore]`d
+and enforces its own per-launch 30 s budget and cleanup. Release re-runs remain
+blocked by the environment `rustc` crash. See
+[`M6_SESSION_207_EXTENDED_SOAK.md`](../benchmarks/M6/M6_SESSION_207_EXTENDED_SOAK.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
