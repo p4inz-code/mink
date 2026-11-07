@@ -9997,6 +9997,8 @@ const IAT_TLS_GET_VALUE: u32 = 42;
 const IAT_TLS_SET_VALUE: u32 = 43;
 // --- Session 125: growable heap ---
 const IAT_VIRTUAL_ALLOC: u32 = 40;
+// --- Session 206: exact 64-bit file sizes ---
+const IAT_GET_FILE_SIZE_EX: u32 = super::pe::iat::GET_FILE_SIZE_EX;
 
 const IAT_STD_INPUT_HANDLE: i32 = -10;
 
@@ -10051,7 +10053,9 @@ fn emit_fs_exists(code: &mut Code) {
 }
 
 /// `rt_fs_file_size(path: Str) -> Int`.
-/// Opens the file, gets its size via GetFileSize, closes it.
+/// Opens the file, reads its exact 64-bit size via GetFileSizeEx, closes it.
+/// `GetFileSize` reported only the low DWORD, so files at or above 4 GiB were
+/// silently truncated to their size modulo 4 GiB (Session 206).
 fn emit_fs_file_size(code: &mut Code) {
     prologue(code);
     // [rbp+16] = path Str ptr
@@ -10078,13 +10082,24 @@ fn emit_fs_file_size(code: &mut Code) {
     code.cmp_r_imm32(Reg::Rax, 0xFF_FF_FF_FFu32);
     let err = code.label();
     code.jcc_label(0x84, err); // je
-    // GetFileSize(handle, NULL) — 2 reg args, 0 stack args
+    // GetFileSizeEx(handle, &large_integer) — 2 reg args, 0 stack args.
+    // [rbp-32] holds the LARGE_INTEGER; [rbp-24] holds the returned size.
     code.sub_rsp(32); // shadow only: RSP = RBP-64 ≡ 0 mod 16
-    code.mov_rr(Reg::Rcx, Reg::Rax); // hFile
-    code.xor_rr32(Reg::Rdx, Reg::Rdx); // lpFileSizeHigh = NULL
-    code.call_rip(PatchKind::Iat(IAT_GET_FILE_SIZE));
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // hFile
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -32); // lpFileSize
+    code.call_rip(PatchKind::Iat(IAT_GET_FILE_SIZE_EX));
     code.add_rsp(32);
-    // Rax = size (DWORD)
+    // Session 206: the BOOL result must be checked. Before this, a failed
+    // query returned whatever happened to be in RAX as the file size.
+    let have_size = code.label();
+    let size_saved = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x85, have_size); // jnz — query succeeded
+    code.movabs(Reg::Rax, 0xFFFF_FFFF_FFFF_FFFFu64); // -1
+    code.jmp_label(size_saved);
+    code.bind_label(have_size);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -32); // exact 64-bit size
+    code.bind_label(size_saved);
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // save size
     // CloseHandle — 1 reg arg, 0 stack args
     code.sub_rsp(32);
@@ -10117,6 +10132,7 @@ fn emit_fs_read(code: &mut Code) {
     to_cstr(code, Reg::Rax);
     // Spill: [rbp-8]=cstr [rbp-16]=handle [rbp-24]=size [rbp-32]=result_ptr
     // [rbp-40]=bytes_read (zeroed before ReadFile: it writes a DWORD)
+    // [rbp-48]=LARGE_INTEGER size from GetFileSizeEx
     code.sub_rsp(64);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr
     // CreateFileA(cstr, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
@@ -10135,13 +10151,25 @@ fn emit_fs_read(code: &mut Code) {
     code.cmp_r_imm32(Reg::Rax, 0xFF_FF_FF_FFu32);
     let err = code.label();
     code.jcc_label(0x84, err);
-    // GetFileSize(handle, NULL)
+    // GetFileSizeEx(handle, &large_integer). Session 206: the 32-bit
+    // `GetFileSize` silently truncated files at or above 4 GiB, and its
+    // `INVALID_FILE_SIZE` failure value was indistinguishable from a real
+    // 4 GiB-1 length. A failed query and a file too large for the arena are
+    // both refused as an owned empty Str, never truncated.
     code.sub_rsp(32);
-    code.mov_rr(Reg::Rcx, Reg::Rax);
-    code.xor_rr32(Reg::Rdx, Reg::Rdx);
-    code.call_rip(PatchKind::Iat(IAT_GET_FILE_SIZE));
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16); // hFile
+    code.lea_r_mem(Reg::Rdx, Reg::Rbp, -48); // lpFileSize
+    code.call_rip(PatchKind::Iat(IAT_GET_FILE_SIZE_EX));
     code.add_rsp(32);
+    let unreadable = code.label();
+    code.test_rr(Reg::Rax, Reg::Rax);
+    code.jcc_label(0x84, unreadable); // jz — size query failed
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -48); // exact 64-bit size
     code.mov_mem_r(Reg::Rbp, -24, Reg::Rax); // size
+    // A Str of `size` needs 16 header bytes; refuse anything that could not
+    // fit the arena instead of letting StrAlloc abort with E-R02.
+    code.cmp_r_imm32(Reg::Rax, (HEAP_MAX_BYTES - 16) as u32);
+    code.jcc_label(0x87, unreadable); // ja — larger than the arena
     // StrAlloc(size)
     code.sub_rsp(8);
     code.u8(0x50); // push rax (size)
@@ -10194,7 +10222,14 @@ fn emit_fs_read(code: &mut Code) {
     code.mov_r_mem(Reg::Rax, Reg::Rbp, -32);
     let end = code.label();
     code.jmp_label(end);
-    // Error path: return empty string
+    // Size failure or a file larger than the arena: close the open handle,
+    // then fall through to the owned-empty-string result.
+    code.bind_label(unreadable);
+    code.sub_rsp(32);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -16);
+    code.call_rip(PatchKind::Iat(IAT_CLOSE_HANDLE));
+    code.add_rsp(32);
+    // Error path (invalid handle: nothing to close): return empty string
     code.bind_label(err);
     code.sub_rsp(8);
     code.xor_rr32(Reg::Rax, Reg::Rax);

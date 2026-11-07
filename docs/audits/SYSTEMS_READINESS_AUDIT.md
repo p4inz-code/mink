@@ -365,3 +365,15 @@ release-mode `rustc` invocation in this session crashed (varying
 debug is unaffected. This is a toolchain/machine fault, recorded as not run
 rather than passed. See
 [`M6_SESSION_205_TLS_HARNESS.md`](../benchmarks/M6/M6_SESSION_205_TLS_HARNESS.md).
+
+*Dated addendum — Session 206 (2026-11-07).* The 4 GiB `GetFileSize`
+limitation recorded in Sessions 203/204 was a real defect, not just an
+unsupported range: `fs_file_size` returned the low DWORD (4 GiB + 12,345 →
+12,345; exactly 4 GiB → 0) and `fs_read` returned that many leading bytes,
+while a 4 GiB−1 file aborted with `E-R02`. Both services now use
+`GetFileSizeEx`; `fs_file_size` reports the exact 64-bit length and `fs_read`
+refuses files larger than the arena with an owned empty string. The public
+API remains whole-file, so offsets above 4 GiB are not reachable. Five sparse
+tests in `tests/large_file.rs`; red 4 failed / 1 passed, green 5/5. Release
+remains environment-blocked by the `rustc` crash. See
+[`M6_SESSION_206_LARGE_FILES.md`](../benchmarks/M6/M6_SESSION_206_LARGE_FILES.md).

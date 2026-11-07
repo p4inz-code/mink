@@ -393,13 +393,16 @@ filesystem last-error call.
 `fs_read` cannot distinguish a missing file from an empty file: both return a
 zero-length string. Use `fs_exists` or `fs_file_size` (`-1` vs `0`).
 
-`fs_read` sizes its allocation from `GetFileSize`, then uses the byte count
-`ReadFile` actually transferred as the returned string's length. A failed read
-and a short read therefore return an owned string of exactly the transferred
-bytes (empty on failure); the uninitialised tail of the allocation is never
-exposed. Files at or above 4 GiB are outside the supported range: `GetFileSize`
-reports only the low 32 bits, and the 1 GiB heap ceiling rejects larger
-allocations with `E-R02` (102).
+`fs_read` obtains the exact 64-bit size with `GetFileSizeEx` (Session 206),
+then uses the byte count `ReadFile` actually transferred as the returned
+string's length. A failed read and a short read therefore return an owned
+string of exactly the transferred bytes (empty on failure); the uninitialised
+tail of the allocation is never exposed. A file larger than the 1 GiB arena
+(minus the 16-byte string header) is refused with an owned empty string
+instead of being truncated or aborting, and a failed size query takes the same
+safe path. `fs_file_size` also uses `GetFileSizeEx`, so it reports the exact
+64-bit length at and above 4 GiB rather than the low 32 bits. The read API
+remains whole-file; there is no seek or read-at-offset operation.
 
 `fs_is_file` returns true when the path exists and its size is non-negative;
 `fs_is_dir` returns true when the path exists and its size is negative. These

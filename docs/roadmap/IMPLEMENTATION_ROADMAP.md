@@ -443,6 +443,20 @@ including previously passing targets; debug builds are unaffected and this is
 not a repository defect. Release verification is recorded as not run. See
 [`M6_SESSION_205_TLS_HARNESS.md`](../benchmarks/M6/M6_SESSION_205_TLS_HARNESS.md).
 
+*Dated status, 2026-11-07 (Session 206).* Large-file handling was audited. The
+public filesystem API is whole-file only (no seek/read-at-offset), but both
+`fs_file_size` and `fs_read` used the 32-bit `GetFileSize`, so a file of 4 GiB
++ 12,345 reported 12,345 and its read returned 12,345 leading bytes; exactly
+4 GiB reported 0, and 4 GiB−1 aborted with `E-R02` while trying to allocate
+4 GiB. Both services now use `GetFileSizeEx`: `fs_file_size` is exact at and
+above 4 GiB, and `fs_read` refuses a file larger than the 1 GiB arena with an
+owned empty string after closing the handle. The new import is appended at IAT
+index 44 so no earlier index moves. Five sparse-file tests in
+`tests/large_file.rs` (`SetEndOfFile`, 16-byte tail, cleanup guard); red run
+4 failed / 1 passed, after the fix 5/5. Release verification remains blocked
+by the environment `rustc` crash. See
+[`M6_SESSION_206_LARGE_FILES.md`](../benchmarks/M6/M6_SESSION_206_LARGE_FILES.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

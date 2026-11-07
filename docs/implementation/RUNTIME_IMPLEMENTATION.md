@@ -184,9 +184,12 @@ returning FALSE as an owned empty string. The count lives in a per-call stack
 slot rather than the shared `.bss` bytes-written scratch, so concurrent reads
 cannot observe each other's lengths. A short read (the file shrank while open,
 or a device delivered fewer bytes) returns exactly the bytes transferred; the
-uninitialised tail of the allocation is never exposed. Files at or above 4 GiB
-remain outside the supported range: `GetFileSize` reports only the low 32 bits,
-and the 1 GiB heap ceiling rejects larger allocations with `E-R02` (102).
+uninitialised tail of the allocation is never exposed. Session 206 replaced
+`GetFileSize` with `GetFileSizeEx`: `rt_fs_file_size` now reports the exact
+64-bit length (including at and above 4 GiB), and `rt_fs_read` refuses a file
+larger than the arena (1 GiB minus the 16-byte header) with an owned empty
+string instead of silently truncating it. A failed size query takes the same
+safe path. The API stays whole-file; no offset operation exists.
 
 ### Bounded socket operations (Session 145)
 

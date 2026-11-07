@@ -74,6 +74,9 @@ const KERNEL32_IMPORTS: &[&str] = &[
     "TlsAlloc",
     "TlsGetValue",
     "TlsSetValue",
+    // --- Exact 64-bit file sizes (Session 206) ---
+    // Appended at the end so every existing IAT index stays stable.
+    "GetFileSizeEx",
 ];
 
 const K32_COUNT: u32 = KERNEL32_IMPORTS.len() as u32;
@@ -85,9 +88,9 @@ const K32_COUNT: u32 = KERNEL32_IMPORTS.len() as u32;
 const ILT_OFFSET: u32 = 40;
 /// IAT offset: after ILT entries + null
 pub(crate) const IAT_OFFSET: u32 = ILT_OFFSET + (K32_COUNT + 1) * 8;
-// 1792: the 44 kernel32 hint/name entries plus the ILT/IAT pairs need 1561
-// bytes (Session 144 added TlsAlloc/TlsGetValue/TlsSetValue); 1536 would
-// truncate the table.
+// 1792: the 45 kernel32 hint/name entries plus the ILT/IAT pairs need 1593
+// bytes (Session 144 added TlsAlloc/TlsGetValue/TlsSetValue; Session 206 added
+// GetFileSizeEx); 1536 would truncate the table.
 pub(crate) const IDATA_SIZE: u32 = 1792;
 
 /// Size of the import directory (1 descriptor + null = 40 bytes).
@@ -107,6 +110,8 @@ pub(crate) mod iat {
     pub const GET_FILE_ATTRIBUTES_A: u32 = 5;
     pub const GET_FILE_SIZE: u32 = 6;
     pub const FIND_FIRST_FILE_A: u32 = 7;
+    // Appended at the end (Session 206) so every earlier index stays stable.
+    pub const GET_FILE_SIZE_EX: u32 = 44;
     pub const FIND_NEXT_FILE_A: u32 = 8;
     pub const FIND_CLOSE: u32 = 9;
     pub const CREATE_DIRECTORY_A: u32 = 10;
