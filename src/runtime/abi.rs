@@ -138,6 +138,11 @@ pub const HANDLE_GENERATION_SHIFT: u8 = 48;
 pub const HANDLE_ADDRESS_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 /// Generation counter width, in bits (the tag field above).
+///
+/// A freed block whose generation reaches `0xFFFF` is retired rather than
+/// reused (Session 204): generation 0 is never issued, so a stale handle
+/// cannot alias a later occupant. Retirement costs one block per 65,536
+/// reuses of a block and leaves the handle encoding unchanged.
 pub const HANDLE_GENERATION_BITS: u32 = 16;
 
 /// The exit code base for runtime errors: a runtime error with number `n`

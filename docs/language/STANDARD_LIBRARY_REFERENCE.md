@@ -329,9 +329,11 @@ fn main() -> Int {
   Handles also carry the allocation generation, so a freed handle whose block
   is **reused by a new allocation** is still rejected (`E-R05`, 105) rather
   than aliasing the replacement; freeing such a handle is `E-R05` too, while a
-  plain double free remains `E-R04` (104). The generation is 16 bits, so the
-  only remaining alias window is a handle kept alive across 65,536
-  reallocations of the same block. Treat freed handles as dead.
+  plain double free remains `E-R04` (104). The generation is 16 bits, but a
+  freed block whose generation reaches `0xFFFF` is retired instead of reused
+  (Session 204), so generation 0 is never issued and a handle kept across any
+  number of reallocations stays dead (`E-R05`, 105). The cost is one abandoned
+  block per 65,536 reuses.
 - A `Vec<Str>` built with `rt_vec_push` inside deeply nested `if`/`else` blocks
   produced a corrupted length (16 for one element) and an invalid free in the
   Session 180 application. The same pattern worked at shallower nesting. The

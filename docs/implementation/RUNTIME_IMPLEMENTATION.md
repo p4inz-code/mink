@@ -58,8 +58,10 @@ have a stable foundation.
   `rt_alloc` increments it and records it in the liveness slot, so every reuse
   of a block invalidates handles issued for its previous occupant. A handle
   whose address matches a live entry but whose generation does not is `E-R05`
-  (105); a double free stays `E-R04` (104). The tag is 16 bits, so a block
-  must be reallocated 65,536 times before a stale handle could match again.
+  (105); a double free stays `E-R04` (104). The tag is 16 bits: when a freed
+  block's generation reaches `0xFFFF` the block is retired instead of reused
+  (Session 204), so generation 0 is never issued and a stale handle cannot
+  become valid again. The cost is one abandoned block per 65,536 reuses.
   Tags exist only on collection handles — raw pointers, strings and every
   other runtime service are unchanged.
 - The pure-Rust reference allocator (`src/runtime/allocator.rs`) mirrors

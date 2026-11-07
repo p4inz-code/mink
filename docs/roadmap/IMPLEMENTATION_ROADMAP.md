@@ -414,6 +414,20 @@ released. Six new tests in `tests/fs_read.rs`; full regression **3,224 passed /
 the supported range. See
 [`M6_SESSION_203_FILESYSTEM_READ.md`](../benchmarks/M6/M6_SESSION_203_FILESYSTEM_READ.md).
 
+*Dated status, 2026-11-07 (Session 204).* Runtime capacity was audited. The
+1 GiB no-coalesce arena and `MAX_LIVE_ALLOCS = 1024` are intentional, documented
+limits: a request above the ceiling is `E-R02` (102) before any commit, an
+`i64::MAX` size cannot wrap, and the 1,025th live allocation is `E-R03` (103)
+with no partially linked metadata. The 16-bit handle generation had a real ABA
+defect: after 65,536 reuses of one block the tag wrapped back to a stale
+handle's value, and the stale handle was accepted (red check: exit 110 instead
+of 105). Freed blocks now retire at generation `0xFFFF` instead of being
+reused, so generation 0 is never issued and stale handles stay `E-R05`
+permanently; the cost is one abandoned block per 65,536 reuses and the handle
+encoding is unchanged. Seven tests in `tests/capacity.rs`; full regression
+**3,231 passed / 0 failed / 7 ignored / 81 suites**. See
+[`M6_SESSION_204_CAPACITY_AND_GENERATIONS.md`](../benchmarks/M6/M6_SESSION_204_CAPACITY_AND_GENERATIONS.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

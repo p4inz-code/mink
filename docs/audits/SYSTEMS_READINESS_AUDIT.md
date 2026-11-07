@@ -332,3 +332,19 @@ fixed path but have no deterministic public-API trigger; `GetFileSize` is a
 32-bit API, so files ≥ 4 GiB stay outside the supported range; `tls_lib` still
 cannot run without `python3`. See
 [`M6_SESSION_203_FILESYSTEM_READ.md`](../benchmarks/M6/M6_SESSION_203_FILESYSTEM_READ.md).
+
+*Dated addendum — Session 204 (2026-11-07).* All three capacity risks were
+inspected. The arena ceiling (1 GiB, no coalescing) and the 1,024-slot live
+allocation table are intentional and fail deterministically (`E-R02`/102 for a
+request above the ceiling before any commit; `E-R03`/103 for the 1,025th live
+allocation) with no partially linked metadata and no post-failure corruption
+path. The 16-bit generation field was a confirmed ABA defect: after 65,536
+reuses of one block the tag wrapped and a stale handle was accepted as live
+(red check reached `E-R10`/110 instead of `E-R05`/105). Freed blocks now retire
+at generation `0xFFFF`, generation 0 is never issued, and retired addresses are
+never reused; the cost is one abandoned block per 65,536 reuses. Seven tests in
+`tests/capacity.rs`, debug and release 7/7; full regression **3,231 passed / 0
+failed / 7 ignored / 81 suites**. Remaining: the 1 GiB ceiling and 1,024-slot
+table stay as documented limits, retirement consumes dead arena space, and
+`tls_lib` still cannot run without `python3`. See
+[`M6_SESSION_204_CAPACITY_AND_GENERATIONS.md`](../benchmarks/M6/M6_SESSION_204_CAPACITY_AND_GENERATIONS.md).

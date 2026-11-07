@@ -1047,11 +1047,21 @@ fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
     // area; blocks smaller than that have no generation history and cannot
     // hold a collection buffer (whose header starts at 24 bytes).
     let no_lineage = code.label();
+    let retire = code.label();
     code.cmp_r_imm32(Reg::Rdx, 24);
     code.jcc_label(0x82, no_lineage); // jb
     code.mov_r_mem(Reg::R8, Reg::Rcx, 16);
     code.shr_r_imm8(Reg::R8, LIVE_ENTRY_GENERATION_SHIFT);
     code.mov_mem_r(Reg::Rax, 16, Reg::R8);
+    // Session 204: never issue generation 0. A block whose occupant used
+    // generation 0xFFFF is retired instead of being reused: after 65,536
+    // reuses of one block the 16-bit tag would otherwise wrap and a stale
+    // handle would match the new occupant again (ABA). Retiring costs one
+    // block per 65,536 reuses and keeps every stale handle permanently
+    // stale. Blocks below 24 bytes never carry collection handles and keep
+    // the plain free-list path.
+    code.cmp_r_imm32(Reg::R8, 0xFFFF);
+    code.jcc_label(0x84, retire); // je — generation exhausted
     code.bind_label(no_lineage);
 
     // Mark dead and push onto the LIFO free list.
@@ -1059,6 +1069,14 @@ fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
     code.mov_r_rip(Reg::Rdx, PatchKind::Bss(BSS.free_head as u32));
     code.mov_mem_r(Reg::Rax, 0, Reg::Rdx);
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.free_head as u32));
+    code.xor_rr32(Reg::Rax, Reg::Rax);
+    rt_lock_release(code);
+    code.leave_ret();
+
+    code.bind_label(retire);
+    // The block stays dead and is never linked into the free list, so its
+    // address cannot be handed out again in this process.
+    code.mov_mem_imm32(Reg::Rcx, 16, 0); // dead, generation cleared
     code.xor_rr32(Reg::Rax, Reg::Rax);
     rt_lock_release(code);
     code.leave_ret();
