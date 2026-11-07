@@ -468,6 +468,17 @@ and enforces its own per-launch 30 s budget and cleanup. Release re-runs remain
 blocked by the environment `rustc` crash. See
 [`M6_SESSION_207_EXTENDED_SOAK.md`](../benchmarks/M6/M6_SESSION_207_EXTENDED_SOAK.md).
 
+*Dated status, 2026-11-07 (Session 208).* Section 26 is the Session 201 appendix
+of public stdlib functions omitted from the main sections, not a language
+feature section. Its 66 signatures were audited against `stdlib/*.mink`; all
+match exactly and no function is missing. The former gap was that
+`tests/stdlib_docs.rs` only checked name mentions. New
+`tests/stdlib_signatures.rs` extracts every §26 signature and compares it with
+the source `fn`, failing on any name, parameter, arity or return-type drift;
+it passes 1/1. Behavior remains covered by the module suites. No API change.
+See
+[`M6_SESSION_208_SECTION26_SIGNATURES.md`](../benchmarks/M6/M6_SESSION_208_SECTION26_SIGNATURES.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

@@ -388,3 +388,13 @@ growth 298 KB, entirely the TLS race test's per-run fixture root; zero
 crashes, hangs or unexpected errors. This is a 5-minute run, not a multi-hour
 soak, and release re-runs remain blocked by the `rustc` environment crash. See
 [`M6_SESSION_207_EXTENDED_SOAK.md`](../benchmarks/M6/M6_SESSION_207_EXTENDED_SOAK.md).
+
+*Dated addendum — Session 208 (2026-11-07).* Section 26 of the standard-library
+reference is the appendix of 66 public functions omitted from the main
+sections. All 66 signatures were checked against `stdlib/*.mink` and match
+exactly; no function is missing and no API changed. The prior coverage gap was
+mention-only checking in `tests/stdlib_docs.rs`; the new
+`tests/stdlib_signatures.rs` extracts each §26 signature and compares it with
+the source, failing on any drift (1/1 passing). Runtime behavior stays covered
+by the module suites. See
+[`M6_SESSION_208_SECTION26_SIGNATURES.md`](../benchmarks/M6/M6_SESSION_208_SECTION26_SIGNATURES.md).

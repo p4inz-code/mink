@@ -1152,4 +1152,7 @@ SD_BOTH() -> Int      // 2: stop both directions
 
 `tests/stdlib_docs.rs` scans `stdlib/*.mink` and fails when a public function
 is missing from this reference, so the appendix stays complete as the surface
-grows.
+grows. `tests/stdlib_signatures.rs` extracts every signature above and compares
+it with the corresponding top-level source `fn`, so a stale name, parameter
+type or return type fails the suite instead of merely being mentioned
+(Session 208).
