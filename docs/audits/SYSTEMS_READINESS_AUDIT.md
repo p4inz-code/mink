@@ -407,3 +407,17 @@ clean at **85 suites, 3,262 passed, 0 failed, 9 ignored**, with zero non-zero
 suite exits. Release-mode runs remain blocked by the environment `rustc` crash.
 See
 [`M6_SESSION_209_CROSS_SUBSYSTEM.md`](../benchmarks/M6/M6_SESSION_209_CROSS_SUBSYSTEM.md).
+
+*Dated addendum — Session 210 (2026-11-07, final).* Final independent audit:
+worktree preserved (four untracked user files), no merge markers or new
+binaries, Cargo/npm versions both 1.0.5, npm package unpublished. Debug build
+and full regression pass at **85 suites / 3,262 passed / 0 failed / 9 ignored /
+0 bad exits**, and the 203/204/206 fixes plus the 208/209 guards were re-run
+independently (6/6, 5/5, 7/7, 4/4, 1/1). **Release build is still blocked**:
+`rustc` at opt-level 3 crashes with `STATUS_ILLEGAL_INSTRUCTION` /
+`STATUS_HEAP_CORRUPTION` / `STATUS_ACCESS_VIOLATION`, including after a forced
+1.97.1 toolchain reinstall; debug works and a trivial release crate builds.
+Release-mode verification is recorded as not run. Final verdict: **NOT READY**
+— an environment release blocker, not a confirmed MINK defect; M6 external
+validation also remains outstanding. See
+[`M6_SESSION_210_FINAL_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_210_FINAL_ACCEPTANCE.md).

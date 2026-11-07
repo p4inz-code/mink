@@ -489,6 +489,19 @@ The full regression independently re-exercises the 203/204/206 fixes and is
 clean at **85 suites, 3,262 passed, 0 failed, 9 ignored**. See
 [`M6_SESSION_209_CROSS_SUBSYSTEM.md`](../benchmarks/M6/M6_SESSION_209_CROSS_SUBSYSTEM.md).
 
+*Dated status, 2026-11-07 (Session 210 — final audit).* Six-session programme
+complete through Session 209, with Session 210 **PARTIAL**: repository
+integrity, versions (Cargo and npm 1.0.5), documentation and the full debug
+regression are clean (**85 suites, 3,262 passed, 0 failed, 9 ignored**), but
+the release build cannot be produced on this machine. Every release `rustc`
+compile crashes with `STATUS_ILLEGAL_INSTRUCTION`, `STATUS_HEAP_CORRUPTION`
+or `STATUS_ACCESS_VIOLATION`, including after a forced toolchain reinstall;
+debug is unaffected and a trivial release crate compiles. Release build and
+release-mode suites are therefore **not run**. Final verdict: **NOT READY**
+(environment release-verification blocker plus outstanding M6 external
+validation), not a confirmed source defect. See
+[`M6_SESSION_210_FINAL_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_210_FINAL_ACCEPTANCE.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
