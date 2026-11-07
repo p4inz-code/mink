@@ -398,3 +398,12 @@ mention-only checking in `tests/stdlib_docs.rs`; the new
 the source, failing on any drift (1/1 passing). Runtime behavior stays covered
 by the module suites. See
 [`M6_SESSION_208_SECTION26_SIGNATURES.md`](../benchmarks/M6/M6_SESSION_208_SECTION26_SIGNATURES.md).
+
+*Dated addendum — Session 209 (2026-11-07).* Cross-subsystem audit: four new
+tests combine filesystem reads with collections, generation retirement, failed
+reads and live-table exhaustion. All pass; no new defect was found. The full
+regression independently re-exercises the Session 203/204/206 fixes and is
+clean at **85 suites, 3,262 passed, 0 failed, 9 ignored**, with zero non-zero
+suite exits. Release-mode runs remain blocked by the environment `rustc` crash.
+See
+[`M6_SESSION_209_CROSS_SUBSYSTEM.md`](../benchmarks/M6/M6_SESSION_209_CROSS_SUBSYSTEM.md).

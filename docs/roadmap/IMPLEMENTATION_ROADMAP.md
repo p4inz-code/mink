@@ -479,6 +479,16 @@ it passes 1/1. Behavior remains covered by the module suites. No API change.
 See
 [`M6_SESSION_208_SECTION26_SIGNATURES.md`](../benchmarks/M6/M6_SESSION_208_SECTION26_SIGNATURES.md).
 
+*Dated status, 2026-11-07 (Session 209).* Cross-subsystem seams were audited
+along the compiler→runtime→stdlib path, with four new permanent tests in
+`tests/cross_subsystem.rs`: eight live file reads across recursive collection
+churn, stale-handle rejection after filesystem churn, a failed `ReadFile`
+followed by collection and read work in the same process, and live-table
+exhaustion while file data is live. All four pass; no new defect was found.
+The full regression independently re-exercises the 203/204/206 fixes and is
+clean at **85 suites, 3,262 passed, 0 failed, 9 ignored**. See
+[`M6_SESSION_209_CROSS_SUBSYSTEM.md`](../benchmarks/M6/M6_SESSION_209_CROSS_SUBSYSTEM.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
