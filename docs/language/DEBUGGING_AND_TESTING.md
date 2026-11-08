@@ -1,8 +1,12 @@
 # MINK Debugging and Testing
 
-**Applies to:** MINK 1.0.4 (repository build) and 1.0.2 (installed npm package)
-on Windows x86_64.
-**Status:** Working guide, verified 2026-11-05 (M6 Sessions 179-180).
+**Applies to:** MINK 1.0.5 (current repository build) and MINK 1.0.4 (published
+npm package) on Windows x86_64. The commands and diagnostics below were
+verified on 2026-11-05 (M6 Sessions 179-180) against the then-current 1.0.4
+repository build and a 1.0.2 install; audit-time version numbers are kept where
+they are part of the recorded evidence.
+**Status:** Working guide, verified 2026-11-05 (M6 Sessions 179-180); current
+version line re-checked 2026-11-08 (Session 217).
 **Companions:** [`LANGUAGE_BASICS.md`](LANGUAGE_BASICS.md),
 [`STANDARD_LIBRARY_REFERENCE.md`](STANDARD_LIBRARY_REFERENCE.md).
 
@@ -26,8 +30,8 @@ where a diagnostic is imprecise, that is stated rather than smoothed over.
 ## 1. Environment and compile/run
 
 ```bash
-mink --version            # installed package: mink 1.0.2 on the audit machine
-./target/release/mink.exe --version   # repository build: mink 1.0.4
+mink --version            # installed package: 1.0.2 on the audit machine; the registry now serves 1.0.4
+./target/release/mink.exe --version   # repository build: mink 1.0.5 (1.0.4 at audit time)
 mink help                 # command list
 ```
 
@@ -356,15 +360,16 @@ reporting.
 ## 7. Comparing installed and repository compilers
 
 ```bash
-# installed (1.0.2 here)
+# installed (1.0.2 on the audit machine; the registry now serves 1.0.4)
 mink build app.mink && ./app.exe
 
-# repository (1.0.4 here), from the repository root
+# repository (1.0.5 now; 1.0.4 at audit time), from the repository root
 ./target/release/mink.exe build /path/to/app.mink
 ```
 
-Record both versions. On the audit machine they differ (1.0.2 vs 1.0.4), so a
-difference in behavior is not automatically a regression in either. When
+Record both versions. At audit time they differed (1.0.2 vs 1.0.4); the
+registry now serves 1.0.4 and the repository build is 1.0.5, so they can still
+differ. A difference in behavior is not automatically a regression in either. When
 comparing, hold the source, arguments and working directory constant; change
 only the compiler path. The Session 180 verifier supports this directly:
 
@@ -433,7 +438,8 @@ future tests:
 ## 10. Limitations of this guide
 
 - Windows x86_64 only; Linux behavior is outside this audit.
-- The installed package was 1.0.2, not 1.0.4; version-specific behavior may
+- The installed package used for the audit was 1.0.2 (the registry now serves
+  1.0.4, and the repository build is 1.0.5); version-specific behavior may
   differ elsewhere.
 - `mink repl`, package commands (`init`, `add`, `install`, environments) and
   `--target` were not exercised.

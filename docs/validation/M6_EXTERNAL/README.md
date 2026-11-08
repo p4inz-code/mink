@@ -141,10 +141,10 @@ Read in this order, and note where you had to guess:
 5. `docs/language/DEBUGGING_AND_TESTING.md` — diagnostics, exit codes, bug
    report template.
 
-The reference documents were audited against 1.0.4. Where a page says
-"Applies to 1.0.4", treat it as describing the same language surface as 1.0.5;
-report any statement that turns out to be wrong for 1.0.5 as a documentation
-defect.
+The reference documents were audited against 1.0.4 and now name 1.0.5 as the
+current repository build. Where a page records a 1.0.4-specific result, treat it
+as the audit baseline and verify it as you go; report any statement that turns
+out to be wrong for 1.0.5 as a documentation defect.
 
 ## 7. Example programs
 

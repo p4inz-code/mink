@@ -2,7 +2,10 @@
 
 **Platform:** Windows x64 only. Linux is not supported by this package.
 **Audited:** 2026-11-05 against the published `@p4inz-code/mink@1.0.4` artifact
-and the repository build.
+and the then-current 1.0.4 repository build.
+**Current repository build:** **1.0.5**, unpublished. The install examples
+below intentionally pin the published `1.0.4` artifact, which is what the
+registry still serves; a repository build prints `mink 1.0.5`.
 **Companion documents:** [`LANGUAGE_BASICS.md`](LANGUAGE_BASICS.md),
 [`STANDARD_LIBRARY_REFERENCE.md`](STANDARD_LIBRARY_REFERENCE.md),
 [`DEBUGGING_AND_TESTING.md`](DEBUGGING_AND_TESTING.md).
@@ -47,7 +50,9 @@ mink 1.0.4
 The package also creates `node_modules\.bin\mink.cmd`. A global install (`npm install -g`)
 was **not tested** in this audit; use it only if your npm global prefix is
 writable without elevation. If `mink --version` prints `1.0.2`, that is an
-older unsupported install and is not interchangeable with 1.0.4.
+older unsupported install and is not interchangeable with 1.0.4. (Session 217
+re-ran this prefix install against the registry: 28 files, 26 `stdlib/`
+modules, no `windows/`, and `mink --version` printed `mink 1.0.4`.)
 
 ## 3. First program
 
@@ -176,8 +181,10 @@ a bare association can execute source unexpectedly.
 
 - **Published 1.0.4:** intrinsic-only programs and CLI basics verified; stdlib
   and Windows association are not distribution-equivalent to HEAD.
-- **Repository HEAD (`1.0.4` in the manifest):** audited 12/12 application
-  verifier, fixed `strings` and `environment` modules, Windows association
-  harness 56/56.
+- **Repository HEAD (`1.0.5` in the manifest, unpublished):** the 12/12
+  application verifier, fixed `strings` and `environment` modules and the
+  Windows association harness 56/56 were audited at the 1.0.4 baseline and
+  still describe the source; the current build reports `mink 1.0.5` and the
+  Session 213 release verification passes.
 - **1.0.2:** unsupported.
 - **Linux:** not supported by this package.

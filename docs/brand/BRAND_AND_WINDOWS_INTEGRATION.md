@@ -1,6 +1,7 @@
 # MINK brand assets and Windows file identity
 
-**Status:** implemented · **Version:** 1.0.4 (unchanged) · **Platform:** Windows x86_64
+**Status:** implemented · **Version:** 1.0.4 at implementation (unchanged by
+the 1.0.5 candidate) · **Platform:** Windows x86_64
 **Design source:** the supplied `MINK UI SETS OFFICIAL` artwork package (2026-10-25), used as
 delivered — no artwork was redrawn, recoloured or rescaled.
 

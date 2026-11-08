@@ -2,8 +2,10 @@
 
 **Status:** LOCKED strategic roadmap. Canonical planning document for the repository.
 **Locked:** Session 128 (strategic roadmap lock).
-**Baseline:** MINK **1.0.4** · branch `main` · last milestone commit
-`bb3ff1e3caafdb00004223ff4a5a204ecdf7724d`.
+**Baseline at lock:** MINK **1.0.4** · branch `main` · last milestone commit
+`bb3ff1e3caafdb00004223ff4a5a204ecdf7724d`. The current repository build is
+**1.0.5**, unpublished; the dated statuses in §8 record later state without
+rewriting this locked baseline.
 **Scope of this document:** strategy, sequencing, gates and the rules the project runs on.
 It does not itself implement anything. It replaces the earlier phase-based plan, which is
 preserved verbatim as an archived historical record in

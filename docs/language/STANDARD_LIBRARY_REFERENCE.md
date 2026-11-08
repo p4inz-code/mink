@@ -1,8 +1,11 @@
 # MINK Standard Library Reference
 
-**Applies to:** MINK 1.0.4 (repository build) and the installed
-`@p4inz-code/mink` package as found on the audit machine.
-**Status:** Developer reference, audited 2026-11-05 (M6 Session 178).
+**Applies to:** MINK 1.0.5 (current repository build) and MINK 1.0.4 (published
+npm package). The module contracts below were audited on 2026-11-05 (M6
+Session 178) against the then-current 1.0.4 repository build and a 1.0.2
+install; audit-time versions are kept where they are part of the evidence.
+**Status:** Developer reference, audited 2026-11-05 (M6 Session 178); current
+version line re-checked 2026-11-08 (Session 217).
 **Companion documents:** [`LANGUAGE_BASICS.md`](LANGUAGE_BASICS.md) for runtime
 semantics, [`DEBUGGING_AND_TESTING.md`](DEBUGGING_AND_TESTING.md) for
 diagnostics and test workflow.
@@ -52,9 +55,9 @@ execution wins and the disagreement is called out.
 
 ## 1. Environment and version reality
 
-Two binaries were used during this audit and they are **not the same version**:
+Two binaries were used during this audit and they were **not the same version**:
 
-| Binary | Version | Standard-library lookup |
+| Binary | Version at audit (2026-11-05) | Standard-library lookup |
 | --- | --- | --- |
 | `mink` on `PATH` (npm global package) | `mink 1.0.2` | `<package>/stdlib`, resolved from the executable |
 | `target/release/mink.exe` (repository build) | `mink 1.0.4` | `<exe>/../stdlib`, then `<cwd>/stdlib` |
@@ -63,7 +66,10 @@ The installed package reported **1.0.2** on the audit machine. Earlier M6
 records assume an installed 1.0.4; that assumption did not hold here. Both
 binaries compiled and ran the programs in this reference, but the repository
 1.0.4 binary is the one used for every recorded output unless stated
-otherwise. Record the exact version in any bug report.
+otherwise. **Current state (Session 217, 2026-11-08):** the registry serves
+1.0.4 and the repository build reports `mink 1.0.5`; the module contracts and
+recorded outputs below still come from the 1.0.4/1.0.2 audit and were not
+re-executed for 1.0.5. Record the exact version in any bug report.
 
 The repository binary must be run with the repository root as the working
 directory, or the source copied beside the needed `stdlib` files. The
@@ -71,11 +77,11 @@ installed binary carries its own `stdlib`, so it works from any directory.
 
 ```bash
 # repository build
-./target/release/mink.exe --version        # mink 1.0.4
+./target/release/mink.exe --version        # mink 1.0.5 (1.0.4 at audit time)
 ./target/release/mink.exe build app.mink
 
 # installed package
-mink --version                             # mink 1.0.2
+mink --version                             # 1.0.2 on the audit machine; registry now 1.0.4
 mink build app.mink
 ```
 

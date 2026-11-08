@@ -1,7 +1,10 @@
 # MINK Language Basics
 
-**Applies to:** MINK 1.0.4 (Windows x86_64)
-**Status:** Developer reference
+**Applies to:** MINK 1.0.5 (current repository build) and MINK 1.0.4 (published
+npm package), Windows x86_64. The reference was written against the 1.0.4
+repository build; version-specific statements below explicitly name 1.0.4.
+**Status:** Developer reference; current version line re-checked 2026-11-08
+(Session 217).
 
 This guide covers the runtime behavior a developer needs in order to write
 MINK programs: output, collections, modules, ownership, filesystem returns,

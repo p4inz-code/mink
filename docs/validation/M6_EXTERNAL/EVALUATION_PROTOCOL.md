@@ -38,9 +38,11 @@ Rules for the tester:
 - Before running anything, write down what you expect. Then run it.
 - Keep a transcript (terminal output or a notes file). Do not clean it up.
 
-Suggested total effort: **4–6 hours across two or three sittings**. It is not
-necessary to finish every task; partial coverage with honest notes is more
-useful than a rushed pass.
+Suggested total effort: **4–6 hours across two or three sittings**. The 18
+stated time boxes sum to about 7.5 hours; the required minimum set (T1, T2, T3,
+T6, T8, T9, T17, T18) sums to about 3 hours, so 4–6 hours covers the required
+tasks plus several optional ones. It is not necessary to finish every task;
+partial coverage with honest notes is more useful than a rushed pass.
 
 ## 2. What gets recorded per task
 
