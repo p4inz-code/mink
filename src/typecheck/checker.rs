@@ -117,6 +117,11 @@ struct Coverage {
     intervals: Vec<(i64, i64)>,
     /// Whether a catch-all (`_`/binding) arm covered every value.
     all: bool,
+    /// Whether a refutable aggregate pattern (currently a struct pattern
+    /// with at least one refutable field) can match some values without
+    /// contributing a finite key or interval. Such an arm is live, but it
+    /// never makes a match exhaustive on its own.
+    partial: bool,
 }
 
 /// The operator categories the checker distinguishes; each category has
@@ -2009,7 +2014,7 @@ impl<'a> Checker<'a> {
         }
         let matchable = matches!(
             self.types.kind(canon),
-            Some(TypeKind::Int | TypeKind::Bool | TypeKind::Enum(_))
+            Some(TypeKind::Int | TypeKind::Bool | TypeKind::Enum(_) | TypeKind::Struct(_))
         );
         if !matchable && !matches!(self.types.kind(canon), Some(TypeKind::Infer(_))) {
             self.push_error(TypeError::invalid_match_scrutinee(
@@ -2124,7 +2129,7 @@ impl<'a> Checker<'a> {
         // scrutinee is deferred: its patterns pin its type.
         let matchable = matches!(
             self.types.kind(canon),
-            Some(TypeKind::Int | TypeKind::Bool | TypeKind::Enum(_))
+            Some(TypeKind::Int | TypeKind::Bool | TypeKind::Enum(_) | TypeKind::Struct(_))
         );
         if !matchable && !matches!(self.types.kind(canon), Some(TypeKind::Infer(_))) {
             self.push_error(TypeError::invalid_match_scrutinee(
@@ -2410,8 +2415,16 @@ impl<'a> Checker<'a> {
             // Tuple patterns in payload context: not yet fully supported
             // for exhaustiveness — treat as non-covering for now.
             Pattern::Tuple { .. } => None,
-            // Struct patterns in payload context: not yet supported.
-            Pattern::Struct { .. } => None,
+            // Struct patterns in a payload: recursively check the fields;
+            // an irrefutable struct pattern covers the payload completely.
+            Pattern::Struct { name, fields, span } => {
+                let coverage = self.check_struct_match_pattern(name, fields, payload_ty, *span);
+                if coverage.all {
+                    None
+                } else {
+                    Some(Box::new(coverage))
+                }
+            }
         }
     }
 
@@ -2672,8 +2685,146 @@ impl<'a> Checker<'a> {
             }
             // Tuple patterns: not yet fully supported for exhaustiveness.
             Pattern::Tuple { .. } => Coverage::default(),
-            // Struct patterns: not yet supported in match arms.
-            Pattern::Struct { .. } => Coverage::default(),
+            Pattern::Struct { name, fields, span } => {
+                self.check_struct_match_pattern(name, fields, scrutinee_ty, *span)
+            }
+        }
+    }
+
+    /// Checks a struct pattern in a match arm against the scrutinee type.
+    ///
+    /// Every declared field must be named (the same rule as `let`
+    /// destructuring), each field pattern is checked recursively against
+    /// the field type, and a field may be refutable (`x: 0`) or a nested
+    /// struct/tuple/enum pattern. The pattern covers the whole scrutinee
+    /// only when every field pattern is irrefutable; otherwise it covers no
+    /// finite value class and a catch-all arm is required for
+    /// exhaustiveness.
+    fn check_struct_match_pattern(
+        &mut self,
+        name: &Ident,
+        fields: &[crate::ast::StructPatternField],
+        scrutinee_ty: TypeId,
+        pat_span: Span,
+    ) -> Coverage {
+        let canonical = self.types.canonical(scrutinee_ty);
+        let (struct_id, actual) = match self.types.kind(canonical) {
+            Some(TypeKind::Struct(id)) => (*id, self.display(canonical)),
+            // An unresolved scrutinee is pinned by the pattern's struct
+            // name, exactly like a binding pattern pins an unresolved
+            // scalar (bidirectional checking).
+            Some(TypeKind::Infer(_)) => match self.structs.get(&name.name) {
+                Some(reg) => {
+                    let _ = self.types.unify(canonical, reg.id);
+                    (reg.struct_id, self.display(reg.id))
+                }
+                None => {
+                    self.push_error(TypeError::unknown_type(name.span, &name.name));
+                    return Coverage::default();
+                }
+            },
+            _ => {
+                self.push_error(TypeError::struct_pattern_type_mismatch(
+                    pat_span,
+                    &name.name,
+                    &self.display(canonical),
+                ));
+                return Coverage::default();
+            }
+        };
+
+        let struct_info = match self.types.struct_info(struct_id) {
+            Some(info) => info.clone(),
+            None => {
+                self.push_error(TypeError::struct_pattern_type_mismatch(
+                    pat_span,
+                    &name.name,
+                    &actual,
+                ));
+                return Coverage::default();
+            }
+        };
+        if struct_info.name != name.name {
+            self.push_error(TypeError::struct_pattern_type_mismatch(
+                name.span,
+                &name.name,
+                &actual,
+            ));
+            return Coverage::default();
+        }
+
+        let mut complete = true;
+        for field in fields {
+            if !struct_info.fields.iter().any(|f| f.name == field.name.name) {
+                self.push_error(TypeError::unknown_struct_field_in_pattern(
+                    field.name.span,
+                    &field.name.name,
+                    &struct_info.name,
+                ));
+                complete = false;
+            }
+        }
+        for declared in &struct_info.fields {
+            if !fields.iter().any(|f| f.name.name == declared.name) {
+                self.push_error(TypeError::missing_struct_field_in_pattern(
+                    pat_span,
+                    &declared.name,
+                    &struct_info.name,
+                ));
+                complete = false;
+            }
+        }
+
+        let mut all = true;
+        for field in fields {
+            let Some(field_info) = struct_info
+                .fields
+                .iter()
+                .find(|f| f.name == field.name.name)
+            else {
+                continue;
+            };
+            let field_coverage = match &field.binding {
+                Some(inner) => self.check_arm_pattern(inner, field_info.ty, field.span),
+                None => {
+                    // Shorthand: bind the field name to the field value.
+                    self.unify_decl(&field.name, field_info.ty, field.name.span);
+                    Coverage {
+                        all: true,
+                        ..Default::default()
+                    }
+                }
+            };
+            if !field_coverage.all {
+                all = false;
+            }
+        }
+
+        if complete && all {
+            Coverage {
+                all: true,
+                ..Default::default()
+            }
+        } else if complete {
+            // A refutable field pattern can match some values, but this
+            // implementation does not construct a product coverage, so an
+            // unguarded struct arm never makes a match exhaustive unless
+            // every field is irrefutable. Mark it partial so the arm is not
+            // mistaken for a pattern that matches nothing (which is what an
+            // empty `Coverage` means for unreachable-arm checking).
+            Coverage {
+                partial: true,
+                ..Default::default()
+            }
+        } else {
+            // A malformed pattern (unknown/missing field) already produced
+            // its own diagnostic. Mark it partial so it is never mistaken
+            // for a pattern that matches nothing while the diagnostic is
+            // being reported; exhaustiveness still requires a catch-all.
+            Coverage {
+                partial: true,
+                ..Default::default()
+            }
         }
     }
 
@@ -2736,6 +2887,9 @@ impl<'a> Checker<'a> {
     fn merge_arm_coverage(&mut self, into: &mut Coverage, new: Coverage) {
         if new.all {
             into.all = true;
+        }
+        if new.partial {
+            into.partial = true;
         }
         for key in new.keys {
             match into.keys.iter_mut().find(|entry| entry.key == key.key) {
@@ -2839,6 +2993,13 @@ impl<'a> Checker<'a> {
         }
         if acc.all {
             return true;
+        }
+        // A partial aggregate pattern (a refutable struct arm) matches
+        // values that are not represented by a key or interval. Without a
+        // product coverage we cannot prove that an earlier arm covers all of
+        // them, so it is conservatively live.
+        if cand.partial {
+            return false;
         }
         for key in &cand.keys {
             let Some(entry) = acc.keys.iter().find(|entry| entry.key == key.key) else {
@@ -3017,6 +3178,9 @@ impl<'a> Checker<'a> {
             }
             Some(TypeKind::Bool) => {
                 "the match is not exhaustive: a `Bool` match must cover both `true` and `false`, or add a `_` or binding arm".to_string()
+            }
+            Some(TypeKind::Struct(_)) => {
+                "the match is not exhaustive: add a `_` or binding arm, or make every struct field pattern irrefutable".to_string()
             }
             Some(TypeKind::Enum(id)) => {
                 let missing = self

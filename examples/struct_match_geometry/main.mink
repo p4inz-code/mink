@@ -1,0 +1,40 @@
+// Geometry area report: struct patterns keep the shape arithmetic next to
+// the data it consumes. Each enum payload is destructured field-by-field in
+// the match arm, with no temporary local or repeated `.field` access.
+
+struct Rect { width: Int, height: Int }
+struct Circle { radius: Int }
+
+enum Shape {
+    Rect(Rect),
+    Circle(Circle),
+    Empty,
+}
+
+fn area(shape: Shape) -> Int {
+    return match shape {
+        Shape::Rect(Rect { width, height }) => width * height,
+        Shape::Circle(Circle { radius }) => 3 * radius * radius,
+        Shape::Empty => 0,
+    };
+}
+
+fn main() -> Int {
+    let rect_area = area(Shape::Rect(Rect { width: 4, height: 5 }));
+    let circle_area = area(Shape::Circle(Circle { radius: 3 }));
+    let empty_area = area(Shape::Empty);
+
+    rt_print_str("areas:");
+    rt_print_int(rect_area);
+    rt_print_str(" ");
+    rt_print_int(circle_area);
+    rt_print_str(" ");
+    rt_print_int(empty_area);
+    rt_print_str("\n");
+
+    if rect_area != 20 || circle_area != 27 || empty_area != 0 {
+        rt_print_str("FAIL: unexpected area\n");
+        return 1;
+    }
+    return 0;
+}

@@ -962,6 +962,12 @@ impl<'a> Analyzer<'a> {
                         }
                     }
                 }
+                crate::ast::Pattern::Struct { fields, .. } => {
+                    // Struct pattern bindings read fields from the observed
+                    // scrutinee. Like tuple patterns, each field binding is
+                    // registered as a copy; the original value remains live.
+                    self.bind_struct_pattern(fields);
+                }
                 _ => {}
             }
             // A guard (session 27) reads the pattern's bindings in the
@@ -1042,6 +1048,42 @@ impl<'a> Analyzer<'a> {
                 .iter()
                 .any(|e| self.payload_binding_transfers(e, provenance)),
             _ => false,
+        }
+    }
+
+    /// Registers the bindings introduced by a struct pattern's fields.
+    /// Field sub-patterns are walked recursively so nested struct, tuple,
+    /// and or-pattern bindings are visible to the arm body and to scope
+    /// release. The scrutinee is observed, so these bindings are copies.
+    fn bind_struct_pattern(&mut self, fields: &[crate::ast::StructPatternField]) {
+        for field in fields {
+            match &field.binding {
+                Some(crate::ast::Pattern::Binding(name)) => {
+                    self.bind(name.span, &EvalValue::copy());
+                }
+                Some(crate::ast::Pattern::Struct { fields, .. }) => {
+                    self.bind_struct_pattern(fields);
+                }
+                Some(crate::ast::Pattern::Tuple { elements, .. }) => {
+                    for element in elements {
+                        if let crate::ast::Pattern::Binding(name) = element {
+                            self.bind(name.span, &EvalValue::copy());
+                        }
+                    }
+                }
+                Some(crate::ast::Pattern::Or { alternatives, .. }) => {
+                    for alternative in alternatives {
+                        if let crate::ast::Pattern::Binding(name) = alternative {
+                            self.bind(name.span, &EvalValue::copy());
+                        }
+                    }
+                }
+                None => {
+                    // Shorthand: bind the field's own name.
+                    self.bind(field.name.span, &EvalValue::copy());
+                }
+                _ => {}
+            }
         }
     }
 
@@ -1606,6 +1648,9 @@ impl<'a> Analyzer<'a> {
                                     self.bind(name.span, &EvalValue::copy());
                                 }
                             }
+                        }
+                        crate::ast::Pattern::Struct { fields, .. } => {
+                            self.bind_struct_pattern(fields);
                         }
                         _ => {}
                     }

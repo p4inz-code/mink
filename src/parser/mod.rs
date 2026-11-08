@@ -2127,6 +2127,61 @@ impl<'a> Parser<'a> {
                     name,
                     span: token.span(),
                 };
+                // `Name { field, field: pattern }`: a struct pattern. The
+                // brace is unambiguous here because a bare identifier
+                // pattern is never followed by one. This form is used by
+                // both `let` (through the dedicated let parser) and match
+                // arms.
+                if self.current_kind() == TokenKind::LBrace {
+                    let lbrace = self.bump();
+                    self.open_delims.push((TokenKind::LBrace, lbrace.span()));
+                    let mut fields = Vec::new();
+                    if self.current_kind() != TokenKind::RBrace {
+                        loop {
+                            let field = match self.parse_struct_pattern_field() {
+                                Ok(field) => field,
+                                Err(()) => {
+                                    self.open_delims.pop();
+                                    return Err(());
+                                }
+                            };
+                            fields.push(field);
+                            if self.current_kind() == TokenKind::Comma {
+                                let _ = self.bump();
+                                if self.current_kind() == TokenKind::RBrace {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    if self.current_kind() != TokenKind::RBrace {
+                        let bad = self.current();
+                        self.record_error(ParseErrorKind::ExpectedRBrace, bad.span());
+                        while !matches!(
+                            self.current_kind(),
+                            TokenKind::RBrace
+                                | TokenKind::FatArrow
+                                | TokenKind::Comma
+                                | TokenKind::Eof
+                        ) {
+                            let _ = self.bump();
+                        }
+                    }
+                    if self.current_kind() != TokenKind::RBrace {
+                        self.open_delims.pop();
+                        return Err(());
+                    }
+                    let close = self.bump();
+                    self.open_delims.pop();
+                    let span = self.join(token.span(), close.span());
+                    return Ok(Pattern::Struct {
+                        name: ident,
+                        fields,
+                        span,
+                    });
+                }
                 if self.current_kind() == TokenKind::ColonColon {
                     // `E::V`: an enum variant pattern. A missing variant
                     // name is the same `E-P22` the expression form reports.

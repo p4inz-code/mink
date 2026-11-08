@@ -408,24 +408,25 @@ impl<'a> Lowerer<'a> {
                 fields: fields
                     .iter()
                     .map(|f| {
-                        // The binding is either the explicit pattern (must be a
-                        // Binding after type-checking) or the shorthand field name.
-                        let binding_ident = match &f.binding {
-                            Some(Pattern::Binding(ident)) => self.lower_decl_ident(ident),
-                            None => {
-                                // Shorthand: bind to the field name.
-                                self.lower_decl_ident(&f.name)
-                            }
-                            _ => {
-                                // Non-binding patterns rejected by type checker;
-                                // produce a dummy ident.
-                                crate::hir::HirIdent {
-                                    name: f.name.name.clone(),
-                                    span: f.name.span,
-                                    symbol: crate::hir::SymbolId::new(0),
-                                    ty: crate::typecheck::TypeId::new(0),
-                                }
-                            }
+                        // Lower the full field pattern. Shorthand fields bind
+                        // the field name; explicit fields keep their nested
+                        // pattern for the MIR pattern chain.
+                        let field_pattern = match &f.binding {
+                            Some(inner) => self.lower_pattern(inner),
+                            None => HirPattern::Binding(self.lower_decl_ident(&f.name)),
+                        };
+                        // Let destructuring only accepts bindings; keep the
+                        // binding field populated for that path. Complex
+                        // match-arm field patterns use `pattern` below and
+                        // never reach the let lowering.
+                        let binding_ident = match &field_pattern {
+                            HirPattern::Binding(ident) => ident.clone(),
+                            _ => crate::hir::HirIdent {
+                                name: f.name.name.clone(),
+                                span: f.name.span,
+                                symbol: crate::hir::SymbolId::new(0),
+                                ty: crate::typecheck::TypeId::new(0),
+                            },
                         };
                         crate::hir::HirStructPatternField {
                             name: HirName {
@@ -433,6 +434,7 @@ impl<'a> Lowerer<'a> {
                                 span: f.name.span,
                             },
                             binding: binding_ident,
+                            pattern: Box::new(field_pattern),
                         }
                     })
                     .collect(),

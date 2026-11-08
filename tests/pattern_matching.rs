@@ -386,10 +386,10 @@ fn variant_pattern_on_a_non_enum_type_is_rejected() {
 
 #[test]
 fn non_matchable_scrutinees_are_rejected() {
-    // Structs, arrays, strings, floats, and chars are not matchable in
-    // this milestone: each is a single E-T26.
+    // Arrays, strings, floats, and chars are not matchable: each is a
+    // single E-T26. Structs became matchable in Session 239 and are
+    // covered by the positive test below and `tests/struct_match.rs`.
     let programs = [
-        "struct S { x: Int } fn main() { let s = S { x: 1 }; match s { 1 => { }, _ => { } } }",
         "fn main() { let a = [1, 2]; match a { 1 => { }, _ => { } } }",
         "fn main() { let s = \"hi\"; match s { 1 => { }, _ => { } } }",
         "fn main() { let f = 1.5; match f { 1 => { }, _ => { } } }",
@@ -404,6 +404,13 @@ fn non_matchable_scrutinees_are_rejected() {
             types.errors()
         );
     }
+}
+
+#[test]
+fn struct_scrutinee_is_matchable_with_a_struct_pattern() {
+    let src = "struct S { x: Int } fn main() { let s = S { x: 1 }; match s { S { x } => { }, } }";
+    let (_s, _a, _semantic, types) = check_src(src);
+    assert!(types.errors().is_empty(), "{:?}", types.errors());
 }
 
 #[test]

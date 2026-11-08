@@ -4096,14 +4096,83 @@ impl<'a> FnBuilder<'a> {
                     });
                 }
             }
-            HirPattern::Struct { .. } => {
-                // Struct patterns in match arms are not yet supported;
-                // the type checker rejects them (E-T26).
-                self.terminate(MirTerminator::Jump {
-                    target: else_,
-                    span,
-                });
+            HirPattern::Struct { fields, .. } => {
+                // A struct pattern matches field-wise: extract each named
+                // field and recursively match its pattern. The checker has
+                // already resolved every field name and type. An empty
+                // struct pattern is irrefutable.
+                if fields.is_empty() {
+                    self.terminate(MirTerminator::Jump { target: then, span });
+                } else {
+                    let count = fields.len();
+                    for (index, field) in fields.iter().enumerate() {
+                        let field_ty = self
+                            .eval
+                            .table
+                            .struct_field_type(value.ty, &field.name.name)
+                            .unwrap_or(value.ty);
+                        let field_operand =
+                            self.emit_member_load(value, field_ty, &field.name.name, span);
+                        if index + 1 == count {
+                            self.lower_pattern_chain(
+                                &field.pattern,
+                                &field_operand,
+                                then,
+                                else_,
+                                span,
+                            );
+                        } else {
+                            let next = self.alloc_block();
+                            self.lower_pattern_chain(
+                                &field.pattern,
+                                &field_operand,
+                                next,
+                                else_,
+                                span,
+                            );
+                            self.start_block(next, span);
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    /// Emits a load of a named struct field from `base` into a temporary.
+    fn emit_member_load(
+        &mut self,
+        base: &MirOperand,
+        ty: TypeId,
+        member: &str,
+        span: Span,
+    ) -> MirOperand {
+        let rvalue = MirRvalueKind::Member {
+            base: base.clone(),
+            member: MirName {
+                name: member.to_string(),
+                span,
+            },
+        };
+        let temp = self.eval.temp(ty, span);
+        self.eval.emit(MirStmt {
+            kind: MirStmtKind::Assign {
+                target: MirTarget {
+                    kind: MirTargetKind::Local(temp),
+                    span,
+                    ty,
+                },
+                rvalue: MirRvalue {
+                    kind: rvalue,
+                    span,
+                    ty,
+                },
+            },
+            span,
+        });
+        MirOperand {
+            kind: MirOperandKind::Local(temp),
+            span,
+            ty,
         }
     }
 

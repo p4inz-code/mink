@@ -1,0 +1,41 @@
+// Command dispatch: the match arms read like the command table. Integer and
+// boolean field patterns select a command and its verbose variant, while the
+// final arm handles every remaining command kind.
+
+struct Command {
+    kind: Int,
+    verbose: Bool,
+    count: Int,
+}
+
+fn dispatch(command: Command) -> Int {
+    return match command {
+        Command { kind: 0, verbose: true, count } => count + 100,
+        Command { kind: 0, verbose: false, count } => count + 10,
+        Command { kind: 1, verbose: _, count } => count,
+        Command { kind, verbose: _, count } => kind * 1000 + count,
+    };
+}
+
+fn main() -> Int {
+    let verbose_sync = dispatch(Command { kind: 0, verbose: true, count: 3 });
+    let quiet_sync = dispatch(Command { kind: 0, verbose: false, count: 4 });
+    let status = dispatch(Command { kind: 1, verbose: false, count: 5 });
+    let custom = dispatch(Command { kind: 7, verbose: true, count: 6 });
+
+    rt_print_str("dispatch:");
+    rt_print_int(verbose_sync);
+    rt_print_str(" ");
+    rt_print_int(quiet_sync);
+    rt_print_str(" ");
+    rt_print_int(status);
+    rt_print_str(" ");
+    rt_print_int(custom);
+    rt_print_str("\n");
+
+    if verbose_sync != 103 || quiet_sync != 14 || status != 5 || custom != 7006 {
+        rt_print_str("FAIL: unexpected dispatch result\n");
+        return 1;
+    }
+    return 0;
+}

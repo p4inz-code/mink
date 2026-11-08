@@ -362,7 +362,8 @@ pub enum HirPattern {
         /// Span of the whole tuple pattern.
         span: Span,
     },
-    /// A struct destructuring pattern (session 32): `Name { field1, field2 }`.
+    /// A struct destructuring or match pattern (session 32):
+    /// `Name { field1, field2 }`.
     Struct {
         /// The struct type name.
         name: HirName,
@@ -378,8 +379,14 @@ pub enum HirPattern {
 pub struct HirStructPatternField {
     /// The struct field name to extract.
     pub name: HirName,
-    /// The resolved binding identifier (with symbol and type).
+    /// The resolved binding identifier for the shorthand form. Let
+    /// destructuring consumes this field directly; match patterns consume
+    /// `pattern` so nested and refutable field patterns lower correctly.
     pub binding: HirIdent,
+    /// The full field pattern. This is a binding for the shorthand form and
+    /// for `field: name`, and may be any pattern (literal, nested struct,
+    /// enum, tuple, or-pattern) in a match arm.
+    pub pattern: Box<HirPattern>,
 }
 
 impl HirPattern {
