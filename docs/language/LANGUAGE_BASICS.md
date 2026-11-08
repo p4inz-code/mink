@@ -4,11 +4,12 @@
 npm package), Windows x86_64. The reference was written against the 1.0.4
 repository build; version-specific statements below explicitly name 1.0.4.
 **Status:** Developer reference; current version line re-checked 2026-11-08
-(Session 217).
+(Session 217); command-line, stderr and stdin contracts verified 2026-11-08
+(Session 238).
 
 This guide covers the runtime behavior a developer needs in order to write
-MINK programs: output, collections, modules, ownership, filesystem returns,
-and compiler/standard-library lookup.
+MINK programs: output, command-line input, collections, modules, ownership,
+filesystem returns, and compiler/standard-library lookup.
 
 `CORE_GRAMMAR.md` remains the syntax authority. The records under
 `docs/implementation/` describe how the compiler implements the language and
@@ -34,6 +35,36 @@ hello.exe
 
 `mink run hello.mink` builds and runs in one step. `mink check hello.mink`
 runs the front end without writing an executable.
+
+### 1.1 Command-line arguments and stdin
+
+`rt_argc()` returns the number of arguments after the executable name.
+`rt_argv(index)` returns argument `index` (0-based, so `rt_argv(0)` is the first
+argument after the program name). An out-of-range index is the runtime failure
+`E-R10`. The returned `Str` is owned; free it with `rt_str_free`.
+
+`rt_stdin_read()` reads all available standard input to EOF and returns an
+owned `Str` (empty when there is no input). Free it when done. It is a read-all
+operation, not a line reader; split the returned text yourself if the program
+needs lines. `rt_stderr_write(s)` writes `s` to standard error and returns the
+byte count, or `-1` on failure.
+
+```mink
+fn main() -> Int {
+    if rt_argc() < 1 {
+        rt_stderr_write("usage: tool <name>\n");
+        return 2;
+    }
+    let name = rt_argv(0);
+    rt_print_str(name);
+    rt_str_free(name);
+
+    let input = rt_stdin_read();
+    rt_print_int(rt_str_len(input));
+    rt_str_free(input);
+    return 0;
+}
+```
 
 ## 2. Output is line-oriented
 
@@ -335,6 +366,9 @@ safe.
 `fs_read` cannot distinguish a missing file from an empty file by itself:
 both return a zero-length string. Use `fs_exists` (false for missing) or
 `fs_file_size` (`-1` for missing, `0` for empty).
+
+`fs_write` replaces the file's contents; there is no append mode. To append,
+read the existing text, concatenate the addition, and write the result back.
 
 These return values are the only error information the filesystem wrappers
 expose; there is no last-error call.
