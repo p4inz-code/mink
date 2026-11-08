@@ -149,3 +149,12 @@ plus the four untouched untracked user files.
 
 **Next:** Session 212 root-cause investigation of the release toolchain.
 Release-mode verification remains BLOCKED and no release action was taken.
+
+*Dated correction, 2026-11-08 (Session 213).* The release-mode blocker recorded
+in this session cleared without a source or toolchain change. Sessions 212–213
+produced a clean release build and a complete release-mode regression (85
+suites, 3,262 passed, 0 failed, 9 ignored), and the ten validation applications
+rebuilt with the release compiler match their Python references on 228/228
+cases. The gate statement above remains the accurate record of what was true
+when the session ran; release verification is no longer BLOCKED
+([`M6_SESSION_213_RELEASE_VERIFICATION.md`](M6_SESSION_213_RELEASE_VERIFICATION.md)).

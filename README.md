@@ -439,14 +439,16 @@ developer experience across MINK, Python, Rust, Go and C#; and M5 delivered thre
 Windows applications with 163 executable checks per run. Native compilation and ownership
 are treated as **capabilities that must be tested, not as proven differentiators.**
 
-Two items are open. **Release-mode verification is blocked on the current verification
-machine**: every `rustc` compile at `opt-level` 3 crashes with
-`STATUS_ILLEGAL_INSTRUCTION`, `STATUS_HEAP_CORRUPTION` or `STATUS_ACCESS_VIOLATION`,
-including after a forced toolchain reinstall, while debug builds are unaffected and a
-trivial release crate compiles. Debug is verified at the current HEAD: **85 suites, 3,262
-passed, 0 failed, 9 ignored**. **M6 external developer validation is outstanding** — it
-requires a developer who did not build MINK. M7 tooling and ecosystem work remains gated on
-demonstrated demand.
+**Release-mode verification passes.** A clean optimized build compiles in 30.78 s (4,048,384
+bytes, `mink 1.0.5`) and the full release suite reports **85 suites, 3,262 passed, 0 failed,
+9 ignored** — the same counts as debug. The Sessions 205–210 `rustc` crash was a transient
+host fault that no longer reproduces; Session 212 records the evidence and Session 213 the
+verification. Ten validation applications rebuilt with the release compiler match their
+Python references on **228/228 cases**.
+
+One item is open. **M6 external developer validation is outstanding** — it requires a
+developer who did not build MINK. M7 tooling and ecosystem work remains gated on
+demonstrated demand. No publication, tag or release was created: 1.0.5 remains unpublished.
 
 MINK targets **Windows x64**, the completed baseline and the only active platform for
 practical validation. Linux and any additional platform remain **FROZEN until the M8
