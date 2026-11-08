@@ -490,8 +490,8 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   first matching arm runs. Matches over enums must be exhaustive: a
   missing variant arm without a catch-all is `E-T24` (non-exhaustive
   match), an arm after an exhaustive prefix or catch-all is `E-T25`
-  (unreachable arm), and a scrutinee of any non-matchable type (struct,
-  array, string, pointer, reference) is `E-T26`. Integer/bool matches
+  (unreachable arm), and a scrutinee of any non-matchable type (array,
+  string, pointer, reference) is `E-T26`. Integer/bool matches
   need no exhaustiveness proof (`_` or a final catch-all is the way to
   write them). Arms bind patterns: an identifier pattern introduces a
   copy of the scrutinee (`let x = e;` semantics) in its own scope, and
@@ -508,7 +508,14 @@ full design record is `docs/implementation/TYPE_SYSTEM_IMPLEMENTATION.md`.
   **Session 33** adds match expressions (`let x = match e { pat => expr, ... }`),
   where every arm is an expression and all arm types are unified to produce
   the match result. See [`MATCH_EXPRESSIONS_IMPLEMENTATION.md`](../implementation/MATCH_EXPRESSIONS_IMPLEMENTATION.md).
-- Type diagnostics. Type errors use the stable range `E-T01`…`E-T34`
+  **Session 239** adds struct patterns (`Point { x, y }`, `Point { x: 0, y }`)
+  to both match forms. Field patterns are full patterns and may nest,
+  including inside enum payloads; a struct pattern is exhaustive by itself
+  only when every field is irrefutable, otherwise a catch-all is required.
+  All declared fields must be named (no `..` rest syntax yet), and field
+  bindings copy the fields. See
+  [`STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md).
+- Type diagnostics. Type errors use the stable range `E-T01`…`E-T43`
   (mismatch, invalid operator, invalid range, not callable, wrong argument
   count, not iterable, the session-14 aggregate rules, the session-17/19/20
   enum rules, the session-18 match rules, the session-19 sum-type rules,

@@ -724,7 +724,7 @@ StructPatternField := Ident (':' Pattern)?
 
 The session-32 lexer needed no changes (all tokens already existed).
 Const struct destructuring (`const Point { x, y } = expr;`) remains
-deferred. Match-arm struct patterns are not yet supported.
+deferred. Match-arm struct patterns landed later in Session 239; see §32.
 Exclusions from §2 and §9 that remain (`type` aliases, generics,
 lambdas/closures) are unchanged.
 
@@ -750,10 +750,10 @@ MatchExprArm:= Pattern ('if' Expr)? '=>' Expr
   block trailing position, and nested within other expressions.
   They do **not** appear in arbitrary operand position (function
   arguments, binary operands), this mirrors the existing `if`-expression
-  limitation.
-- The scrutinee may be any expression. Its type decides whether the
-  match is legal: `Int`, `Bool`, and enums are matchable; every other
-  type is `E-T26`.
+  limitation.- The scrutinee may be any expression. Its type decides whether the
+  match is legal: `Int`, `Bool`, enums, and structs are matchable; every
+  other type is `E-T26`.
+
 - Arms are `pattern => expr`, separated by commas (a trailing comma is
   allowed). The body is an expression, so `=> 1` works directly and
   `=> { stmt; expr }` works through block expressions.
@@ -763,7 +763,7 @@ MatchExprArm:= Pattern ('if' Expr)? '=>' Expr
   coverage.
 - All existing pattern forms work in match expressions: integer literals,
   boolean literals, enum variant paths, binding patterns, `_` wildcard,
-  or-patterns, range patterns, and payload patterns.
+  or-patterns, range patterns, payload patterns, and struct patterns.
 - The match must be exhaustive: a missing variant or uncovered space is
   `E-T24`; an unreachable arm is `E-T25`.
 
@@ -850,3 +850,49 @@ let named = |x: Int| { let y = x * 2; y + 1 };
 - Mutating captured values is not supported in V1.
 - Escaping closures that outlive their defining scope are rejected
   when they would produce dangling references.
+
+## §32  Struct patterns in match arms
+
+**Session:** 239, structural matching over struct values.
+
+```EBNF
+StructPattern      = Ident "{" [ StructPatternField { "," StructPatternField } [ "," ] ] "}" ;
+StructPatternField = Ident [ ":" Pattern ] ;
+MatchPattern       = ... | StructPattern ;
+```
+
+A struct pattern destructures a struct scrutinee field-by-field in either a
+`match` statement or a `match` expression:
+
+```mink
+struct Point { x: Int, y: Int }
+
+fn quadrant(p: Point) -> Int {
+    return match p {
+        Point { x: 0, y: 0 } => 0,
+        Point { x: 0, y } => y,
+        Point { x, y: 0 } => x,
+        Point { x, y } => x + y,
+    };
+}
+```
+
+- The pattern's struct name must denote the scrutinee's struct type
+  (`E-T41` otherwise). A struct pattern applied to a non-struct value is
+  also `E-T41`.
+- Shorthand fields (`x`) bind the field to its own name; explicit fields
+  (`x: pattern`) use a full pattern, including a literal, wildcard, nested
+  struct, enum payload, tuple, range, or or-pattern.
+- Every declared field must appear in the pattern (`E-T40` when omitted);
+  unknown fields are `E-T39`. There is no `..` rest syntax yet.
+- A struct pattern is exhaustive by itself only when every field pattern
+  is irrefutable (a binding, wildcard, or recursively irrefutable struct
+  pattern). A refutable field pattern such as `x: 0` requires a catch-all
+  (`_` or a binding arm) for the match to be exhaustive (`E-T24`).
+- Guards and or-patterns compose with struct patterns. Every alternative
+  of an or-pattern must bind the same field names (`E-T34`).
+- Field bindings are copies of the fields, matching `let` struct
+  destructuring; the scrutinee is observed rather than consumed.
+
+The Session 239 parser needed no new lexer tokens. `let` struct
+destructuring (§25) is unchanged.

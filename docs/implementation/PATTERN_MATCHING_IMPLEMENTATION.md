@@ -25,10 +25,12 @@ ranges or or-patterns, or guards. (Data-carrying variant patterns
   runs the body block of the **first** arm whose pattern matches. `match`
   produces no value.
 - The scrutinee is any expression. Its type decides whether the match is
-  legal: `Int`, `Bool`, and enums are matchable; every other type (structs,
-  arrays, `Str`, pointers, references) is a single `E-T26`
+  legal: `Int`, `Bool`, and enums are matchable; every other type (arrays,
+  `Str`, pointers, references) is a single `E-T26`
   (invalid match scrutinee) and the arms are not checked, so one root cause
-  never cascades into a swarm of arm diagnostics.
+  never cascades into a swarm of arm diagnostics. Struct scrutinees became
+  matchable in Session 239 when the arm is a struct pattern; see
+  `STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md`.
 - Arms are `pattern => { body }`, separated by commas (a trailing comma is
   allowed, mirroring struct fields and enum variants). The body is a
   block, so braces are required around it.
@@ -204,8 +206,10 @@ lowering as ordinary CFG, no new validation rules were needed.
 - Match expressions landed in session 33. `match` can now be used as
   an expression (`let x = match e { pat => expr, ... }`); see
   `MATCH_EXPRESSIONS_IMPLEMENTATION.md`.
-- No destructuring. Patterns match scalar values only. No struct
-  patterns, array patterns, or tuple forms; no nested patterns.
+- Session 18 had no destructuring. Struct patterns in match arms landed
+  in Session 239 (`STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md`); tuple
+  patterns in match arms remain partially supported, and array patterns
+  are still absent.
 - No ranges, or-patterns, or guards. `1 | 2 =>`, `1..=3 =>`, and
   `x if cond =>` are all rejected (the first is a parse error; ranges and
   guards have no syntax this session).

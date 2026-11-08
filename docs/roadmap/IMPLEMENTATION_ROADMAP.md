@@ -408,6 +408,22 @@ SHA-256 `87a1cae4...b6da23`. **M6 remains OUTSTANDING**: no independent
 evaluator has submitted evidence, M7 stays demand-gated, M8 stays gated, Linux
 stays frozen, and 1.0.5 remains unpublished.
 
+*Dated status, 2026-11-08 (Session 239 — struct patterns in match).* A real
+core-language capability was implemented instead of another readiness audit:
+struct patterns now work in both `match` statements and `match` expressions.
+The change spans parser, type checker/exhaustiveness, HIR field-pattern
+representation, MIR member extraction, and ownership binding registration.
+Field patterns may be bindings, wildcards, integer/boolean literals, nested
+structs, tuples, ranges, enum payloads, and or-patterns; guards compose with
+them. Refutable struct fields require a catch-all unless every field is
+irrefutable (no product coverage yet), and `..` rest syntax is not included.
+`tests/struct_match.rs` adds 23 passing tests, including 7 native executions;
+`examples/struct_match_geometry` and `examples/struct_match_dispatch` build and
+run with exit 0. Focused debug and release verification is recorded with this
+work. M6 remains **OUTSTANDING** (no external developer), M7 demand-gated, M8
+gated, Linux frozen, and 1.0.5 unpublished. See
+[`STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md`](../implementation/STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md).
+
 *Dated status, 2026-11-06 (Sessions 194–196).* Windows x86_64 runtime reliability
 was re-audited under bounded stress and one confirmed defect was fixed: collection
 handles are now validated against the liveness table, so using a freed `Vec`,

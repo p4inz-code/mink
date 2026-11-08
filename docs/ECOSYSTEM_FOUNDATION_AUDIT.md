@@ -1099,7 +1099,7 @@ Every official MINK library must satisfy:
 - Async/await (E-3)
 - HIGHER-kinded types (E-4)
 - Const generics (E-5)
-- Pattern matching on structs (E-6, partially implemented)
+- Pattern matching on structs (E-6, implemented in Session 239 for match statements and expressions; see `docs/implementation/STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md`)
 
 ### Category F: Explicitly rejected:
 - Garbage collection (F-1, ownership model is the safety strategy)

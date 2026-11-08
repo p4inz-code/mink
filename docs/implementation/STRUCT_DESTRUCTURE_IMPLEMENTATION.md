@@ -67,7 +67,10 @@ See `docs/language/CORE_GRAMMAR.md` §25 for the full specification.
 
 - `HirPattern` gains a `Struct` variant with `name: HirName`,
   `fields: Vec<HirStructPatternField>`, and `span: Span`.
-- `HirStructPatternField` holds `name: HirName` and `binding: HirIdent`.
+- `HirStructPatternField` holds `name: HirName`, `binding: HirIdent`, and
+  `pattern: Box<HirPattern>`. The binding is the `let` path's simple field
+  binding; `pattern` was added in Session 239 for full match-arm field
+  patterns.
 - The struct type name is stored as `HirName` (not `HirIdent`) because it
   is a type reference, not a value binding.
 
@@ -108,8 +111,9 @@ The initializer is not consumed by destructuring.
 
 ## 11. Known limitations
 
-- Match-arm struct patterns: `match p { Point { x, y } => { .. } }` is
-  not yet supported. Struct patterns in let-destructuring only.
+- Match-arm struct patterns landed in Session 239; see
+  [`STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md`](STRUCT_PATTERN_MATCHING_IMPLEMENTATION.md).
+  This document remains the `let`-destructuring record.
 - Const struct destructuring: `const Point { x, y } = p;` remains
   deferred.
 - Nested struct destructuring in native backend: deeply nested struct
