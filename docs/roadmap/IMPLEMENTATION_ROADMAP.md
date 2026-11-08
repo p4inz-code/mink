@@ -308,16 +308,13 @@ inactive and must not be executed.
 `jsontool` ports in all five languages before any M4 timing was claimed. M4 ran
 through Session 162 and M5 through Session 177; both are closed.
 
-**Current next action (2026-11-08):** produce a release-mode build and release-mode
-suite run on a healthy Windows x86_64 host. Every debug check is green and the
-source-side reliability programme (Sessions 197–210) is closed, but the release
-build cannot be produced on the current verification machine because `rustc` at
-`opt-level` 3 crashes with `STATUS_ILLEGAL_INSTRUCTION`,
-`STATUS_HEAP_CORRUPTION` or `STATUS_ACCESS_VIOLATION` (reproduced after a forced
-toolchain reinstall; a trivial release crate compiles and debug is unaffected).
-Until that is resolved the release verdict cannot advance past **NOT READY**.
-M6 external developer validation is the only other open milestone item, and it
-requires a developer who did not build MINK.
+**Current next action (2026-11-08):** run M6 external developer validation.
+Release-mode verification is complete (Session 213): a clean optimized build and
+the full release suite pass at 85 suites / 3,262 passed / 0 failed / 9 ignored,
+and the Sessions 205–210 `rustc` release crash no longer reproduces (Session 212
+records it as a transient host fault with no source or toolchain change). M6 — a
+developer who did not build MINK attempting predefined tasks — is the only open
+milestone item; M7 remains gated on demonstrated demand.
 
 *Dated status, 2026-11-06 (Sessions 190–193).* M4 and M5 are closed. The
 standard-library ownership work that this roadmap treats as a prerequisite is
@@ -328,6 +325,20 @@ tested heap/borrowed/arena contract
 ([`M6_SESSION_193_OWNERSHIP_CLOSURE.md`](../benchmarks/M6/M6_SESSION_193_OWNERSHIP_CLOSURE.md)).
 The next open milestone is M6 external developer validation, which requires a
 developer who did not build MINK; M7 remains gated on demonstrated demand.
+
+*Dated status, 2026-11-08 (Sessions 212–214 — release verification).* Release
+verification is **PASS**. A clean isolated optimized build succeeded in 30.78 s
+(`target/s213_clean/release/mink.exe`, 4,048,384 bytes, SHA-256
+`87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`), the full
+release suite reported **85 suites, 3,262 passed, 0 failed, 9 ignored** (identical
+to debug, exit 0, no test skipped or weakened), and the release soak passed 8/8
+under its 60 s budget. The ten M2 validation applications were rebuilt with the
+release compiler and replayed against their Python references: **228/228 cases**
+match. The earlier `rustc` crash is a non-reproducing host-level transient, not a
+source defect, and was not concealed. M6 external developer validation remains
+**OUTSTANDING**; 1.0.5 stays unpublished, with no tag or GitHub release
+([`M6_SESSION_213_RELEASE_VERIFICATION.md`](../benchmarks/M6/M6_SESSION_213_RELEASE_VERIFICATION.md),
+[`VALIDATION_MILESTONE_2_AUDIT.md`](../validation/VALIDATION_MILESTONE_2_AUDIT.md)).
 
 *Dated status, 2026-11-06 (Sessions 194–196).* Windows x86_64 runtime reliability
 was re-audited under bounded stress and one confirmed defect was fixed: collection

@@ -421,3 +421,22 @@ Release-mode verification is recorded as not run. Final verdict: **NOT READY**
 — an environment release blocker, not a confirmed MINK defect; M6 external
 validation also remains outstanding. See
 [`M6_SESSION_210_FINAL_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_210_FINAL_ACCEPTANCE.md).
+
+## Addendum — 2026-11-08 (Sessions 211–214)
+
+*Dated addendum; the assessment above is retained as the record of its date.*
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Documentation reconciliation | PASS | Session 211; 5 contradictions corrected; commit `74beba4` |
+| Release `rustc` crash | NOT REPRODUCING | Session 212: clean build plus every previously failing flag succeeds on a rebooted host; recorded as a host-level transient, no source change |
+| Release build | PASS | 30.78 s clean isolated build, 4,048,384 bytes, SHA-256 `87a1cae4…b6da23`, `mink 1.0.5` |
+| Release regression | PASS | 85 suites, 3,262 passed, 0 failed, 9 ignored, exit 0 — identical to debug |
+| Release stability | PASS | soak 8/8 (60.11 s), `resource_lifecycle`, `capacity`, `diagnostics` all green |
+| Windows practical parity (M2) | PASS | already closed at Session 138; 10 apps rebuilt with the release compiler, 228/228 cases match the Python references |
+| M6 external developer validation | **OUTSTANDING** | requires a developer who did not build MINK |
+| Publication | NOT DONE | 1.0.5 unpublished; no tag, no GitHub release |
+
+Readiness therefore moves from **NOT READY (release verification blocked)** to
+**internally verified, M6 outstanding**. Release-mode verification is no longer
+a blocker. The bounded limits recorded above are unchanged and still apply.
