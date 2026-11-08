@@ -399,7 +399,7 @@ Capabilities:
 
 ## Limitations
 
-MINK 1.0.4 is explicit about its edges:
+MINK is explicit about its edges:
 
 - **Windows x86_64 is the only supported platform.** A native ELF backend exists in source
   for Linux, but Linux is frozen and unsupported; macOS is not supported.
@@ -407,24 +407,46 @@ MINK 1.0.4 is explicit about its edges:
   is no Unicode database — no non-ASCII case operations, categories, normalization or
   collation. Command-line arguments and filesystem entries use the ANSI Windows APIs, so
   non-ASCII arguments and paths are limited.
-- **Ownership coverage is incomplete in parts of the standard library.** A few functions
-  that consume an owned heap `Str` — in `encoding` and `strings`, beyond the fixed
-  `hashing` path — do not release it.
+- **Runtime resources are deliberately bounded.** The heap arena is a 1 GiB
+  no-coalesce region, so a single request above that ceiling is rejected with `E-R02`
+  rather than served; at most 1,024 heap allocations may be live at once (`E-R03`), which
+  bounds workloads such as one live string per split line to roughly 800–1,000 lines; and
+  the JSON parser works inside a caller-sized arena. These limits fail loudly and are
+  documented, not silent.
+- **Some platform surface is missing.** Paths and arguments use the ANSI Windows APIs, so
+  non-ASCII paths are limited; long paths (`MAX_PATH`) are unsupported; and there is no
+  console control handler, so Ctrl+C cannot be trapped.
 - **Tooling is CLI-only.** There is no integrated debugger or profiler.
 - **Some ecosystem capabilities remain partial.** There is no package registry or
   publishing workflow (dependencies are declared requirements or local paths), no
-  library-version model, and stdin is read-all rather than line-streamed. No long-running
-  soak testing has been done.
-- **No performance claims.** MINK has not been benchmarked against any other language.
+  library-version model, and stdin is read-all rather than line-streamed.
+- **Soak evidence is bounded, not long-running.** A 300-second mixed soak (1,440 program
+  launches, 72 compiler builds, 216 double-free runs, two full TLS suites) and bounded
+  per-suite soaks are green with flat handle counts; there is no multi-hour or overnight
+  soak record.
+- **No superiority claim.** M4 measured developer experience and M5 delivered three frozen
+  applications, but the results come from one machine and one run period. MINK is allowed
+  to lose comparisons, and no benchmark in this repository demonstrates broad advantage
+  over Python, Rust, Go or C#.
 
 ## What's Next
 
 Planning is governed by the **canonical locked roadmap** ([`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md)).
-**M1 — Real Application Validation is complete** (10 real applications, 228 executable cases,
-one real semantic defect found and fixed). The **next milestone is M2 — Windows Practical
-Stress Validation**: find where MINK stops being practically usable, with no feature work
-until every failure is classified. Native compilation and ownership are treated as
-**capabilities that must be tested, not as proven differentiators.**
+**M1 through M5 are complete**: M1 validated 10 real applications with 228 executable cases
+and caught one real semantic defect; M2 ran the practical stress validation and closed in
+Session 138; M3 closed the reliability and capability gaps it exposed; M4 measured the
+developer experience across MINK, Python, Rust, Go and C#; and M5 delivered three frozen
+Windows applications with 163 executable checks per run. Native compilation and ownership
+are treated as **capabilities that must be tested, not as proven differentiators.**
+
+Two items are open. **Release-mode verification is blocked on the current verification
+machine**: every `rustc` compile at `opt-level` 3 crashes with
+`STATUS_ILLEGAL_INSTRUCTION`, `STATUS_HEAP_CORRUPTION` or `STATUS_ACCESS_VIOLATION`,
+including after a forced toolchain reinstall, while debug builds are unaffected and a
+trivial release crate compiles. Debug is verified at the current HEAD: **85 suites, 3,262
+passed, 0 failed, 9 ignored**. **M6 external developer validation is outstanding** — it
+requires a developer who did not build MINK. M7 tooling and ecosystem work remains gated on
+demonstrated demand.
 
 MINK targets **Windows x64**, the completed baseline and the only active platform for
 practical validation. Linux and any additional platform remain **FROZEN until the M8

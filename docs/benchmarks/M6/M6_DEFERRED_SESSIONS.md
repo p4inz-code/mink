@@ -1,6 +1,6 @@
 # M6-M9 - Programme ledger
 
-**Updated:** 2026-11-05
+**Updated:** 2026-11-08 (Session 211 documentation reconciliation)
 **Current milestone:** M6 - external developer usability
 **Status:** M6 repository acceptance COMPLETE (Sessions 182-183);
 published 1.0.4 distribution **BLOCKED** (Sessions 184-185, since resolved by the
@@ -20,7 +20,7 @@ published 1.0.4 distribution **BLOCKED** (Sessions 184-185, since resolved by th
 | 180 | Cold-start application and verifier (consolidated; absorbs original 182-183) | **COMPLETE** |
 | 181 | Cross-cutting usability audit and M6 decision (consolidated; absorbs original 185 decision) | **COMPLETE** |
 | 182 | Defect closure (environment module, zip reader, nested Vec, version) | **COMPLETE** |
-| 183 | M6 final acceptance and closure | **COMPLETE** (decision: COMPLETE) |
+| 183 | M6 final acceptance and closure | **COMPLETE** (decision: COMPLETE; no external developer study was performed) |
 | 184 | Published package, clean installation and distribution integrity | **COMPLETE** (distribution defects verified) |
 | 185 | Windows installation, association and CLI first-run audit (original closure slot remains decided in 183) | **COMPLETE** (association blocked from published package) |
 | M6-RC1 | Repository recovery, 1.0.5 candidate preparation, full verification and GitHub synchronization (operation ID, not a session number) | **COMPLETE** (candidate verified from its own tarball; registry still serves 1.0.4) |
@@ -30,6 +30,18 @@ published 1.0.4 distribution **BLOCKED** (Sessions 184-185, since resolved by th
 
 M5 is COMPLETE. Its final report and readiness gate remain authoritative for
 the application evidence used by M6.
+
+*Dated correction, 2026-11-08 (Session 211).* The session-slot column above
+reserved **186-197 for M7**, **198-203 for M8** and **204-209 for M9**. Those
+slots were not used as planned: sessions **189-210** were consumed by M6 release
+finalisation, runtime reliability, capacity, soak and release-readiness work,
+recorded as `M6_SESSION_189_…` through `M6_SESSION_210_…`. **M7, M8 and M9 are
+still NOT STARTED** and no M7/M8/M9 work exists in the repository. M6 repository
+acceptance is complete, but **M6 external developer validation - a developer who
+did not build MINK - remains OUTSTANDING**; the internal cold-start sessions
+(174-181) do not satisfy that requirement. Linux remains frozen, M7 remains
+demand-gated, and MINK 1.0.5 remains unpublished. See
+[`M6_SESSION_210_FINAL_ACCEPTANCE.md`](M6_SESSION_210_FINAL_ACCEPTANCE.md).
 
 ## Sessions 184-185 result - published 1.0.4 is not repository HEAD
 

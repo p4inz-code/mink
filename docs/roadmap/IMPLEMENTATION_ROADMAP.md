@@ -132,8 +132,14 @@ M2 coverage:
 - **Do not add arbitrary features.**
 
 ### M4 — Developer Experience Benchmark
-- **IN PROGRESS — methodology and preparation (Session 150).** No benchmark
-  results exist yet; do not mark M4 complete.
+- **COMPLETE (Sessions 150–162).** Measurement finished 2026-11-02: 450/450
+  language-case combinations green, 3,910 runtime samples, 750 startup samples
+  and 100 clean-build records retained. No composite score exists; runtime,
+  startup, memory, build and correctness are reported as separate panels.
+- Evidence: [`docs/benchmarks/M4/M4_SESSION_162_FINAL_REPORT.md`](../benchmarks/M4/M4_SESSION_162_FINAL_REPORT.md)
+  and the committed derived statistics
+  [`M4_RESULTS_SUMMARY.json`](../benchmarks/M4/M4_RESULTS_SUMMARY.json). Results are
+  from one machine and one run period, not a universal language ranking.
 - Method, workload selection and environment baseline:
   [`docs/benchmarks/M4/`](../benchmarks/M4/README.md).
 - Selected workload categories: W1 JSON CLI, W2 local HTTP/JSON client,
@@ -168,6 +174,17 @@ Measure where relevant:
 **MINK is allowed to lose.** The purpose is to discover where MINK actually wins.
 
 ### M5 — Competitive Workload Shootout
+- **COMPLETE (Sessions 163–177).** Three frozen applications (`repoaudit`,
+  `hookbox`, `releasepack`) are GREEN with 163 executable checks per run, each
+  shipped as one native PE executable. The milestone closed PARTIAL on a real
+  stdlib JSON-capacity defect and was revised to COMPLETE only after Sessions
+  174–175 fixed it with a backward-compatible API and permanent boundary
+  regressions.
+- Evidence: [`docs/benchmarks/M5/M5_FINAL_REPORT.md`](../benchmarks/M5/M5_FINAL_REPORT.md)
+  and [`M5_SESSION_177_FINAL_REPORT_REVISION.md`](../benchmarks/M5/M5_SESSION_177_FINAL_REPORT_REVISION.md).
+  M5 adds no timing, throughput or memory measurement; M4 owns the cross-language
+  comparison, and neither milestone demonstrates broad superiority.
+
 Use a small representative set:
 
 1. Windows developer CLI
@@ -286,11 +303,21 @@ inactive and must not be executed.
 
 ## 8. Next action
 
-**Recommended next action: execute M4 Session 151.** Build the benchmark
-harness skeleton and the W1 `jsontool` ports in all five languages, with
-shared fixtures and golden output, before any M4 timing is claimed. M3 is
-closed; M4 compares representative workflows against Python, Rust, Go, and C#
-without adding new language, ecosystem, or platform features.
+*Superseded recommendation (retained for history).* The original next action was
+"execute M4 Session 151" — build the benchmark harness skeleton and the W1
+`jsontool` ports in all five languages before any M4 timing was claimed. M4 ran
+through Session 162 and M5 through Session 177; both are closed.
+
+**Current next action (2026-11-08):** produce a release-mode build and release-mode
+suite run on a healthy Windows x86_64 host. Every debug check is green and the
+source-side reliability programme (Sessions 197–210) is closed, but the release
+build cannot be produced on the current verification machine because `rustc` at
+`opt-level` 3 crashes with `STATUS_ILLEGAL_INSTRUCTION`,
+`STATUS_HEAP_CORRUPTION` or `STATUS_ACCESS_VIOLATION` (reproduced after a forced
+toolchain reinstall; a trivial release crate compiles and debug is unaffected).
+Until that is resolved the release verdict cannot advance past **NOT READY**.
+M6 external developer validation is the only other open milestone item, and it
+requires a developer who did not build MINK.
 
 *Dated status, 2026-11-06 (Sessions 190–193).* M4 and M5 are closed. The
 standard-library ownership work that this roadmap treats as a prerequisite is
@@ -501,6 +528,22 @@ release-mode suites are therefore **not run**. Final verdict: **NOT READY**
 (environment release-verification blocker plus outstanding M6 external
 validation), not a confirmed source defect. See
 [`M6_SESSION_210_FINAL_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_210_FINAL_ACCEPTANCE.md).
+
+*Dated status, 2026-11-08 (Session 211 — documentation reconciliation).* A
+repository-wide documentation audit found and corrected three internal
+contradictions; no milestone state changed. (1) This roadmap marked M4 "IN
+PROGRESS" and left M5 unmarked while §8 recorded both as closed, although
+`M4_SESSION_162_FINAL_REPORT.md` and `M5_FINAL_REPORT.md` already document their
+completion; both are now marked COMPLETE with their evidence. (2) The next
+action still pointed at M4 Session 151; it now points at release-mode
+verification. (3) `README.md` still described M2 as the next milestone, claimed
+the standard library retains unreleased owned strings in `encoding` and
+`strings` (closed in Sessions 190–193), and stated that MINK had never been
+benchmarked (M4/M5 exist); those statements are corrected without deleting the
+historical records. Re-verified at this HEAD: **85 suites, 3,262 passed, 0
+failed, 9 ignored**, and `origin/main` equals local HEAD. Release-mode
+verification remains **BLOCKED**; M6 external validation remains outstanding;
+M7 remains demand-gated; Linux remains frozen; 1.0.5 remains unpublished.
 
 ---
 
