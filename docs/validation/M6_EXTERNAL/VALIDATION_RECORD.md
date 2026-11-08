@@ -89,3 +89,40 @@ not evidence that MINK has no defects.
 
 **M6 verdict: OUTSTANDING.** A prepared package and a written protocol are
 preparation, not validation.
+
+## 7. Session 219 intake — 2026-11-08
+
+Checkpoint before intake:
+
+- Local `HEAD` equals `origin/main` at
+  `f57ce47848a2e7325f61230d3de686ee01ad4f64`, verified after `git fetch origin`.
+- The worktree contains only the four user-owned untracked files
+  (`MINK UI SETS OFFICIAL.zip`, `freebuff-chat-2026-10-01T19-08-00.600Z.md`,
+  `nl1.exe`, `nl1.mink`); no modified, staged or stashed content.
+- `docs/validation/M6_EXTERNAL/` holds the package README, the protocol and this
+  record, and no submission directory.
+
+Intake result: **no evaluation evidence was supplied.** No tester report,
+verbatim feedback, transcript, terminal log, screenshot, recording, source
+program or environment description exists in the repository or arrived with
+this session. The register in §1 therefore stays empty, and §3–§5 stay empty
+with it.
+
+Independence screening: not applicable — no candidate submitted anything to
+screen, so nothing is asserted about anyone's independence.
+
+Consent: not applicable — no feedback exists to cover.
+
+Information recorded as missing rather than assumed: tester identity and
+self-described background, Windows version and architecture, installation path,
+`mink --version` output, measured binary checksum, per-task expected versus
+actual results, and the transcript itself.
+
+No invitation was sent and no developer was contacted. The session rules forbid
+contact without the owner's explicit authorization, and this environment has no
+channel to an outside developer.
+
+**M6 verdict at intake: OUTSTANDING.** Sessions 220–228 are not executed
+because each is conditional on tester evidence. The blocking human action is
+unchanged: the owner sends the invitation in §2 to a developer who has never
+contributed to MINK, and the returned material is recorded here verbatim.
