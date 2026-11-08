@@ -480,3 +480,19 @@ lookup were re-probed. No compiler source changed; the 1.0.5 reference binary
 is unchanged. M6 remains **OUTSTANDING**, overall readiness remains **NOT READY**
 for publication because no independent developer has run the protocol, and
 1.0.5 remains unpublished.
+
+*M6 readiness addendum, 2026-11-08 (Sessions 229–238).* The external package
+was re-reviewed against the documented APIs. Five task expectations would have
+produced false defect reports and were corrected: file append and missing-file
+handling (T9), malformed-JSON handling (T10), in-memory SQLite scope (T12),
+and closed-port exit behavior (T14). T6, T8 and T11 were clarified, and the language guide now
+documents the command-line, stderr and stdin intrinsics T17 requires. The
+package now includes a
+per-task submission template, verified FAQ, acceptance checklist and
+coordinator triage procedure, and the README carries a handoff manifest and the
+current build-source statement. A clean clone at `1f6f79a` built in 21.36 s
+(exit 0, 60 warnings, 0 errors), reported `mink 1.0.5`, produced 4,048,384
+bytes, and ran standalone and `mod filesystem;` programs. The reference binary
+still matches SHA-256 `87a1cae4...b6da23`. No compiler or runtime source changed.
+M6 remains **OUTSTANDING**, readiness for publication remains **NOT READY**,
+and 1.0.5 remains unpublished.

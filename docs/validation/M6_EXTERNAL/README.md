@@ -2,11 +2,13 @@
 
 **Package version:** 1.0.5 (repository build)
 **Prepared:** 2026-11-08, Session 215
+**Re-verified:** 2026-11-08, Session 237
 **Audience:** a developer who did not build MINK and has no prior MINK knowledge
 **Platform:** Windows x86_64
 **Package status:** **READY FOR EXTERNAL EVALUATION** (internal reproducibility
-check passed 2026-11-08, Session 218). This is not external validation; M6
-remains OUTSTANDING.
+check passed 2026-11-08, Session 218; instructions and task expectations
+re-reviewed in Sessions 229–238). This is not external validation; M6 remains
+OUTSTANDING.
 
 This package exists so an independent developer can install MINK, learn it from
 its own documentation, build practical programs, and report what actually
@@ -30,6 +32,28 @@ notes or the project owner.
 | Validation-sized workloads | `validation/a1_fileinspect` … `validation/h_manifest` (10 programs) |
 | Evaluation tasks and expected outcomes | [`EVALUATION_PROTOCOL.md`](EVALUATION_PROTOCOL.md) |
 | Evidence record and report format | [`VALIDATION_RECORD.md`](VALIDATION_RECORD.md) |
+| Per-task submission form | [`SUBMISSION_TEMPLATE.md`](SUBMISSION_TEMPLATE.md) |
+| Troubleshooting | [`FAQ.md`](FAQ.md) |
+| Acceptance and closure checklist | [`ACCEPTANCE_CHECKLIST.md`](ACCEPTANCE_CHECKLIST.md) |
+
+### 1.1 Handoff manifest
+
+The coordinator delivers either a clone of this repository at the commit under
+test, or a folder with the same items:
+
+- `mink.exe` (Path A; it must match the reference checksum in §4) or the source
+  tree for Path B;
+- `stdlib/` — the 27 `.mink` modules;
+- `docs/language/` — the six reference pages linked in §1;
+- `examples/` (15 programs), `validation/` (10 applications), and
+  `benchmarks/m6/session176/` (the 10 tutorial programs `01_hello.mink` …
+  `10_imports.mink`);
+- this README, `EVALUATION_PROTOCOL.md`, `VALIDATION_RECORD.md`,
+  `SUBMISSION_TEMPLATE.md`, `FAQ.md`, and `ACCEPTANCE_CHECKLIST.md`.
+
+A folder containing only `mink.exe` is not sufficient: the documentation,
+examples, and protocol are part of the evaluation. The coordinator keeps
+`FINDINGS_TRIAGE.md` for handling returned reports.
 
 The package is the repository itself; no separate archive is required. Do not
 read `docs/implementation/`, `docs/benchmarks/` or `docs/audits/` while
@@ -55,8 +79,8 @@ Two supported paths. Use the first one if the coordinator supplied a binary.
 1. Create a working directory, for example `C:\mink-eval`.
 2. Put `mink.exe` there.
 3. Put the standard library beside it, in `C:\mink-eval\stdlib\` (the 27
-   `.mink` files). MINK resolves modules from `<folder containing mink.exe>\stdlib`
-   first, then `<current directory>\stdlib`.
+   `.mink` files listed in §1.1). MINK resolves modules from
+   `<folder containing mink.exe>\stdlib` first, then `<current directory>\stdlib`.
 4. Verify the checksum against §4.
 5. Open Git Bash in `C:\mink-eval` and run:
 
@@ -80,7 +104,9 @@ cargo build --release    # ~21-31 s on the verification host, 60 warnings, 0 err
 ```
 
 Run programs **from the repository root** so that `./stdlib` is found, or copy
-`stdlib/` beside `target/release/mink.exe`.
+`stdlib/` beside `target/release/mink.exe`. The `../mink.exe` in the §5 quick
+start is the Path A layout; for Path B run `./target/release/mink.exe` from the
+repository root.
 
 Do not use `npm install -g @p4inz-code/mink` for this evaluation: the registry
 still serves 1.0.4, which is not the version under evaluation and has known
@@ -94,7 +120,7 @@ standard-library defects. 1.0.5 is unpublished by policy.
 | Binary (release, Windows x86_64) | 4,048,384 bytes |
 | SHA-256 | `87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23` |
 | Reference binary | `target/s213_clean/release/mink.exe` (Session 213 clean build, 2026-11-08; git-ignored) |
-| Build source | commit `f851947`; `src/`, `stdlib/`, `Cargo.toml`, `Cargo.lock` and `npm/mink/bin/mink.exe` unchanged through `ebb3bc8` |
+| Build source | compiler source commit `f851947`; the reference binary is unchanged through `1f6f79a`. `stdlib/` gained two post-package fixes in `bf3fe81` (Sessions 219–228); they affect compiled programs, not the compiler checksum. |
 | Target | `x86_64-windows-pe` |
 | Build toolchain | rustc 1.97.1 (8bab26f4f 2026-07-14), LLVM 22.1.6 |
 | Package state | **unpublished**; npm registry serves 1.0.4, not this version |
@@ -112,6 +138,14 @@ from `target/release`; both were 4,048,384 bytes and reported `mink 1.0.5`. The
 checksum above identifies the exact reference binary. Compare the copy you were
 given, not its filename.
 
+Session 237 re-verified the source path at `1f6f79a`: `cargo build --release`
+exited 0 in 21.36 s with 60 warnings and 0 errors, `mink --version` printed
+`mink 1.0.5`, the binary was 4,048,384 bytes with SHA-256
+`67450d40347029de902fb921242c42fa2a4281776f27f8ff84771a286e29717f` (a normal
+self-build, expected to differ from the reference binary as explained above),
+and a `mod filesystem;` program ran from the clone root. Path A's supplied
+binary must match the reference checksum; a Path B self-build need not.
+
 ## 5. Quick start
 
 ```bash
@@ -122,7 +156,9 @@ printf 'fn main() -> Int {\n    rt_print_int(42);\n    return 0;\n}\n' > hello.m
 ```
 
 Expected: `42`, exit code 0. `build` writes `hello.exe` beside the source.
-`run` compiles and runs in one step; `check` runs the front end only.
+`run` compiles and runs in one step; `check` runs the front end only. For Path B,
+replace `../mink.exe` with `./target/release/mink.exe` and run from the
+repository root.
 
 Programs are one or more `.mink` files. `fn main` is the entry point;
 `main() -> Int` becomes the process exit code. Output is line-oriented: every
@@ -220,15 +256,20 @@ These are documented, intentional or accepted, and are not defects to report
 - ANSI paths; Unicode filenames and paths beyond `MAX_PATH` are not supported.
 - No console control-handler API (Ctrl+C handling), no thread pool, no
   condition variables, no dynamic thread priority.
-- SQLite correctness and practical workloads are claimed; performance parity
-  with native SQLite is not.
+- SQLite is an in-memory SQL engine (the database is an opaque `Str` blob),
+  not a file-backed SQLite binding; it does not persist across processes.
+  Correctness and practical workloads are claimed; performance parity with
+  native SQLite is not.
+- stdin is read-all rather than line-streamed; it is not a line-oriented
+  terminal reader.
 - Soak testing is bounded, not a long-duration guarantee.
 - No claim of superiority over any other language.
 - The published npm package is 1.0.4 and differs from 1.0.5; do not mix them.
 
 ## 10. Reporting bugs and feedback
 
-Use the template in `DEBUGGING_AND_TESTING.md` §8. Every report should contain:
+Use the per-task form in [`SUBMISSION_TEMPLATE.md`](SUBMISSION_TEMPLATE.md) and
+the bug template in `DEBUGGING_AND_TESTING.md` §8. Every report should contain:
 
 1. `mink --version` output and the binary checksum.
 2. Windows version and architecture.
@@ -248,6 +289,8 @@ difference, environment/test issue, or invalid report. Severity:
 | S3 | Diagnostic or documentation problem that costs real time but has a workaround |
 | S4 | Cosmetic or preference |
 
+A report becomes a confirmed finding only after the coordinator reproduces it
+against the reference binary; see [`FINDINGS_TRIAGE.md`](FINDINGS_TRIAGE.md).
 Send reports to the coordinator who gave you this package. Do not open public
 issues without the owner's agreement, and do not include credentials, personal
 paths or unrelated files.

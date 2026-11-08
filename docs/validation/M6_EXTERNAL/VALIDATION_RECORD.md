@@ -126,3 +126,75 @@ channel to an outside developer.
 because each is conditional on tester evidence. The blocking human action is
 unchanged: the owner sends the invitation in §2 to a developer who has never
 contributed to MINK, and the returned material is recorded here verbatim.
+
+## 8. Session 229–238 readiness pass — 2026-11-08
+
+Baseline: local `HEAD` equals `origin/main` at
+`1f6f79adc71795d146df3bdf899109925193a812`; the worktree contains only the four
+user-owned untracked files. No tester evidence was supplied, so §§1, 3, 4 and
+5 contain no tester data; §2 remains the recruitment blocker, and no acceptance
+claim is made.
+
+The package was re-reviewed as an evaluator would encounter it. Five task
+expectations contradicted the documented API and would have produced false
+defect reports:
+
+- **T9** asked the evaluator to append to a file, but the filesystem module has
+  no append mode; `fs_write` replaces the contents. The task now uses an
+explicit read-modify-write append and says so. Its missing-file expectation was
+also wrong: `fs_read` returns an empty string, `fs_file_size` returns `-1`, and
+`fs_exists` returns `false`; the process exits 0 unless the program chooses
+otherwise.
+- **T10** expected malformed JSON to be rejected with a non-zero exit and a
+  position. `json_parse` returns `0` and has no position reporting.
+- **T12** expected on-disk SQLite persistence. The engine is in-memory and the
+  database is an opaque `Str` blob; persistence across processes is not part of
+  the contract.
+- **T14** expected a closed port to produce a non-zero process exit.
+  `net_connect` returns `-1` and `net_last_error` reports the Winsock reason;
+  the program chooses its exit code.
+
+T6 now states the intended variant mix (two data-carrying variants plus one
+unit variant), T8 distinguishes `rt_map_has` from the documented `E-R11`
+failure of `rt_map_get` on an absent key, and T11 states that `csv_parse_row`
+is record-oriented and receives the whole record. T9's expected file-handle
+wording was replaced with deletion-after-read because the module exposes no
+regular-file handle. The protocol now records partial completion explicitly and
+states that internal evidence never satisfies an acceptance condition. T17's
+required argument, stderr and stdin APIs (`rt_argc`, `rt_argv`,
+`rt_stderr_write`, `rt_stdin_read`) were absent from the language guides; a
+short verified section now documents their contracts in `LANGUAGE_BASICS.md`
+§1.1.
+
+New evaluator materials: `SUBMISSION_TEMPLATE.md` (per-task evidence, consent,
+findings and partial-completion sections), `FAQ.md` (verified onboarding and
+runtime traps), `ACCEPTANCE_CHECKLIST.md` (condition-to-evidence map and
+verdict definitions), and `FINDINGS_TRIAGE.md` (coordinator classification,
+severity, status and retest workflow). `README.md` now carries a handoff
+manifest, the current build-source statement and the Session 237 clean-clone
+result.
+
+Session 237 clean-clone verification at `1f6f79a`: `cargo build --release`
+exit 0 in 21.36 s, 60 warnings, 0 errors; `mink 1.0.5`; binary 4,048,384 bytes;
+SHA-256 `67450d40347029de902fb921242c42fa2a4281776f27f8ff84771a286e29717f` (a
+normal self-build, different from the reference binary by design); `hello` and
+a `mod filesystem;` program both ran from the clone root. The reference binary
+still matches 4,048,384 bytes and
+`87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`.
+
+Focused probes: `fs_write` of 3 bytes followed by `fs_write` of 2 bytes read
+back as lengths 3 and 2, exit 0, confirming replacement rather than append.
+The new CLI example built and ran twice: without arguments it wrote `usage:
+tool <name>` to stderr and exited 2; with argument `alice` and piped `abc` it
+printed `alice` and `3` and exited 0. A struct/enum probe with a unit variant
+built and printed `1`/`0`; a nested JSON document with a boolean, object and
+array parsed and serialized back unchanged; a CSV record with a quoted comma
+and embedded newline parsed into three fields (`a,b`, length 11, `3`); and the
+existing `examples/inventory_db` SQLite example built and ran with exit 0,
+printing the expected filtered, updated and final rows. All probes used the
+reference binary; they check that the corrected tasks are expressible and are
+not external validation.
+
+**M6 verdict remains OUTSTANDING.** No invitation was sent, no developer was
+contacted, and no feedback was fabricated. The owner action is unchanged: send
+the §2 invitation and return the evaluator's completed submission form.

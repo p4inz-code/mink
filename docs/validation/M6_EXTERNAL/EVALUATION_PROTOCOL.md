@@ -50,7 +50,7 @@ partial coverage with honest notes is more useful than a rushed pass.
 | --- | --- |
 | Task id | T1–T18 |
 | Started / finished | wall-clock times, or "abandoned at 20 min" |
-| Outcome | completed / completed with friction / blocked |
+| Outcome | completed / completed with friction / partially completed / blocked |
 | Expected vs actual | one or two lines each |
 | Exit codes | compiler and program |
 | Errors seen | verbatim message and code |
@@ -112,9 +112,9 @@ Record how understandable each ownership message is.
 
 ### T6 — Structs, enums and pattern matching (25 min)
 
-Define a struct with at least two fields and an enum with at least two variants
-carrying data. Write a function that consumes the enum with `match` and returns
-a value derived from it. Cover one variant without data.
+Define a struct with at least two fields, and an enum with at least two
+data-carrying variants plus one unit variant. Write a function that consumes
+the enum with `match` and returns a value derived from it.
 
 **Expected:** builds and runs; a non-exhaustive `match` is rejected. Record
 whether the exhaustiveness message names the missing variant.
@@ -133,45 +133,60 @@ about file naming and module lookup.
 Build a list, a map and a set; insert, look up, update, iterate and remove.
 Print a deterministic summary (sorted keys, counts).
 
-**Expected:** output is stable across two runs; missing keys are observable as a
-documented result rather than a crash. Record whether the reference made the
-lookup behavior obvious.
+**Expected:** output is stable across two runs. Test absence with `rt_map_has`;
+`rt_map_get` on a missing key is a documented runtime failure (`E-R11`, exit
+111), not a sentinel value. If you exercise it, record the documented failure
+rather than treating it as a crash. Record whether the reference made this
+distinction obvious.
 
 ### T9 — Filesystem (25 min)
 
-Create a directory, write a text file, read it back, append, list the directory,
-and delete the file. Then read a file that does not exist.
+Create a directory, write a text file, read it back, overwrite it with
+additional content (append by read-modify-write; there is no append mode), list
+the directory, and delete the file. Then read a file that does not exist.
 
-**Expected:** contents round-trip exactly; the missing file produces a
-documented error and a non-zero exit, not a panic. Record whether file handles
-were released (no lock remaining after the program exits).
+**Expected:** contents round-trip exactly and the overwrite contains the
+intended combined text; a missing file is observable through `fs_exists`
+(`false`) or `fs_file_size` (`-1`). `fs_read` returns an empty string for a
+missing file, so it cannot distinguish missing from empty by itself; the
+program exits non-zero only if you choose to make the missing file fatal.
+Record whether deletion succeeded after the reads (no lock remained).
 
 ### T10 — JSON (25 min)
 
 Serialize a structure with a string, an integer, a boolean, a nested object and
 an array; write it to a file; read it back; extract two fields.
 
-**Expected:** the round-trip preserves values and types; malformed JSON is
-rejected with a non-zero exit. Record whether malformed input was reported at
-the right position.
+**Expected:** the round-trip preserves values and types. `json_parse` returns
+`0` for malformed input; the API has no line/column reporting, so have your
+program print the failure and exit non-zero if it treats it as fatal. Record
+that absence of position information rather than expecting it.
 
 ### T11 — CSV (25 min)
 
-Parse a file containing a quoted field with a comma and a quoted field with a
-newline; compute one aggregate (count or sum) over a numeric column.
+Parse a CSV record containing a quoted field with a comma and a quoted field
+with a newline; compute one aggregate (count or sum) over a numeric column. Pass
+the whole record text to `csv_parse_row`; the module is record-oriented and does
+not split a document into records for you.
 
 **Expected:** the quoted fields are parsed as single values; the aggregate
-matches a hand calculation. Record any ambiguity in the documented API.
+matches a hand calculation. The embedded newline is preserved only when the
+whole record is passed; splitting on physical lines first will fail and is a
+documented caller constraint. Record any ambiguity in the documented API.
 
 ### T12 — SQLite (30 min)
 
-Create a database, create a table, insert several rows, query with a filter,
-update one row, then close the program, reopen the database in a second run and
-confirm the data is still there.
+Use `mod sqlite;` to create an in-memory database: create a table, insert
+several rows, query with a filter, update one row, and report the final rows.
+The "database" is an opaque `Str` blob threaded through every call, so pass
+each call's returned blob to the next call. The engine is in-memory only; it is
+not a file-backed SQLite binding and does not persist across process runs.
 
-**Expected:** the second run sees the persisted rows; a failing statement
-reports an error and does not silently continue. Record whether parameter
-binding was discoverable from the reference.
+**Expected:** the queries reflect the mutations; a failing statement is
+reported through the result text rather than silently continuing; the program
+reports the documented in-memory limitation and does not claim file
+persistence. Record whether the blob-threading ownership rule and the in-memory
+scope were clear.
 
 ### T13 — HTTP and HTTPS (25 min)
 
@@ -188,8 +203,10 @@ Start a TCP listener in one process and connect from a second process on
 localhost; send a line each way and print what was received. Then connect to a
 closed port.
 
-**Expected:** both messages arrive intact; the closed port produces a documented
-failure with a non-zero exit. Record whether the accept/connect lifecycle was
+**Expected:** both messages arrive intact; a closed port makes `net_connect`
+return `-1` and leaves the reason in `net_last_error` (for example 10061,
+connection refused). The program exits non-zero if you treat that as fatal; the
+runtime does not exit for you. Record whether the accept/connect lifecycle was
 clear.
 
 ### T15 — Concurrency (30 min)
@@ -220,7 +237,8 @@ pipe.
 
 **Expected:** all paths behave as described; invalid usage prints guidance to
 stderr and exits non-zero. This is the capstone task: it should feel like
-ordinary native-tool development.
+ordinary native-tool development. The reference should make argument parsing,
+stderr and the read-all stdin model discoverable; record any remaining gap.
 
 ### T18 — Documentation and developer experience (30 min)
 
@@ -274,3 +292,6 @@ M6 can be marked COMPLETE only when all of the following are true:
 M6 is PARTIAL when validation occurred but an S2 defect remains open or a
 required task was not completed. M6 stays OUTSTANDING when no independent tester
 has completed the protocol.
+
+Internal tests, agent runs and repository audit results never count toward any
+condition above. A prepared package is not validation.

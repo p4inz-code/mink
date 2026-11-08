@@ -388,6 +388,26 @@ M6 remains **OUTSTANDING**, M7 demand-gated, M8 gated, Linux frozen, and 1.0.5
 unpublished. See
 [`M6_SESSION_219_ENGINEERING_AUDIT.md`](../benchmarks/M6/M6_SESSION_219_ENGINEERING_AUDIT.md).
 
+*Dated status, 2026-11-08 (Sessions 229–238 — M6 readiness).* The external
+package was re-reviewed against the documented APIs. Five task expectations
+across four tasks were false-defect traps and were corrected: there is no file
+append mode, and a missing file returns an empty string/`-1` rather than
+exiting non-zero (T9); malformed JSON returns `0` with no position (T10);
+SQLite is an in-memory `Str` blob with no cross-process persistence (T12); and
+a refused connection returns `-1` with a Winsock code rather than exiting the
+process (T14). T6, T8 and T11 now state their variant,
+missing-key and record-oriented constraints. The language guide now documents
+the command-line, stderr and stdin intrinsics T17 requires. Added a per-task
+submission form,
+verified FAQ, acceptance checklist, and coordinator triage procedure; the
+README carries a handoff manifest and the current build-source statement. A
+clean clone at `1f6f79a` built in 21.36 s (exit 0, 60 warnings, 0 errors),
+reported `mink 1.0.5`, produced 4,048,384 bytes, and ran both a standalone and
+a `mod filesystem;` program. The reference binary remains 4,048,384 bytes with
+SHA-256 `87a1cae4...b6da23`. **M6 remains OUTSTANDING**: no independent
+evaluator has submitted evidence, M7 stays demand-gated, M8 stays gated, Linux
+stays frozen, and 1.0.5 remains unpublished.
+
 *Dated status, 2026-11-06 (Sessions 194–196).* Windows x86_64 runtime reliability
 was re-audited under bounded stress and one confirmed defect was fixed: collection
 handles are now validated against the liveness table, so using a freed `Vec`,
