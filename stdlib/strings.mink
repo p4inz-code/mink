@@ -261,7 +261,7 @@ fn str_trim(s: Str) -> Str {
     let mut start_done = 0;
     while start < len && start_done == 0 {
         let b = rt_str_byte(s, start);
-        if b != 32 && b != 9 && b != 10 && b != 13 {
+        if !_is_whitespace(b) {
             start_done = 1;
         }
         if start_done == 0 { start = start + 1; }
@@ -273,7 +273,7 @@ fn str_trim(s: Str) -> Str {
         let mut end_done = 0;
         while end > start && end_done == 0 {
             let b = rt_str_byte(s, end - 1);
-            if b != 32 && b != 9 && b != 10 && b != 13 {
+            if !_is_whitespace(b) {
                 end_done = 1;
             }
             if end_done == 0 { end = end - 1; }
@@ -288,7 +288,7 @@ fn str_trim_start(s: Str) -> Str {
     let mut done = 0;
     while start < len && done == 0 {
         let b = rt_str_byte(s, start);
-        if b != 32 && b != 9 && b != 10 && b != 13 {
+        if !_is_whitespace(b) {
             done = 1;
         }
         if done == 0 { start = start + 1; }
@@ -302,7 +302,7 @@ fn str_trim_end(s: Str) -> Str {
     let mut done = 0;
     while end > 0 && done == 0 {
         let b = rt_str_byte(s, end - 1);
-        if b != 32 && b != 9 && b != 10 && b != 13 {
+        if !_is_whitespace(b) {
             done = 1;
         }
         if done == 0 { end = end - 1; }

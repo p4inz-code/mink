@@ -392,6 +392,18 @@ fn e38_is_whitespace() {
     assert_bool_op("is_ws", "byte_is_whitespace(10)", true);
 }
 #[test]
+fn e38b_is_whitespace_all_ascii() {
+    // ASCII whitespace is tab, LF, VT, FF, CR and space. VT/FF were omitted
+    // while the reference described this as an ASCII whitespace check.
+    assert_bool_op("is_ws_tab", "byte_is_whitespace(9)", true);
+    assert_bool_op("is_ws_lf", "byte_is_whitespace(10)", true);
+    assert_bool_op("is_ws_vt", "byte_is_whitespace(11)", true);
+    assert_bool_op("is_ws_ff", "byte_is_whitespace(12)", true);
+    assert_bool_op("is_ws_cr", "byte_is_whitespace(13)", true);
+    assert_bool_op("is_ws_space", "byte_is_whitespace(32)", true);
+    assert_bool_op("is_ws_a", "byte_is_whitespace(65)", false);
+}
+#[test]
 fn e39_str_is_ascii_true() {
     assert_bool_op("str_ascii_t", "str_is_ascii(\"Hello\")", true);
 }

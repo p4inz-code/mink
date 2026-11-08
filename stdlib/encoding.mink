@@ -584,7 +584,7 @@ fn byte_is_printable(b: Int) -> Bool {
 }
 
 fn byte_is_whitespace(b: Int) -> Bool {
-    return b == 32 || b == 9 || b == 10 || b == 13;
+    return b == 32 || b == 9 || b == 10 || b == 11 || b == 12 || b == 13;
 }
 
 /// Whether every byte of `s` is ASCII.  `s` is consumed and freed, so a

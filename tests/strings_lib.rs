@@ -555,6 +555,51 @@ fn main() {
 }
 
 #[test]
+fn s37b_trim_all_ascii_whitespace() {
+    // Session 219: "ASCII whitespace" includes VT (0x0B) and FF (0x0C), not
+    // only space, tab, LF and CR. All three trim entry points must agree.
+    let test = r#"
+fn main() {
+    let a = rt_str_alloc(7);
+    rt_str_set_byte(a, 0, 11);
+    rt_str_set_byte(a, 1, 12);
+    rt_str_set_byte(a, 2, 32);
+    rt_str_set_byte(a, 3, 65);
+    rt_str_set_byte(a, 4, 32);
+    rt_str_set_byte(a, 5, 11);
+    rt_str_set_byte(a, 6, 12);
+    let s = str_trim(a);
+    rt_print_int(rt_str_len(s));
+    rt_print_str(s);
+    rt_str_free(s);
+
+    let b = rt_str_alloc(4);
+    rt_str_set_byte(b, 0, 11);
+    rt_str_set_byte(b, 1, 12);
+    rt_str_set_byte(b, 2, 65);
+    rt_str_set_byte(b, 3, 32);
+    let t = str_trim_start(b);
+    rt_print_int(rt_str_len(t));
+    rt_print_str(t);
+    rt_str_free(t);
+
+    let c = rt_str_alloc(4);
+    rt_str_set_byte(c, 0, 32);
+    rt_str_set_byte(c, 1, 65);
+    rt_str_set_byte(c, 2, 11);
+    rt_str_set_byte(c, 3, 12);
+    let u = str_trim_end(c);
+    rt_print_int(rt_str_len(u));
+    rt_print_str(u);
+    rt_str_free(u);
+    rt_exit(0);
+}"#;
+    let (code, stdout) = build_and_run(test);
+    assert_eq!(code, 0, "unexpected exit code: {code}");
+    assert_eq!(stdout_text(&stdout), "1\r\nA\r\n2\r\nA \r\n2\r\n A\r\n");
+}
+
+#[test]
 fn s38_reverse() {
     let test = r#"
 fn main() {
@@ -760,6 +805,32 @@ fn main() {
 }"#;
     let (code, _) = build_and_run(test);
     assert_eq!(code, 0);
+}
+
+#[test]
+fn s51b_replace_first_occurrence_only() {
+    // The reference table once claimed str_replace replaced every occurrence.
+    // The implementation replaces the first; str_replace_all is the repeated
+    // variant. Pin both behaviors and the documented empty-needle cases.
+    let test = r#"
+fn main() {
+    let a = str_replace("aaa", "aa", "b");
+    rt_print_str(a);
+    rt_str_free(a);
+    let b = str_replace_all("aaa", "aa", "b");
+    rt_print_str(b);
+    rt_str_free(b);
+    let c = str_replace("abc", "", "-");
+    rt_print_str(c);
+    rt_str_free(c);
+    let d = str_replace_all("abc", "", "-");
+    rt_print_str(d);
+    rt_str_free(d);
+    rt_exit(0);
+}"#;
+    let (code, stdout) = build_and_run(test);
+    assert_eq!(code, 0, "unexpected exit code: {code}");
+    assert_eq!(stdout_text(&stdout), "ba\r\nba\r\n-abc\r\nabc\r\n");
 }
 
 #[test]
