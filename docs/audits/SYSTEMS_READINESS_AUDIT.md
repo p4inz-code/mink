@@ -440,3 +440,13 @@ validation also remains outstanding. See
 Readiness therefore moves from **NOT READY (release verification blocked)** to
 **internally verified, M6 outstanding**. Release-mode verification is no longer
 a blocker. The bounded limits recorded above are unchanged and still apply.
+
+*External validation addendum, 2026-11-08 (Sessions 215–216).* The M6 external
+package and 18-task protocol are complete
+([`docs/validation/M6_EXTERNAL/`](../validation/M6_EXTERNAL/README.md)), but **no
+independent developer was available to this work**: the owner built MINK, and the
+executing agent's results are internal verification. No invitation was sent, no
+tester ran the protocol and no feedback exists, so M6 remains **OUTSTANDING** and
+overall readiness remains **NOT READY** for publication. Nothing in MINK source
+changed in Sessions 215–216; the release and regression checkpoints above still
+describe the tree.

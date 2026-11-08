@@ -340,6 +340,19 @@ source defect, and was not concealed. M6 external developer validation remains
 ([`M6_SESSION_213_RELEASE_VERIFICATION.md`](../benchmarks/M6/M6_SESSION_213_RELEASE_VERIFICATION.md),
 [`VALIDATION_MILESTONE_2_AUDIT.md`](../validation/VALIDATION_MILESTONE_2_AUDIT.md)).
 
+*Dated status, 2026-11-08 (Sessions 215–216 — external validation).* The M6
+external package and protocol are ready
+([`docs/validation/M6_EXTERNAL/`](../validation/M6_EXTERNAL/README.md)): two install
+paths, exact version and SHA-256, quick start, documentation index, example map,
+test instructions, known limitations, bug-reporting format, and 18 timed tasks
+with expected outcomes and M6 acceptance thresholds. **No independent developer
+was available**, so none was invited and no external evidence exists; the blocker
+is recorded rather than worked around, and no feedback was fabricated. M6 stays
+**OUTSTANDING** (not PARTIAL — external testing has not begun). MINK source is
+unchanged by both sessions, so the Session 213 checkpoints still describe the
+tree. M7 remains demand-gated, M8 not started, Windows x86_64 supported, Linux
+frozen, 1.0.5 unpublished with no tag or release.
+
 *Dated status, 2026-11-06 (Sessions 194–196).* Windows x86_64 runtime reliability
 was re-audited under bounded stress and one confirmed defect was fixed: collection
 handles are now validated against the liveness table, so using a freed `Vec`,
