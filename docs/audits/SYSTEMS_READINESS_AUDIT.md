@@ -462,3 +462,21 @@ bytes, SHA-256 `87a1cae4...b6da23`). The package is **READY FOR EXTERNAL
 EVALUATION**, but M6 remains **OUTSTANDING** and overall publication readiness
 remains **NOT READY** because no independent developer has run the protocol.
 1.0.5 remains unpublished.
+
+*Engineering audit addendum, 2026-11-08 (Sessions 219–228).* An internal
+ten-session audit re-verified the compiler boundaries, language semantics,
+diagnostics, standard library, resource lifecycle, practical workloads, the
+project workflow and the CLI. It is internal evidence, not external validation.
+Four contract defects were confirmed and closed: the three string trim
+entry points and `encoding.byte_is_whitespace` ignored VT/FF despite the
+"ASCII whitespace" contract; the `str_replace` row wrongly claimed it replaced
+every occurrence; and the map reference omitted that a missing-key `rt_map_get`
+is `E-R11` (exit 111). Regression coverage was added for each behavior, and the
+ancillary reference pages were corrected. Debug and release `strings_lib` pass
+90/90, `encoding_lib` passes after the fix, and the stdlib documentation and
+signature suites pass 1/1 each. SHA-256 known vectors, JSON/CSV round-trips,
+filesystem return values, collection operations and the documented module
+lookup were re-probed. No compiler source changed; the 1.0.5 reference binary
+is unchanged. M6 remains **OUTSTANDING**, overall readiness remains **NOT READY**
+for publication because no independent developer has run the protocol, and
+1.0.5 remains unpublished.

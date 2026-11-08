@@ -69,6 +69,7 @@ directories by copying the source to a disposable directory first.
 | 3-5 | `invsync` example | Invalid input / unreadable input / unwritable output |
 | 104 | runtime | `E-R04` invalid free (`100 + 4`) |
 | 106 | runtime | `E-R06` memory leak at exit (`100 + 6`) |
+| 111 | runtime | `E-R11` map key not found (`100 + 11`) |
 | any | `main() -> Int` | The returned value, unless a runtime error overrides it |
 
 The 100-offset convention means runtime error codes surface as three-digit
@@ -203,9 +204,9 @@ The message points at map key typing, but the real issue is that
   permissions.
 - `E-S01 cannot find name` after `use x;` usually means the file was never
   loaded: `use` does not load. Add `mod x;`.
-- `mink explain` documents 50 codes and does **not** include runtime `E-R04`
-  or `E-R06`: `mink explain E-R06` prints `unknown error code`. Do not assume
-  an absent explanation means an invalid code.
+- `mink explain` documents 50 codes and does **not** include runtime `E-R04`,
+  `E-R06` or `E-R11`: `mink explain E-R06` prints `unknown error code`. Do not
+  assume an absent explanation means an invalid code.
 
 ## 5. Runtime failures, leaks and invalid frees
 

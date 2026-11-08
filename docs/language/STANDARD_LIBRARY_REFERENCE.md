@@ -220,8 +220,8 @@ contains
 | `str_pad_left(s, len, pad_byte) -> Str` | `pad_byte` is a byte value (`48` = `'0'`) | EXEC |
 | `str_pad_right(s, len, pad_byte) -> Str` | Same convention | SOURCE |
 | `str_reverse(s) -> Str` | Byte order, not grapheme order | SOURCE |
-| `str_replace(s, old, new) -> Str` | Replaces every occurrence | EXEC |
-| `str_replace_all(s, old, new) -> Str` | Variant; see source | SOURCE |
+| `str_replace(s, old, new) -> Str` | Replaces the first occurrence; an empty `old` inserts `new` at the start | EXEC |
+| `str_replace_all(s, old, new) -> Str` | Replaces every non-overlapping occurrence; an empty `old` returns the input unchanged | SOURCE |
 | `str_join_2(a, b) -> Str`, `str_join_3(a, b, c) -> Str` | Plain concatenation helpers | SOURCE |
 
 All of these consume their `Str` arguments. Passing a literal is safe because
@@ -328,6 +328,8 @@ fn main() -> Int {
 - `rt_map_keys` / `rt_map_values` / `rt_set_elements` return owned vectors;
   free them with `rt_vec_free`. Their order is **not** insertion order; treat
   it as unspecified.
+- `rt_map_get` on a key that is not present is a runtime failure `E-R11`
+  (exit 111), not a sentinel value. Use `rt_map_has` when a key may be absent.
 - **Use-after-free and stale handles are diagnosed (Sessions 195 and 197).**
   Every `Vec`/`Map`/`Set` accessor validates the handle against the runtime
   liveness table before reading its header, so `rt_map_free(m);

@@ -369,6 +369,25 @@ task identifiers and timings are internally consistent. Package status:
 **READY FOR EXTERNAL EVALUATION**. M6 remains **OUTSTANDING** because no
 independent developer has run the protocol. 1.0.5 remains unpublished.
 
+*Dated status, 2026-11-08 (Sessions 219–228 — internal engineering audit).* A
+ten-session engineering audit ran without an external tester, so it adds
+internal evidence only and does not change M6. It fixed two standard-library
+contract violations: `str_trim`, `str_trim_start` and `str_trim_end` now trim
+all six ASCII whitespace bytes (VT `0x0B` and FF `0x0C` were missed although
+the reference promises ASCII whitespace), and `encoding.byte_is_whitespace`
+now agrees with them. The `str_replace` / `str_replace_all` reference rows and
+the map missing-key behaviour (`E-R11`, exit 111) are now documented accurately.
+New regressions cover the trim entry points, first-occurrence replacement
+semantics and every ASCII whitespace byte. Verification: `strings_lib` 90/90
+in debug and release, `encoding_lib` 76/76 in debug and release,
+`stdlib_signatures` 1/1, `stdlib_docs` 1/1; SHA-256 known vectors, JSON/CSV
+round-trips, filesystem return values and collection operations were re-probed.
+No compiler source changed, so the Session 213 release checkpoint and the
+reference binary (4,048,384 bytes, SHA-256 `87a1cae4...b6da23`) still apply.
+M6 remains **OUTSTANDING**, M7 demand-gated, M8 gated, Linux frozen, and 1.0.5
+unpublished. See
+[`M6_SESSION_219_ENGINEERING_AUDIT.md`](../benchmarks/M6/M6_SESSION_219_ENGINEERING_AUDIT.md).
+
 *Dated status, 2026-11-06 (Sessions 194–196).* Windows x86_64 runtime reliability
 was re-audited under bounded stress and one confirmed defect was fixed: collection
 handles are now validated against the liveness table, so using a freed `Vec`,
