@@ -4,6 +4,9 @@
 **Prepared:** 2026-11-08, Session 215
 **Audience:** a developer who did not build MINK and has no prior MINK knowledge
 **Platform:** Windows x86_64
+**Package status:** **READY FOR EXTERNAL EVALUATION** (internal reproducibility
+check passed 2026-11-08, Session 218). This is not external validation; M6
+remains OUTSTANDING.
 
 This package exists so an independent developer can install MINK, learn it from
 its own documentation, build practical programs, and report what actually
@@ -72,7 +75,7 @@ Requires the MSVC Rust toolchain. The build was verified with rustc 1.97.1.
 git clone https://github.com/p4inz-code/mink.git
 cd mink
 rustc --version          # must be a stable MSVC toolchain
-cargo build --release    # ~31 s, 60 warnings, 0 errors
+cargo build --release    # ~21-31 s on the verification host, 60 warnings, 0 errors
 ./target/release/mink.exe --version
 ```
 
@@ -90,6 +93,8 @@ standard-library defects. 1.0.5 is unpublished by policy.
 | Compiler version | `mink 1.0.5` |
 | Binary (release, Windows x86_64) | 4,048,384 bytes |
 | SHA-256 | `87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23` |
+| Reference binary | `target/s213_clean/release/mink.exe` (Session 213 clean build, 2026-11-08; git-ignored) |
+| Build source | commit `f851947`; `src/`, `stdlib/`, `Cargo.toml`, `Cargo.lock` and `npm/mink/bin/mink.exe` unchanged through `ebb3bc8` |
 | Target | `x86_64-windows-pe` |
 | Build toolchain | rustc 1.97.1 (8bab26f4f 2026-07-14), LLVM 22.1.6 |
 | Package state | **unpublished**; npm registry serves 1.0.4, not this version |
@@ -98,6 +103,14 @@ standard-library defects. 1.0.5 is unpublished by policy.
 
 Record the exact `mink --version` output and the checksum you observe in the
 evidence record. If they differ from the table, stop and report it.
+
+A normal `cargo build --release` can report the same version and produce the
+same byte size with a different checksum. Session 218 measured
+`312f7bfd3036c5e71575e34cef6190c72ee3b135a76db098f5e9f4dceb6c91a5` from a
+clean clone and `8b3b28469ae4bc9d79f0f8bcf6ca63112ba9357dfef3f9ab2b71e1c49eccf4ee`
+from `target/release`; both were 4,048,384 bytes and reported `mink 1.0.5`. The
+checksum above identifies the exact reference binary. Compare the copy you were
+given, not its filename.
 
 ## 5. Quick start
 
@@ -167,8 +180,11 @@ Each is a single `main.mink`. Build from the repository root:
 
 ```bash
 ./target/release/mink.exe build examples/freq_count/main.mink
-./examples/freq_count/main.exe --help
+./examples/freq_count/main.exe
 ```
+
+Not every example implements `--help`; these are small programs, not a uniform
+CLI toolkit.
 
 `benchmarks/m6/session176/01_hello.mink` … `10_imports.mink` are the shortest
 progression from variables to imports; start there if the language is entirely
@@ -178,10 +194,11 @@ implementation beside them (`python_ref.py`) and a comparison harness
 
 ## 8. Test instructions
 
-MINK has built-in test discovery:
+MINK has built-in test discovery. Write a file containing top-level `fn test_*`
+functions, then run:
 
 ```bash
-mink test tests_example.mink   # runs fn test_* functions
+mink test your_tests.mink   # runs fn test_* functions
 ```
 
 A test function fails by returning a non-zero exit path through the assertion

@@ -310,8 +310,9 @@ inactive and must not be executed.
 `jsontool` ports in all five languages before any M4 timing was claimed. M4 ran
 through Session 162 and M5 through Session 177; both are closed.
 
-**Current next action (2026-11-08):** run M6 external developer validation.
-Release-mode verification is complete (Session 213): a clean optimized build and
+**Current next action (2026-11-08):** recruit an independent developer and run
+the M6 external validation. The package is **READY FOR EXTERNAL EVALUATION**
+(Session 218); no tester has started it. Release-mode verification is complete (Session 213): a clean optimized build and
 the full release suite pass at 85 suites / 3,262 passed / 0 failed / 9 ignored,
 and the Sessions 205–210 `rustc` release crash no longer reproduces (Session 212
 records it as a transient host fault with no source or toolchain change). M6 — a
@@ -354,6 +355,19 @@ is recorded rather than worked around, and no feedback was fabricated. M6 stays
 unchanged by both sessions, so the Session 213 checkpoints still describe the
 tree. M7 remains demand-gated, M8 not started, Windows x86_64 supported, Linux
 frozen, 1.0.5 unpublished with no tag or release.
+
+*Dated status, 2026-11-08 (Sessions 217–218 — package reproducibility).* Seven
+active documents that still described the current build as 1.0.4 were corrected
+to name 1.0.5 while preserving the 1.0.4 audit baseline; registry statements
+still say npm serves 1.0.4 and 1.0.5 is unpublished. The M6 package was then
+re-verified independently of its preparation: a clean clone at `ebb3bc8` built
+with `cargo build --release` in 21.38 s (exit 0, 60 warnings, 0 errors), the
+exact reference binary (`target/s213_clean/release/mink.exe`, 4,048,384 bytes,
+SHA-256 `87a1cae4...b6da23`) matches the package, all 15 examples, 10 tutorial
+programs, 10 validation applications and 27 stdlib modules exist, and all 18
+task identifiers and timings are internally consistent. Package status:
+**READY FOR EXTERNAL EVALUATION**. M6 remains **OUTSTANDING** because no
+independent developer has run the protocol. 1.0.5 remains unpublished.
 
 *Dated status, 2026-11-06 (Sessions 194–196).* Windows x86_64 runtime reliability
 was re-audited under bounded stress and one confirmed defect was fixed: collection

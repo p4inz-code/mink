@@ -450,3 +450,15 @@ tester ran the protocol and no feedback exists, so M6 remains **OUTSTANDING** an
 overall readiness remains **NOT READY** for publication. Nothing in MINK source
 changed in Sessions 215–216; the release and regression checkpoints above still
 describe the tree.
+
+*Package reproducibility addendum, 2026-11-08 (Sessions 217–218).* Active
+documentation now names 1.0.5 as the current build while retaining the 1.0.4
+audit baseline and the registry statement that npm serves 1.0.4. The M6 external
+package was re-verified from a clean clone: release build exit 0 in 21.38 s,
+60 warnings, 0 errors, `mink 1.0.5`, all referenced examples, tutorials,
+validation applications and stdlib modules present, all 18 protocol task
+identifiers sequential, and the recorded reference binary matches (4,048,384
+bytes, SHA-256 `87a1cae4...b6da23`). The package is **READY FOR EXTERNAL
+EVALUATION**, but M6 remains **OUTSTANDING** and overall publication readiness
+remains **NOT READY** because no independent developer has run the protocol.
+1.0.5 remains unpublished.
