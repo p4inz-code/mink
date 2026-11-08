@@ -191,7 +191,9 @@ built and printed `1`/`0`; a nested JSON document with a boolean, object and
 array parsed and serialized back unchanged; a CSV record with a quoted comma
 and embedded newline parsed into three fields (`a,b`, length 11, `3`); and the
 existing `examples/inventory_db` SQLite example built and ran with exit 0,
-printing the expected filtered, updated and final rows. All probes used the
+printing the expected filtered, updated and final rows; a local HTTP server's
+404 response was read as status 404 with exit 0; and two threads doing 1,000
+locked increments each printed exactly `2000` with exit 0. All probes used the
 reference binary; they check that the corrected tasks are expressible and are
 not external validation.
 
