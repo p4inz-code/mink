@@ -17,7 +17,7 @@ fn run_with_output(source: &str) -> (i32, String) {
     let tmp = std::env::temp_dir().join(format!("mink_math_test_{}_{id}.mink", std::process::id()));
     fs::write(&tmp, combined).expect("failed to write temp file");
     let exe = tmp.with_extension("exe");
-    let build = Command::new("target/debug/mink.exe")
+    let build = Command::new(env!("CARGO_BIN_EXE_mink"))
         .args(["build", tmp.to_str().unwrap()])
         .output()
         .expect("failed to run mink build");
