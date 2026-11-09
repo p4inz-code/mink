@@ -1603,6 +1603,14 @@ impl<'a> FnBuilder<'a> {
                 expr.span,
             ),
             HirExprKind::Block(block) => {
+                // A value-less block expression is still a lexical scope.
+                // Route it through the normal block lowering path so a
+                // `defer` inside it is registered on this block and runs at
+                // this block's exit, not the enclosing function's exit.
+                if block.result.is_none() {
+                    self.lower_block(block);
+                    return self.eval.eval_operand(expr);
+                }
                 // A block expression in operand position: lower statements,
                 // then handle the trailing expression.
                 if let Some(result) = self.lower_block_trailing_expr(block) {
@@ -1990,10 +1998,7 @@ impl<'a> FnBuilder<'a> {
                 // directly would then observe the cleanup's write instead of
                 // the value at the return statement. With no registrations
                 // the operand can be returned as-is.
-                let has_defers = self
-                    .defer_scopes
-                    .iter()
-                    .any(|scope| !scope.is_empty());
+                let has_defers = self.defer_scopes.iter().any(|scope| !scope.is_empty());
                 let value = value.map(|operand| {
                     if !has_defers {
                         return operand;

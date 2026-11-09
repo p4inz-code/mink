@@ -88,11 +88,8 @@ fn mink() -> Command {
 fn native(src: &str) -> (String, i32) {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "mink_defer_test_{}_{}.mink",
-        std::process::id(),
-        n
-    ));
+    let path =
+        std::env::temp_dir().join(format!("mink_defer_test_{}_{}.mink", std::process::id(), n));
     std::fs::write(&path, src).unwrap();
     let build = mink().arg("build").arg(&path).output().unwrap();
     assert!(
@@ -141,10 +138,7 @@ fn parser_rejects_unterminated_statement_in_defer() {
 
 #[test]
 fn semantics_accepts_defer_in_function_and_loop() {
-    assert!(semantic_codes(
-        "fn main() { defer { } while true { defer { } break; } }"
-    )
-    .is_empty());
+    assert!(semantic_codes("fn main() { defer { } while true { defer { } break; } }").is_empty());
 }
 
 #[test]
@@ -185,6 +179,36 @@ fn ownership_rejects_owned_local_capture() {
         "fn main() { let s = rt_str_alloc(2); defer { rt_print_str(s); } rt_str_free(s); }",
     );
     assert_eq!(codes, vec!["E-S18"]);
+}
+
+#[test]
+fn ownership_rejects_mutable_capture_that_can_become_owned_later() {
+    let codes = ownership_codes(
+        "fn main() { \
+         let mut s = \"literal\"; \
+         defer { rt_print_str(s); } \
+         s = rt_str_alloc(2); \
+         rt_str_free(s); }",
+    );
+    assert_eq!(codes, vec!["E-S18"]);
+}
+
+#[test]
+fn ownership_rejects_tuple_containing_owned_value() {
+    let codes = ownership_codes(
+        "fn main() { \
+         let t = (rt_str_alloc(2), 1); \
+         defer { rt_print_str(t.0); } \
+         rt_str_free(t.0); }",
+    );
+    assert_eq!(codes, vec!["E-S18"]);
+}
+
+#[test]
+fn ownership_allows_copy_only_tuple_capture() {
+    assert!(
+        ownership_codes("fn main() { let t = (1, true); defer { rt_print_int(t.0); } }").is_empty()
+    );
 }
 
 #[test]
@@ -323,6 +347,19 @@ fn native_continue_before_registration_does_not_run_later_defer() {
 }
 
 #[test]
+fn native_value_less_block_expression_cleans_up_at_block_exit() {
+    let (out, code) = native(
+        "fn main() -> Int { \
+         rt_print_str(\"before\"); \
+         let x = { defer { rt_print_str(\"block-cleanup\"); } }; \
+         rt_print_str(\"after\"); \
+         return 0; }",
+    );
+    assert_eq!(out, "before\nafter\nblock-cleanup\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn native_return_value_is_snapshotted_before_cleanup() {
     let (out, code) = native(
         "fn f() -> Int { \
@@ -346,6 +383,89 @@ fn native_break_value_is_snapshotted_before_cleanup() {
     );
     assert_eq!(out, "1\n");
     assert_eq!(code, 1);
+}
+
+#[test]
+fn native_struct_return_is_snapshotted_before_cleanup() {
+    let (out, code) = native(
+        "struct P { x: Int } \
+         fn f() -> P { \
+           let mut p = P { x: 1 }; \
+           defer { p.x = 9; } \
+           return p; \
+         } \
+         fn main() -> Int { \
+           let got = f(); \
+           rt_print_int(got.x); \
+           return got.x; \
+         }",
+    );
+    assert_eq!(out, "1\n");
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn native_nested_loops_keep_independent_defer_floors() {
+    let (out, code) = native(
+        "fn main() -> Int { \
+         let mut i = 0; \
+         while i < 2 { \
+           i += 1; \
+           defer { rt_print_int(i * 10); } \
+           let mut j = 0; \
+           while j < 2 { \
+             j += 1; \
+             defer { rt_print_int(j); } \
+             if j == 1 { continue; } \
+             break; \
+           } \
+         } \
+         rt_print_str(\"done\"); \
+         return 0; }",
+    );
+    assert_eq!(out, "1\n2\n10\n1\n2\n20\ndone\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn native_match_arm_return_runs_only_its_arm_cleanup() {
+    let (out, code) = native(
+        "fn f(x: Int) -> Int { \
+           match x { \
+             1 => { defer { rt_print_str(\"arm1\"); } return 10; }, \
+             _ => { defer { rt_print_str(\"arm2\"); } return 20; }, \
+           } \
+         } \
+         fn main() -> Int { \
+           let a = f(1); \
+           let b = f(2); \
+           rt_print_int(a + b); \
+           return 0; \
+         }",
+    );
+    assert_eq!(out, "arm1\narm2\n30\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn native_defer_body_inner_loop_control_flow_runs_once() {
+    let (out, code) = native(
+        "fn main() -> Int { \
+         defer { \
+           defer { rt_print_str(\"inner-defer\"); } \
+           let mut i = 0; \
+           while i < 2 { \
+             i += 1; \
+             defer { rt_print_str(\"loop\"); } \
+             if i == 1 { continue; } \
+             break; \
+           } \
+           rt_print_str(\"body-end\"); \
+         } \
+         return 0; }",
+    );
+    assert_eq!(out, "loop\nloop\nbody-end\ninner-defer\n");
+    assert_eq!(code, 0);
 }
 
 #[test]

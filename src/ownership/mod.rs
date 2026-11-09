@@ -1692,31 +1692,71 @@ impl<'a> Analyzer<'a> {
     /// Whether a deferred read of `symbol` could observe an invalidated
     /// owned value. Owned/reference-bearing bindings are rejected; plain
     /// copy values and immutable scalars are safe.
+    ///
+    /// The check is type-aware as well as state-aware. A mutable binding of
+    /// an owning type may be reassigned to an owned value *after* the
+    /// `defer` is registered, so its current provenance is not enough: a
+    /// `let mut s = "literal"` followed later by `s = rt_str_alloc(..)` and
+    /// `rt_str_free(s)` must be rejected even though `s` looked immutable
+    /// when the cleanup body was walked. Copy-only types remain safe.
     fn deferred_capture_may_own(&self, symbol: SymbolId) -> bool {
-        match self.bindings.get(&symbol) {
-            Some(State::Str(BindingState::Live(Provenance::Owned))) => true,
-            Some(State::Array(_)) => true,
-            Some(State::Enum {
-                state: BindingState::Live(Provenance::Owned),
-                ..
-            }) => true,
-            Some(State::Enum { ref_borrows, .. }) => !ref_borrows.is_empty(),
-            Some(State::Struct {
-                fields,
-                dead,
-                ref_fields,
-            }) => {
-                *dead
-                    || !ref_fields.is_empty()
-                    || fields.values().any(|state| {
-                        matches!(
-                            state,
+        let mutable = self
+            .semantic
+            .symbols()
+            .get(symbol)
+            .is_some_and(|symbol| symbol.kind.is_mutable());
+        let ty = self.types.symbol_type(symbol);
+        let shape = ty.map(|ty| self.type_shape(ty)).unwrap_or(Shape::Copy);
+        match shape {
+            Shape::Copy => ty.is_some_and(|ty| self.deferred_type_may_own(ty)),
+            Shape::Str => {
+                mutable
+                    || matches!(
+                        self.bindings.get(&symbol),
+                        Some(State::Str(
                             BindingState::Live(Provenance::Owned) | BindingState::Dead
-                        )
-                    })
+                        ))
+                    )
             }
-            Some(State::Ref { .. }) => true,
-            _ => false,
+            Shape::Array => true,
+            Shape::Ref => true,
+            Shape::Struct => {
+                if mutable {
+                    return true;
+                }
+                match self.bindings.get(&symbol) {
+                    Some(State::Struct {
+                        fields,
+                        dead,
+                        ref_fields,
+                    }) => {
+                        *dead
+                            || !ref_fields.is_empty()
+                            || fields.values().any(|state| {
+                                matches!(
+                                    state,
+                                    BindingState::Live(Provenance::Owned) | BindingState::Dead
+                                )
+                            })
+                    }
+                    _ => false,
+                }
+            }
+            Shape::Enum => {
+                if mutable {
+                    return true;
+                }
+                match self.bindings.get(&symbol) {
+                    Some(State::Enum { state, ref_borrows }) => {
+                        !ref_borrows.is_empty()
+                            || matches!(
+                                state,
+                                BindingState::Live(Provenance::Owned) | BindingState::Dead
+                            )
+                    }
+                    _ => false,
+                }
+            }
         }
     }
 
@@ -1737,8 +1777,10 @@ impl<'a> Analyzer<'a> {
             return self.copy_const(symbol);
         }
         if self.defer_depth > 0 && self.deferred_capture_may_own(symbol) {
-            self.errors
-                .push(SemanticError::deferred_owned_capture(ident.name.clone(), ident.span));
+            self.errors.push(SemanticError::deferred_owned_capture(
+                ident.name.clone(),
+                ident.span,
+            ));
         }
         // A mutably-borrowed binding cannot be read or transferred at all;
         // reads of a shared-borrowed binding are fine (the transfer and
@@ -2839,6 +2881,42 @@ impl<'a> Analyzer<'a> {
                 })
         })
         .unwrap_or(false)
+    }
+
+    /// Whether a type may transitively contain ownership-tracked storage:
+    /// `Str`, a reference, or an aggregate/tuple holding either. This is
+    /// used only by the deferred-capture check; tuples are not otherwise
+    /// tracked by the ownership pass, so a deferred read of a tuple holding
+    /// an owned `Str` must be rejected explicitly.
+    fn deferred_type_may_own(&self, ty: TypeId) -> bool {
+        match self.types.types().kind(ty) {
+            Some(TypeKind::Str) | Some(TypeKind::Ref { .. }) => true,
+            Some(TypeKind::Array { elem, .. }) | Some(TypeKind::Vec(elem)) => {
+                self.deferred_type_may_own(*elem)
+            }
+            Some(TypeKind::Map(key, value)) => {
+                self.deferred_type_may_own(*key) || self.deferred_type_may_own(*value)
+            }
+            Some(TypeKind::Set(elem)) => self.deferred_type_may_own(*elem),
+            Some(TypeKind::Struct(id)) => {
+                self.types.types().struct_info(*id).is_some_and(|info| {
+                    info.fields
+                        .iter()
+                        .any(|field| self.deferred_type_may_own(field.ty))
+                })
+            }
+            Some(TypeKind::Enum(id)) => self.types.types().enum_info(*id).is_some_and(|info| {
+                info.variants.iter().any(|variant| {
+                    variant
+                        .payload
+                        .is_some_and(|payload| self.deferred_type_may_own(payload))
+                })
+            }),
+            Some(TypeKind::Tuple(elems)) => {
+                elems.iter().any(|elem| self.deferred_type_may_own(*elem))
+            }
+            _ => false,
+        }
     }
 
     /// Whether a type may (transitively) own heap storage (or hold a

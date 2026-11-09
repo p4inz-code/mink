@@ -481,7 +481,7 @@ impl fmt::Display for SemanticError {
                 .clone()
                 .unwrap_or_else(|| "control flow leaves a `defer` block".to_string()),
             SemanticErrorKind::DeferredOwnedCapture => format!(
-                "cannot reference owned value `{}` from a `defer` block",
+                "cannot capture `{}` in a `defer` block: its value may be moved or freed before cleanup",
                 self.name
             ),
         };
