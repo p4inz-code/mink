@@ -16,6 +16,7 @@ const KEYWORDS: &[(&str, TokenKind)] = &[
     ("break", TokenKind::Break),
     ("const", TokenKind::Const),
     ("continue", TokenKind::Continue),
+    ("defer", TokenKind::Defer),
     ("else", TokenKind::Else),
     ("enum", TokenKind::Enum),
     ("false", TokenKind::False),

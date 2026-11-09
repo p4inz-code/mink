@@ -415,6 +415,10 @@ pub enum StmtKind {
     Break(Option<Expr>),
     /// `continue;`.
     Continue,
+    /// `defer { ... }`: register a cleanup block for the enclosing lexical
+    /// scope. Deferred blocks run in reverse registration order when the
+    /// scope exits normally, returns, breaks, or continues.
+    Defer(Block),
     /// An `if` / `else if` / `else` statement.
     If(IfStmt),
     /// A `while` loop: `while cond { body }`.

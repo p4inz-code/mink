@@ -1645,6 +1645,7 @@ impl<'a> Parser<'a> {
             TokenKind::Return => self.parse_return(),
             TokenKind::Break => self.parse_break(),
             TokenKind::Continue => self.parse_break_or_continue(),
+            TokenKind::Defer => self.parse_defer(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
             TokenKind::For => self.parse_for(),
@@ -1660,6 +1661,19 @@ impl<'a> Parser<'a> {
                 })
             }
         }
+    }
+
+    /// Parses `defer { ... }`. The body is a statement block (no trailing
+    /// expression) and the construct has no trailing semicolon, matching
+    /// the other block statements (`if`, `while`, `loop`).
+    fn parse_defer(&mut self) -> Result<Stmt, ()> {
+        let start = self.bump().span(); // 'defer'
+        let body = self.parse_block_body()?;
+        let span = self.join(start, body.span);
+        Ok(Stmt {
+            kind: StmtKind::Defer(body),
+            span,
+        })
     }
 
     fn parse_return(&mut self) -> Result<Stmt, ()> {
@@ -1694,6 +1708,7 @@ impl<'a> Parser<'a> {
                     | TokenKind::Return
                     | TokenKind::Break
                     | TokenKind::Continue
+                    | TokenKind::Defer
                     | TokenKind::Fn
                     | TokenKind::Struct
                     | TokenKind::Enum
@@ -2694,6 +2709,7 @@ impl<'a> Parser<'a> {
                             | TokenKind::Return
                             | TokenKind::Break
                             | TokenKind::Continue
+                            | TokenKind::Defer
                             | TokenKind::While
                             | TokenKind::For
                             | TokenKind::Loop

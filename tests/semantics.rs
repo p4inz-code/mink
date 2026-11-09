@@ -138,6 +138,7 @@ fn stmt_idents<'a>(stmt: &'a Stmt, out: &mut Vec<(&'a str, Span, bool)>) {
             block_idents(body, out);
         }
         StmtKind::Loop(body) => block_idents(body, out),
+        StmtKind::Defer(body) => block_idents(body, out),
         StmtKind::Match(stmt) => {
             expr_idents(&stmt.scrutinee, out);
             for arm in &stmt.arms {

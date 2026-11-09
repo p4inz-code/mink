@@ -286,6 +286,7 @@ pub fn check(ast: &Ast, semantic: &SemanticResult, types: &TypeResult) -> Owners
         borrows: HashMap::new(),
         scopes: Vec::new(),
         param_indices: HashMap::new(),
+        defer_depth: 0,
         errors: Vec::new(),
         result: FnResult::default(),
         fn_results: HashMap::new(),
@@ -342,6 +343,8 @@ struct Analyzer<'a> {
     scopes: Vec<Vec<SymbolId>>,
     /// Parameter index by symbol, for reference-return tracking.
     param_indices: HashMap<SymbolId, usize>,
+    /// Nesting depth of `defer` blocks being walked.
+    defer_depth: u32,
     /// Ownership errors, in traversal order.
     errors: Vec<SemanticError>,
     /// The current function's accumulated result provenance.
@@ -366,6 +369,7 @@ impl<'a> Analyzer<'a> {
             self.borrows.clear();
             self.scopes.clear();
             self.param_indices.clear();
+            self.defer_depth = 0;
             self.errors.clear();
             self.walk_module();
             if self.fn_results == before {
@@ -855,6 +859,15 @@ impl<'a> Analyzer<'a> {
             }
             StmtKind::Return(None) => return Some(true),
             StmtKind::Continue => return Some(false),
+            StmtKind::Defer(body) => {
+                // The cleanup body is walked where it is registered so names
+                // resolve normally. Reads of owned locals are rejected in
+                // `eval_ident`: the cleanup runs later, after a move could
+                // have invalidated the value.
+                self.defer_depth += 1;
+                self.walk_block(body);
+                self.defer_depth -= 1;
+            }
             StmtKind::Break(value) => {
                 if let Some(value) = value {
                     self.eval_expr(value, Mode::Transfer);
@@ -1676,6 +1689,37 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    /// Whether a deferred read of `symbol` could observe an invalidated
+    /// owned value. Owned/reference-bearing bindings are rejected; plain
+    /// copy values and immutable scalars are safe.
+    fn deferred_capture_may_own(&self, symbol: SymbolId) -> bool {
+        match self.bindings.get(&symbol) {
+            Some(State::Str(BindingState::Live(Provenance::Owned))) => true,
+            Some(State::Array(_)) => true,
+            Some(State::Enum {
+                state: BindingState::Live(Provenance::Owned),
+                ..
+            }) => true,
+            Some(State::Enum { ref_borrows, .. }) => !ref_borrows.is_empty(),
+            Some(State::Struct {
+                fields,
+                dead,
+                ref_fields,
+            }) => {
+                *dead
+                    || !ref_fields.is_empty()
+                    || fields.values().any(|state| {
+                        matches!(
+                            state,
+                            BindingState::Live(Provenance::Owned) | BindingState::Dead
+                        )
+                    })
+            }
+            Some(State::Ref { .. }) => true,
+            _ => false,
+        }
+    }
+
     /// Evaluates a name reference. `const` bindings always copy their
     /// value (each use is an independent immutable value); ordinary
     /// bindings move an Owned value in transfer mode and borrow it in
@@ -1691,6 +1735,10 @@ impl<'a> Analyzer<'a> {
             .is_some_and(|symbol| symbol.kind == SymbolKind::Const)
         {
             return self.copy_const(symbol);
+        }
+        if self.defer_depth > 0 && self.deferred_capture_may_own(symbol) {
+            self.errors
+                .push(SemanticError::deferred_owned_capture(ident.name.clone(), ident.span));
         }
         // A mutably-borrowed binding cannot be read or transferred at all;
         // reads of a shared-borrowed binding are fine (the transfer and

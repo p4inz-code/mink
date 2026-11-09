@@ -67,6 +67,14 @@ struct Ctx {
     in_loop: bool,
     /// Whether traversal is inside a function body.
     in_function: bool,
+    /// Number of enclosing loops (including loops inside a defer body).
+    loop_depth: usize,
+    /// Whether traversal is inside a `defer` block.
+    in_defer: bool,
+    /// Loop depth when the innermost `defer` block was entered. A
+    /// `break`/`continue` at or below this depth would leave the deferred
+    /// block and is rejected.
+    defer_loop_floor: usize,
 }
 
 /// A registered type declaration (a struct or an enum): its name's span,
@@ -419,6 +427,9 @@ impl Analyzer {
             scope,
             in_loop: false,
             in_function: true,
+            loop_depth: 0,
+            in_defer: false,
+            defer_loop_floor: 0,
         };
         self.analyze_block(&f.body, ctx);
     }
@@ -462,6 +473,22 @@ impl Analyzer {
     // ------------------------------------------------------------------
 
     fn analyze_block(&mut self, block: &Block, ctx: Ctx) {
+        // A `defer` executes after the block's value is computed, but MIR
+        // lowering evaluates a trailing expression after the statement
+        // list. Reject the combination rather than silently running cleanup
+        // before the value expression.
+        if block.result.is_some() {
+            if let Some(stmt) = block
+                .stmts
+                .iter()
+                .find(|stmt| matches!(stmt.kind, StmtKind::Defer(_)))
+            {
+                self.errors.push(SemanticError::invalid_defer_control_flow(
+                    stmt.span,
+                    "`defer` cannot appear in a block with a trailing expression".to_string(),
+                ));
+            }
+        }
         for stmt in &block.stmts {
             self.analyze_stmt(stmt, ctx);
         }
@@ -510,7 +537,12 @@ impl Analyzer {
                 self.bind(&binding.name, SymbolKind::Const, ctx.scope);
             }
             StmtKind::Return(value) => {
-                if !ctx.in_function {
+                if ctx.in_defer {
+                    self.errors.push(SemanticError::invalid_defer_control_flow(
+                        stmt.span,
+                        "`return` cannot leave a `defer` block".to_string(),
+                    ));
+                } else if !ctx.in_function {
                     // Defensive: the frozen grammar only allows statements
                     // inside function bodies, so this is currently
                     // unreachable from parser-produced ASTs.
@@ -522,7 +554,12 @@ impl Analyzer {
                 }
             }
             StmtKind::Break(value) => {
-                if !ctx.in_loop {
+                if ctx.in_defer && ctx.loop_depth <= ctx.defer_loop_floor {
+                    self.errors.push(SemanticError::invalid_defer_control_flow(
+                        stmt.span,
+                        "`break` cannot leave a `defer` block".to_string(),
+                    ));
+                } else if !ctx.in_loop {
                     self.errors
                         .push(SemanticError::break_outside_loop(stmt.span));
                 }
@@ -531,10 +568,27 @@ impl Analyzer {
                 }
             }
             StmtKind::Continue => {
-                if !ctx.in_loop {
+                if ctx.in_defer && ctx.loop_depth <= ctx.defer_loop_floor {
+                    self.errors.push(SemanticError::invalid_defer_control_flow(
+                        stmt.span,
+                        "`continue` cannot leave a `defer` block".to_string(),
+                    ));
+                } else if !ctx.in_loop {
                     self.errors
                         .push(SemanticError::continue_outside_loop(stmt.span));
                 }
+            }
+            StmtKind::Defer(body) => {
+                let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
+                self.analyze_block(
+                    body,
+                    Ctx {
+                        scope,
+                        in_defer: true,
+                        defer_loop_floor: ctx.loop_depth,
+                        ..ctx
+                    },
+                );
             }
             StmtKind::If(stmt) => self.analyze_if(stmt, ctx),
             StmtKind::While { cond, body } => {
@@ -545,6 +599,7 @@ impl Analyzer {
                     Ctx {
                         scope,
                         in_loop: true,
+                        loop_depth: ctx.loop_depth + 1,
                         ..ctx
                     },
                 );
@@ -564,6 +619,7 @@ impl Analyzer {
                     Ctx {
                         scope,
                         in_loop: true,
+                        loop_depth: ctx.loop_depth + 1,
                         ..ctx
                     },
                 );
@@ -575,6 +631,7 @@ impl Analyzer {
                     Ctx {
                         scope,
                         in_loop: true,
+                        loop_depth: ctx.loop_depth + 1,
                         ..ctx
                     },
                 );
@@ -1027,6 +1084,9 @@ impl Ctx {
             scope,
             in_loop: false,
             in_function: false,
+            loop_depth: 0,
+            in_defer: false,
+            defer_loop_floor: 0,
         }
     }
 }

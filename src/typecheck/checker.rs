@@ -495,6 +495,7 @@ impl<'a> Checker<'a> {
                 self.resolve_deferred_block(body);
             }
             StmtKind::Loop(body) => self.resolve_deferred_block(body),
+            StmtKind::Defer(body) => self.resolve_deferred_block(body),
             StmtKind::Match(stmt) => self.resolve_deferred_match(stmt),
             StmtKind::Expr(expr) => {
                 self.resolve_deferred_expr(expr);
@@ -1975,6 +1976,7 @@ impl<'a> Checker<'a> {
                 self.check_block(body);
             }
             StmtKind::Loop(body) => self.check_block(body),
+            StmtKind::Defer(body) => self.check_block(body),
             StmtKind::Match(stmt) => self.check_match(stmt),
             StmtKind::Expr(expr) => {
                 self.expr_type(expr);

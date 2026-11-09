@@ -538,6 +538,7 @@ impl Monomorphizer {
                 self.monomorphize_block(body);
             }
             StmtKind::Loop(body) => self.monomorphize_block(body),
+            StmtKind::Defer(body) => self.monomorphize_block(body),
             StmtKind::Match(m) => {
                 self.monomorphize_expr(&mut m.scrutinee);
                 for arm in &mut m.arms {
@@ -1071,6 +1072,9 @@ impl Monomorphizer {
                 StmtKind::Loop(body) => {
                     Self::collect_closure_bindings_in_block(body, captures, out);
                 }
+                StmtKind::Defer(body) => {
+                    Self::collect_closure_bindings_in_block(body, captures, out);
+                }
                 StmtKind::For { iterable, body, .. } => {
                     Self::collect_closure_bindings_in_expr(iterable, captures, out);
                     Self::collect_closure_bindings_in_block(body, captures, out);
@@ -1252,6 +1256,9 @@ impl Monomorphizer {
                     self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
                 }
                 StmtKind::Loop(body) => {
+                    self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
+                }
+                StmtKind::Defer(body) => {
                     self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
                 }
                 StmtKind::For { iterable, body, .. } => {
@@ -2011,6 +2018,7 @@ impl Monomorphizer {
                 self.resolve_names_in_block(body, subst);
             }
             StmtKind::Loop(body) => self.resolve_names_in_block(body, subst),
+            StmtKind::Defer(body) => self.resolve_names_in_block(body, subst),
             StmtKind::Match(m) => {
                 self.resolve_names_in_expr(&mut m.scrutinee, subst);
                 for arm in &mut m.arms {
@@ -2212,6 +2220,7 @@ impl Monomorphizer {
                 self.resolve_all_named_app_in_block(body);
             }
             StmtKind::Loop(body) => self.resolve_all_named_app_in_block(body),
+            StmtKind::Defer(body) => self.resolve_all_named_app_in_block(body),
             StmtKind::Match(m) => {
                 self.resolve_all_named_app_in_expr(&mut m.scrutinee);
                 for arm in &mut m.arms {
@@ -2407,6 +2416,7 @@ impl Monomorphizer {
                 self.substitute_block(body, subst);
             }
             StmtKind::Loop(body) => self.substitute_block(body, subst),
+            StmtKind::Defer(body) => self.substitute_block(body, subst),
             StmtKind::Match(m) => {
                 self.substitute_expr(&mut m.scrutinee, subst);
                 for arm in &mut m.arms {
@@ -2596,6 +2606,7 @@ impl Monomorphizer {
                 self.reassign_block_spans(body);
             }
             StmtKind::Loop(body) => self.reassign_block_spans(body),
+            StmtKind::Defer(body) => self.reassign_block_spans(body),
             StmtKind::Match(m) => {
                 self.reassign_expr_spans(&mut m.scrutinee);
                 for arm in &mut m.arms {
@@ -2929,6 +2940,9 @@ fn collect_free_vars(
                     StmtKind::Loop(body) => {
                         collect_free_vars_block(body, &inner_bound, out);
                     }
+                    StmtKind::Defer(body) => {
+                        collect_free_vars_block(body, &inner_bound, out);
+                    }
                     StmtKind::For {
                         name,
                         iterable,
@@ -3222,6 +3236,9 @@ fn collect_name_uses_block(
                 collect_name_uses_block(body, name, callee_uses, value_uses);
             }
             StmtKind::Loop(body) => {
+                collect_name_uses_block(body, name, callee_uses, value_uses)
+            }
+            StmtKind::Defer(body) => {
                 collect_name_uses_block(body, name, callee_uses, value_uses)
             }
             StmtKind::Match(m) => {

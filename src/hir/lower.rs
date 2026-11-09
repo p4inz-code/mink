@@ -270,6 +270,7 @@ impl<'a> Lowerer<'a> {
                 HirStmtKind::Break(value.as_ref().map(|expr| self.lower_expr(expr)))
             }
             StmtKind::Continue => HirStmtKind::Continue,
+            StmtKind::Defer(body) => HirStmtKind::Defer(self.lower_block(body)),
             StmtKind::If(stmt) => HirStmtKind::If(self.lower_if(stmt)),
             StmtKind::While { cond, body } => HirStmtKind::While {
                 cond: self.lower_expr(cond),

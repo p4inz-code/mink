@@ -1135,6 +1135,10 @@ struct LoopCtx {
     /// For loop expressions (session 30): the local that holds the break
     /// value. `None` for statement-position loops.
     break_value_local: Option<LocalId>,
+    /// Number of deferred scopes outside the loop body. `break` and
+    /// `continue` run deferred blocks down to this depth (the loop body's
+    /// own scope and every nested scope), but not the enclosing scopes.
+    defer_floor: usize,
 }
 
 /// The function-body builder: owns the block graph and fills it as
@@ -1157,6 +1161,9 @@ struct FnBuilder<'a> {
     current_span: Span,
     /// The stack of enclosing loops, innermost last.
     loops: Vec<LoopCtx>,
+    /// Deferred cleanup blocks by lexical scope, outermost first. Every
+    /// `lower_block` pushes one scope; a `defer` appends to the innermost.
+    defer_scopes: Vec<Vec<HirBlock>>,
 }
 
 impl<'a> FnBuilder<'a> {
@@ -1174,6 +1181,7 @@ impl<'a> FnBuilder<'a> {
             current: None,
             current_span: Span::new(SourceId::new(0), 0..0),
             loops: Vec::new(),
+            defer_scopes: Vec::new(),
         }
     }
 
@@ -1369,8 +1377,51 @@ impl<'a> FnBuilder<'a> {
     // ------------------------------------------------------------------
 
     fn lower_block(&mut self, block: &HirBlock) {
+        self.defer_scopes.push(Vec::new());
         for stmt in &block.stmts {
             self.lower_stmt(stmt);
+        }
+        // Normal fall-through: run this scope's cleanup before leaving it.
+        // A diverging path (`return`/`break`/`continue`) already ran the
+        // cleanup, so there is nothing left to emit into a dead block.
+        if self.current.is_some() {
+            let defers = self.defer_scopes.pop().unwrap_or_default();
+            for body in defers.iter().rev() {
+                self.lower_block(body);
+            }
+        } else {
+            self.defer_scopes.pop();
+        }
+    }
+
+    /// Registers `body` with the innermost lexical scope. Registration is a
+    /// compile-time event recorded in statement order, so a `return` before
+    /// a later `defer` does not run it; every path that reaches the defer
+    /// and then leaves the scope does.
+    fn register_defer(&mut self, body: &HirBlock) {
+        if let Some(scope) = self.defer_scopes.last_mut() {
+            scope.push(body.clone());
+        }
+    }
+
+    /// Lowers the deferred blocks of every scope at or inside `depth` in
+    /// LIFO order: each scope's own registrations reversed, innermost scope
+    /// first. This is used by early exits (`return`, `break`, `continue`).
+    fn run_deferred_scopes_to(&mut self, depth: usize) {
+        let bodies: Vec<HirBlock> = self
+            .defer_scopes
+            .iter()
+            .skip(depth)
+            .rev()
+            .flat_map(|scope| scope.iter().rev().cloned())
+            .collect();
+        for body in bodies {
+            if self.current.is_none() {
+                // A deferred block terminated control flow (rejected by
+                // semantic analysis); stop rather than emit into no block.
+                break;
+            }
+            self.lower_block(&body);
         }
     }
 
@@ -1933,6 +1984,41 @@ impl<'a> FnBuilder<'a> {
                 if self.current.is_none() {
                     return;
                 }
+                // Snapshot the return value before cleanup runs when any
+                // deferred block is registered. A deferred block may mutate a
+                // local used in `return x`; returning the local operand
+                // directly would then observe the cleanup's write instead of
+                // the value at the return statement. With no registrations
+                // the operand can be returned as-is.
+                let has_defers = self
+                    .defer_scopes
+                    .iter()
+                    .any(|scope| !scope.is_empty());
+                let value = value.map(|operand| {
+                    if !has_defers {
+                        return operand;
+                    }
+                    let ty = operand.ty;
+                    let span = operand.span;
+                    let temp = self.eval.temp(ty, span);
+                    self.emit_stmt(MirStmt {
+                        kind: MirStmtKind::Assign {
+                            target: MirTarget {
+                                kind: MirTargetKind::Local(temp),
+                                span,
+                                ty,
+                            },
+                            rvalue: use_rvalue(operand, span, ty),
+                        },
+                        span,
+                    });
+                    MirOperand {
+                        kind: MirOperandKind::Local(temp),
+                        span,
+                        ty,
+                    }
+                });
+                self.run_deferred_scopes_to(0);
                 self.terminate(MirTerminator::Return {
                     value,
                     span: stmt.span,
@@ -1950,6 +2036,7 @@ impl<'a> FnBuilder<'a> {
                 // Copy out of ctx before mutable borrows below.
                 let break_local = ctx.break_value_local;
                 let break_target = ctx.break_target;
+                let defer_floor = ctx.defer_floor;
                 // An unreachable `break` (after a terminator) is skipped.
                 if self.current.is_some() {
                     // Session 30: `break expr;` evaluates the value and
@@ -1971,12 +2058,14 @@ impl<'a> FnBuilder<'a> {
                             });
                         }
                     }
+                    self.run_deferred_scopes_to(defer_floor);
                     self.terminate(MirTerminator::Jump {
                         target: break_target,
                         span: stmt.span,
                     });
                 }
             }
+            HirStmtKind::Defer(body) => self.register_defer(body),
             HirStmtKind::Continue => {
                 let Some(ctx) = self.loops.last() else {
                     // Defensive: semantic analysis rejects `continue`
@@ -1988,8 +2077,11 @@ impl<'a> FnBuilder<'a> {
                 };
                 // An unreachable `continue` (after a terminator) is skipped.
                 if self.current.is_some() {
+                    let defer_floor = ctx.defer_floor;
+                    let continue_target = ctx.continue_target;
+                    self.run_deferred_scopes_to(defer_floor);
                     self.terminate(MirTerminator::Jump {
-                        target: ctx.continue_target,
+                        target: continue_target,
                         span: stmt.span,
                     });
                 }
@@ -2571,6 +2663,7 @@ impl<'a> FnBuilder<'a> {
             break_target: exit,
             continue_target: header,
             break_value_local: None,
+            defer_floor: self.defer_scopes.len(),
         });
         // Jump into the loop from the preceding block.
         self.ensure_current(span);
@@ -2610,6 +2703,7 @@ impl<'a> FnBuilder<'a> {
             break_target: merge,
             continue_target: header,
             break_value_local: Some(break_local),
+            defer_floor: self.defer_scopes.len(),
         });
         // Jump into the loop from the preceding block.
         self.ensure_current(span);
@@ -2711,6 +2805,7 @@ impl<'a> FnBuilder<'a> {
             break_target: exit,
             continue_target: header,
             break_value_local: None,
+            defer_floor: self.defer_scopes.len(),
         });
 
         // Jump into the init block from the preceding block.
@@ -2871,6 +2966,7 @@ impl<'a> FnBuilder<'a> {
             break_target: exit,
             continue_target: inc_block,
             break_value_local: None,
+            defer_floor: self.defer_scopes.len(),
         });
 
         self.ensure_current(span);
@@ -3151,6 +3247,7 @@ impl<'a> FnBuilder<'a> {
             break_target: exit,
             continue_target: inc_block,
             break_value_local: None,
+            defer_floor: self.defer_scopes.len(),
         });
 
         self.ensure_current(span);
@@ -3398,6 +3495,7 @@ impl<'a> FnBuilder<'a> {
             break_target: exit,
             continue_target: header,
             break_value_local: None,
+            defer_floor: self.defer_scopes.len(),
         });
         // Jump into the loop from the preceding block.
         self.ensure_current(span);
@@ -3421,6 +3519,7 @@ impl<'a> FnBuilder<'a> {
             break_target: merge,
             continue_target: header,
             break_value_local: Some(break_local),
+            defer_floor: self.defer_scopes.len(),
         });
         // Jump into the loop from the preceding block.
         self.ensure_current(span);

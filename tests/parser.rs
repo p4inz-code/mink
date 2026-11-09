@@ -1532,6 +1532,7 @@ fn walk_stmt(stmt: &Stmt, text_len: u32, src: &str) {
             walk_block(body, text_len, src);
         }
         StmtKind::Loop(body) => walk_block(body, text_len, src),
+        StmtKind::Defer(body) => walk_block(body, text_len, src),
         StmtKind::Match(stmt) => walk_match_stmt(stmt, text_len, src),
         StmtKind::Expr(expr) => walk_expr(expr, text_len, src),
     }

@@ -230,6 +230,9 @@ pub enum HirStmtKind {
     Break(Option<HirExpr>),
     /// `continue;`.
     Continue,
+    /// `defer { ... }`: a cleanup block registered with the enclosing
+    /// lexical scope and run in reverse registration order at scope exit.
+    Defer(HirBlock),
     /// An `if` / `else if` / `else` statement.
     If(HirIf),
     /// A `while` loop.

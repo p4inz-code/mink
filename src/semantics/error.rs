@@ -74,6 +74,14 @@ pub enum SemanticErrorKind {
     DuplicateEnum,
     /// An enum declares the same variant name twice.
     DuplicateVariant,
+    /// A `defer` body contains `return`, or a `break`/`continue` that
+    /// targets a loop outside the deferred block. Such control flow would
+    /// leave the cleanup block while cleanup is already running.
+    InvalidDeferControlFlow,
+    /// A `defer` body references an owned local. The cleanup runs at scope
+    /// exit, after later moves could invalidate the value, so ownership is
+    /// kept sound by rejecting the capture.
+    DeferredOwnedCapture,
 }
 
 impl SemanticErrorKind {
@@ -99,6 +107,8 @@ impl SemanticErrorKind {
             Self::DanglingReference => "E-S14",
             Self::DuplicateEnum => "E-S15",
             Self::DuplicateVariant => "E-S16",
+            Self::InvalidDeferControlFlow => "E-S17",
+            Self::DeferredOwnedCapture => "E-S18",
         }
     }
 }
@@ -361,6 +371,28 @@ impl SemanticError {
         }
     }
 
+    /// Creates an invalid-defer-control-flow error at `span` (E-S17).
+    pub fn invalid_defer_control_flow(span: Span, detail: impl Into<String>) -> Self {
+        Self {
+            kind: SemanticErrorKind::InvalidDeferControlFlow,
+            span,
+            name: String::new(),
+            original: None,
+            detail: Some(detail.into()),
+        }
+    }
+
+    /// Creates a deferred-owned-capture error for `name` at `span` (E-S18).
+    pub fn deferred_owned_capture(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind: SemanticErrorKind::DeferredOwnedCapture,
+            span,
+            name: name.into(),
+            original: None,
+            detail: None,
+        }
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> SemanticErrorKind {
         self.kind
@@ -444,6 +476,14 @@ impl fmt::Display for SemanticError {
             SemanticErrorKind::DuplicateVariant => {
                 format!("duplicate variant `{}` in enum declaration", self.name)
             }
+            SemanticErrorKind::InvalidDeferControlFlow => self
+                .detail
+                .clone()
+                .unwrap_or_else(|| "control flow leaves a `defer` block".to_string()),
+            SemanticErrorKind::DeferredOwnedCapture => format!(
+                "cannot reference owned value `{}` from a `defer` block",
+                self.name
+            ),
         };
         f.write_str(&message)
     }

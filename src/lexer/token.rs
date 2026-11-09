@@ -80,6 +80,8 @@ pub enum TokenKind {
     Break,
     /// The keyword `continue`.
     Continue,
+    /// The keyword `defer` (scope-exit cleanup).
+    Defer,
     /// The keyword `async`.
     Async,
     /// The keyword `await`.
