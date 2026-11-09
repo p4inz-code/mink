@@ -94,14 +94,22 @@ The semantic analyzer and ownership pass reject three unsafe shapes.
 
 ### `E-S18` — deferred owned capture
 
-A deferred body may not name a local whose storage is owned or borrowed. The
-rejected kinds are an owned `Str`, any array binding, an owned or
-reference-bearing struct, an enum holding owned/reference state, and any
-reference binding. These values may be moved or released after registration
-and before cleanup, so reading them at scope exit could observe invalid
-storage. Copy values (`Int`, `Float`, `Bool`, `Char`, immutable scalars) and
-immutable locals without references are allowed. A `const` is a fresh copy at
-each use and is also allowed.
+A deferred body may not name a binding whose type may own or borrow storage.
+The rejected kinds are an owned `Str`, any array binding, a mutable binding of
+an owning type (even when its current value is an immutable literal), an owned
+or reference-bearing struct, an enum holding owned/reference state, any
+reference binding, and a tuple or collection carrying an owned value. These
+values may be moved, reassigned, or released after registration and before
+cleanup, so reading them at scope exit could observe invalid storage. Copy
+values (`Int`, `Float`, `Bool`, `Char`, copy-only tuples, copy-only structs)
+and immutable locals without references are allowed. A `const` is a fresh copy
+at each use and is also allowed.
+
+The type check is important: a `let mut s = "literal"` binding is allowed to
+be assigned an owned allocation later, so its registration-time provenance is
+not enough. The analyzer rejects the mutable binding up front. The tuple check
+is separate because the general ownership pass does not otherwise track tuple
+fields; a `(Str, Int)` deferred read must still be rejected.
 
 The restriction is deliberately conservative and lexical: the check runs
 wherever a name is read while analysis is inside a deferred body, including
@@ -117,16 +125,20 @@ with owned elements keeps the rule easy to reason about.
 - **Semantics:** `Ctx` tracks `loop_depth`, `in_defer`, and
   `defer_loop_floor`; loop depth is incremented around loop bodies and
   restored afterwards. Placement and control-flow checks produce `E-S17`.
-- **Ownership:** a `defer_depth` counter drives `E-S18` from `eval_ident` for
-  live owned/reference-bearing bindings.
+- **Ownership:** a `defer_depth` counter drives `E-S18` from `eval_ident`. The
+  check combines the binding's current state with its declared type and
+  mutability so a mutable owning-type binding cannot become an unsafe capture
+  after registration. Tuple/collection contents are inspected explicitly.
 - **Type checking:** both the normal traversal and the deferred-member recheck
   path traverse defer bodies.
 - **Monomorphization:** all exhaustive statement matches recurse into the
   defer body.
 - **MIR:** `FnBuilder` keeps `defer_scopes: Vec<Vec<HirBlock>>`, outermost
   first. `lower_block` pushes a scope, lowers statements, then on normal
-  fallthrough pops it and inlines its bodies in reverse order. `LoopCtx`
-  stores `defer_floor`, the scope count outside the loop body, so
+  fallthrough pops it and inlines its bodies in reverse order. A value-less
+  block expression is routed through `lower_block` as well, so its cleanup
+  runs at that block's exit rather than leaking to the enclosing scope.
+  `LoopCtx` stores `defer_floor`, the scope count outside the loop body, so
   `break`/`continue` inline exactly the scopes opened inside the loop.
   `return` inlines every remaining scope down to depth zero after snapshotting
   the return value. No backend or runtime special case is involved; the
@@ -134,19 +146,22 @@ with owned elements keeps the rule easy to reason about.
 
 ## Tests and examples
 
-`tests/defer.rs` has 25 permanent tests:
+`tests/defer.rs` has 33 permanent tests:
 
 - 4 parser tests: empty body, nested statements/`defer`, missing block,
   unterminated statement.
-- 9 semantic, ownership and type tests: valid placement, inner loop control
+- 12 semantic, ownership and type tests: valid placement, inner loop control
   flow, `return`, `break`, `continue`, trailing-expression placement, an error
-  inside the body, owned capture rejection, and allowed copy/immutable
-  capture.
-- 12 native execution tests: LIFO on normal exit, cleanup on return, break and
+  inside the body, owned capture rejection, mutable-capture rejection,
+  tuple-owned capture rejection, copy-only tuple acceptance, and allowed
+  copy/immutable capture.
+- 17 native execution tests: LIFO on normal exit, cleanup on return, break and
   continue, per-iteration cleanup, nested scopes inside-out, nested `defer`,
   return inside nested loops, conditional registration, continue before
-  registration, return-value and break-value snapshots, and nested statements
-  in a deferred body.
+  registration, return-value, break-value and struct-return snapshots,
+  value-less block-expression scope, nested loop floors, match-arm cleanup,
+  inner-loop control flow in a deferred body, and nested statements in a
+  deferred body.
 
 Both debug and release native runs pass. `cargo check --all-targets` and the
 release compiler build are clean.
@@ -164,7 +179,11 @@ Examples:
   example does with its `Int` handle) or perform the move explicitly before
   registration.
 - A block expression cannot contain `defer` and also use its trailing
-  expression as a value.
+  expression as a value. A value-less block expression does contain its own
+  deferred cleanup scope.
+- Tuple/collection values carrying owned storage are rejected; collection
+  handles without owned elements remain copy handles with user-managed
+  lifetimes.
 - Cleanup bodies are inlined at every exit path, so a scope with many exits and
   many large defers grows code proportionally. There is no runtime registration
   list.

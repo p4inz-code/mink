@@ -934,9 +934,12 @@ Rules:
   `continue` are rejected when they would leave the deferred body; loops
   wholly inside the body may use them.
 - A deferred body may read copy values and immutable scalars. It may not
-  reference a local whose storage is owned or borrowed (owned `Str`, array,
-  owned struct/enum, or any reference), because the read happens after the
-  scope may have moved or released that storage (`E-S18`).
+  reference a binding whose type may own or borrow storage (an owned `Str`,
+  any array, a mutable owning-type binding even when its current value is a
+  literal, an owned struct/enum, a tuple or collection carrying an owned
+  value, or any reference), because the read happens after the scope may have
+  moved or released that storage (`E-S18`). The mutable case is checked by
+  type because a `let mut` binding can become owned after registration.
 - Deferred bodies read variables when cleanup runs, not when `defer` is
   registered. Mutating an ordinary local after registration changes what the
   cleanup observes.

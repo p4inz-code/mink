@@ -624,6 +624,24 @@ release-mode suites are therefore **not run**. Final verdict: **NOT READY**
 validation), not a confirmed source defect. See
 [`M6_SESSION_210_FINAL_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_210_FINAL_ACCEPTANCE.md).
 
+*Dated status, 2026-11-10 (Sessions 254–258 — defer audit).* An independent
+audit of the new `defer` implementation found and fixed two correctness
+defects. A value-less block expression lowered its statements without its own
+cleanup scope, so its `defer` ran at the enclosing function's exit instead of
+the block's; that path now uses normal block lowering. A mutable `Str` binding
+that looked immutable at registration could later be assigned an owned
+allocation and freed before cleanup, producing a runtime invalid access; the
+`E-S18` check is now type- and mutability-aware, and also walks tuple and
+collection contents. Three adversarial regressions cover these cases, and the
+suite grew to 33 permanent tests, all passing in debug and release. The
+stdlib bundle drift was also fixed: `encoding.mink` and `strings.mink` in
+`npm/mink/stdlib/` were both stale copies of the post-`bf3fe81` repository
+modules. The guarded copies are now byte-identical, and the exact
+`s107_npm_stdlib_bundle_matches_repo_stdlib` test passes. Full suite:
+**89 suites, 3,322 passed, 0 failed, 9 ignored**. Milestone state is
+unchanged: M6 **OUTSTANDING**, M7 demand-gated, M8 gated, Linux frozen, and
+1.0.5 unpublished.
+
 *Dated status, 2026-11-10 (Sessions 249–253 — deferred cleanup).* The
 language gained statement-only `defer { ... }` scope-exit cleanup with LIFO
 ordering across normal exit, `return`, `break`, `continue`, nested scopes and
