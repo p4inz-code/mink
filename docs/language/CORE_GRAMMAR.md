@@ -102,12 +102,13 @@ ConstBinding:= 'const' Ident '=' Expr ';'
 ```
 Block       := '{' Stmt* '}'
 Stmt        := LetBinding | ConstBinding
-             | Return | Break | Continue
+             | Return | Break | Continue | Defer
              | If | While | For | Loop
              | Expr ';'
 Return      := 'return' Expr? ';'
 Break       := 'break' ';'
 Continue    := 'continue' ';'
+Defer       := 'defer' Block
 If          := 'if' Expr Block ('else' (If | Block))?
 While       := 'while' Expr Block
 For         := 'for' Ident 'in' Expr Block
@@ -122,6 +123,9 @@ Loop        := 'loop' Block
   `return` is rejected outside function bodies). The syntax accepts them
   anywhere; see `docs/language/CORE_LANGUAGE.md` §24 and
   `docs/implementation/SEMANTIC_ANALYSIS_IMPLEMENTATION.md`.
+- `defer` is a statement and takes a braced body with no trailing `;`
+  (`defer { ... }`). The body is a statement block; its trailing
+  expression, if any, is discarded. See §33.
 
 ## 8. Expressions
 
@@ -896,3 +900,47 @@ fn quadrant(p: Point) -> Int {
 
 The Session 239 parser needed no new lexer tokens. `let` struct
 destructuring (§25) is unchanged.
+
+## §33  Deferred cleanup (`defer`)
+
+**Sessions:** 249–253, scope-exit cleanup.
+
+```EBNF
+defer-stmt = "defer" block ;
+```
+
+`defer { body }` registers `body` with the lexically enclosing block. When
+control leaves that block, registered bodies run in last-in-first-out (LIFO)
+order, including on normal fallthrough and on `return`, `break`, and
+`continue` that leave the block. Nested scopes run inner registrations before
+outer ones. A `defer` that is not executed (for example, the untaken branch of
+an `if`) is not registered.
+
+```mink
+fn use_mutex(mu: Int) -> Int {
+    rt_mutex_lock(mu);
+    defer { rt_mutex_unlock(mu); }
+    return 1;
+}
+```
+
+Rules:
+
+- A deferred body is a statement block, so a trailing expression there is
+  discarded. A `defer` inside a block whose own trailing expression is the
+  block value (a block expression) is rejected (`E-S17`), because the block
+  value is produced after statement lowering.
+- `return` is rejected inside a deferred body (`E-S17`). `break` and
+  `continue` are rejected when they would leave the deferred body; loops
+  wholly inside the body may use them.
+- A deferred body may read copy values and immutable scalars. It may not
+  reference a local whose storage is owned or borrowed (owned `Str`, array,
+  owned struct/enum, or any reference), because the read happens after the
+  scope may have moved or released that storage (`E-S18`).
+- Deferred bodies read variables when cleanup runs, not when `defer` is
+  registered. Mutating an ordinary local after registration changes what the
+  cleanup observes.
+- Cleanup cannot change a value already produced by `return` or by `break
+  value;`: the returned value is snapshotted before cleanup.
+- The syntax is statement-only; there is no `defer` expression and no
+  trailing semicolon after the block.

@@ -624,6 +624,25 @@ release-mode suites are therefore **not run**. Final verdict: **NOT READY**
 validation), not a confirmed source defect. See
 [`M6_SESSION_210_FINAL_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_210_FINAL_ACCEPTANCE.md).
 
+*Dated status, 2026-11-10 (Sessions 249–253 — deferred cleanup).* The
+language gained statement-only `defer { ... }` scope-exit cleanup with LIFO
+ordering across normal exit, `return`, `break`, `continue`, nested scopes and
+conditional registration. It is implemented through the full compiler
+pipeline to native Windows MIR and covered by 25 permanent tests in
+`tests/defer.rs`, all passing in debug and release, plus two examples that
+build and run in both profiles. Unsafe cases are rejected statically:
+`return`/escaping loop control flow and defer-with-trailing-expression blocks
+(`E-S17`), and deferred reads of owned or borrowed locals (`E-S18`). A
+return-value mutation defect found during verification was fixed by
+snapshotting the value before cleanup, with regression coverage. Full suite:
+**89 suites, 3,313 passed, 1 failed, 9 ignored**; the single failure is the
+pre-existing `s107_npm_stdlib_bundle_matches_repo_stdlib` mismatch between
+`stdlib/encoding.mink` and `npm/mink/stdlib/encoding.mink`, unrelated to this
+work and not changed here. See
+[`DEFER_IMPLEMENTATION.md`](../implementation/DEFER_IMPLEMENTATION.md).
+Milestone state is otherwise unchanged: M6 remains **OUTSTANDING**, M7
+demand-gated, M8 gated, Linux frozen, and 1.0.5 unpublished.
+
 *Dated status, 2026-11-08 (Session 211 — documentation reconciliation).* A
 repository-wide documentation audit found and corrected three internal
 contradictions; no milestone state changed. (1) This roadmap marked M4 "IN

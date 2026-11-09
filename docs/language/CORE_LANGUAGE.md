@@ -67,8 +67,8 @@ Keywords are reserved only when their special syntactic meaning justifies
 reservation. The keyword list was frozen together with the core grammar in
 session 03 (`docs/language/CORE_GRAMMAR.md` §10):
 
-`async await break const continue else enum false fn for if impl in let loop
-match mod mut null pub return struct trait true type unsafe use while`
+`async await break const continue defer else enum false fn for if impl in let
+loop match mod mut null pub return struct trait true type unsafe use while`
 
 The boolean and null literals (`true`, `false`, `null`) are reserved words
 classified as literals rather than keywords.
@@ -202,7 +202,11 @@ MINK should provide clear constructs for:
 - Iteration
 - Early return
 - Error propagation
-- Structured resource cleanup
+- Structured resource cleanup: `defer { ... }` runs registrations when the
+  enclosing block exits, in LIFO order, including on `return`, `break`, and
+  `continue`. The implemented syntax and restrictions are in
+  `docs/language/CORE_GRAMMAR.md` §33 and
+  `docs/implementation/DEFER_IMPLEMENTATION.md`.
 
 Pattern matching should be designed as a major correctness and expressiveness feature rather than merely syntactic sugar.
 

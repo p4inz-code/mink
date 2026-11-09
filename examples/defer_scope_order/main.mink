@@ -1,0 +1,37 @@
+// Nested cleanup: the loop body's defer runs once per iteration, including
+// on continue and break. The if-block cleans up at its own exit, then the
+// function-level cleanup runs last.
+
+fn main() -> Int {
+    defer {
+        rt_print_str("outer-cleanup");
+    }
+
+    let mut i = 0;
+    while i < 3 {
+        i += 1;
+
+        defer {
+            rt_print_str("iteration");
+            rt_print_int(i);
+        }
+
+        if i == 1 {
+            continue;
+        }
+        if i == 2 {
+            break;
+        }
+        rt_print_str("tail");
+    }
+
+    if true {
+        defer {
+            rt_print_str("if-cleanup");
+        }
+        rt_print_str("if-body");
+    }
+
+    rt_print_str("after-loop");
+    return 0;
+}
