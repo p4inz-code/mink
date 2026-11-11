@@ -415,10 +415,16 @@ pub enum StmtKind {
     Break(Option<Expr>),
     /// `continue;`.
     Continue,
-    /// `defer { ... }`: register a cleanup block for the enclosing lexical
-    /// scope. Deferred blocks run in reverse registration order when the
-    /// scope exits normally, returns, breaks, or continues.
-    Defer(Block),
+    /// `defer { ... }` or `defer move (a, b) { ... }`: register a cleanup
+    /// block for the enclosing lexical scope. Deferred blocks run in reverse
+    /// registration order when the scope exits normally, returns, breaks, or
+    /// continues.
+    Defer {
+        /// The cleanup statements.
+        body: Block,
+        /// How the body obtains the values it reads (session 260).
+        capture: DeferCapture,
+    },
     /// An `if` / `else if` / `else` statement.
     If(IfStmt),
     /// A `while` loop: `while cond { body }`.
@@ -444,6 +450,43 @@ pub enum StmtKind {
     Match(MatchStmt),
     /// An expression evaluated for its side effects, followed by `;`.
     Expr(Expr),
+}
+
+/// How a `defer` block obtains the values its cleanup body reads.
+///
+/// A plain `defer` reads the enclosing bindings when the cleanup runs, which
+/// is why the ownership pass rejects owned or borrowed captures (`E-S18`):
+/// the value may be moved or released between registration and cleanup.
+///
+/// `defer move (a, b) { ... }` transfers the listed local bindings into the
+/// deferred operation when the `defer` statement executes. The original
+/// bindings become moved (unusable), and the cleanup body reads the
+/// transferred values from capture slots that nothing else can reach, so the
+/// value is guaranteed live when cleanup runs (session 260).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeferCapture {
+    /// `defer { ... }`: cleanup reads the enclosing bindings at scope exit.
+    None,
+    /// `defer move (a, b) { ... }`: the listed locals are transferred at
+    /// registration. The list is non-empty (the parser requires at least one
+    /// name) and is resolved and validated by semantic analysis.
+    Move(Vec<Ident>),
+}
+
+impl DeferCapture {
+    /// The explicitly transferred bindings, in source order (empty for an
+    /// ordinary `defer`).
+    pub fn moved(&self) -> &[Ident] {
+        match self {
+            Self::None => &[],
+            Self::Move(names) => names,
+        }
+    }
+
+    /// Whether this is an ordinary (capture-free) `defer`.
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
 }
 
 /// A `match` statement (session 18): evaluates `scrutinee` once, then runs

@@ -1,0 +1,36 @@
+// Ownership transfer into deferred cleanup (`defer move (...)`).
+//
+// The cleanup body reads the transferred value from the capture, not from the
+// original binding: `buffer` is moved at the `defer` statement, so the function
+// body can no longer use it (using it is a compile-time `E-S10`), and the
+// cleanup is the only owner while it runs. That is what makes freeing an owned
+// string in a deferred block safe.
+//
+// Run: mink build examples/defer_move_resource/main.mink && main.exe
+
+fn report(len: Int) -> Str {
+    let buffer = rt_str_alloc(16);
+
+    // Transfer `buffer` into the deferred operation. From here on the local is
+    // moved; only the cleanup can reach the value.
+    defer move (buffer) {
+        rt_print_str("released buffer once");
+        rt_str_free(buffer);
+    }
+
+    rt_print_int(len);
+    return rt_str_from_int(len);
+}
+
+fn main() -> Int {
+    let msg = report(41);
+    defer move (msg) {
+        rt_str_free(msg);
+    }
+
+    rt_print_str("report done");
+
+    // A second registration of the same value would be a use-after-move, so
+    // exactly one cleanup owns the string.
+    return 0;
+}

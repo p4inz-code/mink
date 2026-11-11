@@ -82,6 +82,8 @@ pub enum TokenKind {
     Continue,
     /// The keyword `defer` (scope-exit cleanup).
     Defer,
+    /// The keyword `move` (ownership transfer into a deferred cleanup block).
+    Move,
     /// The keyword `async`.
     Async,
     /// The keyword `await`.

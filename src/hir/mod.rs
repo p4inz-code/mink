@@ -230,9 +230,17 @@ pub enum HirStmtKind {
     Break(Option<HirExpr>),
     /// `continue;`.
     Continue,
-    /// `defer { ... }`: a cleanup block registered with the enclosing
-    /// lexical scope and run in reverse registration order at scope exit.
-    Defer(HirBlock),
+    /// `defer { ... }` or `defer move (a, b) { ... }`: a cleanup block
+    /// registered with the enclosing lexical scope and run in reverse
+    /// registration order at scope exit.
+    Defer {
+        /// The cleanup statements.
+        body: HirBlock,
+        /// How the body obtains the values it reads (session 260). A
+        /// `move` list names resolved locals that are transferred into the
+        /// deferred operation when the registration executes.
+        capture: HirDeferCapture,
+    },
     /// An `if` / `else if` / `else` statement.
     If(HirIf),
     /// A `while` loop.
@@ -258,6 +266,27 @@ pub enum HirStmtKind {
     Match(HirMatch),
     /// An expression evaluated for its side effects.
     Expr(HirExpr),
+}
+
+/// How a lowered `defer` obtains the values its cleanup body reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HirDeferCapture {
+    /// `defer { ... }`: cleanup reads the enclosing bindings at scope exit.
+    None,
+    /// `defer move (a, b) { ... }`: the listed locals are transferred at
+    /// registration, in source order. Each entry carries the resolved
+    /// symbol and its type, so later stages do not re-resolve the names.
+    Move(Vec<HirIdent>),
+}
+
+impl HirDeferCapture {
+    /// The explicitly transferred bindings, in source order.
+    pub fn moved(&self) -> &[HirIdent] {
+        match self {
+            Self::None => &[],
+            Self::Move(names) => names,
+        }
+    }
 }
 
 /// A lowered `match` statement: the typed scrutinee plus its arms.

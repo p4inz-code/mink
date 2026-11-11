@@ -1,0 +1,75 @@
+// Realistic resource-management workload using ownership-aware cleanup.
+//
+// A record pipeline builds owned string lines, hands them over by move, and
+// releases each line in a deferred cleanup. The interesting part is the error
+// path: a rejected record returns early, and the cleanup that owns its line
+// still runs exactly once. The compiler enforces the ownership rule at every
+// step — the builder cannot keep using a line it transferred, and the consumer
+// cannot read a line it already freed.
+//
+// Run: mink build examples/defer_move_pipeline/main.mink && main.exe
+
+struct Record {
+    line: Str,
+    fields: Int,
+}
+
+fn build_record(id: Int, payload: Str) -> Record {
+    let id_text = rt_str_from_int(id);
+    let line = rt_str_format("record:{}:{}", id_text, payload, "");
+    rt_str_free(id_text);
+    return Record { line: line, fields: 3 };
+}
+
+fn reject(record: Record, reason: Str) -> Int {
+    // Reads happen before the transfer: after `defer move (record)` the local
+    // is moved, and reading it is a compile-time `E-S10`.
+    rt_print_int(record.fields);
+    rt_print_str(reason);
+
+    // The rejected record still owns its line; the cleanup frees it once.
+    defer move (record) {
+        rt_print_str("reject cleanup");
+        rt_str_free(record.line);
+    }
+    return 1;
+}
+
+fn accept(record: Record) -> Int {
+    rt_print_str(record.line);
+
+    defer move (record) {
+        rt_print_int(rt_str_len(record.line));
+        rt_str_free(record.line);
+    }
+    return 0;
+}
+
+fn process(id: Int, payload: Str, expect_ok: Bool) -> Int {
+    let record = build_record(id, payload);
+
+    if !expect_ok {
+        return reject(record, "rejected");
+    }
+
+    let rc = accept(record);
+    rt_print_str("accepted");
+    return rc;
+}
+
+fn main() -> Int {
+    let ok = process(1, "alpha", true);
+    if ok != 0 {
+        rt_print_str("FAIL: accepted record returned an error");
+        return 1;
+    }
+
+    let failed = process(2, "beta", false);
+    if failed != 1 {
+        rt_print_str("FAIL: rejected record returned the wrong code");
+        return 2;
+    }
+
+    rt_print_str("pipeline complete");
+    return 0;
+}

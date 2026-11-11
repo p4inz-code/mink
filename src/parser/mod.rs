@@ -27,10 +27,10 @@
 mod error;
 
 use crate::ast::{
-    AssignOp, Ast, BinaryOp, Block, ConstItem, ElseBranch, EnumItem, EnumVariant, Expr, ExprKind,
-    FnItem, Ident, IfExpr, IfStmt, Item, ItemKind, LetItem, MatchArm, MatchStmt, Param, Pattern,
-    Stmt, StmtKind, StructField, StructFieldInit, StructItem, StructPatternField, Ty, TyKind,
-    UnaryOp,
+    AssignOp, Ast, BinaryOp, Block, ConstItem, DeferCapture, ElseBranch, EnumItem, EnumVariant,
+    Expr, ExprKind, FnItem, Ident, IfExpr, IfStmt, Item, ItemKind, LetItem, MatchArm, MatchStmt,
+    Param, Pattern, Stmt, StmtKind, StructField, StructFieldInit, StructItem, StructPatternField,
+    Ty, TyKind, UnaryOp,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::source::{SourceFile, Span};
@@ -1663,17 +1663,58 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses `defer { ... }`. The body is a statement block (no trailing
-    /// expression) and the construct has no trailing semicolon, matching
-    /// the other block statements (`if`, `while`, `loop`).
+    /// Parses `defer { ... }` or `defer move (a, b) { ... }`. The body is a
+    /// statement block (no trailing expression) and the construct has no
+    /// trailing semicolon, matching the other block statements (`if`,
+    /// `while`, `loop`).
     fn parse_defer(&mut self) -> Result<Stmt, ()> {
         let start = self.bump().span(); // 'defer'
+        let capture = self.parse_defer_capture()?;
         let body = self.parse_block_body()?;
         let span = self.join(start, body.span);
         Ok(Stmt {
-            kind: StmtKind::Defer(body),
+            kind: StmtKind::Defer { body, capture },
             span,
         })
+    }
+
+    /// Parses the optional `move (a, b)` capture list of a `defer` (session
+    /// 260). The list must name at least one binding: an empty list adds
+    /// nothing over `defer { ... }` and is a syntax error rather than a
+    /// silently meaningless form.
+    fn parse_defer_capture(&mut self) -> Result<DeferCapture, ()> {
+        if !self.eat(TokenKind::Move) {
+            return Ok(DeferCapture::None);
+        }
+        if self.current_kind() != TokenKind::LParen {
+            let token = self.current();
+            self.record_error(ParseErrorKind::ExpectedLParen, token.span());
+            return Err(());
+        }
+        let open = self.bump().span();
+        self.open_delims.push((TokenKind::LParen, open));
+        let mut names = Vec::new();
+        loop {
+            names.push(self.expect_ident()?);
+            match self.current_kind() {
+                TokenKind::Comma => {
+                    let _ = self.bump();
+                    // A trailing comma is allowed before the closing paren.
+                    if self.current_kind() == TokenKind::RParen {
+                        break;
+                    }
+                }
+                TokenKind::RParen => break,
+                _ => {
+                    let token = self.current();
+                    self.record_error(ParseErrorKind::ExpectedRParen, token.span());
+                    return Err(());
+                }
+            }
+        }
+        let _ = self.bump(); // ')' — every loop exit above stops on it
+        self.open_delims.pop();
+        Ok(DeferCapture::Move(names))
     }
 
     fn parse_return(&mut self) -> Result<Stmt, ()> {

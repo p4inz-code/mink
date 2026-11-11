@@ -34,10 +34,10 @@ use crate::runtime::layout::{self, LayoutError};
 use crate::semantics::{SemanticResult, SymbolId, SymbolKind};
 use crate::source::{SourceMap, Span};
 
-use super::error::TypeError;
-use super::ty::{EnumId, EnumVariantInfo, StructFieldInfo, StructId, TypeId, TypeKind, TypeTable};
 use super::ExternalFnSig;
 use super::TypeResult;
+use super::error::TypeError;
+use super::ty::{EnumId, EnumVariantInfo, StructFieldInfo, StructId, TypeId, TypeKind, TypeTable};
 
 /// A struct whose field types are still unresolved: the struct's id plus
 /// each declared field's name, span, and (unresolved) type expression.
@@ -495,7 +495,7 @@ impl<'a> Checker<'a> {
                 self.resolve_deferred_block(body);
             }
             StmtKind::Loop(body) => self.resolve_deferred_block(body),
-            StmtKind::Defer(body) => self.resolve_deferred_block(body),
+            StmtKind::Defer { body, .. } => self.resolve_deferred_block(body),
             StmtKind::Match(stmt) => self.resolve_deferred_match(stmt),
             StmtKind::Expr(expr) => {
                 self.resolve_deferred_expr(expr);
@@ -1976,7 +1976,7 @@ impl<'a> Checker<'a> {
                 self.check_block(body);
             }
             StmtKind::Loop(body) => self.check_block(body),
-            StmtKind::Defer(body) => self.check_block(body),
+            StmtKind::Defer { body, .. } => self.check_block(body),
             StmtKind::Match(stmt) => self.check_match(stmt),
             StmtKind::Expr(expr) => {
                 self.expr_type(expr);
@@ -2739,18 +2739,14 @@ impl<'a> Checker<'a> {
             Some(info) => info.clone(),
             None => {
                 self.push_error(TypeError::struct_pattern_type_mismatch(
-                    pat_span,
-                    &name.name,
-                    &actual,
+                    pat_span, &name.name, &actual,
                 ));
                 return Coverage::default();
             }
         };
         if struct_info.name != name.name {
             self.push_error(TypeError::struct_pattern_type_mismatch(
-                name.span,
-                &name.name,
-                &actual,
+                name.span, &name.name, &actual,
             ));
             return Coverage::default();
         }

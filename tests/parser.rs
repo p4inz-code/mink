@@ -1532,7 +1532,7 @@ fn walk_stmt(stmt: &Stmt, text_len: u32, src: &str) {
             walk_block(body, text_len, src);
         }
         StmtKind::Loop(body) => walk_block(body, text_len, src),
-        StmtKind::Defer(body) => walk_block(body, text_len, src),
+        StmtKind::Defer { body, .. } => walk_block(body, text_len, src),
         StmtKind::Match(stmt) => walk_match_stmt(stmt, text_len, src),
         StmtKind::Expr(expr) => walk_expr(expr, text_len, src),
     }
@@ -1903,7 +1903,13 @@ fn closure_block_statement_if_before_a_trailing_expression_parses() {
     let block = closure_body("|x: Int| { if x > 0 { let y = 1; } x }");
     assert_eq!(block.stmts.len(), 1, "statements: {:?}", block.stmts);
     assert!(
-        matches!(&block.stmts[0].kind, StmtKind::If(IfStmt { else_branch: None, .. })),
+        matches!(
+            &block.stmts[0].kind,
+            StmtKind::If(IfStmt {
+                else_branch: None,
+                ..
+            })
+        ),
         "expected a statement `if`, found {:?}",
         block.stmts[0].kind
     );
@@ -1941,7 +1947,13 @@ fn block_expression_statement_if_without_else_parses() {
     };
     assert_eq!(block.stmts.len(), 1, "statements: {:?}", block.stmts);
     assert!(
-        matches!(&block.stmts[0].kind, StmtKind::If(IfStmt { else_branch: None, .. })),
+        matches!(
+            &block.stmts[0].kind,
+            StmtKind::If(IfStmt {
+                else_branch: None,
+                ..
+            })
+        ),
         "expected a statement `if`, found {:?}",
         block.stmts[0].kind
     );
@@ -2062,7 +2074,12 @@ fn block_expr_missing_semi_reports_only_the_local_error() {
     let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
         panic!("expected a function item")
     };
-    assert_eq!(func.body.stmts.len(), 2, "statements: {:?}", func.body.stmts);
+    assert_eq!(
+        func.body.stmts.len(),
+        2,
+        "statements: {:?}",
+        func.body.stmts
+    );
     assert!(matches!(&func.body.stmts[1].kind, StmtKind::Let(_)));
 }
 
@@ -2071,9 +2088,7 @@ fn block_expr_missing_semi_reports_only_the_local_error() {
 /// still parsed.
 #[test]
 fn block_expr_if_statement_fallback_restores_the_cursor() {
-    let output = parse_src(
-        "fn f() { let v = { if 1 == 1 { let a = 1; } 7 }; let w = 2; }",
-    );
+    let output = parse_src("fn f() { let v = { if 1 == 1 { let a = 1; } 7 }; let w = 2; }");
     assert!(
         output.parse_errors().is_empty(),
         "unexpected parse errors: {:?}",
@@ -2207,7 +2222,12 @@ fn block_expr_multiple_missing_semis_do_not_swallow_tokens() {
     let ItemKind::Fn(func) = &output.ast().items()[0].kind else {
         panic!("expected a function item")
     };
-    assert_eq!(func.body.stmts.len(), 2, "statements: {:?}", func.body.stmts);
+    assert_eq!(
+        func.body.stmts.len(),
+        2,
+        "statements: {:?}",
+        func.body.stmts
+    );
     let StmtKind::Let(binding) = &func.body.stmts[0].kind else {
         panic!("expected a let statement")
     };

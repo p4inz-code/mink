@@ -32,8 +32,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{AssignOp, BinaryOp, UnaryOp};
 use crate::hir::{
-    HirBlock, HirConst, HirElseBranch, HirExpr, HirExprKind, HirFn, HirIdent, HirIf, HirItemKind,
-    HirLet, HirMatch, HirMatchArm, HirName, HirPattern, HirProgram, HirStmt, HirStmtKind,
+    HirBlock, HirConst, HirDeferCapture, HirElseBranch, HirExpr, HirExprKind, HirFn, HirIdent,
+    HirIf, HirItemKind, HirLet, HirMatch, HirMatchArm, HirName, HirPattern, HirProgram, HirStmt,
+    HirStmtKind,
 };
 use crate::semantics::SymbolId;
 use crate::source::{SourceId, Span};
@@ -1161,9 +1162,25 @@ struct FnBuilder<'a> {
     current_span: Span,
     /// The stack of enclosing loops, innermost last.
     loops: Vec<LoopCtx>,
-    /// Deferred cleanup blocks by lexical scope, outermost first. Every
+    /// Deferred cleanups by lexical scope, outermost first. Every
     /// `lower_block` pushes one scope; a `defer` appends to the innermost.
-    defer_scopes: Vec<Vec<HirBlock>>,
+    defer_scopes: Vec<Vec<DeferEntry>>,
+}
+
+/// One registered deferred cleanup (session 260): the body to run at scope
+/// exit, plus the capture slots a `defer move (...)` transferred in when the
+/// registration executed.
+///
+/// The capture slots are ordinary locals of the enclosing function. Because
+/// the transfer is emitted at the registration site (inside whatever branch
+/// or loop reached it) and the body reads them instead of the original
+/// bindings, the cleanup observes exactly the values that were live when it
+/// was registered, and nothing else can free them.
+#[derive(Clone)]
+struct DeferEntry {
+    body: HirBlock,
+    /// `(captured symbol, capture slot)`, in source order.
+    captures: Vec<(SymbolId, LocalId)>,
 }
 
 impl<'a> FnBuilder<'a> {
@@ -1386,21 +1403,81 @@ impl<'a> FnBuilder<'a> {
         // cleanup, so there is nothing left to emit into a dead block.
         if self.current.is_some() {
             let defers = self.defer_scopes.pop().unwrap_or_default();
-            for body in defers.iter().rev() {
-                self.lower_block(body);
+            for entry in defers.iter().rev() {
+                self.lower_defer_body(entry);
             }
         } else {
             self.defer_scopes.pop();
         }
     }
 
-    /// Registers `body` with the innermost lexical scope. Registration is a
-    /// compile-time event recorded in statement order, so a `return` before
+    /// Registers a cleanup with the innermost lexical scope. Registration is
+    /// a compile-time event recorded in statement order, so a `return` before
     /// a later `defer` does not run it; every path that reaches the defer
     /// and then leaves the scope does.
-    fn register_defer(&mut self, body: &HirBlock) {
+    ///
+    /// For `defer move (a, b)`, the capture slots are created and assigned
+    /// here — that is, on the control-flow path that reaches the statement,
+    /// so an unexecuted conditional registration transfers nothing.
+    fn register_defer(&mut self, body: &HirBlock, capture: &HirDeferCapture) {
+        let mut captures = Vec::new();
+        for moved in capture.moved() {
+            let Some(&source) = self.eval.symbols.get(&moved.symbol) else {
+                // Not a function local (semantic analysis rejects this case);
+                // there is nothing to transfer.
+                continue;
+            };
+            let slot = self.eval.declare_local(
+                moved.name.clone(),
+                Some(moved.symbol),
+                moved.ty,
+                false,
+                moved.span,
+            );
+            let operand = |local: LocalId| MirOperand {
+                kind: MirOperandKind::Local(local),
+                span: moved.span,
+                ty: moved.ty,
+            };
+            self.emit_stmt(MirStmt {
+                kind: MirStmtKind::Assign {
+                    target: MirTarget {
+                        kind: MirTargetKind::Local(slot),
+                        span: moved.span,
+                        ty: moved.ty,
+                    },
+                    rvalue: use_rvalue(operand(source), moved.span, moved.ty),
+                },
+                span: moved.span,
+            });
+            captures.push((moved.symbol, slot));
+        }
         if let Some(scope) = self.defer_scopes.last_mut() {
-            scope.push(body.clone());
+            scope.push(DeferEntry {
+                body: body.clone(),
+                captures,
+            });
+        }
+    }
+
+    /// Lowers one registered cleanup. Inside the body, each moved capture
+    /// resolves to its capture slot instead of the original binding, so the
+    /// cleanup reads the value it owns.
+    fn lower_defer_body(&mut self, entry: &DeferEntry) {
+        let mut displaced = Vec::with_capacity(entry.captures.len());
+        for (symbol, slot) in &entry.captures {
+            displaced.push((*symbol, self.eval.symbols.insert(*symbol, *slot)));
+        }
+        self.lower_block(&entry.body);
+        for (symbol, previous) in displaced.into_iter().rev() {
+            match previous {
+                Some(local) => {
+                    self.eval.symbols.insert(symbol, local);
+                }
+                None => {
+                    self.eval.symbols.remove(&symbol);
+                }
+            }
         }
     }
 
@@ -1408,20 +1485,20 @@ impl<'a> FnBuilder<'a> {
     /// LIFO order: each scope's own registrations reversed, innermost scope
     /// first. This is used by early exits (`return`, `break`, `continue`).
     fn run_deferred_scopes_to(&mut self, depth: usize) {
-        let bodies: Vec<HirBlock> = self
+        let entries: Vec<DeferEntry> = self
             .defer_scopes
             .iter()
             .skip(depth)
             .rev()
             .flat_map(|scope| scope.iter().rev().cloned())
             .collect();
-        for body in bodies {
+        for entry in entries {
             if self.current.is_none() {
                 // A deferred block terminated control flow (rejected by
                 // semantic analysis); stop rather than emit into no block.
                 break;
             }
-            self.lower_block(&body);
+            self.lower_defer_body(&entry);
         }
     }
 
@@ -1458,14 +1535,7 @@ impl<'a> FnBuilder<'a> {
                 // materialization as any other operand position.
                 self.ensure_current(*span);
                 let local = self.eval.temp(result.ty, *span);
-                self.lower_if_expr_binding(
-                    local,
-                    cond,
-                    then_block,
-                    else_branch,
-                    result.ty,
-                    *span,
-                );
+                self.lower_if_expr_binding(local, cond, then_block, else_branch, result.ty, *span);
                 Some(MirOperand {
                     kind: MirOperandKind::Local(local),
                     span: *span,
@@ -1499,24 +1569,20 @@ impl<'a> FnBuilder<'a> {
             HirExprKind::Assign { target, value, .. } => {
                 Self::needs_cfg(target) || Self::needs_cfg(value)
             }
-            HirExprKind::Range { start, end, .. } => {
-                Self::needs_cfg(start) || Self::needs_cfg(end)
-            }
+            HirExprKind::Range { start, end, .. } => Self::needs_cfg(start) || Self::needs_cfg(end),
             HirExprKind::Call { callee, args } => {
                 Self::needs_cfg(callee) || args.iter().any(Self::needs_cfg)
             }
-            HirExprKind::Index { base, index } => {
-                Self::needs_cfg(base) || Self::needs_cfg(index)
-            }
+            HirExprKind::Index { base, index } => Self::needs_cfg(base) || Self::needs_cfg(index),
             HirExprKind::StructLit { fields, .. } => {
                 fields.iter().any(|(_, value)| Self::needs_cfg(value))
             }
             HirExprKind::ArrayLit(elems) | HirExprKind::Tuple(elems) => {
                 elems.iter().any(Self::needs_cfg)
             }
-            HirExprKind::EnumVariant { payload, .. } => {
-                payload.as_ref().is_some_and(|payload| Self::needs_cfg(payload))
-            }
+            HirExprKind::EnumVariant { payload, .. } => payload
+                .as_ref()
+                .is_some_and(|payload| Self::needs_cfg(payload)),
             HirExprKind::TupleFieldAccess { base, .. } => Self::needs_cfg(base),
             // A block is always lowered on this path: its statements are
             // emitted by `FnBuilder`, and an empty-result block (the body of
@@ -1788,14 +1854,8 @@ impl<'a> FnBuilder<'a> {
                 self.ensure_current(expr.span);
                 let lhs = self.eval_operand(lhs);
                 let rhs = self.eval_operand(rhs);
-                self.eval.temp_rvalue(
-                    expr,
-                    MirRvalueKind::Binary {
-                        op: *op,
-                        lhs,
-                        rhs,
-                    },
-                )
+                self.eval
+                    .temp_rvalue(expr, MirRvalueKind::Binary { op: *op, lhs, rhs })
             }
             HirExprKind::Range {
                 inclusive,
@@ -2070,7 +2130,7 @@ impl<'a> FnBuilder<'a> {
                     });
                 }
             }
-            HirStmtKind::Defer(body) => self.register_defer(body),
+            HirStmtKind::Defer { body, capture } => self.register_defer(body, capture),
             HirStmtKind::Continue => {
                 let Some(ctx) = self.loops.last() else {
                     // Defensive: semantic analysis rejects `continue`

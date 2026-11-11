@@ -29,6 +29,7 @@ const KEYWORDS: &[(&str, TokenKind)] = &[
     ("loop", TokenKind::Loop),
     ("match", TokenKind::Match),
     ("mod", TokenKind::Mod),
+    ("move", TokenKind::Move),
     ("mut", TokenKind::Mut),
     ("null", TokenKind::Null),
     ("pub", TokenKind::Pub),

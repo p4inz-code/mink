@@ -21,10 +21,11 @@
 //! The frozen rules are documented in
 //! `docs/implementation/OWNERSHIP_IMPLEMENTATION.md` §1.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    AssignOp, Ast, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, ItemKind, Stmt, StmtKind,
+    AssignOp, Ast, DeferCapture, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, ItemKind, Stmt,
+    StmtKind,
 };
 use crate::runtime::intrinsics::{self, Intrinsic, IntrinsicType};
 use crate::semantics::{SemanticError, SemanticResult, SymbolId, SymbolKind};
@@ -287,6 +288,8 @@ pub fn check(ast: &Ast, semantic: &SemanticResult, types: &TypeResult) -> Owners
         scopes: Vec::new(),
         param_indices: HashMap::new(),
         defer_depth: 0,
+        defer_captures: Vec::new(),
+        defer_locals: HashSet::new(),
         errors: Vec::new(),
         result: FnResult::default(),
         fn_results: HashMap::new(),
@@ -295,6 +298,15 @@ pub fn check(ast: &Ast, semantic: &SemanticResult, types: &TypeResult) -> Owners
     OwnershipResult {
         errors: analyzer.errors,
     }
+}
+
+/// One `defer move (...)` body being walked (session 260).
+struct DeferCaptureFrame {
+    /// The symbols transferred into this deferred operation.
+    symbols: HashSet<SymbolId>,
+    /// The subset the cleanup body actually reads, so a capture the body
+    /// never uses is reported (it would silently leak the resource).
+    seen: HashSet<SymbolId>,
 }
 
 /// The mode an expression is evaluated in: transfer positions move Owned
@@ -345,6 +357,18 @@ struct Analyzer<'a> {
     param_indices: HashMap<SymbolId, usize>,
     /// Nesting depth of `defer` blocks being walked.
     defer_depth: u32,
+    /// Capture scopes of the `defer move (...)` bodies currently being
+    /// walked (session 260), innermost last. A captured name is live inside
+    /// its own cleanup body — the value was transferred into the deferred
+    /// operation — so the `E-S18` check is suspended for it there, and the
+    /// walk records which captures the body actually uses.
+    defer_captures: Vec<DeferCaptureFrame>,
+    /// Bindings declared *inside* a deferred body (session 260): their
+    /// storage belongs to the cleanup itself, so reading them at cleanup
+    /// time is always safe and `E-S18` does not apply. Without this, a
+    /// cleanup could not allocate, match an owned payload, or use any
+    /// intermediate it creates.
+    defer_locals: HashSet<SymbolId>,
     /// Ownership errors, in traversal order.
     errors: Vec<SemanticError>,
     /// The current function's accumulated result provenance.
@@ -370,6 +394,8 @@ impl<'a> Analyzer<'a> {
             self.scopes.clear();
             self.param_indices.clear();
             self.defer_depth = 0;
+            self.defer_captures.clear();
+            self.defer_locals.clear();
             self.errors.clear();
             self.walk_module();
             if self.fn_results == before {
@@ -553,6 +579,11 @@ impl<'a> Analyzer<'a> {
         let Some(symbol) = self.decl_spans.get(&(name.file(), name.start())).copied() else {
             return;
         };
+        // A binding declared while walking a deferred body lives exactly as
+        // long as that cleanup, so it is not a deferred capture.
+        if self.defer_depth > 0 {
+            self.defer_locals.insert(symbol);
+        }
         let Some(ty) = self.types.symbol_type(symbol) else {
             return;
         };
@@ -738,9 +769,9 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Walks a block. Returns whether control flow **terminates** inside it (a
-/// `return` whose enclosing arms also return): a terminating block's
-/// post-state never reaches the statements after it, so a move performed on
-/// that path is invisible to them.
+    /// `return` whose enclosing arms also return): a terminating block's
+    /// post-state never reaches the statements after it, so a move performed on
+    /// that path is invisible to them.
     fn walk_block(&mut self, block: &crate::ast::Block) -> bool {
         // A block is a scope: borrows declared inside it are released when
         // it exits, so a reference cannot outlive its declaring block.
@@ -859,15 +890,18 @@ impl<'a> Analyzer<'a> {
             }
             StmtKind::Return(None) => return Some(true),
             StmtKind::Continue => return Some(false),
-            StmtKind::Defer(body) => {
-                // The cleanup body is walked where it is registered so names
-                // resolve normally. Reads of owned locals are rejected in
-                // `eval_ident`: the cleanup runs later, after a move could
-                // have invalidated the value.
-                self.defer_depth += 1;
-                self.walk_block(body);
-                self.defer_depth -= 1;
-            }
+            StmtKind::Defer { body, capture } => match capture {
+                DeferCapture::None => {
+                    // The cleanup body is walked where it is registered so
+                    // names resolve normally. Reads of owned locals are
+                    // rejected in `eval_ident`: the cleanup runs later,
+                    // after a move could have invalidated the value.
+                    self.defer_depth += 1;
+                    self.walk_block(body);
+                    self.defer_depth -= 1;
+                }
+                DeferCapture::Move(names) => self.walk_move_defer(body, names),
+            },
             StmtKind::Break(value) => {
                 if let Some(value) = value {
                     self.eval_expr(value, Mode::Transfer);
@@ -906,6 +940,159 @@ impl<'a> Analyzer<'a> {
             }
         }
         None
+    }
+
+    /// Walks a `defer move (...)` statement (session 260): validates and
+    /// transfers each listed local, walks the cleanup body with the captures
+    /// treated as live, then marks the original bindings moved.
+    ///
+    /// The order matters. The body is walked *first*, while the captures are
+    /// still live, so a second consumption inside the cleanup (a double
+    /// free) is caught by the ordinary move machinery (`E-S10`); the
+    /// transfer then marks the original bindings dead, so any later use of
+    /// them outside the cleanup is a use of a moved value.
+    fn walk_move_defer(&mut self, body: &crate::ast::Block, names: &[Ident]) {
+        // Every resolved name is part of the capture scope, so a rejected
+        // capture does not also produce a generic `E-S18` read error from
+        // the body: the specific rejection is the useful diagnostic.
+        let mut listed: Vec<(SymbolId, &Ident)> = Vec::new();
+        let mut accepted: Vec<(SymbolId, &Ident)> = Vec::new();
+        for name in names {
+            let Some(symbol) = self.semantic.resolve(name.span) else {
+                // Semantic analysis already reported the unresolved name.
+                continue;
+            };
+            if listed.iter().any(|(seen, _)| *seen == symbol) {
+                // A second transfer of the same value: the first capture
+                // already took ownership.
+                self.errors
+                    .push(SemanticError::use_of_moved(name.name.clone(), name.span));
+                continue;
+            }
+            listed.push((symbol, name));
+            if self.is_borrowed(symbol) {
+                self.errors.push(SemanticError::borrow_conflict(
+                    name.name.clone(),
+                    name.span,
+                    format!(
+                        "cannot move `{}` into a deferred cleanup: it is borrowed",
+                        name.name
+                    ),
+                ));
+                continue;
+            }
+            if let Some(reason) = self.move_capture_rejection(symbol) {
+                self.errors.push(SemanticError::invalid_move_capture(
+                    name.name.clone(),
+                    name.span,
+                    reason,
+                ));
+                continue;
+            }
+            accepted.push((symbol, name));
+        }
+        self.defer_captures.push(DeferCaptureFrame {
+            symbols: listed.iter().map(|(symbol, _)| *symbol).collect(),
+            seen: HashSet::new(),
+        });
+        self.defer_depth += 1;
+        self.walk_block(body);
+        self.defer_depth -= 1;
+        let frame = self.defer_captures.pop();
+        if let Some(frame) = frame {
+            for (symbol, name) in &accepted {
+                if !frame.seen.contains(symbol) {
+                    self.errors.push(SemanticError::invalid_move_capture(
+                        name.name.clone(),
+                        name.span,
+                        format!(
+                            "`{}` is moved into the deferred cleanup but never used by it, so the value would leak; use it in the cleanup or remove the capture",
+                            name.name
+                        ),
+                    ));
+                }
+            }
+        }
+        // The originals are dead from here on. A value the cleanup itself
+        // consumed is already dead; marking again is a no-op, not an error.
+        // An immortal value (a string literal) is copied rather than moved,
+        // so its binding stays usable — exactly like an ordinary move of an
+        // immutable string.
+        for (symbol, _) in &accepted {
+            if matches!(
+                self.bindings.get(symbol),
+                Some(State::Str(BindingState::Live(Provenance::Immutable)))
+            ) {
+                continue;
+            }
+            self.mark_symbol_dead(*symbol);
+        }
+    }
+
+    /// Why `symbol` cannot be transferred into a deferred cleanup, if it
+    /// cannot (session 260). `None` means the value is either a plain copy
+    /// value or an ownership-tracked owned value (`Str`, or a struct/enum of
+    /// tracked fields), which the transfer machinery handles soundly.
+    fn move_capture_rejection(&self, symbol: SymbolId) -> Option<String> {
+        let ty = self.types.symbol_type(symbol)?;
+        let name = self
+            .semantic
+            .symbols()
+            .get(symbol)
+            .map(|symbol| symbol.name.clone())
+            .unwrap_or_default();
+        match self.move_capture_type_rejection(ty) {
+            Some(reason) => Some(format!(
+                "cannot move `{}` into a deferred cleanup: {}",
+                name, reason
+            )),
+            None => None,
+        }
+    }
+
+    /// The type-level half of [`Analyzer::move_capture_rejection`].
+    fn move_capture_type_rejection(&self, ty: TypeId) -> Option<&'static str> {
+        match self.types.types().kind(ty) {
+            Some(TypeKind::Str)
+            | Some(TypeKind::Int)
+            | Some(TypeKind::Float)
+            | Some(TypeKind::Bool)
+            | Some(TypeKind::Char)
+            | Some(TypeKind::Unit)
+            | Some(TypeKind::Null) => None,
+            Some(TypeKind::Ref { .. }) => {
+                Some("a reference cannot be owned, and the cleanup could outlive the referent")
+            }
+            Some(TypeKind::Array { .. }) => {
+                Some("fixed-length arrays are not supported: element ownership is not tracked")
+            }
+            Some(TypeKind::Tuple(_)) => {
+                Some("tuples are not ownership-tracked; move each element instead")
+            }
+            Some(TypeKind::Vec(_)) | Some(TypeKind::Map(..)) | Some(TypeKind::Set(_)) => Some(
+                "collection handles are copy values with user-managed lifetimes; \
+                 transfer them with an ordinary `defer`",
+            ),
+            Some(TypeKind::Ptr(_)) => Some(
+                "raw pointers are copy values with user-managed lifetimes; \
+                 transfer them with an ordinary `defer`",
+            ),
+            // A struct or enum is transferable only when every field and
+            // payload is; the first unsupported component supplies the
+            // reason (the enclosing message already names the binding).
+            Some(TypeKind::Struct(id)) => self.types.types().struct_info(*id).and_then(|info| {
+                info.fields
+                    .iter()
+                    .find_map(|field| self.move_capture_type_rejection(field.ty))
+            }),
+            Some(TypeKind::Enum(id)) => self.types.types().enum_info(*id).and_then(|info| {
+                info.variants
+                    .iter()
+                    .filter_map(|variant| variant.payload)
+                    .find_map(|payload| self.move_capture_type_rejection(payload))
+            }),
+            _ => None,
+        }
     }
 
     /// Walks a `match` statement: the scrutinee is observed (matchable
@@ -1190,7 +1377,10 @@ impl<'a> Analyzer<'a> {
     }
 
     /// Restores a [`Analyzer::snapshot_flow`] snapshot wholesale.
-    fn restore_flow(&mut self, snapshot: &(HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>)) {
+    fn restore_flow(
+        &mut self,
+        snapshot: &(HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>),
+    ) {
         self.bindings = snapshot.0.clone();
         self.borrows = snapshot.1.clone();
     }
@@ -1223,16 +1413,31 @@ impl<'a> Analyzer<'a> {
                     (State::Array(before), State::Array(after)) => {
                         State::Array(Self::join_binding_state(before, *after))
                     }
-                    (State::Ref { source, mutable, .. }, State::Ref { source: other, mutable: other_mutable, dead }) => {
-                        State::Ref {
-                            source: source.or(*other),
-                            mutable: mutable || *other_mutable,
-                            dead: *dead,
-                        }
-                    }
                     (
-                        State::Struct { fields, dead, ref_fields },
-                        State::Struct { fields: arm_fields, dead: arm_dead, ref_fields: arm_refs },
+                        State::Ref {
+                            source, mutable, ..
+                        },
+                        State::Ref {
+                            source: other,
+                            mutable: other_mutable,
+                            dead,
+                        },
+                    ) => State::Ref {
+                        source: source.or(*other),
+                        mutable: mutable || *other_mutable,
+                        dead: *dead,
+                    },
+                    (
+                        State::Struct {
+                            fields,
+                            dead,
+                            ref_fields,
+                        },
+                        State::Struct {
+                            fields: arm_fields,
+                            dead: arm_dead,
+                            ref_fields: arm_refs,
+                        },
                     ) => {
                         let mut fields = fields.clone();
                         for (name, after) in arm_fields {
@@ -1247,16 +1452,29 @@ impl<'a> Analyzer<'a> {
                         for (name, view) in arm_refs {
                             refs.entry(name.clone()).or_insert(*view);
                         }
-                        State::Struct { fields, dead: dead || *arm_dead, ref_fields: refs }
+                        State::Struct {
+                            fields,
+                            dead: dead || *arm_dead,
+                            ref_fields: refs,
+                        }
                     }
-                    (State::Enum { state, ref_borrows }, State::Enum { state: arm_state, ref_borrows: arm_refs }) => {
+                    (
+                        State::Enum { state, ref_borrows },
+                        State::Enum {
+                            state: arm_state,
+                            ref_borrows: arm_refs,
+                        },
+                    ) => {
                         let mut refs = ref_borrows.clone();
                         for (name, view) in arm_refs {
                             if !refs.iter().any(|(existing, _)| existing == name) {
                                 refs.push((name.clone(), *view));
                             }
                         }
-                        State::Enum { state: Self::join_binding_state(state, *arm_state), ref_borrows: refs }
+                        State::Enum {
+                            state: Self::join_binding_state(state, *arm_state),
+                            ref_borrows: refs,
+                        }
                     }
                     // A state shape that cannot be joined (only reachable
                     // for an unknown/untracked kind): keep the incoming one.
@@ -1776,7 +1994,22 @@ impl<'a> Analyzer<'a> {
         {
             return self.copy_const(symbol);
         }
-        if self.defer_depth > 0 && self.deferred_capture_may_own(symbol) {
+        // A name transferred in by `defer move (...)` is live inside its own
+        // cleanup body: the value moved out of the original binding into the
+        // deferred operation, so the `E-S18` rejection does not apply there.
+        let mut captured = false;
+        for frame in self.defer_captures.iter_mut().rev() {
+            if frame.symbols.contains(&symbol) {
+                frame.seen.insert(symbol);
+                captured = true;
+                break;
+            }
+        }
+        if !captured
+            && self.defer_depth > 0
+            && !self.defer_locals.contains(&symbol)
+            && self.deferred_capture_may_own(symbol)
+        {
             self.errors.push(SemanticError::deferred_owned_capture(
                 ident.name.clone(),
                 ident.span,
@@ -2261,6 +2494,13 @@ impl<'a> Analyzer<'a> {
         let Some(symbol) = self.semantic.resolve(root.span) else {
             return;
         };
+        self.mark_symbol_dead(symbol);
+    }
+
+    /// Marks `symbol`'s tracked value moved: a `Str`/array/enum dies, a
+    /// struct dies whole (all fields dead), a reference stops holding its
+    /// borrow. Copy-shaped bindings have no state to change.
+    fn mark_symbol_dead(&mut self, symbol: SymbolId) {
         match self.bindings.get_mut(&symbol) {
             Some(State::Str(state)) => *state = BindingState::Dead,
             Some(State::Array(state)) => *state = BindingState::Dead,
@@ -2898,13 +3138,11 @@ impl<'a> Analyzer<'a> {
                 self.deferred_type_may_own(*key) || self.deferred_type_may_own(*value)
             }
             Some(TypeKind::Set(elem)) => self.deferred_type_may_own(*elem),
-            Some(TypeKind::Struct(id)) => {
-                self.types.types().struct_info(*id).is_some_and(|info| {
-                    info.fields
-                        .iter()
-                        .any(|field| self.deferred_type_may_own(field.ty))
-                })
-            }
+            Some(TypeKind::Struct(id)) => self.types.types().struct_info(*id).is_some_and(|info| {
+                info.fields
+                    .iter()
+                    .any(|field| self.deferred_type_may_own(field.ty))
+            }),
             Some(TypeKind::Enum(id)) => self.types.types().enum_info(*id).is_some_and(|info| {
                 info.variants.iter().any(|variant| {
                     variant

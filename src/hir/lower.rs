@@ -24,8 +24,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    Ast, Block, ConstItem, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind,
-    LetItem, MatchArm, MatchStmt, Param, Pattern, Stmt, StmtKind, StructItem,
+    Ast, Block, ConstItem, DeferCapture, ElseBranch, Expr, ExprKind, FnItem, Ident, IfStmt, Item,
+    ItemKind, LetItem, MatchArm, MatchStmt, Param, Pattern, Stmt, StmtKind, StructItem,
 };
 use crate::semantics::{SemanticResult, SymbolId};
 use crate::source::Span;
@@ -33,9 +33,9 @@ use crate::typecheck::{TypeId, TypeKind, TypeResult, TypeTable};
 
 use super::error::HirError;
 use super::{
-    HirBlock, HirConst, HirElseBranch, HirEnum, HirExpr, HirExprKind, HirFn, HirIdent, HirIf,
-    HirItem, HirItemKind, HirLet, HirMatch, HirMatchArm, HirName, HirParam, HirPattern, HirProgram,
-    HirStmt, HirStmtKind, HirStruct,
+    HirBlock, HirConst, HirDeferCapture, HirElseBranch, HirEnum, HirExpr, HirExprKind, HirFn,
+    HirIdent, HirIf, HirItem, HirItemKind, HirLet, HirMatch, HirMatchArm, HirName, HirParam,
+    HirPattern, HirProgram, HirStmt, HirStmtKind, HirStruct,
 };
 
 /// Lowers `ast` with its semantic and type results into HIR.
@@ -216,6 +216,24 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Lowers a `defer` capture list: every listed name is resolved to the
+    /// binding it names, so later stages work with symbols instead of
+    /// re-running name resolution.
+    fn lower_defer_capture(&mut self, capture: &DeferCapture) -> HirDeferCapture {
+        match capture {
+            DeferCapture::None => HirDeferCapture::None,
+            DeferCapture::Move(names) => HirDeferCapture::Move(
+                names
+                    .iter()
+                    .map(|ident| match self.lower_var(ident) {
+                        HirExprKind::Var(lowered) => lowered,
+                        _ => self.fallback_ident(ident),
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
     fn lower_let(&mut self, binding: &LetItem, span: Span) -> HirLet {
         let name = self.lower_decl_ident(&binding.name);
         let init = self.lower_expr(&binding.init);
@@ -270,7 +288,10 @@ impl<'a> Lowerer<'a> {
                 HirStmtKind::Break(value.as_ref().map(|expr| self.lower_expr(expr)))
             }
             StmtKind::Continue => HirStmtKind::Continue,
-            StmtKind::Defer(body) => HirStmtKind::Defer(self.lower_block(body)),
+            StmtKind::Defer { body, capture } => HirStmtKind::Defer {
+                body: self.lower_block(body),
+                capture: self.lower_defer_capture(capture),
+            },
             StmtKind::If(stmt) => HirStmtKind::If(self.lower_if(stmt)),
             StmtKind::While { cond, body } => HirStmtKind::While {
                 cond: self.lower_expr(cond),

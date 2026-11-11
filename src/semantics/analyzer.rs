@@ -23,8 +23,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    Ast, Block, ElseBranch, EnumItem, Expr, ExprKind, FnItem, Ident, IfStmt, Item, ItemKind,
-    Pattern, Stmt, StmtKind, StructItem,
+    Ast, Block, DeferCapture, ElseBranch, EnumItem, Expr, ExprKind, FnItem, Ident, IfStmt, Item,
+    ItemKind, Pattern, Stmt, StmtKind, StructItem,
 };
 use crate::source::Span;
 
@@ -481,7 +481,7 @@ impl Analyzer {
             if let Some(stmt) = block
                 .stmts
                 .iter()
-                .find(|stmt| matches!(stmt.kind, StmtKind::Defer(_)))
+                .find(|stmt| matches!(stmt.kind, StmtKind::Defer { .. }))
             {
                 self.errors.push(SemanticError::invalid_defer_control_flow(
                     stmt.span,
@@ -578,7 +578,10 @@ impl Analyzer {
                         .push(SemanticError::continue_outside_loop(stmt.span));
                 }
             }
-            StmtKind::Defer(body) => {
+            StmtKind::Defer { body, capture } => {
+                if let DeferCapture::Move(names) = capture {
+                    self.analyze_move_capture(names, stmt.span, ctx);
+                }
                 let scope = self.scopes.push(ScopeKind::Block, Some(ctx.scope));
                 self.analyze_block(
                     body,
@@ -731,6 +734,67 @@ impl Analyzer {
                         None => out.push(&field.name),
                     }
                 }
+            }
+        }
+    }
+
+    /// Resolves and validates the explicit capture list of a
+    /// `defer move (a, b) { ... }` (session 260).
+    ///
+    /// Only function-local bindings can be transferred: a module item, a
+    /// constant, a function name, or an intrinsic has no per-execution value
+    /// to move. Whether the *type* can be transferred is the ownership
+    /// pass's decision (`E-S19`), because it needs the binding's tracked
+    /// state. A move capture registered from inside another deferred block
+    /// is rejected: it would run during that cleanup, after the value could
+    /// already have been released, which is exactly the hazard `E-S18`
+    /// guards against.
+    fn analyze_move_capture(&mut self, names: &[Ident], defer_span: Span, ctx: Ctx) {
+        if ctx.in_defer {
+            self.errors.push(SemanticError::invalid_move_capture(
+                names
+                    .first()
+                    .map(|name| name.name.clone())
+                    .unwrap_or_default(),
+                names.first().map(|name| name.span).unwrap_or(defer_span),
+                "a move-capturing `defer` cannot be registered inside a deferred block".to_string(),
+            ));
+        }
+        let mut seen: Vec<(String, Span)> = Vec::new();
+        for name in names {
+            self.resolve_name(name, ctx);
+            if seen.iter().any(|(known, _)| known == &name.name) {
+                self.errors.push(SemanticError::invalid_move_capture(
+                    name.name.clone(),
+                    name.span,
+                    format!("`{}` is listed more than once", name.name),
+                ));
+                continue;
+            }
+            seen.push((name.name.clone(), name.span));
+            let Some(symbol) = self.lookup(&name.name, ctx.scope) else {
+                continue;
+            };
+            let is_local = self.symbols.get(symbol).is_some_and(|symbol| {
+                matches!(
+                    symbol.kind,
+                    SymbolKind::Param | SymbolKind::Let { .. } | SymbolKind::ForVar
+                )
+            });
+            let in_module_scope = self
+                .symbols
+                .get(symbol)
+                .and_then(|symbol| self.scopes.get(symbol.scope))
+                .is_some_and(|scope| scope.kind == ScopeKind::Module);
+            if !is_local || in_module_scope {
+                self.errors.push(SemanticError::invalid_move_capture(
+                    name.name.clone(),
+                    name.span,
+                    format!(
+                        "`{}` is not a local binding; only function-local values can be moved into a deferred cleanup",
+                        name.name
+                    ),
+                ));
             }
         }
     }

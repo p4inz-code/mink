@@ -82,6 +82,12 @@ pub enum SemanticErrorKind {
     /// exit, after later moves could invalidate the value, so ownership is
     /// kept sound by rejecting the capture.
     DeferredOwnedCapture,
+    /// An invalid `defer move (a, b)` capture (session 260): a name that is
+    /// not a local binding, a reference, a type whose move is not tracked
+    /// soundly, a duplicate name in one list, a capture registered from
+    /// inside a deferred block, or a captured value the cleanup never uses
+    /// (which would leak it).
+    InvalidMoveCapture,
 }
 
 impl SemanticErrorKind {
@@ -109,6 +115,7 @@ impl SemanticErrorKind {
             Self::DuplicateVariant => "E-S16",
             Self::InvalidDeferControlFlow => "E-S17",
             Self::DeferredOwnedCapture => "E-S18",
+            Self::InvalidMoveCapture => "E-S19",
         }
     }
 }
@@ -393,6 +400,24 @@ impl SemanticError {
         }
     }
 
+    /// Creates an invalid-move-capture error for `name` at `span` (E-S19).
+    ///
+    /// `detail` is the full explanation, because the rejected shapes differ
+    /// (references, arrays, owned aggregates, duplicates, unused captures).
+    pub fn invalid_move_capture(
+        name: impl Into<String>,
+        span: Span,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: SemanticErrorKind::InvalidMoveCapture,
+            span,
+            name: name.into(),
+            original: None,
+            detail: Some(detail.into()),
+        }
+    }
+
     /// The category of this error.
     pub fn kind(&self) -> SemanticErrorKind {
         self.kind
@@ -484,6 +509,9 @@ impl fmt::Display for SemanticError {
                 "cannot capture `{}` in a `defer` block: its value may be moved or freed before cleanup",
                 self.name
             ),
+            SemanticErrorKind::InvalidMoveCapture => self.detail.clone().unwrap_or_else(|| {
+                format!("cannot move `{}` into a deferred cleanup block", self.name)
+            }),
         };
         f.write_str(&message)
     }

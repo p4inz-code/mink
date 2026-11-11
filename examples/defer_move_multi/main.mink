@@ -1,0 +1,67 @@
+// Multiple transferred resources, LIFO cleanup, and control-flow exits.
+//
+// Each `defer move` registration owns one resource, so every buffer is freed
+// exactly once even when the function returns early, breaks out of a loop, or
+// leaves a nested block. Cleanup runs last-registered-first.
+//
+// Run: mink build examples/defer_move_multi/main.mink && main.exe
+
+struct Buffer {
+    data: Str,
+    used: Int,
+}
+
+fn make_buffer(size: Int, byte: Int) -> Buffer {
+    let data = rt_str_alloc(size);
+    rt_str_set_byte(data, 0, byte);
+    return Buffer { data: data, used: 1 };
+}
+
+fn drain(limit: Int, fail_at: Int) -> Int {
+    let a = make_buffer(8, 65);
+    defer move (a) {
+        rt_print_str("free a");
+        rt_str_free(a.data);
+    }
+
+    let b = make_buffer(16, 66);
+    defer move (b) {
+        rt_print_str("free b");
+        rt_str_free(b.data);
+    }
+
+    let mut i = 0;
+    while i < limit {
+        i += 1;
+        let scratch = rt_str_alloc(4);
+        defer move (scratch) {
+            rt_print_int(rt_str_len(scratch));
+            rt_str_free(scratch);
+        }
+
+        if i == fail_at {
+            rt_print_str("early return");
+            return 90 + i;
+        }
+    }
+
+    rt_print_str("drained");
+    return 0;
+}
+
+fn main() -> Int {
+    let first = drain(2, 0);
+    if first != 0 {
+        rt_print_str("FAIL: unexpected result");
+        return 1;
+    }
+
+    let second = drain(3, 2);
+    if second != 92 {
+        rt_print_str("FAIL: unexpected early result");
+        return 2;
+    }
+
+    rt_print_int(second);
+    return 0;
+}

@@ -138,7 +138,8 @@ impl Monomorphizer {
                 ItemKind::Fn(f) => {
                     if f.generic_params.is_empty() {
                         if let Some(ret) = &f.return_ty {
-                            self.simple_fn_returns.insert(f.name.name.clone(), ret.clone());
+                            self.simple_fn_returns
+                                .insert(f.name.name.clone(), ret.clone());
                         }
                     }
                 }
@@ -158,7 +159,8 @@ impl Monomorphizer {
                     ItemKind::Fn(f) => {
                         if f.generic_params.is_empty() {
                             if let Some(ret) = &f.return_ty {
-                                self.simple_fn_returns.insert(f.name.name.clone(), ret.clone());
+                                self.simple_fn_returns
+                                    .insert(f.name.name.clone(), ret.clone());
                             }
                         }
                     }
@@ -538,7 +540,7 @@ impl Monomorphizer {
                 self.monomorphize_block(body);
             }
             StmtKind::Loop(body) => self.monomorphize_block(body),
-            StmtKind::Defer(body) => self.monomorphize_block(body),
+            StmtKind::Defer { body, .. } => self.monomorphize_block(body),
             StmtKind::Match(m) => {
                 self.monomorphize_expr(&mut m.scrutinee);
                 for arm in &mut m.arms {
@@ -1072,7 +1074,7 @@ impl Monomorphizer {
                 StmtKind::Loop(body) => {
                     Self::collect_closure_bindings_in_block(body, captures, out);
                 }
-                StmtKind::Defer(body) => {
+                StmtKind::Defer { body, .. } => {
                     Self::collect_closure_bindings_in_block(body, captures, out);
                 }
                 StmtKind::For { iterable, body, .. } => {
@@ -1258,7 +1260,7 @@ impl Monomorphizer {
                 StmtKind::Loop(body) => {
                     self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
                 }
-                StmtKind::Defer(body) => {
+                StmtKind::Defer { body, .. } => {
                     self.rewrite_closure_calls_in_block(body, var_to_closure, fn_params);
                 }
                 StmtKind::For { iterable, body, .. } => {
@@ -2018,7 +2020,7 @@ impl Monomorphizer {
                 self.resolve_names_in_block(body, subst);
             }
             StmtKind::Loop(body) => self.resolve_names_in_block(body, subst),
-            StmtKind::Defer(body) => self.resolve_names_in_block(body, subst),
+            StmtKind::Defer { body, .. } => self.resolve_names_in_block(body, subst),
             StmtKind::Match(m) => {
                 self.resolve_names_in_expr(&mut m.scrutinee, subst);
                 for arm in &mut m.arms {
@@ -2220,7 +2222,7 @@ impl Monomorphizer {
                 self.resolve_all_named_app_in_block(body);
             }
             StmtKind::Loop(body) => self.resolve_all_named_app_in_block(body),
-            StmtKind::Defer(body) => self.resolve_all_named_app_in_block(body),
+            StmtKind::Defer { body, .. } => self.resolve_all_named_app_in_block(body),
             StmtKind::Match(m) => {
                 self.resolve_all_named_app_in_expr(&mut m.scrutinee);
                 for arm in &mut m.arms {
@@ -2416,7 +2418,7 @@ impl Monomorphizer {
                 self.substitute_block(body, subst);
             }
             StmtKind::Loop(body) => self.substitute_block(body, subst),
-            StmtKind::Defer(body) => self.substitute_block(body, subst),
+            StmtKind::Defer { body, .. } => self.substitute_block(body, subst),
             StmtKind::Match(m) => {
                 self.substitute_expr(&mut m.scrutinee, subst);
                 for arm in &mut m.arms {
@@ -2606,7 +2608,18 @@ impl Monomorphizer {
                 self.reassign_block_spans(body);
             }
             StmtKind::Loop(body) => self.reassign_block_spans(body),
-            StmtKind::Defer(body) => self.reassign_block_spans(body),
+            StmtKind::Defer { body, capture } => {
+                // The capture list names bindings of this clone, so its
+                // identifiers need fresh spans too: a stale span would
+                // resolve to the *original* declaration (or another
+                // instantiation) instead of the clone's binding.
+                if let DeferCapture::Move(names) = capture {
+                    for name in names.iter_mut() {
+                        name.span = self.next_span();
+                    }
+                }
+                self.reassign_block_spans(body);
+            }
             StmtKind::Match(m) => {
                 self.reassign_expr_spans(&mut m.scrutinee);
                 for arm in &mut m.arms {
@@ -2940,8 +2953,14 @@ fn collect_free_vars(
                     StmtKind::Loop(body) => {
                         collect_free_vars_block(body, &inner_bound, out);
                     }
-                    StmtKind::Defer(body) => {
-                        collect_free_vars_block(body, &inner_bound, out);
+                    StmtKind::Defer { body, capture } => {
+                        // Names transferred into the cleanup are bound inside
+                        // it, so they are not free variables of the body.
+                        let mut defer_bound = inner_bound.clone();
+                        for moved in capture.moved() {
+                            defer_bound.insert(moved.name.clone());
+                        }
+                        collect_free_vars_block(body, &defer_bound, out);
                     }
                     StmtKind::For {
                         name,
@@ -3150,17 +3169,13 @@ fn collect_name_uses(
                 collect_name_uses(p, name, false, callee_uses, value_uses);
             }
         }
-        ExprKind::Group(inner) => {
-            collect_name_uses(inner, name, false, callee_uses, value_uses)
-        }
+        ExprKind::Group(inner) => collect_name_uses(inner, name, false, callee_uses, value_uses),
         ExprKind::IfExpr(inner) => {
             collect_name_uses(&inner.cond, name, false, callee_uses, value_uses);
             collect_name_uses_block(&inner.then_block, name, callee_uses, value_uses);
             collect_name_uses_else(&inner.else_branch, name, callee_uses, value_uses);
         }
-        ExprKind::Block(b) => {
-            collect_name_uses_block(b, name, callee_uses, value_uses)
-        }
+        ExprKind::Block(b) => collect_name_uses_block(b, name, callee_uses, value_uses),
         ExprKind::WhileExpr { cond, body, .. } => {
             collect_name_uses(cond, name, false, callee_uses, value_uses);
             collect_name_uses_block(body, name, callee_uses, value_uses);
@@ -3235,10 +3250,8 @@ fn collect_name_uses_block(
                 collect_name_uses(iterable, name, false, callee_uses, value_uses);
                 collect_name_uses_block(body, name, callee_uses, value_uses);
             }
-            StmtKind::Loop(body) => {
-                collect_name_uses_block(body, name, callee_uses, value_uses)
-            }
-            StmtKind::Defer(body) => {
+            StmtKind::Loop(body) => collect_name_uses_block(body, name, callee_uses, value_uses),
+            StmtKind::Defer { body, .. } => {
                 collect_name_uses_block(body, name, callee_uses, value_uses)
             }
             StmtKind::Match(m) => {
@@ -3282,12 +3295,7 @@ fn collect_name_uses_else(
         ElseBranch::If(inner) => {
             collect_name_uses(&inner.cond, name, false, callee_uses, value_uses);
             collect_name_uses_block(&inner.then_block, name, callee_uses, value_uses);
-            collect_name_uses_else_opt(
-                inner.else_branch.as_ref(),
-                name,
-                callee_uses,
-                value_uses,
-            );
+            collect_name_uses_else_opt(inner.else_branch.as_ref(), name, callee_uses, value_uses);
         }
         ElseBranch::IfExpr(inner) => {
             collect_name_uses(&inner.cond, name, false, callee_uses, value_uses);
