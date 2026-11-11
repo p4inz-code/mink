@@ -193,8 +193,8 @@ message:
 | Shape | Why |
 | --- | --- |
 | a reference (`&T`, `&mut T`) | a reference cannot be owned, and the cleanup could outlive the referent |
-| a fixed-length array | element ownership is not tracked |
-| a tuple | tuple bindings are not ownership-tracked; move each element instead |
+| a fixed-length array | an array is owned as one value, so reading an element in the cleanup moves the whole array; a multi-element cleanup is not expressible |
+| a tuple | tuple bindings are not ownership-tracked, so the transfer could not invalidate the original tuple |
 | `Vec`/`Map`/`Set` | copy handles with user-managed lifetimes; use an ordinary `defer` |
 | `Ptr<T>` | copy handle with a user-managed lifetime; use an ordinary `defer` |
 | a struct/enum containing any of the above | the same reason, reported for the offending component |
@@ -204,7 +204,42 @@ message:
 | a capture the cleanup never uses | the value would leak (nothing else can free it after the transfer) |
 
 A capture made while the value is borrowed is a borrow conflict (`E-S12`):
-moving it would leave the reference dangling.
+moving it would leave the reference dangling. A capture of a value that is
+already moved is a use of a moved value (`E-S10`) at the capture name.
+
+## Conditional and loop ownership (session 268)
+
+Every control-flow construct that can reach a join (an `if` arm, a `match`
+arm, a block, a loop body) is analyzed from the state at its entry, and the
+arms converge on a **may-move join**: a binding that is dead on any arm is
+dead afterwards, struct fields join field-wise, structs/enums that are dead in
+any arm are dead whole, and borrows take the strongest count observed. A
+transfer that happens only on the taken path is therefore visible to the code
+after the join, so a free or a second transfer after a conditional capture is
+`E-S10` rather than a double free at run time.
+
+A loop body **can run more than once**, which a single pass does not model. The
+analysis therefore walks each loop body to a fixpoint over its back edge
+(`walk_loop_body`):
+
+1. the first pass runs with its diagnostics discarded and only discovers the
+   states that reach the loop head again — the state at the end of the body and
+   the state at each `continue`;
+2. the loop head becomes the join of the loop entry and those back edges;
+3. the second, authoritative pass walks the body from that loop head, so a
+   move or a transfer a previous iteration performed is visible and reported;
+4. after the loop, the state is the join of the zero-iteration path, every
+   `break` state, and the back edges.
+
+A `break` leaves the loop and therefore carries no back edge: a body that
+registers a capture and always breaks transfers once and is accepted. This
+closes the defect that a `defer move` of a local declared **outside** a loop
+re-transferred the same value on the second iteration (compiled cleanly, then
+an `E-R04` invalid-free at run time). The same loop head now also rejects the
+plain-move form of the same bug (`let t = s;` repeated by a second iteration).
+
+Captures of values declared **inside** the loop body are unaffected: those are
+fresh owners each iteration and are the supported pattern.
 
 ## Compiler pipeline
 
@@ -220,7 +255,9 @@ moving it would leave the reference dangling.
   restored afterwards. Placement and control-flow checks produce `E-S17`;
   `analyze_move_capture` resolves the capture list and rejects non-locals,
   duplicates, and registrations inside a deferred block (`E-S19`).
-- **Ownership:** a `defer_depth` counter drives `E-S18` from `eval_ident`. The
+- **Ownership:** loop bodies are walked to a back-edge fixpoint (session 268),
+  and `join_flow` is the single may-move join used by `if`, `match` and loops.
+  A `defer_depth` counter drives `E-S18` from `eval_ident`. The
   check combines the binding's current state with its declared type and
   mutability so a mutable owning-type binding cannot become an unsafe capture
   after registration. Tuple/collection contents are inspected explicitly.
@@ -272,7 +309,7 @@ moving it would leave the reference dangling.
   inner-loop control flow in a deferred body, and nested statements in a
   deferred body.
 
-`tests/defer_move.rs` has 58 permanent tests for move capture:
+`tests/defer_move.rs` has 74 permanent tests for move capture:
 
 - 6 parser tests: accepted list, trailing comma, empty list, missing list,
   unterminated list, and plain `defer` still parsing.
@@ -295,6 +332,14 @@ moving it would leave the reference dangling.
   reassignment after capture, return-value snapshot, break-value snapshot,
   match arm, cleanup-local temporaries, generic instantiation, parameter
   cleanup, and mixed plain/move ordering.
+- 16 session 267–270 tests: loop re-registration rejected for `while`/`for`/
+  `continue` back edges and for the plain-move form of the same bug; loop-local
+  and break-only registrations accepted; use after the loop rejected; capture
+  after a branch that freed the value rejected; conditional capture with a
+  freeing `else` accepted and executed at branch exit; tuple and array captures
+  rejected with their specific reasons; generic captures accepted-with-copy and
+  rejected-when-unused; and a closure inside the cleanup freeing the capture
+  once.
 
 Both debug and release native runs pass. `cargo check --all-targets` and the
 release compiler build are clean.
@@ -313,6 +358,55 @@ Examples:
   builds owned lines, hands them over by move, and releases them on both the
   accept and reject paths.
 
+## Aggregate capture investigation (session 269)
+
+Each unsupported aggregate was examined against the ownership model rather than
+rejected by default. None is supported yet, and each rejection now states the
+actual reason:
+
+| Category | Ownership representation today | Verdict |
+| --- | --- | --- |
+| Tuple | construction **moves** its owned elements, but the tuple binding has no tracked state, so a tuple-to-tuple move is not tracked and re-using the original is possible | rejected: a transfer could not invalidate the original tuple, so the cleanup and the original could both free the same value |
+| Fixed array | one whole-array state (`Shape::Array`); an element read in transfer position moves the *whole* array | rejected: only one element can be consumed before the array is dead, so the multi-element cleanup that motivates arrays is not expressible |
+| `Vec`/`Map`/`Set` | copy handles with user-managed lifetimes | rejected: not an owned resource; the ordinary `defer` rules already cover them |
+| `Ptr<T>` | copy handle | rejected: same reason |
+
+Supporting tuples or arrays needs element-level ownership state (per-element
+liveness, joins, and destructuring transfers) — a change to the general
+ownership model, not a capture feature. The capture implementation therefore
+continues to reject them with `E-S19` and a message that names the reason.
+
+## Measured cost (session 271)
+
+`benchmarks/defer/measure.sh` regenerates these programs and prints the table;
+the numbers below are from a Windows x86_64 debug-host / release-compiler run
+(minimum of three runs per case; sizes are the produced `.exe` in bytes, build
+time is `mink build` wall time in ms).
+
+| Case | exe bytes | build ms | run ms |
+| --- | --- | --- | --- |
+| inline free, no `defer` | 53,760 | 33 | – |
+| one plain `defer` | 53,760 | 33 | – |
+| three move captures | 54,784 | 34 | – |
+| three nested scopes, one capture each | 54,272 | 33 | – |
+| two return paths | 53,760 | 34 | – |
+| four return paths | 54,272 | 33 | – |
+| eight return paths | 54,784 | 33 | – |
+| 1,000,000 loop iterations, capture | 54,272 | 33 | 43 |
+| 1,000,000 loop iterations, inline free | 54,272 | 33 | 42 |
+
+The fixed runtime dominates the executable (53,760 bytes with no `defer` at
+all). Above that baseline, each capture or exit path adds a few hundred bytes
+of inlined cleanup, in 512-byte section steps: three registrations cost 1,024
+bytes, and going from two to eight return paths costs 1,024 bytes. Compile time
+is unchanged within noise (33–34 ms). The 1,000,000-iteration loop shows no
+meaningful run-time difference between a capture and an inline free (43 ms vs
+42 ms, same output), so a capture slot costs the same as the local it replaces.
+
+This is not a reason to add a runtime cleanup stack: the observed growth is
+proportional to the number of *exit paths* in one function, which is small in
+practice, and a capture is an ordinary stack local.
+
 ## Deliberate limitations
 
 - `E-S18` remains for plain `defer`: reading an owned or borrowed local in a
@@ -324,16 +418,28 @@ Examples:
 - A cleanup may not register another move capture (`E-S19`); a plain `defer`
   inside a cleanup body is still allowed.
 - A capture the body never reads is rejected rather than silently leaked.
-- The static analysis is path-insensitive at joins: a *conditional*
-  registration transfers at runtime only on the taken path, but after the `if`
-  the original binding is treated as dead if it is dead on every path, so a
-  free after a conditional capture can still be reported or, on the taken path
-  only, escape static detection. This is the same conservative join the move
-  analysis already uses for conditionals.
+- Joins are conservative, not path-exact: a binding dead on *any* arm is dead
+  after the join. Two complementary registrations
+  (`if c { defer move (s) … } if !c { defer move (s) … }`) are therefore
+  rejected even though exactly one of them executes, and a registration that
+  sits before an unconditional `break` is accepted only because the `break`
+  removes the back edge. Conservative rejection never accepts an unsafe
+  program; it can reject a safe one, and the fix in that case is to declare or
+  transfer the value where it is used.
+- A loop whose body can iterate twice must not transfer a value declared
+  outside it; the value is already moved on the second iteration. Declare it
+  inside the body (the supported pattern) or move the loop into a function
+  whose parameter is transferred once.
 - Generic functions can contain move captures of concrete locals (verified at
-  two instantiations). Capturing a *generic-typed* parameter is rejected unless
-  the cleanup uses it, and MINK has no generic destructor operation, so a
-  generic capture is rarely expressible.
+  two instantiations). A *generic-typed* parameter may be captured and copied
+  inside the cleanup, but MINK has no generic destructor operation, so such a
+  cleanup can leak the value; an unused generic capture is rejected like any
+  other unused capture. Instantiating a generic function with an owned string
+  argument is still limited by the pre-existing generic-call inference rule.
+- Pre-existing and outside the capture subset: tuple *bindings* are not
+  ownership-tracked, so moving a tuple copies its fields (`let u = t;` leaves
+  `t.0` usable and a double free is possible). This is why tuples cannot be
+  move-captured; fixing tuple ownership is a separate change.
 - A block expression cannot contain `defer` and also use its trailing
   expression as a value. A value-less block expression does contain its own
   deferred cleanup scope.

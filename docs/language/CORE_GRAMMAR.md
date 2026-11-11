@@ -982,6 +982,12 @@ Semantics:
 - The transfer happens when the statement executes. A registration in an
   untaken branch transfers nothing and cleans up nothing; a registration
   inside a loop transfers and cleans up once per iteration.
+- The value being transferred must be *declared* where the transfer makes
+  sense: a registration in a loop body moves a value declared outside the loop
+  again on the next iteration, which is a use of a moved value (`E-S10`), so
+  the supported pattern declares the value inside the loop body (or takes it
+  as a function parameter). A body that always `break`s before reaching the
+  head again transfers once and is accepted.
 - After registration the original bindings are **moved**: reading, moving, or
   freeing them is `E-S10`. The cleanup body is the only owner of the value.
 - Inside the body the captured names denote the transferred values, so the
@@ -991,14 +997,22 @@ Semantics:
   value it had when the `defer` statement ran (unlike a plain `defer`, which
   reads the local at cleanup time).
 - A capture is rejected when the transfer cannot be sound: a reference
-  (`E-S19`), an array (`E-S19`), a tuple (`E-S19`), a `Vec`/`Map`/`Set` or
-  pointer handle (`E-S19`), a struct or enum containing any of those
-  (`E-S19`), a capture while the value is borrowed (`E-S12`), a non-local or
-  `const` name (`E-S19`), a duplicate name in one list (`E-S19`), a
-  registration from inside another deferred block (`E-S19`), and a capture
-  the cleanup never uses (`E-S19`, because the value would leak).
+  (`E-S19`), an array (`E-S19`: an array is owned as one value, so a
+  multi-element cleanup is not expressible), a tuple (`E-S19`: tuple bindings
+  are not ownership-tracked), a `Vec`/`Map`/`Set` or pointer handle (`E-S19`),
+  a struct or enum containing any of those (`E-S19`), a capture while the
+  value is borrowed (`E-S12`), a capture of a value already moved (`E-S10`),
+  a non-local or `const` name (`E-S19`), a duplicate name in one list
+  (`E-S19`), a registration from inside another deferred block (`E-S19`), and
+  a capture the cleanup never uses (`E-S19`, because the value would leak).
 - Transfers whose type is ownership-tracked are supported: `Str`, copy
   scalars, and structs/enums whose fields are all supported. A cleanup may
   allocate, match owned payloads, and free its intermediates: a binding
   declared *inside* a deferred body is local to the cleanup and is not a
   deferred capture.
+- Each branch of a conditional owns the transferred value only on its own
+  path, and the branches join conservatively: a binding moved in any branch is
+  moved after the join, so use-after-move is caught statically rather than at
+  run time.
+- A registration inside a branch block is scoped to that block, so its cleanup
+  runs when the branch block ends — before the statements after the `if`.

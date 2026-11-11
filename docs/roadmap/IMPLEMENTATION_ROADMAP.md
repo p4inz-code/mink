@@ -711,6 +711,41 @@ otherwise unchanged: M6 **OUTSTANDING**, M7 demand-gated, M8 gated, Linux
 frozen, and 1.0.5 unpublished. See
 [`DEFER_IMPLEMENTATION.md`](../implementation/DEFER_IMPLEMENTATION.md).
 
+*Dated status, 2026-11-11 (Sessions 267–272 — ownership-aware deferred cleanup,
+final 25% and acceptance).* The remaining 25% was correctness and evidence, not
+new syntax. An independent review found one soundness defect: the ownership
+analysis walked a loop body once, so a `defer move` of a local declared
+**outside** a loop re-transferred the value on the second iteration — accepted
+at compile time, then an `E-R04` invalid free at run time. Loop bodies are now
+analyzed to a fixpoint over their back edge (body end plus each `continue`;
+`break` and `return` carry no back edge), the loop head is the join of entry
+and those back edges, and a second authoritative pass reports the repeat as
+`E-S10` at the capture name. Conditional arms keep the may-move join: a value
+captured in a branch is dead after the join, and each branch's cleanup runs at
+that branch's block exit. The same loop head now also rejects the plain-move
+form of the bug (`let t = s;` repeated by a second iteration), and the analysis
+accepts the supported patterns: loop-local captures, a break-only registration,
+and capture in one arm with a freeing `else`. Aggregate support was investigated
+rather than assumed: tuples (bindings are not ownership-tracked, so a transfer
+could not invalidate the original) and fixed arrays (owned as one value, so a
+multi-element cleanup is not expressible) stay rejected with reasons that now
+state the actual obstacle; `Vec`/`Map`/`Set`/`Ptr` remain copy handles. Generic
+captures are accepted for copies and have no generic free, so they can leak but
+cannot double free; unused ones are rejected. `benchmarks/defer/measure.sh`
+records the cost: 53,760 bytes with no defer at all, +1,024 bytes for three
+registrations or for growing from two to eight return paths (512-byte section
+steps), unchanged 33–34 ms builds, and 43 ms vs 42 ms across 1,000,000 loop
+iterations of capture vs inline free with identical output. `tests/defer_move.rs`
+grows from 58 to 74 permanent tests. Full suite: **90 suites, 3,396 passed, 0
+failed, 9 ignored** (exit 0), `cargo build --release` succeeds, `defer` and
+`defer_move` pass in debug and release, and `git diff --check` is clean;
+`cargo fmt --check` still reports only the 14 pre-existing untouched files. The
+ownership-aware deferred cleanup milestone is **accepted** for the supported
+capture subset; aggregate element ownership remains the documented next step
+(M6 external validation still outstanding, M7 demand-gated, M8 gated, Linux
+frozen, 1.0.5 unpublished). See
+[`DEFER_IMPLEMENTATION.md`](../implementation/DEFER_IMPLEMENTATION.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
