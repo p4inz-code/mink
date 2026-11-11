@@ -220,6 +220,9 @@ struct Checker<'a> {
     enums: HashMap<String, EnumReg>,
     /// Expression types in traversal order: (expression span, type).
     expr_types: Vec<(Span, TypeId)>,
+    /// Constant array indices in traversal order: (index expression span,
+    /// value). Recorded so the ownership pass can address a single element.
+    index_values: Vec<(Span, u64)>,
     /// The spans of every member/index expression whose forward-pass type
     /// was a deferred fresh variable (its base was an unresolved inference
     /// variable). These are re-typed by [`Checker::resolve_deferred_members`]
@@ -266,6 +269,7 @@ impl<'a> Checker<'a> {
             structs: HashMap::new(),
             enums: HashMap::new(),
             expr_types: Vec::new(),
+            index_values: Vec::new(),
             deferred: Vec::new(),
             errors: Vec::new(),
             fn_result: None,
@@ -1452,7 +1456,13 @@ impl<'a> Checker<'a> {
     }
 
     fn finish(self) -> TypeResult {
-        TypeResult::new(self.errors, self.symbol_types, self.expr_types, self.types)
+        TypeResult::new(
+            self.errors,
+            self.symbol_types,
+            self.expr_types,
+            self.index_values,
+            self.types,
+        )
     }
 
     // ------------------------------------------------------------------
@@ -4663,6 +4673,13 @@ impl<'a> Checker<'a> {
     /// additionally checked against the array's length (`E-T11`). The
     /// result is the element type.
     fn check_index(&mut self, base: TypeId, index: &Expr, index_ty: TypeId, span: Span) -> TypeId {
+        // Record a literal index so later stages (the ownership pass) can
+        // address one array element instead of the whole array.
+        if let Some(value) = self.decode_int_literal(index) {
+            if value >= 0 {
+                self.index_values.push((index.span, value as u64));
+            }
+        }
         let array = match self.types.kind(base) {
             Some(TypeKind::Array { elem, len }) => Some((*elem, *len)),
             _ => None,

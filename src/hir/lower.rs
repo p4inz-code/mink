@@ -971,7 +971,7 @@ mod tests {
         // Fabricate a type result with no recorded expression or symbol
         // types at all.
         let table = TypeTable::new();
-        let types = TypeResult::new(Vec::new(), Vec::new(), Vec::new(), table);
+        let types = TypeResult::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), table);
         let errors = lower(&ast, &semantic, &types).unwrap_err();
         // The initializer `1` is one of the expressions with no recorded
         // type; every missing type is reported (never a panic).
@@ -1004,7 +1004,7 @@ mod tests {
         let int_ty = table.push(TypeKind::Int);
         let mut symbol_types = vec![placeholder; semantic.symbols().len()];
         symbol_types[f.id.raw() as usize] = int_ty;
-        let types = TypeResult::new(Vec::new(), symbol_types, Vec::new(), table);
+        let types = TypeResult::new(Vec::new(), symbol_types, Vec::new(), Vec::new(), table);
         let errors = lower(&ast, &semantic, &types).unwrap_err();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].kind(), HirErrorKind::InvalidFunctionType);

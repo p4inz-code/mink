@@ -54,6 +54,89 @@ pub enum BindingState {
 /// heap storage (Str, or an aggregate containing one).
 type FieldStates = HashMap<String, BindingState>;
 
+/// The tracked state of an aggregate value whose elements move independently
+/// (session 273): a tuple or a fixed-length array.
+///
+/// `dead` means the whole value was moved (a transfer of the aggregate
+/// itself). An element state means that element was moved out by a transfer
+/// through `t.0` / `a[2]`; the remaining elements stay usable. The two are
+/// exclusive in practice: a whole move sets every element state to `Dead`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AggregateState {
+    /// One state per element, in declaration order. Elements whose type
+    /// cannot own heap storage are always `Live(Immutable)`.
+    elems: Vec<BindingState>,
+    /// The whole aggregate was moved.
+    dead: bool,
+}
+
+impl AggregateState {
+    /// A fully live aggregate of the given element states.
+    fn from_elems(elems: Vec<BindingState>) -> Self {
+        Self { elems, dead: false }
+    }
+
+    /// A fully live aggregate of `len` elements, each live with `state`.
+    fn uniform(len: usize, state: BindingState) -> Self {
+        Self {
+            elems: vec![state; len],
+            dead: false,
+        }
+    }
+
+    /// Whether any element was moved out.
+    fn any_dead(&self) -> bool {
+        self.elems
+            .iter()
+            .any(|element| *element == BindingState::Dead)
+    }
+
+    /// The index of the first moved element, if any.
+    fn first_dead(&self) -> Option<usize> {
+        self.elems
+            .iter()
+            .position(|element| *element == BindingState::Dead)
+    }
+
+    /// Whether any element still owns heap storage.
+    fn has_owned(&self) -> bool {
+        self.elems
+            .iter()
+            .any(|element| matches!(element, BindingState::Live(Provenance::Owned)))
+    }
+
+    /// Marks every element moved, as a whole-value transfer does.
+    fn kill_all(&mut self) {
+        self.dead = true;
+        for element in &mut self.elems {
+            *element = BindingState::Dead;
+        }
+    }
+
+    /// The state at a control-flow join: dead wins per element, and a whole
+    /// move in either arm makes the whole aggregate dead.
+    fn joined(&self, other: &Self) -> Self {
+        if self.elems.len() != other.elems.len() {
+            // The shape is fixed by the type, so a length mismatch is only
+            // possible for inconsistent internal state: conservatively dead.
+            return Self {
+                elems: vec![BindingState::Dead; self.elems.len().max(other.elems.len())],
+                dead: true,
+            };
+        }
+        let elems = self
+            .elems
+            .iter()
+            .zip(&other.elems)
+            .map(|(before, after)| Analyzer::join_binding_state(*before, *after))
+            .collect();
+        Self {
+            elems,
+            dead: self.dead || other.dead,
+        }
+    }
+}
+
 /// The borrow state of one root binding (session 16): whether references
 /// to it are currently live, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -114,10 +197,12 @@ enum State {
         /// struct holds, released when the struct dies.
         ref_fields: HashMap<String, BorrowView>,
     },
-    /// An array value: whole-array state (per-element liveness is out of
-    /// scope; reading an Owned array's element in a transfer position
-    /// moves the whole array).
-    Array(BindingState),
+    /// A fixed-length array value (session 273): per-element liveness, so a
+    /// transfer of `a[2]` moves that element and leaves the others usable.
+    Array(AggregateState),
+    /// A tuple value (session 273): per-element liveness. A tuple field is
+    /// moved by `t.1` in a transfer position.
+    Tuple(AggregateState),
     /// An enum value (session 19): the payload's state, tracked only when
     /// the enum's payload type may own (a `Str`, a reference, or an
     /// aggregate containing them). A unit-only enum is Copy and is never
@@ -147,6 +232,10 @@ struct EvalValue {
     /// The reference-typed fields of a struct value, released/transferred
     /// with the value.
     ref_borrows: Vec<(String, BorrowView)>,
+    /// Per-element states of an aggregate literal or of an aggregate value
+    /// read from a binding (session 273), in element order. `None` for every
+    /// other value.
+    elems: Option<Vec<BindingState>>,
 }
 
 impl EvalValue {
@@ -156,6 +245,7 @@ impl EvalValue {
             fields: None,
             view: None,
             ref_borrows: Vec::new(),
+            elems: None,
         }
     }
 
@@ -165,6 +255,7 @@ impl EvalValue {
             fields: None,
             view: None,
             ref_borrows: Vec::new(),
+            elems: None,
         }
     }
 
@@ -174,6 +265,7 @@ impl EvalValue {
             fields: None,
             view: None,
             ref_borrows: Vec::new(),
+            elems: None,
         }
     }
 
@@ -183,6 +275,7 @@ impl EvalValue {
             fields: None,
             view: None,
             ref_borrows: Vec::new(),
+            elems: None,
         }
     }
 
@@ -203,6 +296,7 @@ impl EvalValue {
                 counted,
             }),
             ref_borrows: Vec::new(),
+            elems: None,
         }
     }
 
@@ -222,6 +316,27 @@ impl EvalValue {
             fields: Some(fields),
             view: None,
             ref_borrows,
+            elems: None,
+        }
+    }
+
+    /// An aggregate value (a tuple or fixed-array literal, or a value read
+    /// from an aggregate binding) carrying its per-element states.
+    fn aggregate(elems: Vec<BindingState>) -> Self {
+        let provenance = if elems
+            .iter()
+            .any(|state| matches!(state, BindingState::Live(Provenance::Owned)))
+        {
+            Provenance::Owned
+        } else {
+            Provenance::Immutable
+        };
+        Self {
+            provenance,
+            fields: None,
+            view: None,
+            ref_borrows: Vec::new(),
+            elems: Some(elems),
         }
     }
 }
@@ -340,8 +455,12 @@ enum Shape {
     /// A struct with at least one tracked (Str/reference-containing)
     /// field.
     Struct,
-    /// An array whose element type may own.
+    /// An array whose element type may own, tracked per element
+    /// (session 273).
     Array,
+    /// A tuple with at least one element whose type may own, tracked per
+    /// element (session 273).
+    Tuple,
     /// An enum with a data-carrying variant whose payload type may own
     /// (session 19): the payload moves with the value.
     Enum,
@@ -581,8 +700,12 @@ impl<'a> Analyzer<'a> {
                 );
             }
             Shape::Array => {
-                self.bindings
-                    .insert(symbol, State::Array(BindingState::Live(Provenance::Owned)));
+                let aggregate = self.aggregate_from_type(ty);
+                self.bindings.insert(symbol, State::Array(aggregate));
+            }
+            Shape::Tuple => {
+                let aggregate = self.aggregate_from_type(ty);
+                self.bindings.insert(symbol, State::Tuple(aggregate));
             }
             Shape::Enum => {
                 self.bindings.insert(
@@ -696,8 +819,12 @@ impl<'a> Analyzer<'a> {
                 );
             }
             Shape::Array => {
-                self.bindings
-                    .insert(symbol, State::Array(BindingState::Live(value.provenance)));
+                let aggregate = self.aggregate_from_value(ty, value);
+                self.bindings.insert(symbol, State::Array(aggregate));
+            }
+            Shape::Tuple => {
+                let aggregate = self.aggregate_from_value(ty, value);
+                self.bindings.insert(symbol, State::Tuple(aggregate));
             }
             Shape::Enum => {
                 // The payload's borrows (a struct payload's reference
@@ -723,6 +850,57 @@ impl<'a> Analyzer<'a> {
         self.register_scope(symbol);
     }
 
+    /// The element states of an aggregate type: every element live, Owned
+    /// when its type may own and Immutable when it cannot (session 273).
+    fn aggregate_from_type(&self, ty: TypeId) -> AggregateState {
+        match self.types.types().kind(ty) {
+            Some(TypeKind::Array { elem, len }) => AggregateState::uniform(
+                *len as usize,
+                if self.may_own(*elem) {
+                    BindingState::Live(Provenance::Owned)
+                } else {
+                    BindingState::Live(Provenance::Immutable)
+                },
+            ),
+            Some(TypeKind::Tuple(elems)) => AggregateState::from_elems(
+                elems
+                    .iter()
+                    .map(|elem| {
+                        if self.may_own(*elem) {
+                            BindingState::Live(Provenance::Owned)
+                        } else {
+                            BindingState::Live(Provenance::Immutable)
+                        }
+                    })
+                    .collect(),
+            ),
+            _ => AggregateState::from_elems(Vec::new()),
+        }
+    }
+
+    /// The element states of a freshly bound aggregate: the value's own
+    /// element states when it carries them (an aggregate literal or a value
+    /// read from a binding), otherwise the type's all-live states (a call
+    /// result or a nested place).
+    fn aggregate_from_value(&self, ty: TypeId, value: &EvalValue) -> AggregateState {
+        let derived = self.aggregate_from_type(ty);
+        match &value.elems {
+            Some(elems) if elems.len() == derived.elems.len() => {
+                AggregateState::from_elems(elems.clone())
+            }
+            _ => derived,
+        }
+    }
+
+    /// The element count of an aggregate type (0 for a non-aggregate).
+    fn aggregate_len(&self, ty: TypeId) -> usize {
+        match self.types.types().kind(ty) {
+            Some(TypeKind::Array { len, .. }) => *len as usize,
+            Some(TypeKind::Tuple(elems)) => elems.len(),
+            _ => 0,
+        }
+    }
+
     /// Records a borrow of `source` in the borrow-state table, checking
     /// the session-16 rules: the source must be live (E-S10), mutable for
     /// an exclusive borrow (E-S13), and not borrowed incompatibly (E-S12).
@@ -736,7 +914,8 @@ impl<'a> Analyzer<'a> {
         if matches!(
             self.bindings.get(&source),
             Some(State::Str(BindingState::Dead))
-                | Some(State::Array(BindingState::Dead))
+                | Some(State::Array(AggregateState { dead: true, .. }))
+                | Some(State::Tuple(AggregateState { dead: true, .. }))
                 | Some(State::Enum {
                     state: BindingState::Dead,
                     ..
@@ -884,9 +1063,21 @@ impl<'a> Analyzer<'a> {
                 // For destructuring patterns, bind each field individually.
                 match &binding.pattern {
                     Some(crate::ast::Pattern::Tuple { elements, .. }) => {
-                        for elem in elements {
+                        // A tuple pattern destructures the value: each bound
+                        // element takes that element's state, so an owned
+                        // element moves into the new binding (session 273).
+                        for (position, elem) in elements.iter().enumerate() {
                             if let crate::ast::Pattern::Binding(name) = elem {
-                                self.bind(name.span, &EvalValue::copy());
+                                let state = value
+                                    .elems
+                                    .as_ref()
+                                    .and_then(|elems| elems.get(position))
+                                    .copied()
+                                    .unwrap_or(BindingState::Live(Provenance::Owned));
+                                self.bind(
+                                    name.span,
+                                    &EvalValue::with_provenance(live_provenance(state)),
+                                );
                             }
                         }
                     }
@@ -1016,6 +1207,21 @@ impl<'a> Analyzer<'a> {
                 poisoned.insert(symbol);
                 continue;
             }
+            // A partially moved aggregate cannot be transferred either: the
+            // element that is already gone would be owned twice.
+            if let Some(position) = self.aggregate_partial_move(symbol) {
+                self.errors.push(SemanticError::use_of_moved_detail(
+                    name.name.clone(),
+                    name.span,
+                    format!(
+                        "cannot move `{}` into a deferred cleanup: element {position} was moved \
+                         out earlier",
+                        name.name
+                    ),
+                ));
+                poisoned.insert(symbol);
+                continue;
+            }
             if self.is_borrowed(symbol) {
                 self.errors.push(SemanticError::borrow_conflict(
                     name.name.clone(),
@@ -1025,6 +1231,9 @@ impl<'a> Analyzer<'a> {
                         name.name
                     ),
                 ));
+                // The rejection is the diagnostic; the body's use of a value
+                // the capture never took is not a second, independent error.
+                poisoned.insert(symbol);
                 continue;
             }
             if let Some(reason) = self.move_capture_rejection(symbol) {
@@ -1033,6 +1242,7 @@ impl<'a> Analyzer<'a> {
                     name.span,
                     reason,
                 ));
+                poisoned.insert(symbol);
                 continue;
             }
             accepted.push((symbol, name));
@@ -1097,6 +1307,23 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    /// Whether a capture can transfer a value of this type directly: an owned
+    /// `Str` or a copy scalar, the values a cleanup consumes with one
+    /// intrinsic call. Anything else needs field or element access that the
+    /// capture's ownership state does not model.
+    fn capture_leaf(&self, ty: TypeId) -> bool {
+        matches!(
+            self.types.types().kind(ty),
+            Some(TypeKind::Str)
+                | Some(TypeKind::Int)
+                | Some(TypeKind::Float)
+                | Some(TypeKind::Bool)
+                | Some(TypeKind::Char)
+                | Some(TypeKind::Unit)
+                | Some(TypeKind::Null)
+        )
+    }
+
     /// The type-level half of [`Analyzer::move_capture_rejection`].
     fn move_capture_type_rejection(&self, ty: TypeId) -> Option<&'static str> {
         match self.types.types().kind(ty) {
@@ -1110,15 +1337,25 @@ impl<'a> Analyzer<'a> {
             Some(TypeKind::Ref { .. }) => {
                 Some("a reference cannot be owned, and the cleanup could outlive the referent")
             }
-            Some(TypeKind::Array { .. }) => Some(
-                "an array is owned as one value, so reading an element in the cleanup moves the \
-                 whole array and a multi-element cleanup is not expressible; capture the \
-                 elements separately",
-            ),
-            Some(TypeKind::Tuple(_)) => Some(
-                "tuple bindings are not ownership-tracked, so the transfer could not invalidate \
-                 the original tuple; capture its owned elements separately",
-            ),
+            // A fixed array or tuple transfers element by element (session
+            // 273), so every element must be a value a cleanup can consume
+            // directly. An element that is itself a struct or aggregate
+            // would need `a[0].field`, a nested place the ownership state
+            // does not track through a capture.
+            Some(TypeKind::Array { elem, .. }) => match self.move_capture_type_rejection(*elem) {
+                Some(reason) => Some(reason),
+                None if self.capture_leaf(*elem) => None,
+                None => Some(MOVE_CAPTURE_AGGREGATE_ELEMENT),
+            },
+            Some(TypeKind::Tuple(elems)) => {
+                elems
+                    .iter()
+                    .find_map(|element| match self.move_capture_type_rejection(*element) {
+                        Some(reason) => Some(reason),
+                        None if self.capture_leaf(*element) => None,
+                        None => Some(MOVE_CAPTURE_AGGREGATE_ELEMENT),
+                    })
+            }
             Some(TypeKind::Vec(_)) | Some(TypeKind::Map(..)) | Some(TypeKind::Set(_)) => Some(
                 "collection handles are copy values with user-managed lifetimes; \
                  transfer them with an ordinary `defer`",
@@ -1131,15 +1368,23 @@ impl<'a> Analyzer<'a> {
             // payload is; the first unsupported component supplies the
             // reason (the enclosing message already names the binding).
             Some(TypeKind::Struct(id)) => self.types.types().struct_info(*id).and_then(|info| {
-                info.fields
-                    .iter()
-                    .find_map(|field| self.move_capture_type_rejection(field.ty))
+                info.fields.iter().find_map(|field| {
+                    match self.move_capture_type_rejection(field.ty) {
+                        Some(reason) => Some(reason),
+                        None if self.capture_leaf(field.ty) => None,
+                        None => Some(MOVE_CAPTURE_AGGREGATE_FIELD),
+                    }
+                })
             }),
             Some(TypeKind::Enum(id)) => self.types.types().enum_info(*id).and_then(|info| {
                 info.variants
                     .iter()
                     .filter_map(|variant| variant.payload)
-                    .find_map(|payload| self.move_capture_type_rejection(payload))
+                    .find_map(|payload| match self.move_capture_type_rejection(payload) {
+                        Some(reason) => Some(reason),
+                        None if self.capture_leaf(payload) => None,
+                        None => Some(MOVE_CAPTURE_AGGREGATE_FIELD),
+                    })
             }),
             _ => None,
         }
@@ -1203,12 +1448,35 @@ impl<'a> Analyzer<'a> {
                     self.bind_payload_pattern(inner, provenance);
                 }
                 crate::ast::Pattern::Tuple { elements, .. } => {
-                    // Tuple pattern bindings: each element pattern binds
-                    // its sub-values. For now, treat each binding as a
-                    // copy (the tuple itself is observed, not consumed).
-                    for elem in elements {
+                    // A tuple pattern reads the scrutinee's element states
+                    // (session 273): a bound element whose type owns moves
+                    // out of the scrutinee, exactly like an enum payload.
+                    let states = self.scrutinee_tuple_states(&stmt.scrutinee);
+                    for (position, elem) in elements.iter().enumerate() {
                         if let crate::ast::Pattern::Binding(name) = elem {
-                            self.bind(name.span, &EvalValue::copy());
+                            let state = states
+                                .as_ref()
+                                .and_then(|states| states.get(position))
+                                .copied()
+                                .unwrap_or(BindingState::Live(Provenance::Owned));
+                            if state == BindingState::Dead {
+                                self.errors.push(SemanticError::use_of_moved_detail(
+                                    name.name.clone(),
+                                    name.span,
+                                    format!(
+                                        "element {position} of the matched tuple was moved out earlier"
+                                    ),
+                                ));
+                                self.bind(name.span, &EvalValue::owned());
+                                continue;
+                            }
+                            if live_provenance(state) == Provenance::Owned {
+                                self.mark_scrutinee_element_consumed(&stmt.scrutinee, position);
+                            }
+                            self.bind(
+                                name.span,
+                                &EvalValue::with_provenance(live_provenance(state)),
+                            );
                         }
                     }
                 }
@@ -1253,6 +1521,33 @@ impl<'a> Analyzer<'a> {
             ExprKind::Member { base, member } => self.mark_field_moved(base, member),
             ExprKind::Index { base, .. } => self.mark_root_dead(base),
             _ => self.mark_root_dead(scrutinee),
+        }
+    }
+
+    /// The element states of a matched tuple scrutinee, when it is a plain
+    /// tuple binding (session 273).
+    fn scrutinee_tuple_states(&self, scrutinee: &Expr) -> Option<Vec<BindingState>> {
+        let root = self.root_ident(scrutinee)?;
+        let symbol = self.semantic.resolve(root.span)?;
+        match self.bindings.get(&symbol) {
+            Some(State::Tuple(state)) if !state.dead => Some(state.elems.clone()),
+            _ => None,
+        }
+    }
+
+    /// Marks one element of a matched tuple scrutinee moved out, when the
+    /// scrutinee is a plain tuple binding.
+    fn mark_scrutinee_element_consumed(&mut self, scrutinee: &Expr, position: usize) {
+        let Some(root) = self.root_ident(scrutinee) else {
+            return;
+        };
+        let Some(symbol) = self.semantic.resolve(root.span) else {
+            return;
+        };
+        if let Some(State::Tuple(state)) = self.bindings.get_mut(&symbol) {
+            if let Some(element) = state.elems.get_mut(position) {
+                *element = BindingState::Dead;
+            }
         }
     }
 
@@ -1518,7 +1813,10 @@ impl<'a> Analyzer<'a> {
                         State::Str(Self::join_binding_state(before, *after))
                     }
                     (State::Array(before), State::Array(after)) => {
-                        State::Array(Self::join_binding_state(before, *after))
+                        State::Array(before.joined(after))
+                    }
+                    (State::Tuple(before), State::Tuple(after)) => {
+                        State::Tuple(before.joined(after))
                     }
                     (
                         State::Ref {
@@ -1823,20 +2121,7 @@ impl<'a> Analyzer<'a> {
                 if let ExprKind::Ident(ident) = &base.kind {
                     if let Some(symbol) = self.semantic.resolve(ident.span) {
                         if let Some(State::Array(state)) = self.bindings.get(&symbol).cloned() {
-                            return match state {
-                                // The base `eval_expr` above already
-                                // reported the dead array; reporting again
-                                // would duplicate the diagnostic.
-                                BindingState::Dead => EvalValue::owned(),
-                                BindingState::Live(Provenance::Immutable) => EvalValue::immutable(),
-                                BindingState::Live(Provenance::Owned) => {
-                                    if mode == Mode::Transfer {
-                                        self.bindings
-                                            .insert(symbol, State::Array(BindingState::Dead));
-                                    }
-                                    EvalValue::owned()
-                                }
-                            };
+                            return self.read_array_element(symbol, ident, &state, index, mode);
                         }
                     }
                 }
@@ -1878,22 +2163,20 @@ impl<'a> Analyzer<'a> {
                         fields: None,
                         view: None,
                         ref_borrows: value.ref_borrows,
+                        elems: None,
                     }
                 }
             },
             ExprKind::ArrayLit(elems) => {
-                let mut owned = false;
+                // The literal owns its elements (session 273): each element's
+                // state travels with the array value, so a later transfer of
+                // one element is tracked individually.
+                let mut states = Vec::with_capacity(elems.len());
                 for elem in elems {
                     let value = self.eval_expr(elem, Mode::Transfer);
-                    if value.provenance == Provenance::Owned {
-                        owned = true;
-                    }
+                    states.push(BindingState::Live(value.provenance));
                 }
-                EvalValue::with_provenance(if owned {
-                    Provenance::Owned
-                } else {
-                    Provenance::Immutable
-                })
+                EvalValue::aggregate(states)
             }
             ExprKind::Group(inner) => self.eval_expr(inner, mode),
             ExprKind::IfExpr(inner) => {
@@ -1917,24 +2200,36 @@ impl<'a> Analyzer<'a> {
                 EvalValue::copy()
             }
             ExprKind::Tuple(elems) => {
-                let mut owned = false;
+                let mut states = Vec::with_capacity(elems.len());
                 for elem in elems {
                     let value = self.eval_expr(elem, Mode::Transfer);
-                    if value.provenance == Provenance::Owned {
-                        owned = true;
+                    states.push(BindingState::Live(value.provenance));
+                }
+                EvalValue::aggregate(states)
+            }
+            ExprKind::TupleFieldAccess { base, index } => {
+                // The base is observed (its own state reports a whole-value
+                // move); the element itself moves when the access is a
+                // transfer.
+                self.eval_expr(base, Mode::Observe);
+                if !self.expr_may_own(expr.span) {
+                    return EvalValue::copy();
+                }
+                if let (ExprKind::Ident(ident), Ok(position)) =
+                    (&base.kind, index.name.parse::<usize>())
+                {
+                    if let Some(symbol) = self.semantic.resolve(ident.span) {
+                        if let Some(State::Tuple(state)) = self.bindings.get(&symbol).cloned() {
+                            return self
+                                .read_element(symbol, ident, &state, position, mode, index.span);
+                        }
                     }
                 }
-                EvalValue::with_provenance(if owned {
-                    Provenance::Owned
-                } else {
-                    Provenance::Immutable
-                })
-            }
-            ExprKind::TupleFieldAccess { base, .. } => {
-                // Reading a tuple field observes the value without
-                // consuming it.
-                self.eval_expr(base, Mode::Observe);
-                EvalValue::copy()
+                // Unknown or nested base: conservatively move the whole value.
+                if mode == Mode::Transfer {
+                    self.mark_root_dead(base);
+                }
+                EvalValue::owned()
             }
             ExprKind::WhileExpr { cond, body, .. } => {
                 self.eval_expr(cond, Mode::Observe);
@@ -2043,7 +2338,7 @@ impl<'a> Analyzer<'a> {
                         ))
                     )
             }
-            Shape::Array => true,
+            Shape::Array | Shape::Tuple => true,
             Shape::Ref => true,
             Shape::Struct => {
                 if mutable {
@@ -2248,29 +2543,8 @@ impl<'a> Analyzer<'a> {
                     EvalValue::struct_value(fields, ref_borrows)
                 }
             }
-            Some(State::Array(state)) => match state {
-                BindingState::Live(Provenance::Immutable) => EvalValue::immutable(),
-                BindingState::Live(Provenance::Owned) => {
-                    if mode == Mode::Transfer {
-                        if self.is_borrowed(symbol) {
-                            self.errors.push(SemanticError::borrow_conflict(
-                                ident.name.clone(),
-                                ident.span,
-                                format!("cannot move `{}`: it is borrowed", ident.name),
-                            ));
-                            return EvalValue::owned();
-                        }
-                        self.bindings
-                            .insert(symbol, State::Array(BindingState::Dead));
-                    }
-                    EvalValue::owned()
-                }
-                BindingState::Dead => {
-                    self.errors
-                        .push(SemanticError::use_of_moved(ident.name.clone(), ident.span));
-                    EvalValue::owned()
-                }
-            },
+            Some(State::Array(state)) => self.transfer_aggregate(symbol, ident, state, mode),
+            Some(State::Tuple(state)) => self.transfer_aggregate(symbol, ident, state, mode),
             // An enum whose payload may own (session 19) moves like a
             // struct: an Owned payload transfers with the value; an
             // Immutable payload copies; a Dead payload is a use-after-move.
@@ -2297,6 +2571,7 @@ impl<'a> Analyzer<'a> {
                         fields: None,
                         view: None,
                         ref_borrows: carried,
+                        elems: None,
                     }
                 }
                 BindingState::Live(Provenance::Owned) => {
@@ -2327,6 +2602,7 @@ impl<'a> Analyzer<'a> {
                             fields: None,
                             view: None,
                             ref_borrows: carried,
+                            elems: None,
                         }
                     } else {
                         EvalValue {
@@ -2334,6 +2610,7 @@ impl<'a> Analyzer<'a> {
                             fields: None,
                             view: None,
                             ref_borrows: Vec::new(),
+                            elems: None,
                         }
                     }
                 }
@@ -2374,7 +2651,8 @@ impl<'a> Analyzer<'a> {
         if matches!(
             self.bindings.get(&symbol),
             Some(State::Str(BindingState::Dead))
-                | Some(State::Array(BindingState::Dead))
+                | Some(State::Array(AggregateState { dead: true, .. }))
+                | Some(State::Tuple(AggregateState { dead: true, .. }))
                 | Some(State::Enum {
                     state: BindingState::Dead,
                     ..
@@ -2538,9 +2816,13 @@ impl<'a> Analyzer<'a> {
     /// reading copies it and never moves it.
     fn copy_const(&self, symbol: SymbolId) -> EvalValue {
         match self.bindings.get(&symbol) {
-            Some(State::Str(BindingState::Live(provenance)))
-            | Some(State::Array(BindingState::Live(provenance))) => {
+            Some(State::Str(BindingState::Live(provenance))) => {
                 EvalValue::with_provenance(*provenance)
+            }
+            // A constant aggregate copies at every use, carrying the
+            // per-element states its literal had (session 273).
+            Some(State::Array(state)) | Some(State::Tuple(state)) => {
+                EvalValue::aggregate(state.elems.clone())
             }
             Some(State::Struct {
                 fields,
@@ -2558,6 +2840,172 @@ impl<'a> Analyzer<'a> {
             ),
             _ => EvalValue::immutable(),
         }
+    }
+
+    /// Reads one element of a tracked aggregate (session 273). A transfer
+    /// moves only that element; the others stay usable. A moved element is a
+    /// use-after-move with a diagnostic that names it.
+    fn read_element(
+        &mut self,
+        symbol: SymbolId,
+        name: &Ident,
+        state: &AggregateState,
+        position: usize,
+        mode: Mode,
+        span: Span,
+    ) -> EvalValue {
+        // A whole-value move was already reported at the base expression;
+        // reporting it again here would duplicate the diagnostic.
+        if state.dead {
+            return EvalValue::owned();
+        }
+        match state.elems.get(position).copied() {
+            Some(BindingState::Live(provenance)) => {
+                if mode == Mode::Transfer
+                    && provenance == Provenance::Owned
+                    && !self.mark_element_moved(symbol, position, name)
+                {
+                    return EvalValue::owned();
+                }
+                EvalValue::with_provenance(provenance)
+            }
+            Some(BindingState::Dead) => {
+                self.errors.push(SemanticError::use_of_moved_detail(
+                    name.name.clone(),
+                    span,
+                    format!(
+                        "element {position} of `{}` was moved, so it cannot be used again",
+                        name.name
+                    ),
+                ));
+                EvalValue::owned()
+            }
+            // Out of range: the type checker rejects the access first.
+            None => EvalValue::copy(),
+        }
+    }
+
+    /// Reads one element of an array binding: a literal index addresses one
+    /// element; a runtime index (an unknown position) is conservative.
+    fn read_array_element(
+        &mut self,
+        symbol: SymbolId,
+        ident: &Ident,
+        state: &AggregateState,
+        index: &Expr,
+        mode: Mode,
+    ) -> EvalValue {
+        if state.dead {
+            return EvalValue::owned();
+        }
+        match self.types.index_value(index.span) {
+            Some(position) => {
+                self.read_element(symbol, ident, state, position as usize, mode, index.span)
+            }
+            None => {
+                // A runtime index can select any element, so a read is only
+                // safe when no element has been moved. A transfer through a
+                // runtime index still moves the whole array.
+                if let Some(moved) = state.first_dead() {
+                    self.errors.push(SemanticError::use_of_moved_detail(
+                        ident.name.clone(),
+                        index.span,
+                        format!(
+                            "element {moved} of `{}` was moved, and a runtime index could select it",
+                            ident.name
+                        ),
+                    ));
+                    return EvalValue::owned();
+                }
+                if mode == Mode::Transfer && !self.mark_whole_moved(symbol, ident) {
+                    return EvalValue::owned();
+                }
+                if state.has_owned() {
+                    EvalValue::owned()
+                } else {
+                    EvalValue::copy()
+                }
+            }
+        }
+    }
+
+    /// Reads a whole aggregate binding (session 273): a transfer moves every
+    /// element, an observation copies the value. A partially moved aggregate
+    /// cannot be transferred as a whole — the moved element would be
+    /// duplicated — and the diagnostic names the element.
+    fn transfer_aggregate(
+        &mut self,
+        symbol: SymbolId,
+        ident: &Ident,
+        state: AggregateState,
+        mode: Mode,
+    ) -> EvalValue {
+        if state.dead {
+            self.errors
+                .push(SemanticError::use_of_moved(ident.name.clone(), ident.span));
+            return EvalValue::owned();
+        }
+        if mode == Mode::Transfer {
+            if let Some(moved) = state.first_dead() {
+                self.errors.push(SemanticError::use_of_moved_detail(
+                    ident.name.clone(),
+                    ident.span,
+                    format!(
+                        "cannot move `{}`: element {moved} was moved out earlier",
+                        ident.name
+                    ),
+                ));
+                return EvalValue::owned();
+            }
+            if state.has_owned() && !self.mark_whole_moved(symbol, ident) {
+                return EvalValue::owned();
+            }
+        }
+        EvalValue::aggregate(state.elems)
+    }
+
+    /// Moves every element of an aggregate binding out (a whole-value
+    /// transfer). Returns `false` when the move was rejected because the
+    /// aggregate is borrowed.
+    fn mark_whole_moved(&mut self, symbol: SymbolId, ident: &Ident) -> bool {
+        if self.is_borrowed(symbol) {
+            self.errors.push(SemanticError::borrow_conflict(
+                ident.name.clone(),
+                ident.span,
+                format!("cannot move `{}`: it is borrowed", ident.name),
+            ));
+            return false;
+        }
+        match self.bindings.get_mut(&symbol) {
+            Some(State::Array(state)) | Some(State::Tuple(state)) => state.kill_all(),
+            _ => {}
+        }
+        true
+    }
+
+    /// Moves one element out of an aggregate binding. Returns `false` when
+    /// the move was rejected because the aggregate is borrowed.
+    fn mark_element_moved(&mut self, symbol: SymbolId, position: usize, name: &Ident) -> bool {
+        if self.is_borrowed(symbol) {
+            self.errors.push(SemanticError::borrow_conflict(
+                name.name.clone(),
+                name.span,
+                format!(
+                    "cannot move element {position} of `{}`: it is borrowed",
+                    name.name
+                ),
+            ));
+            return false;
+        }
+        match self.bindings.get_mut(&symbol) {
+            Some(State::Array(state)) | Some(State::Tuple(state)) => {
+                if let Some(element) = state.elems.get_mut(position) {
+                    *element = BindingState::Dead;
+                }
+            }
+            _ => {}
+        }
+        true
     }
 
     /// Marks the tracked field `member` of the base binding dead (a
@@ -2609,12 +3057,25 @@ impl<'a> Analyzer<'a> {
         self.mark_symbol_dead(symbol);
     }
 
+    /// The first element of a partially moved aggregate binding, if any. A
+    /// partially moved aggregate can be neither transferred whole nor
+    /// captured.
+    fn aggregate_partial_move(&self, symbol: SymbolId) -> Option<usize> {
+        match self.bindings.get(&symbol) {
+            Some(State::Array(state)) | Some(State::Tuple(state)) if !state.dead => {
+                state.first_dead()
+            }
+            _ => None,
+        }
+    }
+
     /// Whether `symbol`'s tracked value has been moved: a `Str`/array/enum
     /// value is dead, a struct is dead whole, a reference no longer holds its
     /// borrow. Copy-shaped bindings are never moved.
     fn binding_moved(&self, symbol: SymbolId) -> bool {
         match self.bindings.get(&symbol) {
-            Some(State::Str(state)) | Some(State::Array(state)) => *state == BindingState::Dead,
+            Some(State::Str(state)) => *state == BindingState::Dead,
+            Some(State::Array(state)) | Some(State::Tuple(state)) => state.dead,
             Some(State::Enum { state, .. }) => *state == BindingState::Dead,
             Some(State::Struct { dead, .. }) => *dead,
             Some(State::Ref { dead, .. }) => *dead,
@@ -2628,7 +3089,7 @@ impl<'a> Analyzer<'a> {
     fn mark_symbol_dead(&mut self, symbol: SymbolId) {
         match self.bindings.get_mut(&symbol) {
             Some(State::Str(state)) => *state = BindingState::Dead,
-            Some(State::Array(state)) => *state = BindingState::Dead,
+            Some(State::Array(state)) | Some(State::Tuple(state)) => state.kill_all(),
             Some(State::Enum { state, ref_borrows }) => {
                 *state = BindingState::Dead;
                 ref_borrows.clear();
@@ -2799,13 +3260,40 @@ impl<'a> Analyzer<'a> {
                             return;
                         }
                         if let Some(State::Array(state)) = self.bindings.get_mut(&symbol) {
-                            if matches!(state, BindingState::Dead) {
+                            if state.dead {
                                 self.errors.push(SemanticError::use_of_moved(
                                     ident.name.clone(),
                                     ident.span,
                                 ));
-                            } else if value.provenance == Provenance::Owned {
-                                *state = BindingState::Live(Provenance::Owned);
+                                return;
+                            }
+                            // Reassigning one element makes that element live
+                            // again; a runtime index makes every element
+                            // conservatively live.
+                            match self.types.index_value(index.span) {
+                                Some(position) => {
+                                    if let Some(element) = state.elems.get_mut(position as usize) {
+                                        *element = BindingState::Live(value.provenance);
+                                    }
+                                }
+                                None => {
+                                    for element in &mut state.elems {
+                                        if value.provenance == Provenance::Owned
+                                            || *element == BindingState::Dead
+                                        {
+                                            *element = BindingState::Live(value.provenance);
+                                        }
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                        if let Some(State::Tuple(state)) = self.bindings.get_mut(&symbol) {
+                            if state.dead {
+                                self.errors.push(SemanticError::use_of_moved(
+                                    ident.name.clone(),
+                                    ident.span,
+                                ));
                             }
                             return;
                         }
@@ -2855,7 +3343,12 @@ impl<'a> Analyzer<'a> {
         };
         match self.bindings.get_mut(&symbol) {
             Some(State::Str(state)) => *state = BindingState::Live(Provenance::Owned),
-            Some(State::Array(state)) => *state = BindingState::Live(Provenance::Owned),
+            Some(State::Array(state)) | Some(State::Tuple(state)) => {
+                state.dead = false;
+                for element in &mut state.elems {
+                    *element = BindingState::Live(Provenance::Owned);
+                }
+            }
             Some(State::Struct {
                 fields,
                 ref_fields,
@@ -3182,6 +3675,15 @@ impl<'a> Analyzer<'a> {
                 }
             }
             Some(TypeKind::Array { elem, .. }) if self.may_own(*elem) => Shape::Array,
+            // A tuple with a tracked element is analyzed per element; a
+            // tuple of copy values is Copy.
+            Some(TypeKind::Tuple(elems)) => {
+                if elems.iter().any(|elem| self.may_own(*elem)) {
+                    Shape::Tuple
+                } else {
+                    Shape::Copy
+                }
+            }
             // An enum with a data-carrying variant whose payload may own is
             // tracked (session 19); a unit-only or copy-payload enum is
             // Copy.
@@ -3302,6 +3804,25 @@ impl<'a> Analyzer<'a> {
             }),
             _ => false,
         }
+    }
+}
+
+/// Why an aggregate element cannot be moved into a deferred cleanup: the
+/// cleanup cannot consume it in one operation.
+const MOVE_CAPTURE_AGGREGATE_ELEMENT: &str = "an aggregate element that is not a plain owned value (`Str` or a copy scalar); capture it directly";
+
+/// Why a struct/enum field or payload cannot be moved into a deferred
+/// cleanup: it is itself an aggregate, and a cleanup cannot address its
+/// elements through the capture.
+const MOVE_CAPTURE_AGGREGATE_FIELD: &str = "a field or payload that is itself an aggregate cannot be consumed through a capture; capture it directly";
+
+/// The provenance a live state carries; a defensive Owned for a Dead state
+/// (an invalid move already reported its own error, and the new binding must
+/// stay conservatively owned).
+fn live_provenance(state: BindingState) -> Provenance {
+    match state {
+        BindingState::Live(provenance) => provenance,
+        BindingState::Dead => Provenance::Owned,
     }
 }
 

@@ -153,6 +153,10 @@ pub struct TypeResult {
     symbol_types: Vec<TypeId>,
     /// Expression types, sorted by `(file, span start)`.
     expr_types: Vec<(Span, TypeId)>,
+    /// Literal array indices, sorted by `(file, span start)`: the index
+    /// expression's span and its non-negative value. Recorded by the checker
+    /// so the ownership pass can talk about one array element.
+    index_values: Vec<(Span, u64)>,
     types: TypeTable,
 }
 
@@ -166,16 +170,30 @@ impl TypeResult {
         mut errors: Vec<TypeError>,
         symbol_types: Vec<TypeId>,
         mut expr_types: Vec<(Span, TypeId)>,
+        mut index_values: Vec<(Span, u64)>,
         types: TypeTable,
     ) -> Self {
         errors.sort_by_key(|error| (error.span().file(), error.span().start()));
         expr_types.sort_by_key(|(span, _)| (span.file(), span.start()));
+        index_values.sort_by_key(|(span, _)| (span.file(), span.start()));
+        index_values.dedup();
         Self {
             errors,
             symbol_types,
             expr_types,
+            index_values,
             types,
         }
+    }
+
+    /// The value of a literal array index expression, when it is a constant.
+    pub fn index_value(&self, span: Span) -> Option<u64> {
+        self.index_values
+            .binary_search_by_key(&(span.file(), span.start()), |(known, _)| {
+                (known.file(), known.start())
+            })
+            .ok()
+            .map(|at| self.index_values[at].1)
     }
 
     /// Type diagnostics, in source order. Empty for a well-typed program.

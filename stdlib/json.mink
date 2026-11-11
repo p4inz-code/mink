@@ -121,13 +121,15 @@ fn json_num_text(arena: Ptr<Int>, wp: Int, s: Str) -> Int {
     return wp;
 }
 
-fn json_str_val(arena: Ptr<Int>, wp: Int, s: Str) -> Int {
-    let mut len = rt_str_len(s);
+fn json_str_val(arena: Ptr<Int>, wp: Int, s: &Str) -> Int {
+    // Borrows the string: the caller keeps ownership and frees it, so a
+    // caller cannot accidentally hand ownership in and free it again.
+    let mut len = rt_str_len(*s);
     _write(arena, wp, 3);
     _write(arena, wp + 1, len);
     let mut i = 0;
     while i < len {
-        _write(arena, wp + 2 + i, rt_str_byte(s, i));
+        _write(arena, wp + 2 + i, rt_str_byte(*s, i));
         i = i + 1;
     }
     return wp + 2 + len;
@@ -477,8 +479,11 @@ fn _parse_value(arena: Ptr<Int>, input_len: Int, pos: Int, wp: Int) -> (Int, Int
     if ch == 34 {
         let mut result = _parse_string_from_arena(arena, input_len, p);
         if result.1 == 0 { rt_str_free(result.0); return (0, p, wp); }
-        let mut end_wp = json_str_val(arena, wp, result.0);
-        rt_str_free(result.0);
+        // The element moves into `text`, which json_str_val borrows, so the
+        // cleanup below frees the one owner.
+        let text = result.0;
+        let mut end_wp = json_str_val(arena, wp, &text);
+        rt_str_free(text);
         return (wp, result.1, end_wp);
     }
     // number

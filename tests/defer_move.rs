@@ -350,17 +350,19 @@ fn ownership_rejects_reference_capture() {
 }
 
 #[test]
-fn ownership_rejects_array_capture() {
+fn ownership_allows_array_of_copy_values_capture() {
+    // An array of copy values transfers trivially; the capture is allowed and
+    // the cleanup reads the element.
     let codes =
         ownership_codes("fn main() { let a = [1, 2]; defer move (a) { rt_print_int(a[0]); } }");
-    assert_eq!(codes, vec!["E-S19"]);
+    assert!(codes.is_empty(), "unexpected diagnostics: {codes:?}");
 }
 
 #[test]
-fn ownership_rejects_tuple_capture() {
+fn ownership_allows_tuple_of_copy_values_capture() {
     let codes =
         ownership_codes("fn main() { let t = (1, true); defer move (t) { rt_print_int(t.0); } }");
-    assert_eq!(codes, vec!["E-S19"]);
+    assert!(codes.is_empty(), "unexpected diagnostics: {codes:?}");
 }
 
 #[test]
@@ -380,7 +382,9 @@ fn ownership_rejects_struct_capture_holding_reference() {
 }
 
 #[test]
-fn ownership_rejects_struct_capture_holding_array() {
+fn ownership_rejects_struct_capture_holding_aggregate() {
+    // A cleanup cannot address `h.a[0]` through the capture: the field is
+    // itself an aggregate, whose element state is not tracked inside a struct.
     let codes = ownership_codes(
         "struct H { a: [Int; 2] } \
          fn main() { let h = H { a: [1, 2] }; defer move (h) { rt_print_int(h.a[0]); } }",
@@ -436,10 +440,15 @@ fn ownership_still_rejects_plain_defer_owned_capture() {
 
 #[test]
 fn ownership_still_rejects_plain_defer_tuple_capture() {
+    // `E-S18` names the unsafe deferred read of an owned tuple element. The
+    // element is then genuinely freed twice (the deferred transfer, then the
+    // statement after the registration), which the element-level ownership
+    // state reports as `E-S10` — a real double free, not a duplicate
+    // diagnostic.
     let codes = ownership_codes(
         "fn main() { let t = (rt_str_alloc(2), 1); defer { rt_str_free(t.0); } rt_str_free(t.0); }",
     );
-    assert_eq!(codes, vec!["E-S18"]);
+    assert_eq!(codes, vec!["E-S18", "E-S10"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -957,33 +966,30 @@ fn ownership_messages(src: &str) -> Vec<String> {
 }
 
 #[test]
-fn ownership_rejects_tuple_capture_with_untracked_reason() {
-    let messages = ownership_messages(
+fn ownership_allows_tuple_capture_of_owned_elements() {
+    let codes = ownership_codes(
         "fn main() -> Int { \
          let t = (rt_str_alloc(3), 1); \
          defer move (t) { rt_str_free(t.0); } \
          return 0; }",
     );
-    assert_eq!(messages.len(), 1, "messages: {messages:?}");
-    assert!(messages[0].contains("E-S19"), "messages: {messages:?}");
-    assert!(
-        messages[0].contains("tuple") && messages[0].contains("not ownership-tracked"),
-        "messages: {messages:?}"
-    );
+    assert!(codes.is_empty(), "unexpected diagnostics: {codes:?}");
 }
 
 #[test]
-fn ownership_rejects_array_capture_with_whole_value_reason() {
+fn ownership_rejects_array_of_references_capture() {
     let messages = ownership_messages(
         "fn main() -> Int { \
-         let a = [rt_str_alloc(3), rt_str_alloc(4)]; \
-         defer move (a) { rt_str_free(a[0]); } \
+         let n = 1; \
+         let m = 2; \
+         let a = [&n, &m]; \
+         defer move (a) { rt_print_int(*a[0]); } \
          return 0; }",
     );
     assert_eq!(messages.len(), 1, "messages: {messages:?}");
     assert!(messages[0].contains("E-S19"), "messages: {messages:?}");
     assert!(
-        messages[0].contains("array") && messages[0].contains("whole array"),
+        messages[0].contains("reference cannot be owned"),
         "messages: {messages:?}"
     );
 }
