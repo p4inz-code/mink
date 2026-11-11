@@ -758,3 +758,296 @@ fn native_move_capture_mixed_with_plain_defer_order() {
     assert_eq!(out, "body\nmoved\nplain\n");
     assert_eq!(code, 0);
 }
+
+// ---------------------------------------------------------------------------
+// Session 268: conditional ownership and control-flow correctness
+// ---------------------------------------------------------------------------
+
+/// A capture registered in a loop body transfers the value on the first
+/// iteration, so a second iteration would transfer an already freed value.
+/// The loop head is the join of the loop entry and every back edge, and the
+/// transfer is diagnosed there.
+#[test]
+fn ownership_rejects_capture_of_outer_binding_registered_in_while_loop() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         let mut i = 0; \
+         while i < 2 { \
+           i += 1; \
+           defer move (s) { rt_str_free(s); } \
+         } \
+         return 0; }",
+    );
+    assert_eq!(
+        codes,
+        vec!["E-S10"],
+        "one diagnostic for the repeated transfer"
+    );
+}
+
+#[test]
+fn ownership_rejects_capture_of_outer_binding_registered_in_for_loop() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         for i in 0..3 { defer move (s) { rt_str_free(s); } } \
+         return 0; }",
+    );
+    assert_eq!(codes, vec!["E-S10"]);
+}
+
+#[test]
+fn ownership_rejects_capture_reached_by_continue_back_edge() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         let mut i = 0; \
+         while i < 2 { \
+           i += 1; \
+           defer move (s) { rt_str_free(s); } \
+           if i == 1 { continue; } \
+           break; \
+         } \
+         return 0; }",
+    );
+    assert_eq!(codes, vec!["E-S10"]);
+}
+
+/// A body-declared value is a fresh owner each iteration, so registering it in
+/// the loop body is safe — the case the loop rule must not reject.
+#[test]
+fn ownership_allows_capture_of_loop_local_in_loop_body() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let mut i = 0; \
+         while i < 2 { \
+           i += 1; \
+           let s = rt_str_alloc(3); \
+           defer move (s) { rt_str_free(s); } \
+         } \
+         return 0; }",
+    );
+    assert!(codes.is_empty(), "unexpected diagnostics: {codes:?}");
+}
+
+/// A `break` leaves the loop, so a body that always breaks has no back edge:
+/// the transfer happens exactly once and the program is accepted.
+#[test]
+fn ownership_allows_capture_registered_once_before_break() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         loop { defer move (s) { rt_str_free(s); } break; } \
+         return 0; }",
+    );
+    assert!(codes.is_empty(), "unexpected diagnostics: {codes:?}");
+}
+
+/// The captured value is transferred on the path that reaches the loop, so it
+/// cannot be used after the loop either.
+#[test]
+fn ownership_rejects_use_after_loop_of_captured_binding() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         loop { defer move (s) { rt_str_free(s); } break; } \
+         rt_str_free(s); \
+         return 0; }",
+    );
+    assert_eq!(codes, vec!["E-S10"]);
+}
+
+/// A binding freed on one branch and captured after the join is moved on the
+/// taken path; the join reports the later transfer once.
+#[test]
+fn ownership_rejects_capture_after_branch_that_freed_it() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         if true { rt_str_free(s); } \
+         defer move (s) { rt_str_free(s); } \
+         return 0; }",
+    );
+    assert_eq!(codes, vec!["E-S10"]);
+}
+
+/// Each branch owns the value on its own path: capture in one arm, free in the
+/// other. Every path frees exactly once, so this must be accepted.
+#[test]
+fn ownership_allows_conditional_capture_with_freeing_else_branch() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         if true { defer move (s) { rt_str_free(s); } } \
+         else { rt_str_free(s); } \
+         return 0; }",
+    );
+    assert!(codes.is_empty(), "unexpected diagnostics: {codes:?}");
+}
+
+/// The general move analysis shares the loop head, so a plain move repeated by
+/// a second iteration is rejected too (previously accepted, then a double free
+/// at run time).
+#[test]
+fn ownership_rejects_move_repeated_by_loop_iteration() {
+    let codes = ownership_codes(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         let mut i = 0; \
+         while i < 2 { i += 1; let t = s; rt_str_free(t); } \
+         return 0; }",
+    );
+    assert_eq!(codes, vec!["E-S10"]);
+}
+
+/// A registration inside a branch is scoped to that branch's block, so its
+/// cleanup runs when the block ends — before the statements after the `if`.
+#[test]
+fn native_move_capture_conditional_registration_frees_at_branch_exit() {
+    let (out, code) = native(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         if true { defer move (s) { rt_print_str(\"freed\"); rt_str_free(s); } } \
+         rt_print_str(\"body\"); \
+         return 0; }",
+    );
+    assert_eq!(out, "freed\nbody\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn native_move_capture_break_only_registration_frees_once() {
+    let (out, code) = native(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         loop { defer move (s) { rt_print_str(\"freed\"); rt_str_free(s); } break; } \
+         rt_print_str(\"after\"); \
+         return 0; }",
+    );
+    assert_eq!(out, "freed\nafter\n");
+    assert_eq!(code, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Session 269/270: aggregate and generics edge cases
+// ---------------------------------------------------------------------------
+
+fn ownership_messages(src: &str) -> Vec<String> {
+    let (map, id) = parsed(src);
+    let file = map.get(id).expect("source file present");
+    let result = parser::parse(file);
+    let semantic = mink::semantics::analyze(result.ast());
+    assert!(
+        semantic.errors().is_empty(),
+        "test source must be semantically clean: {:?}",
+        semantic.errors()
+    );
+    let types = mink::typecheck::check(result.ast(), &semantic, &map);
+    assert!(
+        types.errors().is_empty(),
+        "test source must type-check cleanly: {:?}",
+        types.errors()
+    );
+    mink::ownership::check(result.ast(), &semantic, &types)
+        .errors()
+        .iter()
+        .map(|error| format!("{} {error}", error.code()))
+        .collect()
+}
+
+#[test]
+fn ownership_rejects_tuple_capture_with_untracked_reason() {
+    let messages = ownership_messages(
+        "fn main() -> Int { \
+         let t = (rt_str_alloc(3), 1); \
+         defer move (t) { rt_str_free(t.0); } \
+         return 0; }",
+    );
+    assert_eq!(messages.len(), 1, "messages: {messages:?}");
+    assert!(messages[0].contains("E-S19"), "messages: {messages:?}");
+    assert!(
+        messages[0].contains("tuple") && messages[0].contains("not ownership-tracked"),
+        "messages: {messages:?}"
+    );
+}
+
+#[test]
+fn ownership_rejects_array_capture_with_whole_value_reason() {
+    let messages = ownership_messages(
+        "fn main() -> Int { \
+         let a = [rt_str_alloc(3), rt_str_alloc(4)]; \
+         defer move (a) { rt_str_free(a[0]); } \
+         return 0; }",
+    );
+    assert_eq!(messages.len(), 1, "messages: {messages:?}");
+    assert!(messages[0].contains("E-S19"), "messages: {messages:?}");
+    assert!(
+        messages[0].contains("array") && messages[0].contains("whole array"),
+        "messages: {messages:?}"
+    );
+}
+
+/// The generic *parameter* path is checked through the compiler driver: the
+/// whole-program pipeline registers the type parameter, which the bare
+/// `typecheck::check` entry point used above does not.
+fn check_codes(src: &str) -> Vec<String> {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "mink_defer_move_check_{}_{}.mink",
+        std::process::id(),
+        n
+    ));
+    std::fs::write(&path, src).unwrap();
+    let output = mink().arg("check").arg(&path).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = std::fs::remove_file(&path);
+    stderr
+        .lines()
+        .filter_map(|line| {
+            line.find("error[E-").map(|at| {
+                let rest = &line[at + "error[".len()..];
+                rest[..rest.find(']').unwrap_or(rest.len())].to_string()
+            })
+        })
+        .collect()
+}
+
+/// A generic-typed value can be captured and copied inside the cleanup, but
+/// there is no generic free operation, so the cleanup can leak it — never
+/// double free it.
+#[test]
+fn ownership_allows_generic_capture_copied_in_cleanup() {
+    let codes = check_codes(
+        "fn hold<T>(value: T) -> Int {            defer move (value) { let copy = value; rt_print_str(\"cleanup\"); }            return 0; }          fn main() -> Int { hold(1); hold(true); return 0; }",
+    );
+    assert!(codes.is_empty(), "unexpected diagnostics: {codes:?}");
+}
+
+#[test]
+fn ownership_rejects_unused_generic_capture() {
+    let codes = check_codes(
+        "fn hold<T>(value: T) -> Int {            defer move (value) { rt_print_str(\"cleanup\"); }            return 0; }          fn main() -> Int { hold(1); return 0; }",
+    );
+    assert_eq!(codes, vec!["E-S19"]);
+}
+
+/// A closure inside the cleanup body may use the capture: the cleanup owns the
+/// value, the closure runs inside it, and exactly one free remains.
+#[test]
+fn native_move_capture_closure_in_cleanup_frees_once() {
+    let (out, code) = native(
+        "fn main() -> Int { \
+         let s = rt_str_alloc(3); \
+         defer move (s) { \
+           let release = | | rt_str_free(s); \
+           rt_print_str(\"in-cleanup\"); \
+           release(); \
+         } \
+         rt_print_str(\"body\"); \
+         return 0; }",
+    );
+    assert_eq!(out, "body\nin-cleanup\n");
+    assert_eq!(code, 0);
+}

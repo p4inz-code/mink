@@ -290,6 +290,9 @@ pub fn check(ast: &Ast, semantic: &SemanticResult, types: &TypeResult) -> Owners
         defer_depth: 0,
         defer_captures: Vec::new(),
         defer_locals: HashSet::new(),
+        loop_breaks: Vec::new(),
+        loop_continues: Vec::new(),
+        last_block_fell_through: true,
         errors: Vec::new(),
         result: FnResult::default(),
         fn_results: HashMap::new(),
@@ -300,6 +303,10 @@ pub fn check(ast: &Ast, semantic: &SemanticResult, types: &TypeResult) -> Owners
     }
 }
 
+/// A snapshot of the ownership state at one control-flow point: every
+/// binding's state plus the borrow counts of every borrowed root.
+type Flow = (HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>);
+
 /// One `defer move (...)` body being walked (session 260).
 struct DeferCaptureFrame {
     /// The symbols transferred into this deferred operation.
@@ -307,6 +314,10 @@ struct DeferCaptureFrame {
     /// The subset the cleanup body actually reads, so a capture the body
     /// never uses is reported (it would silently leak the resource).
     seen: HashSet<SymbolId>,
+    /// Captures rejected because the value was already moved (session 268):
+    /// the transfer is the reported error, so reading the same value in the
+    /// cleanup body is not a second, independent failure.
+    poisoned: HashSet<SymbolId>,
 }
 
 /// The mode an expression is evaluated in: transfer positions move Owned
@@ -369,6 +380,18 @@ struct Analyzer<'a> {
     /// cleanup could not allocate, match an owned payload, or use any
     /// intermediate it creates.
     defer_locals: HashSet<SymbolId>,
+    /// The ownership state at each `break` of the loop body currently being
+    /// analyzed (session 268), innermost loop last. A `break` leaves the loop,
+    /// so it is a way out of the loop but not a back edge to its head.
+    loop_breaks: Vec<Vec<Flow>>,
+    /// The ownership state at each `continue` of the loop body currently
+    /// being analyzed (session 268): a `continue` *is* a back edge, so a move
+    /// it carries must be visible to the next iteration.
+    loop_continues: Vec<Vec<Flow>>,
+    /// Whether the most recent [`Analyzer::walk_block`] ran past its last
+    /// statement instead of leaving through `return`/`break`/`continue`
+    /// (session 268). Only then is a loop body's end state a back edge.
+    last_block_fell_through: bool,
     /// Ownership errors, in traversal order.
     errors: Vec<SemanticError>,
     /// The current function's accumulated result provenance.
@@ -396,6 +419,8 @@ impl<'a> Analyzer<'a> {
             self.defer_depth = 0;
             self.defer_captures.clear();
             self.defer_locals.clear();
+            self.loop_breaks.clear();
+            self.loop_continues.clear();
             self.errors.clear();
             self.walk_module();
             if self.fn_results == before {
@@ -794,6 +819,10 @@ impl<'a> Analyzer<'a> {
                 self.release_binding(symbol);
             }
         }
+        // A loop needs to know whether the body can fall through to its next
+        // statement (session 268): only then is the block's end state a back
+        // edge to the loop head.
+        self.last_block_fell_through = stop.is_none();
         matches!(stop, Some(true))
     }
 
@@ -889,7 +918,10 @@ impl<'a> Analyzer<'a> {
                 return Some(true);
             }
             StmtKind::Return(None) => return Some(true),
-            StmtKind::Continue => return Some(false),
+            StmtKind::Continue => {
+                self.record_loop_edge(true);
+                return Some(false);
+            }
             StmtKind::Defer { body, capture } => match capture {
                 DeferCapture::None => {
                     // The cleanup body is walked where it is registered so
@@ -906,6 +938,7 @@ impl<'a> Analyzer<'a> {
                 if let Some(value) = value {
                     self.eval_expr(value, Mode::Transfer);
                 }
+                self.record_loop_edge(false);
                 return Some(false);
             }
             StmtKind::If(stmt) => {
@@ -915,7 +948,7 @@ impl<'a> Analyzer<'a> {
             }
             StmtKind::While { cond, body } => {
                 self.eval_expr(cond, Mode::Observe);
-                self.walk_block(body);
+                self.walk_loop_body(body);
             }
             StmtKind::For {
                 name: _,
@@ -925,10 +958,10 @@ impl<'a> Analyzer<'a> {
                 self.eval_expr(iterable, Mode::Observe);
                 // The `for` variable is the range element type (a copy
                 // type today), so it is never tracked.
-                self.walk_block(body);
+                self.walk_loop_body(body);
             }
             StmtKind::Loop(body) => {
-                self.walk_block(body);
+                self.walk_loop_body(body);
             }
             StmtKind::Match(stmt) => {
                 if self.walk_match(stmt) {
@@ -957,6 +990,7 @@ impl<'a> Analyzer<'a> {
         // the body: the specific rejection is the useful diagnostic.
         let mut listed: Vec<(SymbolId, &Ident)> = Vec::new();
         let mut accepted: Vec<(SymbolId, &Ident)> = Vec::new();
+        let mut poisoned = HashSet::new();
         for name in names {
             let Some(symbol) = self.semantic.resolve(name.span) else {
                 // Semantic analysis already reported the unresolved name.
@@ -970,6 +1004,18 @@ impl<'a> Analyzer<'a> {
                 continue;
             }
             listed.push((symbol, name));
+            // A transfer reads the binding's current value, so capturing one
+            // that is already moved is a use of a moved value: either an
+            // earlier statement on this path moved it, or a previous
+            // iteration of an enclosing loop did (session 268). The capture
+            // name is kept in `listed` so the cleanup body is not also
+            // charged with an `E-S18` read of the same name.
+            if self.binding_moved(symbol) {
+                self.errors
+                    .push(SemanticError::use_of_moved(name.name.clone(), name.span));
+                poisoned.insert(symbol);
+                continue;
+            }
             if self.is_borrowed(symbol) {
                 self.errors.push(SemanticError::borrow_conflict(
                     name.name.clone(),
@@ -994,6 +1040,7 @@ impl<'a> Analyzer<'a> {
         self.defer_captures.push(DeferCaptureFrame {
             symbols: listed.iter().map(|(symbol, _)| *symbol).collect(),
             seen: HashSet::new(),
+            poisoned,
         });
         self.defer_depth += 1;
         self.walk_block(body);
@@ -1063,12 +1110,15 @@ impl<'a> Analyzer<'a> {
             Some(TypeKind::Ref { .. }) => {
                 Some("a reference cannot be owned, and the cleanup could outlive the referent")
             }
-            Some(TypeKind::Array { .. }) => {
-                Some("fixed-length arrays are not supported: element ownership is not tracked")
-            }
-            Some(TypeKind::Tuple(_)) => {
-                Some("tuples are not ownership-tracked; move each element instead")
-            }
+            Some(TypeKind::Array { .. }) => Some(
+                "an array is owned as one value, so reading an element in the cleanup moves the \
+                 whole array and a multi-element cleanup is not expressible; capture the \
+                 elements separately",
+            ),
+            Some(TypeKind::Tuple(_)) => Some(
+                "tuple bindings are not ownership-tracked, so the transfer could not invalidate \
+                 the original tuple; capture its owned elements separately",
+            ),
             Some(TypeKind::Vec(_)) | Some(TypeKind::Map(..)) | Some(TypeKind::Set(_)) => Some(
                 "collection handles are copy values with user-managed lifetimes; \
                  transfer them with an ordinary `defer`",
@@ -1366,21 +1416,82 @@ impl<'a> Analyzer<'a> {
         then_terminated && else_terminated
     }
 
+    /// Records the ownership state at a `break`/`continue` of the loop body
+    /// being analyzed (session 268). A `continue` reaches the loop head again
+    /// (a back edge); a `break` leaves the loop. Outside a loop body both are
+    /// semantic errors, so there is no frame to record into.
+    fn record_loop_edge(&mut self, is_continue: bool) {
+        let state = self.snapshot_flow();
+        let frames = if is_continue {
+            &mut self.loop_continues
+        } else {
+            &mut self.loop_breaks
+        };
+        if let Some(frame) = frames.last_mut() {
+            frame.push(state);
+        }
+    }
+
+    /// Walks a loop body to a fixpoint over its back edge (session 268).
+    ///
+    /// A loop body can run more than once, so the state at the top of the
+    /// second iteration is the state at the loop head joined with every state
+    /// that reaches the head again — the end of the body and each `continue`.
+    /// Paths that leave the loop (`break`, `return`) carry no back edge.
+    ///
+    /// Walking the body once, as the analysis used to, misses the defect that
+    /// matters: a binding that one iteration moves is read again by the next,
+    /// which is a use-after-move and a double free at run time (`defer move`
+    /// of a local declared outside the loop re-transfers the same value on
+    /// every iteration). The first pass, with its diagnostics discarded, only
+    /// discovers the back edge; the second pass starts from the joined loop
+    /// head and reports the errors a later iteration would really produce.
+    fn walk_loop_body(&mut self, body: &crate::ast::Block) {
+        let entry = self.snapshot_flow();
+        self.loop_breaks.push(Vec::new());
+        self.loop_continues.push(Vec::new());
+        let errors_before = self.errors.len();
+        self.walk_block(body);
+        self.errors.truncate(errors_before);
+        let mut back_edges = match self.loop_continues.last_mut() {
+            Some(frame) => std::mem::take(frame),
+            None => Vec::new(),
+        };
+        if self.last_block_fell_through {
+            back_edges.push(self.snapshot_flow());
+        }
+        // The loop head: zero iterations, plus every path back to the top.
+        self.join_flow(&entry, &back_edges);
+        // The authoritative pass, from the joined loop head: a move or a
+        // transfer performed by a previous iteration is visible here.
+        self.walk_block(body);
+        // After the loop, any of the zero-iteration path, a `break`, or a
+        // later iteration's exit state is possible.
+        let mut exits = match self.loop_breaks.last_mut() {
+            Some(frame) => std::mem::take(frame),
+            None => Vec::new(),
+        };
+        exits.extend(back_edges);
+        if self.last_block_fell_through {
+            exits.push(self.snapshot_flow());
+        }
+        self.join_flow(&entry, &exits);
+        self.loop_breaks.pop();
+        self.loop_continues.pop();
+    }
+
     // ------------------------------------------------------------------
     // Control-flow joins
     // ------------------------------------------------------------------
 
     /// The tracked state at a control-flow join point: every binding's
     /// state plus the borrow counts of every borrowed root.
-    fn snapshot_flow(&self) -> (HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>) {
+    fn snapshot_flow(&self) -> Flow {
         (self.bindings.clone(), self.borrows.clone())
     }
 
     /// Restores a [`Analyzer::snapshot_flow`] snapshot wholesale.
-    fn restore_flow(
-        &mut self,
-        snapshot: &(HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>),
-    ) {
+    fn restore_flow(&mut self, snapshot: &Flow) {
         self.bindings = snapshot.0.clone();
         self.borrows = snapshot.1.clone();
     }
@@ -1394,11 +1505,7 @@ impl<'a> Analyzer<'a> {
     /// made it Owned, struct fields join field-wise, and borrows take the
     /// strongest count observed in any arm. Bindings introduced inside an
     /// arm are out of scope at the join and do not survive it.
-    fn join_flow(
-        &mut self,
-        entry: &(HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>),
-        arms: &[(HashMap<SymbolId, State>, HashMap<SymbolId, BorrowState>)],
-    ) {
+    fn join_flow(&mut self, entry: &Flow, arms: &[Flow]) {
         let mut bindings = entry.0.clone();
         self.borrows = entry.1.clone();
         for arm in arms {
@@ -2002,6 +2109,11 @@ impl<'a> Analyzer<'a> {
             if frame.symbols.contains(&symbol) {
                 frame.seen.insert(symbol);
                 captured = true;
+                // The capture was already reported as a use of a moved value;
+                // the body's read of the same value is not a second failure.
+                if frame.poisoned.contains(&symbol) {
+                    return EvalValue::owned();
+                }
                 break;
             }
         }
@@ -2495,6 +2607,19 @@ impl<'a> Analyzer<'a> {
             return;
         };
         self.mark_symbol_dead(symbol);
+    }
+
+    /// Whether `symbol`'s tracked value has been moved: a `Str`/array/enum
+    /// value is dead, a struct is dead whole, a reference no longer holds its
+    /// borrow. Copy-shaped bindings are never moved.
+    fn binding_moved(&self, symbol: SymbolId) -> bool {
+        match self.bindings.get(&symbol) {
+            Some(State::Str(state)) | Some(State::Array(state)) => *state == BindingState::Dead,
+            Some(State::Enum { state, .. }) => *state == BindingState::Dead,
+            Some(State::Struct { dead, .. }) => *dead,
+            Some(State::Ref { dead, .. }) => *dead,
+            None => false,
+        }
     }
 
     /// Marks `symbol`'s tracked value moved: a `Str`/array/enum dies, a
