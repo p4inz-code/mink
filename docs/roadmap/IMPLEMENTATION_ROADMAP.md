@@ -746,6 +746,38 @@ capture subset; aggregate element ownership remains the documented next step
 frozen, 1.0.5 unpublished). See
 [`DEFER_IMPLEMENTATION.md`](../implementation/DEFER_IMPLEMENTATION.md).
 
+*Dated status, 2026-11-11 (Session 273 — element-level aggregate ownership).*
+Tuples and fixed arrays now carry per-element ownership state
+(`State::Tuple`/`State::Array` holding `AggregateState { elems, dead }`), so an
+element can move on its own: `rt_str_free(a[0]); rt_str_free(a[1]);` and
+`rt_str_free(t.0);` are accepted, the other elements stay usable, and a
+partially moved aggregate can never be transferred whole (the moved element
+would be duplicated). Reads and transfers of a moved element are `E-S10` and
+name the element; a runtime index is conservative (a read is rejected once any
+element moved, a transfer moves the whole aggregate). Element assignment makes
+an element live again; a whole assignment rebuilds the element states; tuple
+destructuring (`let (a, b) = t;`) moves each owned element and leaves the source
+unusable. Joins merge element-wise with dead-wins, so conditional and loop
+repetition of an element move is reported. `defer move` now captures `[Str; 2]`
+and `(Str, Int)` — each element transfers and the cleanup frees them
+independently — while a capture whose element is itself an aggregate stays
+rejected with a reason that names the obstacle, as do partially moved
+aggregates (`E-S10`). Enabling this exposed one real defect in the shipped JSON
+library: `json_str_val` took a `Str` by value and the caller freed it again
+(a use-after-move that had been invisible while tuple fields were untracked).
+The library now borrows the string (`s: &Str`, caller keeps ownership), in both
+`stdlib/` and the npm bundle. New permanent suite `tests/defer_aggregate.rs`
+(40 tests: element state, control flow, borrowing, reassignment, destructuring,
+`defer move` integration and native execution). Full suite: **91 suites, 3,434
+passed, 0 failed, 9 ignored** (exit 0); `defer`, `defer_move` and
+`defer_aggregate` pass in debug and release. Nested aggregates by value remain
+rejected by the type system (`E-T18`), and an array inside a struct field is
+tracked conservatively (a transfer through `h.a[0]` moves the whole value).
+M6 external validation remains outstanding; M7 demand-gated, M8 gated, Linux
+frozen, 1.0.5 unpublished. See
+[`OWNERSHIP_IMPLEMENTATION.md`](../implementation/OWNERSHIP_IMPLEMENTATION.md)
+§5.1 and [`DEFER_IMPLEMENTATION.md`](../implementation/DEFER_IMPLEMENTATION.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

@@ -358,23 +358,33 @@ Examples:
   builds owned lines, hands them over by move, and releases them on both the
   accept and reject paths.
 
-## Aggregate capture investigation (session 269)
+## Aggregate captures (sessions 269 and 273)
 
-Each unsupported aggregate was examined against the ownership model rather than
-rejected by default. None is supported yet, and each rejection now states the
-actual reason:
+Session 269 established that neither tuples nor arrays could be captured while
+the ownership model only tracked an aggregate as a whole. Session 273 added
+per-element ownership state (`OWNERSHIP_IMPLEMENTATION.md` §5.1), which makes
+both capturable:
 
-| Category | Ownership representation today | Verdict |
-| --- | --- | --- |
-| Tuple | construction **moves** its owned elements, but the tuple binding has no tracked state, so a tuple-to-tuple move is not tracked and re-using the original is possible | rejected: a transfer could not invalidate the original tuple, so the cleanup and the original could both free the same value |
-| Fixed array | one whole-array state (`Shape::Array`); an element read in transfer position moves the *whole* array | rejected: only one element can be consumed before the array is dead, so the multi-element cleanup that motivates arrays is not expressible |
-| `Vec`/`Map`/`Set` | copy handles with user-managed lifetimes | rejected: not an owned resource; the ordinary `defer` rules already cover them |
-| `Ptr<T>` | copy handle | rejected: same reason |
+| Capture | Result |
+| --- | --- |
+| `[Str; 2]`, `[Int; 3]`, … | supported: each element transfers, and the cleanup consumes elements independently |
+| `(Str, Int)`, `(Str, Str)`, … | supported: each field transfers independently |
+| an aggregate whose element is itself an aggregate or a reference | `E-S19`: the cleanup cannot address `a[0].field` through the capture |
+| a `Vec`/`Map`/`Set`/`Ptr` | `E-S19`: copy handle with a user-managed lifetime |
+| a partially moved aggregate | `E-S10`: the already-moved element would be owned twice |
+| a struct/enum with an aggregate field or payload | `E-S19`: the field's element state is not tracked inside the struct |
 
-Supporting tuples or arrays needs element-level ownership state (per-element
-liveness, joins, and destructuring transfers) — a change to the general
-ownership model, not a capture feature. The capture implementation therefore
-continues to reject them with `E-S19` and a message that names the reason.
+The rule is deliberately one level deep: a capture transfers each element as a
+value the cleanup consumes in one operation (`rt_str_free(a[0])`,
+`rt_print_int(t.0)`, or reading a copy field). Anything that would need a nested
+place inside the cleanup stays rejected with a message that names the obstacle.
+Capturing an aggregate also keeps the existing `E-S18` protection for plain
+`defer` and the `E-S10` use-after-move rules for the original binding and each
+of its elements.
+
+`defer move (a)` where `a` is a loop-local array registers once per iteration;
+capturing an aggregate declared outside a loop is rejected like any other
+repeated transfer.
 
 ## Measured cost (session 271)
 

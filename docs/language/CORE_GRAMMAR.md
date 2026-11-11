@@ -996,15 +996,21 @@ Semantics:
 - Copy values are copied at registration, so a captured `Int` snapshots the
   value it had when the `defer` statement ran (unlike a plain `defer`, which
   reads the local at cleanup time).
+- Arrays and tuples are captured **per element**: each element transfers into
+  the deferred operation, the cleanup reads them independently
+  (`rt_str_free(a[0]); rt_str_free(a[1]);`), and the original aggregate and
+  every one of its elements become unusable. A partially moved aggregate
+  cannot be captured (`E-S10`): the moved element would be owned twice.
 - A capture is rejected when the transfer cannot be sound: a reference
-  (`E-S19`), an array (`E-S19`: an array is owned as one value, so a
-  multi-element cleanup is not expressible), a tuple (`E-S19`: tuple bindings
-  are not ownership-tracked), a `Vec`/`Map`/`Set` or pointer handle (`E-S19`),
-  a struct or enum containing any of those (`E-S19`), a capture while the
-  value is borrowed (`E-S12`), a capture of a value already moved (`E-S10`),
-  a non-local or `const` name (`E-S19`), a duplicate name in one list
-  (`E-S19`), a registration from inside another deferred block (`E-S19`), and
-  a capture the cleanup never uses (`E-S19`, because the value would leak).
+  (`E-S19`), a `Vec`/`Map`/`Set` or pointer handle (`E-S19`), a struct or
+  enum containing any of those (`E-S19`), an aggregate whose element is itself
+  an aggregate (`E-S19`: the cleanup cannot address `a[0].field` through the
+  capture), a struct or enum with an aggregate field (`E-S19`, same reason),
+  a capture while the value is borrowed (`E-S12`), a capture of a value
+  already moved (`E-S10`), a non-local or `const` name (`E-S19`), a duplicate
+  name in one list (`E-S19`), a registration from inside another deferred
+  block (`E-S19`), and a capture the cleanup never uses (`E-S19`, because the
+  value would leak).
 - Transfers whose type is ownership-tracked are supported: `Str`, copy
   scalars, and structs/enums whose fields are all supported. A cleanup may
   allocate, match owned payloads, and free its intermediates: a binding

@@ -174,16 +174,28 @@ The following rules are authoritative for this session.
   source stays usable. Programs that want to reuse an owned string across
   calls must pass literals or restructure (borrow syntax is a later
   session).
-- Arrays move whole. Reading an element of an Owned array in a
-  transfer position moves the entire array; remaining elements leak
-  (`E-R06` at exit, the existing leak check catches it). (Audit
-  hardening, Session 21: the element-read path used to push the E-S10
+- Arrays and tuples are tracked **per element** (Session 273). Each element
+  of an array or tuple has its own live/moved state, so `rt_str_free(a[0])`
+  moves element 0 only and `a[1]` stays usable. A whole-value transfer moves
+  every element; a whole-value transfer of a *partially* moved aggregate is
+  rejected (`E-S10`, naming the element), because the moved element would be
+  duplicated and freed twice. An element index that is a runtime value
+  (rather than a literal) is conservative: reading through it is rejected
+  once any element has been moved, and a transfer through it moves the whole
+  aggregate. A nested place such as `h.a[0]` (an array inside a struct
+  field) has no per-element state, so a transfer through it moves the whole
+  containing value — conservative and sound.
+  (Audit hardening, Session 21: the element-read path used to push the E-S10
   twice, once from evaluating the dead base and once from the index
   handler's own dead-branch, for a duplicated diagnostic; the redundant
   push was removed.)
 - Struct field moves are partial. Reading an Owned field moves only
   that field; the struct remains usable for its other fields, but the
   whole struct can no longer be moved until the field is reassigned.
+  Tuple elements and array elements follow the same rule with their own
+  per-element state (Session 273), including through destructuring:
+  `let (a, b) = t;` moves both elements into the new bindings and leaves
+  `t` unusable, while a tuple of copy values still copies.
 - Match scrutinees move at the same granularity as transfers (audit
   alignment, Session 21): `match s.e { ... }` where the payload is owned
   consumes only the field `s.e` (the rest of `s` stays usable), matching
@@ -225,6 +237,48 @@ The following rules are authoritative for this session.
   (`let q = p; let r = p;` both fine), while `P { name: rt_str_alloc(3) }`
   moves as a whole. A whole-struct move is rejected (E-S10) if any field
   was already moved out, even when the remaining fields are Immutable.
+
+## 5.1 Element-level aggregate state (Session 273)
+
+Representation: `State::Array(AggregateState)` and `State::Tuple(AggregateState)`,
+where `AggregateState { elems: Vec<BindingState>, dead: bool }`. `dead` means the
+whole value was moved; an element state of `Dead` means that element was moved
+out. A whole move sets every element state to `Dead`, so `dead` is a summary
+rather than a substitute for the per-element states.
+
+Rules:
+
+- **Construction.** A tuple or array literal evaluates each element in transfer
+  position and records the resulting per-element states on the value
+  (`EvalValue::elems`), so ownership follows the literal into the binding. A
+  call result or a nested place has no element states; the type supplies
+  all-live states (Owned for element types that may own, Immutable otherwise).
+- **Element transfer.** `t.1` / `a[2]` in transfer position moves only that
+  element, after checking that the aggregate is not borrowed (`E-S12`).
+  Reading a moved element is `E-S10` and names the element and its index.
+- **Whole transfer.** `let u = t;`, `return t`, passing `t` to a function and
+  `defer move (t)` move every element; a partially moved aggregate is rejected
+  with a diagnostic naming the first moved element.
+- **Observation.** Reading an aggregate without transferring it (an intrinsic
+  argument, a condition) copies the value and kills nothing.
+- **Joins.** `AggregateState::joined` merges element-wise with dead-wins, and a
+  whole move in either arm makes the aggregate dead, so a conditional element
+  move is visible after the `if` and a loop's back edge reports a repeated
+  element move.
+- **Reassignment.** Assigning a whole aggregate rebuilds its element states
+  from the new value; assigning one element (`a[0] = ...`) makes that element
+  live again, and a runtime index makes every element conservatively live.
+- **Copy aggregates.** A tuple or array whose elements cannot own is not
+  tracked at all (`Shape::Copy`), so it keeps copying freely.
+
+Destructuring is the same machinery: a `let` tuple pattern binds each element
+from the value's element state (so owned elements move and the source dies), and
+matching a tuple reads the scrutinee's element states — reachable only if the
+type checker ever allows aggregate patterns (today it rejects them, `E-T26`).
+
+Nested aggregates remain limited by the type system: an aggregate of aggregates
+by value is rejected as an overflowing size (`E-T18`), so the only nested case is
+an array inside a struct, which is handled conservatively (see §4).
 
 ## 6. What is deliberately absent
 
