@@ -1,9 +1,11 @@
 # Deferred cleanup (`defer`) — implementation record
 
-**Sessions:** 249–253
-**Status:** Implemented for the Windows x86_64 native target; permanent tests and
-two examples.
-**Syntax:** `defer { statements }`, statement-only, no trailing semicolon.
+**Sessions:** 249–253 (scope-exit cleanup), 259–266 (explicit move capture)
+**Status:** Implemented for the Windows x86_64 native target; permanent tests
+(`tests/defer.rs`, `tests/defer_move.rs`) and five examples.
+**Syntax:** `defer { statements }`, statement-only, no trailing semicolon, and
+`defer move (a, b) { statements }`, which transfers the listed locals into the
+deferred operation when the statement executes.
 
 ## Purpose
 
@@ -13,21 +15,40 @@ block when execution leaves the lexically enclosing scope. This covers normal
 fallthrough, early `return`, and loop `break`/`continue`, including deeply
 nested scopes.
 
+A plain `defer` body reads the enclosing bindings when cleanup runs. That is
+convenient for copy handles (`defer { rt_mutex_unlock(lock); }`), but unsafe
+for owned values: between registration and cleanup the value may be moved,
+reassigned, or released, so reading it at scope exit could observe invalid
+storage. The original implementation rejected those reads outright (`E-S18`),
+which blocked the most useful cleanup shape of all — freeing an owned resource
+exactly once.
+
+Session 260 adds the missing mechanism: `defer move (a, b) { ... }` performs an
+explicit ownership transfer at registration. The value leaves the original
+binding, the cleanup body reads it from a capture slot that nothing else can
+reach, and the cleanup is therefore the only owner while it runs.
+
 ## Grammar and parsing
 
 ```ebnf
-Defer := 'defer' Block
+Defer       := 'defer' CaptureList? Block
+CaptureList := 'move' '(' Ident (',' Ident)* ','? ')'
 ```
 
-`defer` is a reserved keyword. The parser dispatches it from statement
-position and parses a normal braced block with `parse_block_body`. The body is
-a statement block: a trailing expression is accepted and discarded. `defer;`
-and `defer` followed by anything other than `{` are parse errors. There is no
-`defer` expression.
+`defer` and `move` are reserved keywords. The parser dispatches `defer` from
+statement position and parses a normal braced block with `parse_block_body`.
+The body is a statement block: a trailing expression is accepted and
+discarded. `defer;`, `defer` followed by anything other than `{`, and
+`defer move` without a parenthesized list are parse errors (`E-P11`, `E-P08`).
+An empty capture list (`defer move () { }`) is an error (`E-P02`) rather than a
+silently meaningless form, and the trailing comma is optional.
 
-`StmtKind::Defer(Block)` carries the body through the AST;
-`HirStmtKind::Defer(HirBlock)` is the HIR form. Every exhaustive HIR walker in
-monomorphization, type checking and ownership recurses into the body.
+`StmtKind::Defer { body, capture }` carries the capture mode through the AST
+(`DeferCapture::{None, Move(Vec<Ident>)}`); `HirStmtKind::Defer { body,
+capture }` is the HIR form (`HirDeferCapture`, whose `Move` list holds resolved
+`HirIdent`s — symbol *and* type — so no later stage re-runs name resolution).
+Every exhaustive HIR walker in monomorphization, type checking and ownership
+recurses into the body.
 
 ## Semantics
 
@@ -78,9 +99,49 @@ verification: without the snapshot, `let mut x = 1; defer { x = 9; } return x;`
 returned `9`; it now returns `1`, and `tests/defer.rs` covers both return and
 break values.
 
-## Static restrictions
+### Move capture (session 260)
 
-The semantic analyzer and ownership pass reject three unsafe shapes.
+```mink
+fn consume(payload: Str) -> Int {
+    defer move (payload) {
+        rt_print_str("closing");
+        rt_str_free(payload);
+    }
+    return rt_str_len(payload);      // OK: read before the transfer
+}
+```
+
+Rules, all enforced by the compiler:
+
+- **Transfer at registration.** When the `defer` statement executes, each
+  listed local is copied into a fresh capture slot (a hidden MIR local) and the
+  original binding becomes moved. The transfer is part of the statement's own
+  control flow, so an unexecuted conditional registration transfers nothing,
+  and a registration inside a loop transfers once per iteration.
+- **The original is dead.** After the statement, reading, moving, or freeing the
+  original binding is `E-S10` (use of a moved value). That is what prevents a
+  double free: only the capture holds the value.
+- **The cleanup is the only owner.** Inside the body the captured names denote
+  the capture slots. A value is guaranteed live at cleanup time because nothing
+  else can reach it, and consuming it twice inside the body is `E-S10`.
+- **Exactly once.** Cleanup runs once per executed registration, and the
+  capture is consumed at most once by the body.
+- **Copy values snapshot.** A captured `Int` keeps the value it had at
+  registration; unlike a plain `defer`, later writes to the original are not
+  observed. (The original mutable binding stays usable: the capture copied it.)
+- **Immortal values copy.** A string literal binding is copied, not moved: it
+  never owns storage, so its original binding stays usable after the capture,
+  exactly like an ordinary move of an immutable string.
+- **Owned values transfer.** `Str` and ownership-tracked aggregates move: the
+  original dies, the capture owns the storage.
+- **Plain `defer` is unchanged**, including `E-S18` for names it reads but does
+  not capture.
+
+What is *not* captured: a name the body reads that is not in the list keeps the
+plain-`defer` rules, so an owned local read without being listed is still
+`E-S18`. Listing one value does not weaken the check for any other.
+
+## Static restrictions
 
 ### `E-S17` — invalid `defer` control flow or placement
 
@@ -92,7 +153,7 @@ The semantic analyzer and ownership pass reject three unsafe shapes.
   `defer` cannot also use a trailing expression as its return value; write an
   explicit `return`.
 
-### `E-S18` — deferred owned capture
+### `E-S18` — deferred owned capture (plain `defer`)
 
 A deferred body may not name a binding whose type may own or borrow storage.
 The rejected kinds are an owned `Str`, any array binding, a mutable binding of
@@ -116,37 +177,85 @@ wherever a name is read while analysis is inside a deferred body, including
 inside a closure in that body. Rejecting all arrays rather than only arrays
 with owned elements keeps the rule easy to reason about.
 
+Session 260 refined one case without weakening the rule: a binding **declared
+inside** the deferred body lives exactly as long as the cleanup, so it cannot be
+invalidated by later code and `E-S18` does not apply to it. Without that
+refinement a cleanup could not allocate a temporary, and an owned payload could
+not be bound by a `match` inside the cleanup — both of which are safe. Outer
+owned locals are still rejected, which the regression tests pin down.
+
+### `E-S19` — invalid move capture
+
+`defer move (...)` transfers ownership, so it accepts only values whose move
+the ownership pass tracks soundly. Rejected shapes, each with a specific
+message:
+
+| Shape | Why |
+| --- | --- |
+| a reference (`&T`, `&mut T`) | a reference cannot be owned, and the cleanup could outlive the referent |
+| a fixed-length array | element ownership is not tracked |
+| a tuple | tuple bindings are not ownership-tracked; move each element instead |
+| `Vec`/`Map`/`Set` | copy handles with user-managed lifetimes; use an ordinary `defer` |
+| `Ptr<T>` | copy handle with a user-managed lifetime; use an ordinary `defer` |
+| a struct/enum containing any of the above | the same reason, reported for the offending component |
+| a non-local name (module `let`, `const`, function, intrinsic) | there is no per-execution local value to move |
+| a name listed twice in one list | the first entry already took ownership |
+| a capture registered inside a deferred block | it would run during that cleanup, after the value could already be released |
+| a capture the cleanup never uses | the value would leak (nothing else can free it after the transfer) |
+
+A capture made while the value is borrowed is a borrow conflict (`E-S12`):
+moving it would leave the reference dangling.
+
 ## Compiler pipeline
 
-- **Lexer:** one keyword entry and `TokenKind::Defer`.
-- **Parser:** `parse_defer`; `defer` is included in the keyword-start
-  statement predicates.
-- **AST/HIR:** `Defer(Block)` variants and HIR lowering.
+- **Lexer:** two keyword entries (`defer`, `move`) and the matching
+  `TokenKind` variants. The keyword table stays sorted for its binary search.
+- **Parser:** `parse_defer` plus `parse_defer_capture`; `defer` is included in
+  the keyword-start statement predicates.
+- **AST/HIR:** `Defer { body, capture }` variants and HIR lowering;
+  `lower_defer_capture` resolves each listed name through the expression
+  resolution path so the HIR list carries symbols and types.
 - **Semantics:** `Ctx` tracks `loop_depth`, `in_defer`, and
   `defer_loop_floor`; loop depth is incremented around loop bodies and
-  restored afterwards. Placement and control-flow checks produce `E-S17`.
+  restored afterwards. Placement and control-flow checks produce `E-S17`;
+  `analyze_move_capture` resolves the capture list and rejects non-locals,
+  duplicates, and registrations inside a deferred block (`E-S19`).
 - **Ownership:** a `defer_depth` counter drives `E-S18` from `eval_ident`. The
   check combines the binding's current state with its declared type and
   mutability so a mutable owning-type binding cannot become an unsafe capture
   after registration. Tuple/collection contents are inspected explicitly.
+  `walk_move_defer` validates each capture (`E-S19`/`E-S12`), walks the body
+  with the captures treated as live (a second consumption inside the body is
+  `E-S10`), reports captures the body never reads, and then marks the original
+  bindings moved. Reads of captured names are recorded through a
+  `DeferCaptureFrame` stack, so `E-S18` is suspended only for the values the
+  cleanup actually owns.
 - **Type checking:** both the normal traversal and the deferred-member recheck
   path traverse defer bodies.
 - **Monomorphization:** all exhaustive statement matches recurse into the
-  defer body.
-- **MIR:** `FnBuilder` keeps `defer_scopes: Vec<Vec<HirBlock>>`, outermost
-  first. `lower_block` pushes a scope, lowers statements, then on normal
-  fallthrough pops it and inlines its bodies in reverse order. A value-less
-  block expression is routed through `lower_block` as well, so its cleanup
-  runs at that block's exit rather than leaking to the enclosing scope.
-  `LoopCtx` stores `defer_floor`, the scope count outside the loop body, so
-  `break`/`continue` inline exactly the scopes opened inside the loop.
-  `return` inlines every remaining scope down to depth zero after snapshotting
-  the return value. No backend or runtime special case is involved; the
-  cleanup is ordinary MIR control flow.
+  defer body, and `reassign_stmt_spans` re-spans the capture list with the rest
+  of the clone. Without that, a cloned generic body's capture entry kept the
+  original span and resolved to a different instantiation's binding — a real
+  defect found by the generic-instantiation test.
+- **MIR:** `FnBuilder` keeps `defer_scopes: Vec<Vec<DeferEntry>>`, outermost
+  first, where a `DeferEntry` is the body plus `(symbol, capture local)` pairs.
+  `lower_block` pushes a scope, lowers statements, then on normal fallthrough
+  pops it and inlines its entries in reverse order. `register_defer` declares
+  the capture slot and assigns the source local into it *at the registration
+  site*, then records the pair. `lower_defer_body` temporarily rebinds each
+  captured symbol to its capture slot while lowering the body, and restores the
+  previous mapping afterwards. A value-less block expression is routed through
+  `lower_block` as well, so its cleanup runs at that block's exit rather than
+  leaking to the enclosing scope. `LoopCtx` stores `defer_floor`, the scope
+  count outside the loop body, so `break`/`continue` inline exactly the scopes
+  opened inside the loop. `return` inlines every remaining scope down to depth
+  zero after snapshotting the return value. No backend or runtime special case
+  is involved; a capture is an ordinary local copy and the cleanup is ordinary
+  MIR control flow.
 
 ## Tests and examples
 
-`tests/defer.rs` has 33 permanent tests:
+`tests/defer.rs` has 33 permanent tests for plain `defer`:
 
 - 4 parser tests: empty body, nested statements/`defer`, missing block,
   unterminated statement.
@@ -163,6 +272,30 @@ with owned elements keeps the rule easy to reason about.
   inner-loop control flow in a deferred body, and nested statements in a
   deferred body.
 
+`tests/defer_move.rs` has 58 permanent tests for move capture:
+
+- 6 parser tests: accepted list, trailing comma, empty list, missing list,
+  unterminated list, and plain `defer` still parsing.
+- 7 semantic tests: registration inside a deferred block, duplicate name,
+  unresolved name, `const`, module binding, function name, and accepted
+  loop/arm placements.
+- 25 ownership tests. Accepted: owned `Str`, owned + copy together, struct,
+  enum payload, cleanup-local allocation, `for` variable, partial field use, and
+  an immutable string literal (which copies, leaving the original usable).
+  Rejected: use after move, read after registration, second capture of the same
+  value, return of the captured value, pass of the captured value, reference,
+  array, tuple, collection, struct holding a reference, struct holding an array,
+  unused capture, double free inside the cleanup, capture while borrowed, and an
+  uncaptured owned read. Two further tests pin that plain `defer` still rejects
+  owned and tuple captures (`E-S18`).
+- 20 native execution tests: single free, two-resource LIFO, cleanup on return,
+  per-iteration cleanup, conditional registration, `break`/`continue`,
+  `continue` before registration, nested scope order, struct cleanup, enum
+  payload cleanup, copy-value snapshot, immutable literal printed twice,
+  reassignment after capture, return-value snapshot, break-value snapshot,
+  match arm, cleanup-local temporaries, generic instantiation, parameter
+  cleanup, and mixed plain/move ordering.
+
 Both debug and release native runs pass. `cargo check --all-targets` and the
 release compiler build are clean.
 
@@ -172,21 +305,41 @@ Examples:
   `rt_mutex_unlock`/`rt_mutex_free` cleanup, and returns early through it.
 - `examples/defer_scope_order/main.mink` demonstrates nested loop/`if` scope
   ordering with LIFO cleanup.
+- `examples/defer_move_resource/main.mink` transfers an owned string into a
+  deferred free and shows the cleanup running once.
+- `examples/defer_move_multi/main.mink` transfers several buffers, frees them
+  LIFO, and covers normal completion plus an early return out of a loop.
+- `examples/defer_move_pipeline/main.mink` is a small record pipeline that
+  builds owned lines, hands them over by move, and releases them on both the
+  accept and reject paths.
 
 ## Deliberate limitations
 
-- Deferred bodies cannot capture owned locals; use a copy handle (as the mutex
-  example does with its `Int` handle) or perform the move explicitly before
-  registration.
+- `E-S18` remains for plain `defer`: reading an owned or borrowed local in a
+  cleanup body that did not transfer it is still an error. Use
+  `defer move (name)` instead.
+- Move capture supports ownership-tracked values (`Str`, copy scalars, structs
+  and enums of supported fields). Arrays, tuples, collections, pointers, and
+  references are rejected with `E-S19` rather than supported unsafely.
+- A cleanup may not register another move capture (`E-S19`); a plain `defer`
+  inside a cleanup body is still allowed.
+- A capture the body never reads is rejected rather than silently leaked.
+- The static analysis is path-insensitive at joins: a *conditional*
+  registration transfers at runtime only on the taken path, but after the `if`
+  the original binding is treated as dead if it is dead on every path, so a
+  free after a conditional capture can still be reported or, on the taken path
+  only, escape static detection. This is the same conservative join the move
+  analysis already uses for conditionals.
+- Generic functions can contain move captures of concrete locals (verified at
+  two instantiations). Capturing a *generic-typed* parameter is rejected unless
+  the cleanup uses it, and MINK has no generic destructor operation, so a
+  generic capture is rarely expressible.
 - A block expression cannot contain `defer` and also use its trailing
   expression as a value. A value-less block expression does contain its own
   deferred cleanup scope.
-- Tuple/collection values carrying owned storage are rejected; collection
-  handles without owned elements remain copy handles with user-managed
-  lifetimes.
 - Cleanup bodies are inlined at every exit path, so a scope with many exits and
   many large defers grows code proportionally. There is no runtime registration
-  list.
+  list; a capture slot is an ordinary stack local.
 - `defer` does not replace ownership checking for normal values; it is cleanup
   control flow, not a destructor protocol.
 - The feature is verified on the Windows x86_64 native target only. Linux

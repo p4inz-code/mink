@@ -677,6 +677,40 @@ failed, 9 ignored**, and `origin/main` equals local HEAD. Release-mode
 verification remains **BLOCKED**; M6 external validation remains outstanding;
 M7 remains demand-gated; Linux remains frozen; 1.0.5 remains unpublished.
 
+*Dated status, 2026-11-11 (Sessions 259–266 — ownership-aware deferred cleanup,
+75% checkpoint).* `defer` can now clean up owned resources safely through an
+explicit transfer: `defer move (a, b) { ... }` moves the listed locals into the
+deferred operation when the statement executes. The originals become moved
+(`E-S10`), the cleanup reads capture slots nothing else can reach, and the
+cleanup therefore frees exactly once — including on `return`, `break`, and
+`continue`, per loop iteration, on conditional registrations, and inside
+nested scopes, structs, and enum payloads. Plain `defer` and its `E-S18`
+protection are unchanged, and one false positive was removed: bindings declared
+*inside* a deferred body are cleanup-local, so a cleanup can allocate
+temporaries and match an owned payload. A new `E-S19` rejects transfers the
+ownership model cannot make sound — references, arrays, tuples, collections,
+pointers, aggregates containing them, non-local or `const` names, duplicate
+names, registrations inside another deferred block, and captures the cleanup
+never uses (which would leak). Transfer while borrowed is `E-S12`. Captures are
+ordinary MIR locals assigned at the registration site and remapped while the
+body is lowered, so no backend or runtime change was needed; a
+monomorphization defect found by the generic-instantiation test (a cloned
+body's capture list kept the original span and resolved to another
+instantiation's binding) was fixed by re-spanning the capture list with the
+clone. `tests/defer_move.rs` adds 58 permanent tests (parser, semantics,
+ownership, native execution) and three examples build and run in debug and
+release: `defer_move_resource`, `defer_move_multi`, `defer_move_pipeline`. Full
+suite: **90 suites, 3,380 passed, 0 failed, 9 ignored**; the `defer` suites
+pass in release too, and `cargo build --release` succeeds here (the
+session-210 release crash did not reproduce). `cargo fmt --check` still
+reports 14 files, all untouched by this work and already failing at the base
+commit (verified against a pristine `git archive HEAD` copy); every file this
+work touched is formatting-clean. This is the 75% checkpoint of the
+ownership-aware cleanup milestone, not its completion. Milestone state is
+otherwise unchanged: M6 **OUTSTANDING**, M7 demand-gated, M8 gated, Linux
+frozen, and 1.0.5 unpublished. See
+[`DEFER_IMPLEMENTATION.md`](../implementation/DEFER_IMPLEMENTATION.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

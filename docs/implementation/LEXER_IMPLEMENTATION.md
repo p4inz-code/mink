@@ -89,6 +89,13 @@ bindings, and `true`/`false`/`null` remain reserved words classified as
 literals. Changing the set remains a one-place edit in `keywords.rs` and a
 `TokenKind` variant, and now requires a grammar decision.
 
+Session 260 used exactly that path to add `move` (the explicit capture list of
+`defer move (a, b) { ... }`, `CORE_GRAMMAR.md` §33): one table entry between
+`mod` and `mut` (the table stays sorted for the binary search) and one
+`TokenKind::Move` variant. `defer` itself is a table entry too but is not
+listed by `is_keyword()`, which classifies only keywords used by expression or
+declaration syntax; `move` follows the same convention.
+
 ## 3. Lexer architecture
 
 The lexer lives in `src/lexer/scanner.rs` and scans the source in a single

@@ -108,7 +108,8 @@ Stmt        := LetBinding | ConstBinding
 Return      := 'return' Expr? ';'
 Break       := 'break' ';'
 Continue    := 'continue' ';'
-Defer       := 'defer' Block
+Defer       := 'defer' CaptureList? Block
+CaptureList := 'move' '(' Ident (',' Ident)* ','? ')'
 If          := 'if' Expr Block ('else' (If | Block))?
 While       := 'while' Expr Block
 For         := 'for' Ident 'in' Expr Block
@@ -126,6 +127,10 @@ Loop        := 'loop' Block
 - `defer` is a statement and takes a braced body with no trailing `;`
   (`defer { ... }`). The body is a statement block; its trailing
   expression, if any, is discarded. See §33.
+- `defer move (a, b) { ... }` transfers the listed local bindings into the
+  deferred operation when the statement executes (session 260). The list is
+  non-empty and parenthesized; `defer move { ... }` (no list) and
+  `defer move ()` (empty list) are syntax errors (`E-P08`, `E-P02`). See §33.
 
 ## 8. Expressions
 
@@ -217,6 +222,12 @@ Freezing the grammar required one minimal lexer change:
   intended freeze point. The change is a one-entry addition to the keyword
   table plus a `TokenKind::Mut` variant; identifiers like `mutt` and `_mut`
   are unaffected.
+
+Session 260 added one keyword the same way: `move`, for the explicit capture
+list of a `defer` (`defer move (a, b) { ... }`, §33). It is a one-entry
+addition to the keyword table plus a `TokenKind::Move` variant; identifiers
+like `moved` and `remove` are unaffected. No program in the repository used
+`move` as an identifier, and no other lexical form changed.
 
 No other lexical forms changed. `:` gained a use in session 14 as the
 struct-field type-annotation separator (see §11); `::` gained one in
@@ -903,10 +914,11 @@ destructuring (§25) is unchanged.
 
 ## §33  Deferred cleanup (`defer`)
 
-**Sessions:** 249–253, scope-exit cleanup.
+**Sessions:** 249–253 (scope-exit cleanup), 259–266 (explicit move capture).
 
 ```EBNF
-defer-stmt = "defer" block ;
+defer-stmt = "defer" [capture-list] block ;
+capture-list = "move" "(" ident ("," ident)* ","? ")" ;
 ```
 
 `defer { body }` registers `body` with the lexically enclosing block. When
@@ -947,3 +959,46 @@ Rules:
   value;`: the returned value is snapshotted before cleanup.
 - The syntax is statement-only; there is no `defer` expression and no
   trailing semicolon after the block.
+
+### Move capture (session 260)
+
+Borrowing and ownership are the reason a plain deferred body cannot touch an
+owned local. `defer move (a, b) { ... }` states the transfer explicitly: when
+the `defer` statement executes, the listed locals are moved into the deferred
+operation, and the cleanup body reads those values from the capture.
+
+```mink
+fn consume(payload: Str) -> Int {
+    defer move (payload) {
+        rt_print_str("closing");
+        rt_str_free(payload);
+    }
+    return rt_str_len(payload);
+}
+```
+
+Semantics:
+
+- The transfer happens when the statement executes. A registration in an
+  untaken branch transfers nothing and cleans up nothing; a registration
+  inside a loop transfers and cleans up once per iteration.
+- After registration the original bindings are **moved**: reading, moving, or
+  freeing them is `E-S10`. The cleanup body is the only owner of the value.
+- Inside the body the captured names denote the transferred values, so the
+  value is guaranteed live when cleanup runs. Consuming it twice inside the
+  body is `E-S10`; the block therefore frees at most once.
+- Copy values are copied at registration, so a captured `Int` snapshots the
+  value it had when the `defer` statement ran (unlike a plain `defer`, which
+  reads the local at cleanup time).
+- A capture is rejected when the transfer cannot be sound: a reference
+  (`E-S19`), an array (`E-S19`), a tuple (`E-S19`), a `Vec`/`Map`/`Set` or
+  pointer handle (`E-S19`), a struct or enum containing any of those
+  (`E-S19`), a capture while the value is borrowed (`E-S12`), a non-local or
+  `const` name (`E-S19`), a duplicate name in one list (`E-S19`), a
+  registration from inside another deferred block (`E-S19`), and a capture
+  the cleanup never uses (`E-S19`, because the value would leak).
+- Transfers whose type is ownership-tracked are supported: `Str`, copy
+  scalars, and structs/enums whose fields are all supported. A cleanup may
+  allocate, match owned payloads, and free its intermediates: a binding
+  declared *inside* a deferred body is local to the cleanup and is not a
+  deferred capture.

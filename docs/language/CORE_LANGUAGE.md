@@ -68,7 +68,8 @@ reservation. The keyword list was frozen together with the core grammar in
 session 03 (`docs/language/CORE_GRAMMAR.md` §10):
 
 `async await break const continue defer else enum false fn for if impl in let
-loop match mod mut null pub return struct trait true type unsafe use while`
+loop match mod move mut null pub return struct trait true type unsafe use
+while`
 
 The boolean and null literals (`true`, `false`, `null`) are reserved words
 classified as literals rather than keywords.
