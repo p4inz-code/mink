@@ -482,6 +482,13 @@ with the Session 213 reference: the current source includes struct patterns,
 not implement. The 3,262 figure describes the Session 213 checkpoint, not the
 current total.
 
+The procedure is now repository-native. `python tools/release_acceptance.py --session <id>`
+runs the fresh release build, the release test compilation and the full regression in a
+dedicated target directory, records artifact size and SHA-256, and decides
+PASS/FAIL/BLOCKED/PARTIAL from the stage results, writing JSON and Markdown reports under
+`target/acceptance/`. See
+[`docs/validation/RELEASE_ACCEPTANCE.md`](docs/validation/RELEASE_ACCEPTANCE.md).
+
 One item is open. **M6 external developer validation is outstanding** — it requires a
 developer who did not build MINK. M7 tooling and ecosystem work remains gated on
 demonstrated demand. No publication, tag or release was created: 1.0.5 remains unpublished.

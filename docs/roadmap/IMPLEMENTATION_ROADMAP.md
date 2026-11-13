@@ -821,6 +821,20 @@ remains **NOT READY** for publication: M6 external validation is OUTSTANDING,
 M7 demand-gated, M8 gated, Linux frozen, and 1.0.5 unpublished. See
 [`M6_SESSION_275_CURRENT_TREE_RELEASE_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_275_CURRENT_TREE_RELEASE_ACCEPTANCE.md).
 
+*Dated status, 2026-11-13 (Session 276 — release acceptance automation).* Release
+verification no longer depends on hand-run commands. `tools/release_acceptance.py`
+runs the authoritative release build, test compilation and `--no-fail-fast` regression
+in a fresh target directory, parses every suite, captures artifact size and SHA-256,
+and computes PASS/FAIL/BLOCKED/PARTIAL with distinct exit codes. Reports are written
+to `target/acceptance/<session>/<run-id>/` and never overwritten. A first run through
+the new entry point at `1b2f324` reported **91 suites, 3,436 passed, 0 failed, 9
+ignored**, exit 0 — identical to Session 275 — with a 4,242,944-byte artifact (SHA-256
+`b6918dfa…b177ea`; the hash differs from Session 275 because the Cargo target path is
+embedded, so bit reproducibility across target paths is not claimed). The automation's
+own 11 failure-injection tests pass. MINK remains **NOT READY**: M6 external validation
+is OUTSTANDING, M7 demand-gated, M8 gated, Linux frozen, and 1.0.5 unpublished. See
+[`M6_SESSION_276_RELEASE_ACCEPTANCE_AUTOMATION.md`](../benchmarks/M6/M6_SESSION_276_RELEASE_ACCEPTANCE_AUTOMATION.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
