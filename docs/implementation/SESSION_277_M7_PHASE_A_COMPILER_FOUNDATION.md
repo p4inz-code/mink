@@ -296,6 +296,16 @@ corpora rather than probes.
    `python tools/release_acceptance.py --session 277` recorded as acceptance
    evidence.
 
+## 9a. Release readiness note (not a Phase A task, recorded so it is not lost)
+
+The npm bundle's `npm/mink/bin/mink.exe` was **not** rebuilt. It still reports
+`mink 1.0.5` and still contains the two defects fixed here, because
+`tests/release.rs` can check that the binary exists and that its version matches
+the crate, not that it was built from the current source. Nothing is published
+by this session, so nothing is inconsistent today; but before any future
+publication the bundled compiler must be rebuilt from this source, exactly as
+the 1.0.4 and 1.0.5 preparation steps did. Tracked here rather than left implicit.
+
 ## 10. Files changed
 
 | File | Change |
