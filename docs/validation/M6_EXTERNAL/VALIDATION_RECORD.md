@@ -200,3 +200,24 @@ not external validation.
 **M6 verdict remains OUTSTANDING.** No invitation was sent, no developer was
 contacted, and no feedback was fabricated. The owner action is unchanged: send
 the §2 invitation and return the evaluator's completed submission form.
+
+## 9. Session 274 documentation reconciliation — 2026-11-13
+
+Baseline: local `HEAD` equals `origin/main` at
+`60c216009a65085b6a0569e736ab7b45845e1796`; the worktree contains only the four
+user-owned untracked files. No tester evidence was supplied, so §§1, 3, 4 and 5
+remain empty and §2 remains the recruitment blocker.
+
+The package README was corrected for facts that changed after the reference
+package was prepared. Its build-source row now names the post-package standard
+library changes (`bf3fe81`, `18eae20`, `a02e6aa`) and states that a source build
+after `f851947` contains struct patterns, `defer` and element-level aggregate
+ownership that the reference binary does not implement. Its inventory now
+distinguishes the 15-program evaluation set from the 22 examples in the
+repository: seven examples require a compiler newer than the reference binary
+and are explicitly excluded from the Path A evaluation. The reference binary
+itself is unchanged (4,048,384 bytes, SHA-256
+`87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`, `mink
+1.0.5`).
+
+**M6 verdict remains OUTSTANDING.** Nothing here is external validation.

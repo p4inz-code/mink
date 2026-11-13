@@ -3,6 +3,7 @@
 **Package version:** 1.0.5 (repository build)
 **Prepared:** 2026-11-08, Session 215
 **Re-verified:** 2026-11-08, Session 237
+**Inventory checked:** 2026-11-13, Session 274
 **Audience:** a developer who did not build MINK and has no prior MINK knowledge
 **Platform:** Windows x86_64
 **Package status:** **READY FOR EXTERNAL EVALUATION** (internal reproducibility
@@ -28,7 +29,7 @@ notes or the project owner.
 | Standard library | [`docs/language/STANDARD_LIBRARY_REFERENCE.md`](../../language/STANDARD_LIBRARY_REFERENCE.md) |
 | Errors and testing | [`docs/language/DEBUGGING_AND_TESTING.md`](../../language/DEBUGGING_AND_TESTING.md) |
 | Small programs | `benchmarks/m6/session176/01_hello.mink` … `10_imports.mink` |
-| Practical applications | `examples/` (15 programs, each a `main.mink`) |
+| Practical applications | `examples/` — the 15 programs supported by the 1.0.5 reference binary, each a `main.mink` (§1.2 explains the seven newer ones) |
 | Validation-sized workloads | `validation/a1_fileinspect` … `validation/h_manifest` (10 programs) |
 | Evaluation tasks and expected outcomes | [`EVALUATION_PROTOCOL.md`](EVALUATION_PROTOCOL.md) |
 | Evidence record and report format | [`VALIDATION_RECORD.md`](VALIDATION_RECORD.md) |
@@ -54,6 +55,16 @@ test, or a folder with the same items:
 A folder containing only `mink.exe` is not sufficient: the documentation,
 examples, and protocol are part of the evaluation. The coordinator keeps
 `FINDINGS_TRIAGE.md` for handling returned reports.
+
+### 1.2 Examples added after the reference package
+
+The repository now contains 22 example directories. Seven use language work
+added after the 1.0.5 reference binary was built and **require a newer source
+build**, so they are not part of the Path A evaluation and must not be scored
+against that binary: `struct_match_geometry` and `struct_match_dispatch` (struct
+patterns in `match`, Session 239), and `defer_scope_order`, `defer_resource`,
+`defer_move_resource`, `defer_move_multi` and `defer_move_pipeline` (`defer` and
+`defer move`, Sessions 249–273). The 15-program package set above is unchanged.
 
 The package is the repository itself; no separate archive is required. Do not
 read `docs/implementation/`, `docs/benchmarks/` or `docs/audits/` while
@@ -120,7 +131,7 @@ standard-library defects. 1.0.5 is unpublished by policy.
 | Binary (release, Windows x86_64) | 4,048,384 bytes |
 | SHA-256 | `87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23` |
 | Reference binary | `target/s213_clean/release/mink.exe` (Session 213 clean build, 2026-11-08; git-ignored) |
-| Build source | compiler source commit `f851947`; the reference binary is unchanged through `1f6f79a`. `stdlib/` gained two post-package fixes in `bf3fe81` (Sessions 219–228); they affect compiled programs, not the compiler checksum. |
+| Build source | compiler source commit `f851947`; the reference binary is unchanged through `1f6f79a`. `stdlib/` gained post-package fixes in `bf3fe81` (ASCII whitespace, Sessions 219–228), `18eae20` (npm bundle sync, Sessions 254–258) and `a02e6aa` (`json_str_val` borrow, Session 273); they affect compiled programs, not the compiler checksum. Source after `f851947` also contains struct patterns (239), `defer` (249–273) and element-level aggregate ownership (273), which the reference binary does not implement; a Path B source build therefore yields a newer compiler and must not be identified with the reference binary. |
 | Target | `x86_64-windows-pe` |
 | Build toolchain | rustc 1.97.1 (8bab26f4f 2026-07-14), LLVM 22.1.6 |
 | Package state | **unpublished**; npm registry serves 1.0.4, not this version |

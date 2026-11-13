@@ -496,3 +496,48 @@ bytes, and ran standalone and `mod filesystem;` programs. The reference binary
 still matches SHA-256 `87a1cae4...b6da23`. No compiler or runtime source changed.
 M6 remains **OUTSTANDING**, readiness for publication remains **NOT READY**,
 and 1.0.5 remains unpublished.
+
+## Addendum — 2026-11-13 (Sessions 239–274)
+
+*Dated addendum; the assessment above is retained as the record of its date.*
+After the Sessions 229–238 readiness pass, work returned to the language and
+ownership model rather than further audit churn. This addendum records only
+executed evidence and does not upgrade the publication verdict.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Struct patterns in `match` | VERIFIED | Session 239; parser, type checker/exhaustiveness, HIR, MIR and ownership; `tests/struct_match.rs` 23 tests (7 native executions); two examples build and run |
+| Statement-only `defer` | VERIFIED | Sessions 249–253; LIFO cleanup on fallthrough, `return`, `break`, `continue`, nested scopes and conditional registration; `tests/defer.rs` 33 tests; `E-S17`/`E-S18` reject unsafe forms |
+| Deferred-cleanup audit fixes | VERIFIED | Sessions 254–258; block-expression cleanup scope corrected, `E-S18` made type- and mutability-aware, npm stdlib copies made byte-identical; three adversarial regressions |
+| `defer move (…)` capture | VERIFIED | Sessions 259–266; explicit ownership transfer at registration, originals become moved (`E-S10`), `E-S19` rejects unsound captures, monomorphization capture-span defect fixed; `tests/defer_move.rs` 74 tests; three examples |
+| Loop ownership fixpoint | VERIFIED | Sessions 267–272; loop bodies analyzed to their back edge, so repeat transfer is `E-S10` at compile time instead of an `E-R04` invalid free at run time; measured cost recorded |
+| Element-level aggregate ownership | VERIFIED | Session 273; tuple/fixed-array elements have independent states; `tests/defer_aggregate.rs` 40 tests; nested aggregates still `E-T18` |
+| Shipped JSON use-after-move | FIXED | Session 273; `json_str_val` consumed a `Str` the caller also freed, invisible while tuple fields were untracked; it now borrows (`s: &Str`) in `stdlib/` and the npm bundle |
+
+Verification at the reconciliation HEAD:
+
+- Local `HEAD` = `origin/main` = `60c216009a65085b6a0569e736ab7b45845e1796`.
+- `cargo test --no-fail-fast`: **91 suites, 3,436 passed, 0 failed, 9 ignored,
+  exit 0**, no non-zero suite result. The 9 ignores are the eight bounded soaks in
+  `tests/soak.rs` and the opt-in public-internet TLS control.
+- The last recorded total was 3,434 at Session 273. The only commit after the
+  final source commit `a02e6aa` is documentation (`60c2160`), so that earlier
+  total was two tests short; **3,436 is the measured figure** and no test was
+  added, removed, weakened or skipped to reach it.
+- `cargo build --release` succeeds on this tree, and the `defer`, `defer_move`
+  and `defer_aggregate` suites pass in debug and release (Session 273).
+- The **full release-mode regression has not been re-run** since the Session 213
+  checkpoint (85 suites / 3,262 passed / 0 failed / 9 ignored). That checkpoint
+  describes the older compiler source, not this tree; current-tree release
+  verification is the next technical action.
+- `cargo fmt --check` still reports the 14 pre-existing files; no formatting
+  change was made in this documentation pass.
+- The M6 reference binary is unchanged: 4,048,384 bytes, SHA-256
+  `87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`,
+  `mink 1.0.5`.
+
+Publication verdict: **NOT READY**, unchanged. M6 external developer validation
+remains **OUTSTANDING** because no independent developer has run the protocol;
+M7 remains demand-gated, M8 gated, Linux frozen, and 1.0.5 unpublished with no
+tag or GitHub release. Session 274 corrected stale active-document statements
+(the README release-count and formatting claims) without changing this verdict.

@@ -309,6 +309,26 @@ Changed in this release (a defect closure; no new features):
 - **Full sweep is green** — **3176 passed · 0 failed · 1 ignored** across 78 test targets;
   the single ignored test needs public internet access
 
+#### Repository source after the prepared 1.0.5 package
+
+The package above is a defect-closure build and has not been republished. The
+repository source has since added language work that is **not in that tarball**
+and is still unpublished:
+
+- **Struct patterns in `match`** (Session 239) — `match p { Point { x, y } => ... }`
+  works in match statements and expressions, composing with nested, literal,
+  tuple, enum, range and or-patterns and with guards.
+- **Scope-exit cleanup** (Sessions 249–273) — statement-only `defer { ... }` and
+  `defer move (a, b) { ... }`, with LIFO ordering on normal exit, `return`,
+  `break` and `continue`; unsafe captures are rejected statically (`E-S17`,
+  `E-S18`, `E-S19`).
+- **Element-level aggregate ownership** (Session 273) — tuple and fixed-array
+  elements can be moved and freed independently, within the documented
+  aggregate limits.
+
+These are covered by permanent tests and are present in a source build, not in
+the published 1.0.4 package or the prepared 1.0.5 tarball.
+
 ### MINK 1.0.4
 
 **Published release (superseded by the prepared 1.0.5).** This is a defect-closure
@@ -416,6 +436,11 @@ MINK is explicit about its edges:
 - **Some platform surface is missing.** Paths and arguments use the ANSI Windows APIs, so
   non-ASCII paths are limited; long paths (`MAX_PATH`) are unsupported; and there is no
   console control handler, so Ctrl+C cannot be trapped.
+- **Deferred cleanup is deliberately narrow.** `defer` is statement-only. `defer
+  move (...)` accepts owned scalars, structs, enum payloads and element-level tuples
+  and fixed arrays, but rejects whole arrays and tuples, nested aggregates,
+  collections, pointers, references and unused captures with `E-S19`. It is not a
+  general destructor system.
 - **Tooling is CLI-only.** There is no integrated debugger or profiler.
 - **Some ecosystem capabilities remain partial.** There is no package registry or
   publishing workflow (dependencies are declared requirements or local paths), no
@@ -439,12 +464,19 @@ developer experience across MINK, Python, Rust, Go and C#; and M5 delivered thre
 Windows applications with 163 executable checks per run. Native compilation and ownership
 are treated as **capabilities that must be tested, not as proven differentiators.**
 
-**Release-mode verification passes.** A clean optimized build compiles in 30.78 s (4,048,384
-bytes, `mink 1.0.5`) and the full release suite reports **85 suites, 3,262 passed, 0 failed,
-9 ignored** — the same counts as debug. The Sessions 205–210 `rustc` crash was a transient
-host fault that no longer reproduces; Session 212 records the evidence and Session 213 the
-verification. Ten validation applications rebuilt with the release compiler match their
-Python references on **228/228 cases**.
+**Release-mode verification passed at the Session 213 compiler checkpoint.** A clean
+optimized build compiled in 30.78 s (4,048,384 bytes, `mink 1.0.5`, SHA-256
+`87a1cae4…b6da23`) and the full release suite reported **85 suites, 3,262 passed, 0
+failed, 9 ignored** — the same counts as debug at that commit. The Sessions 205–210
+`rustc` crash was a transient host fault that no longer reproduces; Session 212 records
+the evidence and Session 213 the verification. Ten validation applications rebuilt with
+the release compiler match their Python references on **228/228 cases**.
+
+The current tree reports more suites than that checkpoint. At `60c2160` the
+debug regression is **91 suites, 3,436 passed, 0 failed, 9 ignored**, and
+`cargo build --release` succeeds, but the full release suite has not been re-run
+against this newer tree. Re-running it is the next technical action; the 3,262 figure
+describes the Session 213 checkpoint, not the current total.
 
 One item is open. **M6 external developer validation is outstanding** — it requires a
 developer who did not build MINK. M7 tooling and ecosystem work remains gated on
@@ -511,10 +543,11 @@ MINK supports a rich feature set for a language built from scratch:
 - **Structs** — `struct Point { x: Int, y: Int }` with field access and destructuring
 - **Enums** — unit variants, data-carrying variants, sum types, explicit discriminants
 - **Generics** — `fn id<T>(x: T) -> T` with monomorphization
-- **Pattern matching** — `match` with literals, variants, bindings, wildcards, or-patterns, range patterns, guards
+- **Pattern matching** — `match` with literals, variants, bindings, wildcards, or-patterns, range patterns, struct patterns, guards
 - **Control flow** — `if`/`else`, `while`, `for` ranges, `loop` with `break`
 - **Closures** — `|x: Int| x + 1` with capture semantics
-- **Ownership** — move semantics, `&`/`&mut` borrows, compile-time borrow checking
+- **Ownership** — move semantics, `&`/`&mut` borrows, compile-time borrow checking, element-level aggregate moves
+- **Cleanup** — `defer { ... }` scope-exit cleanup, with `defer move (...)` explicit ownership capture
 - **Modules** — `mod`/`use`/`pub` with multi-file compilation
 - **Tuples** — `(Int, Bool)`, field access, destructuring
 - **Arrays** — fixed-size with bounds checking
@@ -626,9 +659,11 @@ cargo test
 cargo build
 ```
 
-`cargo fmt --check` is clean. `cargo clippy --all-targets` reports a non-zero warning
-baseline (dead code and missing documentation in the native backend), so it does not yet
-pass `-D warnings`; the gate is that no change adds a new warning.
+`cargo fmt --check` reports 14 files with formatting differences. That baseline
+predates this work, and the gate is that no change adds a new file. `cargo clippy
+--all-targets` reports a non-zero warning baseline (dead code and missing documentation in
+the native backend), so it does not yet pass `-D warnings`; the gate is that no change adds
+a new warning.
 
 ## Repository Layout
 

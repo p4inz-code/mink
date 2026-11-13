@@ -310,14 +310,16 @@ inactive and must not be executed.
 `jsontool` ports in all five languages before any M4 timing was claimed. M4 ran
 through Session 162 and M5 through Session 177; both are closed.
 
-**Current next action (2026-11-08):** recruit an independent developer and run
-the M6 external validation. The package is **READY FOR EXTERNAL EVALUATION**
-(Session 218); no tester has started it. Release-mode verification is complete (Session 213): a clean optimized build and
-the full release suite pass at 85 suites / 3,262 passed / 0 failed / 9 ignored,
-and the Sessions 205–210 `rustc` release crash no longer reproduces (Session 212
-records it as a transient host fault with no source or toolchain change). M6 — a
-developer who did not build MINK attempting predefined tasks — is the only open
-milestone item; M7 remains gated on demonstrated demand.
+**Current next action (2026-11-13 — Session 274):** re-run the full release-mode
+suite on the current tree (`60c2160`), where `cargo build --release` already
+succeeds; the last complete release regression was the Session 213 checkpoint at
+85 suites / 3,262 passed / 0 failed / 9 ignored on the older compiler source.
+After that, recruit an independent developer and run the M6 external validation.
+The package is **READY FOR EXTERNAL EVALUATION** (Session 218); no tester has
+started it. The Sessions 205–210 `rustc` release crash no longer reproduces
+(Session 212 records it as a transient host fault with no source or toolchain
+change). M6 — a developer who did not build MINK attempting predefined tasks —
+is the only open milestone item; M7 remains gated on demonstrated demand.
 
 *Dated status, 2026-11-06 (Sessions 190–193).* M4 and M5 are closed. The
 standard-library ownership work that this roadmap treats as a prerequisite is
@@ -777,6 +779,29 @@ M6 external validation remains outstanding; M7 demand-gated, M8 gated, Linux
 frozen, 1.0.5 unpublished. See
 [`OWNERSHIP_IMPLEMENTATION.md`](../implementation/OWNERSHIP_IMPLEMENTATION.md)
 §5.1 and [`DEFER_IMPLEMENTATION.md`](../implementation/DEFER_IMPLEMENTATION.md).
+
+*Dated status, 2026-11-13 (Session 274 — documentation reconciliation).* The
+reported Session 210 checkpoint (`dc4045e`) is 28 commits behind the repository:
+Sessions 211–273 are already committed and recorded in this section and in the
+implementation records. The reported claim that release verification was blocked
+is also historical — Sessions 212–213 cleared it for the compiler source at
+`f851947`, and later source builds succeed. This reconciliation re-verified the
+current tree instead of regressing the documents to the older checkpoint: local
+`HEAD` equals `origin/main` at `60c2160`, and `cargo test --no-fail-fast` gives
+**91 suites, 3,436 passed, 0 failed, 9 ignored** (exit 0). The previously
+recorded 3,434 was two tests short; the only commit after the final source commit
+`a02e6aa` is documentation, so the measured total is authoritative. The full
+release suite has not been run against this tree since Session 213 (85 suites /
+3,262), which makes it the next technical action. Stale active statements were
+corrected in [`README.md`](../../README.md) (release counts, current feature
+list, formatting claim) and
+[`docs/audits/SYSTEMS_READINESS_AUDIT.md`](../audits/SYSTEMS_READINESS_AUDIT.md)
+was extended through Session 274; the M6 package record now distinguishes its
+15-program reference inventory from the 22 examples in the repository and
+records the post-package standard-library changes. Historical records were
+preserved. M6 remains **OUTSTANDING**, M7 demand-gated, M8 gated, Linux frozen,
+and 1.0.5 unpublished. See
+[`M6_SESSION_274_DOCUMENTATION_RECONCILIATION.md`](../benchmarks/M6/M6_SESSION_274_DOCUMENTATION_RECONCILIATION.md).
 
 ---
 
