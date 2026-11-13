@@ -541,3 +541,27 @@ remains **OUTSTANDING** because no independent developer has run the protocol;
 M7 remains demand-gated, M8 gated, Linux frozen, and 1.0.5 unpublished with no
 tag or GitHub release. Session 274 corrected stale active-document statements
 (the README release-count and formatting claims) without changing this verdict.
+
+## Addendum — 2026-11-13 (Session 275)
+
+*Dated addendum; the Session 274 statement that the release suite was unrun is
+retained as the record of its date.* Release-mode verification was re-run on the
+current tree at `0aa07e4`.
+
+| Item | Result |
+| --- | --- |
+| Clean release build (`CARGO_TARGET_DIR=target/s275_release`) | PASS — exit 0, 20.765 s, 62 library warnings, 0 errors |
+| Release artifact | 4,242,944 bytes, SHA-256 `92bd263adcf11094ef89ef1743d84849fb2f6c22bbad7345adbbdee77d2da436`, `mink 1.0.5` |
+| Release test compilation (`--no-run`) | PASS — 88 integration targets plus both unit harnesses, exit 0, 13.356 s |
+| Full release suite (`--no-fail-fast`) | PASS — **91 suites, 3,436 passed, 0 failed, 9 ignored**, exit 0, 101.707 s |
+| Failures or non-zero suite results | none |
+| Ignored tests | 8 bounded/extended soaks and the opt-in public-internet TLS control |
+| Defects found or fixed | none; no source, test or configuration change |
+
+The release counts equal the Session 274 debug baseline, on source identical
+apart from a documentation commit. The artifact is not comparable with the
+4,048,384-byte Session 213 reference because this source implements struct
+patterns, `defer` and element-level aggregate ownership. Release verification
+is current; the publication verdict remains **NOT READY** and M6 external
+developer validation remains **OUTSTANDING**. See
+[`M6_SESSION_275_CURRENT_TREE_RELEASE_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_275_CURRENT_TREE_RELEASE_ACCEPTANCE.md).

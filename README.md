@@ -472,11 +472,15 @@ failed, 9 ignored** — the same counts as debug at that commit. The Sessions 20
 the evidence and Session 213 the verification. Ten validation applications rebuilt with
 the release compiler match their Python references on **228/228 cases**.
 
-The current tree reports more suites than that checkpoint. At `60c2160` the
-debug regression is **91 suites, 3,436 passed, 0 failed, 9 ignored**, and
-`cargo build --release` succeeds, but the full release suite has not been re-run
-against this newer tree. Re-running it is the next technical action; the 3,262 figure
-describes the Session 213 checkpoint, not the current total.
+The current tree has since been verified in both modes. At `0aa07e4` a clean
+release build completed in 20.77 s (4,242,944 bytes, `mink 1.0.5`, SHA-256
+`92bd263a…d2da436`) and the full release suite reported **91 suites, 3,436
+passed, 0 failed, 9 ignored** — the same counts as the Session 274 debug
+baseline, with the same nine intentional ignores. That binary is not comparable
+with the Session 213 reference: the current source includes struct patterns,
+`defer` and element-level aggregate ownership, which the reference binary does
+not implement. The 3,262 figure describes the Session 213 checkpoint, not the
+current total.
 
 One item is open. **M6 external developer validation is outstanding** — it requires a
 developer who did not build MINK. M7 tooling and ecosystem work remains gated on

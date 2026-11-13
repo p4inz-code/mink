@@ -803,6 +803,24 @@ preserved. M6 remains **OUTSTANDING**, M7 demand-gated, M8 gated, Linux frozen,
 and 1.0.5 unpublished. See
 [`M6_SESSION_274_DOCUMENTATION_RECONCILIATION.md`](../benchmarks/M6/M6_SESSION_274_DOCUMENTATION_RECONCILIATION.md).
 
+*Dated status, 2026-11-13 (Session 275 — current-tree release acceptance).* The
+full release-mode verification was re-run against the current tree at
+`0aa07e4`. A clean build in a fresh target directory completed in 20.765 s with
+0 errors and 62 library warnings, producing a 4,242,944-byte `mink.exe`
+(SHA-256 `92bd263a…d2da436`, `mink 1.0.5`); all 88 integration targets and both
+unit harnesses compiled for release (exit 0, 13.356 s).
+`cargo test --release --no-fail-fast` then reported **91 suites, 3,436 passed,
+0 failed, 9 ignored, exit 0** in 101.707 s — the same counts as the Session 274
+debug baseline, with the same eight bounded/extended soaks and the opt-in
+public-internet TLS test ignored. No defect was found and no source, test or
+configuration file changed. The binary is not comparable with the 4,048,384-byte
+Session 213 reference because the current source implements struct patterns,
+`defer` and element-level aggregate ownership; the faster build time is run
+variance, not a claimed improvement. Release verification is current, but MINK
+remains **NOT READY** for publication: M6 external validation is OUTSTANDING,
+M7 demand-gated, M8 gated, Linux frozen, and 1.0.5 unpublished. See
+[`M6_SESSION_275_CURRENT_TREE_RELEASE_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_275_CURRENT_TREE_RELEASE_ACCEPTANCE.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
