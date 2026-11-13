@@ -235,6 +235,26 @@ Examples include:
 
 Diagnostics should explain both the immediate error and the underlying ownership/lifetime relationship.
 
+## 23a. Verified runtime limits (session 277)
+
+These are the implemented, measured limits of the Windows x86_64 runtime, not
+aspirations. Session 277 re-measured each one on the current tree; all remain
+accurate.
+
+| Limit | Measured behavior | Code / exit |
+| --- | --- | --- |
+| Live allocation slots | 1,024 live allocations are served; the 1,025th fails | `E-R03`, exit 103 |
+| Single allocation | A request of 1 GiB (1,073,741,824 bytes) or more is refused | `E-R02`, exit 102 |
+| Free-list reuse | 3,000 allocate/free cycles complete and reuse retired slots | exit 0 |
+| Exit-time leak check | Unfreed live allocations at exit are reported | `E-R06`, exit 106 |
+| Integer division by zero | Traps instead of faulting | `E-R14`, exit 114 |
+| `i64::MIN / -1` and `i64::MIN % -1` | Traps instead of raising a hardware exception | `E-R15`, exit 115 |
+
+The exit-time leak check means a program that returns 0 has a balanced
+allocator: no heap allocation leaked. Every standard-library suite that runs a
+compiled program therefore asserts exit 0, which is what makes the limits above
+observable rather than merely documented.
+
 ## 24. Compatibility
 
 The memory model is part of MINKs long-term language contract.

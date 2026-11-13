@@ -1022,3 +1022,69 @@ Semantics:
   run time.
 - A registration inside a branch block is scoped to that block, so its cleanup
   runs when the branch block ends — before the statements after the `if`.
+
+## §34  Nesting limits and deep input (session 277)
+
+The parser is a recursive-descent parser, and every later stage (semantic
+analysis, type checking, HIR and MIR lowering, the ownership and backend walks)
+recurses over nested syntax with its own stack frames. Two limits keep that
+bounded. Both are enforced by the parser, are reported as `E-P33`, and are
+reported **once per file** rather than once per remaining level.
+
+| Limit | Constant | Value | Applies to |
+| --- | --- | --- | --- |
+| Nesting depth | `parser::MAX_NESTING` | 512 | parenthesized groups, blocks, types, patterns, and every other recursive production |
+| Expression chain | `parser::MAX_EXPR_CHAIN` | 2,048 | operator nodes in one outermost expression |
+
+- **Nesting depth** is one budget shared by every recursive construct, so the
+  enclosing function body, statement, and expression count toward it. In
+  practice a single function body accepts about 500 nested `(` groups (300 and
+  500 were verified; 512 is rejected), and nested blocks and `Ptr<…>` types draw
+  on the same budget. It is deliberately far beyond anything hand-written; 32
+  levels compile and run.
+- **Expression chain** bounds one outermost expression (a `let` initializer, a
+  statement expression, a call argument list entry) to 2,048 binary operator
+  nodes. A flat chain such as `a + b + c + …` is parsed iteratively, but its
+  tree is one node deep per term, so this bounds the depth the later passes
+  walk. 1,000 terms compile and run; 5,000 terms are rejected.
+- Neither limit bounds the size of a program: statement count, item count,
+  token count, function count, and block length are unbounded and processed in
+  linear time. The limits bound *depth*, not *size*.
+- `mink check` and `mink build` run the whole command on a 64 MiB worker
+  stack, so legal input inside the limits has room for every stage. Deep
+  input is a diagnostic, never a crash: before session 277 the release
+  compiler aborted with `thread 'main' has overflowed its stack` at roughly
+  200 nested parentheses and roughly 500 chain terms.
+- Permanent coverage: `tests/compiler_robustness.rs`.
+
+## §35  Integer arithmetic and shift contracts (session 277)
+
+These contracts describe what the compiler and runtime **do today** and are
+verified by native execution. They were undocumented before session 277.
+
+| Operation | Behavior |
+| --- | --- |
+| `+`, `-`, `*`, unary `-` on `Int` | Two's-complement **wrapping**: `9223372036854775807 + 1 == -9223372036854775808`, `-9223372036854775807 - 1 - 1 == 9223372036854775807` |
+| `a / 0`, `a % 0` | Runtime error `E-R14` ("integer division by zero"), process exit code 114 |
+| `i64::MIN / -1`, `i64::MIN % -1` | Runtime error `E-R15` ("integer arithmetic overflow"), process exit code 115 |
+| `<<`, `>>` | The right operand is masked to its low 6 bits, so `1 << 65 == 1 << 1 == 2` |
+| `>>` | Arithmetic (sign-propagating): `-1 >> 1 == -1` |
+| Comparison (`<`, `<=`, `>`, `>=`) | Signed comparison of `Int` |
+| Integer literal out of range | Compile-time error `E-T43`: the literal does not fit in `Int` |
+
+Numeric conversions between types are explicit; there are no implicit
+widening, narrowing, or `Int`/`Float` conversions (`docs/language/TYPE_SYSTEM.md` §4).
+
+### Unresolved design decisions
+
+Recorded here rather than decided silently. The current behavior above is the
+contract until a design decision changes it, and any change requires the
+compatibility procedure in `docs/language/CORE_LANGUAGE.md` §23.
+
+1. **Shift counts at or above 64 are masked, not rejected.** `1 << 65` silently
+   yields `2`. This follows the x86-64 instruction; it is not clear that a
+   language should expose the hardware mask instead of trapping or
+   diagnosing. A decision is needed.
+2. **Overflow wraps in every build mode.** There is no debug/release
+   difference and no checked-arithmetic mode. Whether `debug` builds should
+   trap on overflow (as some systems languages do) is undecided.

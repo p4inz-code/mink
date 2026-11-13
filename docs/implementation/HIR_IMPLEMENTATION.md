@@ -83,8 +83,9 @@ succeeds and preserves:
 1. Source order: items, statements, and expressions lower in source
    order; the program is deterministic for identical input.
 2. Exact spans: every node carries the span of the source text it was
-   parsed from. A parenthesized expression keeps the parentheses' span, so
-   a lowered node covers the text *as written* (see Group elimination).
+   parsed from. A parenthesized expression keeps the **inner** node's span
+   (see Group elimination); the parentheses themselves remain visible in the
+   AST, which is where tooling reads them.
 3. Symbol resolution: `HirIdent` (declaration names, references,
    parameters, loop variables) carries the exact `SymbolId` the semantic
    analyzer resolved, looked up through `SemanticResult::resolve` for
@@ -96,9 +97,13 @@ succeeds and preserves:
    resolved to the type they denote (`Int`, `Range<Int>`,
    `fn(Int) -> Int`), so the HIR is immediately readable without
    canonicalization.
-5. Group elimination: `(expr)` lowers to the inner node with the
-   parentheses' span. The inner expression's type is the group's type, so
-   no information is lost.
+5. Group elimination: `(expr)` lowers to the inner node with the inner
+   node's span. The inner expression's type is the group's type, so no
+   information is lost. The inner span — not the group span — is required:
+   HIR literal nodes carry no decoded value, so the backend decodes a
+   literal from the source text at its span. Keeping the group span made
+   `let x = (1);` decode `"(1)"` and fail `mink build` with `E-B10` while
+   `mink check` passed (session 277).
 6. No hidden work: no name resolution, no scope construction, no type
    unification is performed during lowering.
 

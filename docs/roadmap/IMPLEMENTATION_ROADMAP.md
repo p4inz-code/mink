@@ -835,6 +835,26 @@ own 11 failure-injection tests pass. MINK remains **NOT READY**: M6 external val
 is OUTSTANDING, M7 demand-gated, M8 gated, Linux frozen, and 1.0.5 unpublished. See
 [`M6_SESSION_276_RELEASE_ACCEPTANCE_AUTOMATION.md`](../benchmarks/M6/M6_SESSION_276_RELEASE_ACCEPTANCE_AUTOMATION.md).
 
+*Dated status, 2026-11-13 (Session 277).* **M7 Phase A has started under
+explicit instruction from the owner** and is **PARTIAL**. Phase A is the
+compiler-foundation half of M7 (compiler correctness, memory/ownership/runtime
+integrity, language conformance, standard-library maturity); the second half
+remains a separate future programme. Two confirmed compiler defects are fixed
+with permanent regressions: deep input aborted the release compiler with a
+stack overflow at ~200 nested parentheses or ~500 chain terms (now bounded by
+`MAX_NESTING`/`MAX_EXPR_CHAIN` with `E-P33`, and the CLI runs on a 64 MiB
+stack), and a parenthesized literal passed `mink check` but failed `mink build`
+with `E-B10` (HIR `Group` elimination now keeps the inner span). The runtime
+limits were re-measured and are unchanged (1,024 live slots / `E-R03`, 1 GiB
+request refused / `E-R02`, exit-time leak check / `E-R06`), integer and shift
+contracts are documented for the first time (`CORE_GRAMMAR.md` §34–§35), and
+25 of 26 specification examples with a `fn main` compile. Baseline regression
+is **102 targets, 3,436 passed, 0 failed, 9 ignored**. G1 and G2 are substantive
+but not complete; G3 and G4 still owe conformance corpora and a module-by-module
+contract audit. Milestone state is otherwise unchanged: M6 **OUTSTANDING**,
+M8 gated, Linux frozen, 1.0.5 unpublished, no tag and no release. See
+[`SESSION_277_M7_PHASE_A_COMPILER_FOUNDATION.md`](../implementation/SESSION_277_M7_PHASE_A_COMPILER_FOUNDATION.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

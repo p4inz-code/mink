@@ -184,9 +184,16 @@ into an x86-64 Windows PE executable (see
 
 ## 8. Known intentional limitations
 
-- Recursion depth is bounded by the call stack (a nested-expression
-  chain costs roughly 30 frames per level). Arbitrarily deep nesting is not
-  a goal of this milestone; pathological depth is a future robustness item.
+- Recursion depth is bounded by `MAX_NESTING` (`src/parser/mod.rs`), not by
+  the call stack: the parser reports `E-P33` once per file when source nests
+  parenthesized groups, blocks, types, or patterns deeper than 512 levels, and
+  `MAX_EXPR_CHAIN` bounds one flat expression to 2,048 operator nodes (which
+  also bounds the depth of the tree the later passes walk). Session 277 added
+  both after the release compiler was found to abort with
+  `thread 'main' has overflowed its stack` at roughly 200 nested parentheses
+  and roughly 500 chain terms; `tests/compiler_robustness.rs` is the
+  permanent regression. `docs/language/CORE_GRAMMAR.md` §34 documents the
+  limits.
 - Semantic validation is out of scope for the parser: for example
   `break` outside a loop, duplicate names, or assignment to immutable
   bindings are not the parser's concern. Semantic analysis landed in session
@@ -322,9 +329,11 @@ grammar description against the implementation. Findings and changes:
   statement-terminator diagnostics (`E-P06`) pointing at the offending
   token, rather than dedicated messages, acceptable while they are not
   part of any production, and regression-tested.
-- Recursion depth remains call-stack bounded (documented in §8); long
-  *chains* of binary operators, postfix operations, and arguments are
-  iterative and scale linearly (tested to 200-500 elements).
+- Recursion depth is bounded by `MAX_NESTING` and flat chains by
+  `MAX_EXPR_CHAIN`, both reporting `E-P33` (documented in §8). Long *chains*
+  of binary operators, postfix operations, and arguments are parsed
+  iteratively and scale linearly; session 277 verified a 1,000-term chain
+  through `check` and `build` and a 2,048-term chain through `check`.
 
 No semantic analysis was introduced; assignment-target validation remains
 syntactic only.
