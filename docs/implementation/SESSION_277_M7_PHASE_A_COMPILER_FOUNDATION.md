@@ -244,6 +244,21 @@ Quality gates: `cargo fmt --check` lists the same pre-existing 14-file baseline
 and **no** file changed here; `cargo clippy --all-targets` reports 113 warnings
 and **none** originate in a file changed here.
 
+Repository-native release acceptance:
+
+```bash
+python tools/release_acceptance.py --session 277 --label rerun
+```
+
+**PASS** — build pass, test-compile pass, regression pass; **92 suites, 3,448
+passed, 0 failed, 9 ignored**; artifact 4,258,816 bytes, SHA-256
+`4c2fd370d204a52354e61fd7a7943e43c2a1f5699aba455a1176867c9f149d9c`, built in
+27.42 s in a fresh `CARGO_TARGET_DIR`. Report:
+`target/acceptance/277/20261113T081912Z-5fef841-rerun/`. The only recorded
+limitation is the four untracked user files in the worktree (a zip, a chat log
+and an unrelated `nl1.mink`/`nl1.exe`), which are not part of this session's
+evidence and were preserved untouched.
+
 ## 8. Gate assessment
 
 Each gate is assessed independently against the Phase A completion criteria.

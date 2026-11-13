@@ -849,7 +849,10 @@ limits were re-measured and are unchanged (1,024 live slots / `E-R03`, 1 GiB
 request refused / `E-R02`, exit-time leak check / `E-R06`), integer and shift
 contracts are documented for the first time (`CORE_GRAMMAR.md` §34–§35), and
 25 of 26 specification examples with a `fn main` compile. Baseline regression
-is **102 targets, 3,436 passed, 0 failed, 9 ignored**. G1 and G2 are substantive
+was **102 targets, 3,436 passed, 0 failed, 9 ignored**; after the tranche the suite is
+**103 targets, 3,448 passed, 0 failed, 9 ignored** in both debug and release, and
+`python tools/release_acceptance.py --session 277` reports **PASS** (92 suites,
+3,448 passed, 0 failed, 9 ignored, 4,258,816-byte artifact). G1 and G2 are substantive
 but not complete; G3 and G4 still owe conformance corpora and a module-by-module
 contract audit. Milestone state is otherwise unchanged: M6 **OUTSTANDING**,
 M8 gated, Linux frozen, 1.0.5 unpublished, no tag and no release. See
