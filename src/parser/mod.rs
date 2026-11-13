@@ -37,6 +37,32 @@ use crate::source::{SourceFile, Span};
 
 pub use error::{ParseError, ParseErrorKind};
 
+/// Maximum nesting depth of a single syntactic construct (parenthesized
+/// groups, blocks, types, patterns, and any other recursive production).
+///
+/// The parser is a recursive-descent parser, so nesting depth is stack depth.
+/// Beyond this limit the parser records [`ParseErrorKind::NestingTooDeep`]
+/// instead of recursing further, so hostile or generated input cannot exhaust
+/// the process stack without a diagnostic.
+///
+/// The value covers everything the project's own tests and examples exercise
+/// (300 nested groups is a tested case) with margin, and fits the 64 MiB stack
+/// the `mink` binary runs on (measured parser cost is roughly 6–8 KiB per
+/// level, so 512 levels is a few MiB). A *library* caller that parses on a
+/// smaller stack must provide its own headroom: the limit is a bound on
+/// hostile input, not a guarantee that every stack size can reach it.
+/// Documented in `docs/language/CORE_GRAMMAR.md`.
+pub const MAX_NESTING: u32 = 512;
+
+/// Maximum number of operands in one flat expression chain (for example
+/// `a + b + c + ...`).
+///
+/// A flat chain is parsed iteratively, so it costs no parser stack, but it
+/// produces a left-deep syntax tree that the later passes walk recursively.
+/// The limit keeps that walk bounded while allowing generated expressions —
+/// long concatenations and arithmetic chains — well beyond hand-written sizes.
+pub const MAX_EXPR_CHAIN: usize = 2048;
+
 /// The complete result of parsing one source file.
 ///
 /// Carries the [`Ast`] plus every lexical error (recorded by the underlying
@@ -122,6 +148,16 @@ struct Parser<'a> {
     /// (parenthesized groups re-enable them). See
     /// `docs/implementation/AGGREGATE_TYPES_IMPLEMENTATION.md`.
     in_block_context: bool,
+    /// Current recursion depth of recursive productions, bounded by
+    /// [`MAX_NESTING`].
+    depth: u32,
+    /// Set once a nesting-limit error has been reported, so one over-deep
+    /// input produces one diagnostic rather than one per remaining level.
+    depth_reported: bool,
+    /// Number of binary operator nodes built while parsing the current
+    /// outermost expression, bounded by [`MAX_EXPR_CHAIN`]. It bounds tree
+    /// depth from above, because a tree's depth never exceeds its node count.
+    expr_nodes: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -137,6 +173,9 @@ impl<'a> Parser<'a> {
             open_delims: Vec::new(),
             eof_unclosed_reported: false,
             in_block_context: false,
+            depth: 0,
+            depth_reported: false,
+            expr_nodes: 0,
         }
     }
 
@@ -218,6 +257,39 @@ impl<'a> Parser<'a> {
     /// Records a syntax error of `kind` over `span`.
     fn record_error(&mut self, kind: ParseErrorKind, span: Span) {
         self.errors.push(ParseError::new(kind, span));
+    }
+
+    /// Enters one level of a recursive production. Returns `false` when
+    /// [`MAX_NESTING`] is exceeded, after recording a single
+    /// [`ParseErrorKind::NestingTooDeep`]; callers must then stop descending
+    /// and return `Err(())` so normal statement-level recovery takes over.
+    fn enter_nesting(&mut self) -> bool {
+        if self.depth >= MAX_NESTING {
+            if !self.depth_reported {
+                self.depth_reported = true;
+                let span = self.current().span();
+                self.record_error(ParseErrorKind::NestingTooDeep, span);
+            }
+            return false;
+        }
+        self.depth += 1;
+        true
+    }
+
+    /// Leaves one level entered by [`Self::enter_nesting`].
+    fn leave_nesting(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
+    /// Reports a flat expression chain longer than [`MAX_EXPR_CHAIN`] once per
+    /// file, returning `false` so the caller can stop.
+    fn chain_too_long(&mut self) -> bool {
+        if !self.depth_reported {
+            self.depth_reported = true;
+            let span = self.current().span();
+            self.record_error(ParseErrorKind::NestingTooDeep, span);
+        }
+        false
     }
 
     /// Records that `open_kind` was never closed before end of input, pointing
@@ -757,6 +829,16 @@ impl<'a> Parser<'a> {
     /// Parses a type: a named type (`Int`, a struct name), `Ptr<T>`, or a
     /// fixed-length array type `[T; N]`.
     fn parse_type(&mut self) -> Result<Ty, ()> {
+        if !self.enter_nesting() {
+            return Err(());
+        }
+        let result = self.parse_type_inner();
+        self.leave_nesting();
+        result
+    }
+
+    /// Parses one type, without the nesting guard (see [`Self::parse_type`]).
+    fn parse_type_inner(&mut self) -> Result<Ty, ()> {
         let token = self.current();
         match token.kind() {
             TokenKind::Amp => {
@@ -2064,6 +2146,17 @@ impl<'a> Parser<'a> {
     /// `E::A(x) | E::B(x)`). Alternatives are separated by `|`; each
     /// alternative may itself be a range (`1 | 2..=5`).
     fn parse_pattern(&mut self) -> Result<Pattern, ()> {
+        if !self.enter_nesting() {
+            return Err(());
+        }
+        let result = self.parse_pattern_inner();
+        self.leave_nesting();
+        result
+    }
+
+    /// Parses one pattern, without the nesting guard (see
+    /// [`Self::parse_pattern`]).
+    fn parse_pattern_inner(&mut self) -> Result<Pattern, ()> {
         let first = self.parse_pattern_atom()?;
         // The `|` token cannot follow a pattern in any other position, so
         // it unambiguously starts another or-pattern alternative.
@@ -2635,6 +2728,17 @@ impl<'a> Parser<'a> {
     /// Parses a `{ ... }` block body; on a missing `{` records
     /// [`ParseErrorKind::ExpectedBlock`] and returns `Err`.
     fn parse_block_body(&mut self) -> Result<Block, ()> {
+        if !self.enter_nesting() {
+            return Err(());
+        }
+        let result = self.parse_block_body_inner();
+        self.leave_nesting();
+        result
+    }
+
+    /// Parses a block body, without the nesting guard (see
+    /// [`Self::parse_block_body`]).
+    fn parse_block_body_inner(&mut self) -> Result<Block, ()> {
         if self.current_kind() != TokenKind::LBrace {
             let token = self.current();
             self.record_error(ParseErrorKind::ExpectedBlock, token.span());
@@ -2697,6 +2801,17 @@ impl<'a> Parser<'a> {
     /// expression (the last expression not followed by `;`) which becomes
     /// the block's value.
     fn parse_block_expr(&mut self) -> Result<Block, ()> {
+        if !self.enter_nesting() {
+            return Err(());
+        }
+        let result = self.parse_block_expr_inner();
+        self.leave_nesting();
+        result
+    }
+
+    /// Parses an expression block, without the nesting guard (see
+    /// [`Self::parse_block_expr`]).
+    fn parse_block_expr_inner(&mut self) -> Result<Block, ()> {
         if self.current_kind() != TokenKind::LBrace {
             let token = self.current();
             self.record_error(ParseErrorKind::ExpectedBlock, token.span());
@@ -2919,7 +3034,17 @@ impl<'a> Parser<'a> {
     // ------------------------------------------------------------------
 
     fn parse_expression(&mut self) -> Result<Expr, ()> {
-        self.parse_assignment()
+        // An outermost expression starts a fresh operator budget; nested ones
+        // (arguments, groups, initializers inside it) share the enclosing one.
+        if self.depth == 0 {
+            self.expr_nodes = 0;
+        }
+        if !self.enter_nesting() {
+            return Err(());
+        }
+        let result = self.parse_assignment();
+        self.leave_nesting();
+        result
     }
 
     fn parse_assignment(&mut self) -> Result<Expr, ()> {
@@ -2974,6 +3099,11 @@ impl<'a> Parser<'a> {
         while let Some((_, op)) = ops.iter().find(|(kind, _)| *kind == self.current_kind()) {
             let _ = self.bump();
             let rhs = next(self)?;
+            self.expr_nodes += 1;
+            if self.expr_nodes > MAX_EXPR_CHAIN {
+                self.chain_too_long();
+                return Err(());
+            }
             let span = self.join(lhs.span, rhs.span);
             lhs = Expr {
                 kind: ExprKind::Binary {

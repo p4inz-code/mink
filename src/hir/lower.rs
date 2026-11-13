@@ -653,20 +653,28 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Group(inner) => {
                 // Syntax-only grouping: lower the inner expression and keep
-                // the parentheses' span, so the node covers the source text
-                // as written. The group's type is the inner type; the group
-                // span is normally recorded too, but the inner type is
-                // authoritative, so a missing group-span entry is not an
-                // error.
-                let inner = self.lower_expr(inner);
+                // the inner node's own span. The group's type is the inner
+                // type; the group span is normally recorded too, but the inner
+                // type is authoritative, so a missing group-span entry is not
+                // an error.
+                //
+                // The span must stay the inner node's, not the parentheses'
+                // (session 277): HIR literal nodes carry no decoded value, so
+                // the backend re-reads the source text at the node's span to
+                // decode it. Keeping the group span made `let x = (1);` decode
+                // "(1)" and fail `mink build` with E-B10 while `mink check`
+                // passed — a literal wrapped in parentheses could not be
+                // compiled. `Group` still exists in the AST, so tooling keeps
+                // the parentheses; only the lowered node is transparent.
+                let lowered = self.lower_expr(inner);
                 let ty = self
                     .types
                     .expr_type_exact(expr.span)
                     .map(|id| self.table.canonical(id))
-                    .unwrap_or(inner.ty);
+                    .unwrap_or(lowered.ty);
                 return HirExpr {
-                    kind: inner.kind,
-                    span: expr.span,
+                    kind: lowered.kind,
+                    span: lowered.span,
                     ty,
                 };
             }

@@ -98,6 +98,12 @@ pub enum ParseErrorKind {
     ExpectedPipe,
     /// An identifier was expected.
     ExpectedIdent,
+    /// The source nests expressions, blocks, types, or patterns deeper than
+    /// the documented limit ([`MAX_NESTING`](crate::parser::MAX_NESTING)), or
+    /// builds a single expression wider than
+    /// [`MAX_EXPR_CHAIN`](crate::parser::MAX_EXPR_CHAIN). Reported once per
+    /// file instead of exhausting the compiler's stack.
+    NestingTooDeep,
 }
 
 impl ParseErrorKind {
@@ -139,6 +145,7 @@ impl ParseErrorKind {
             Self::ExpectedStructField => "E-P27",
             Self::ExpectedPipe => "E-P28",
             Self::ExpectedIdent => "E-P29",
+            Self::NestingTooDeep => "E-P33",
         }
     }
 }
@@ -188,6 +195,10 @@ impl fmt::Display for ParseErrorKind {
             }
             Self::ExpectedPipe => "expected '|' to close the closure parameter list",
             Self::ExpectedIdent => "expected an identifier",
+            Self::NestingTooDeep => {
+                "source nests too deeply for the compiler to analyze (see the \
+                 documented nesting limits in `docs/language/CORE_GRAMMAR.md`)"
+            }
         };
         f.write_str(message)
     }

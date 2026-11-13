@@ -510,8 +510,11 @@ fn expression_spans_are_preserved() {
 
 #[test]
 fn group_nodes_are_eliminated() {
-    // `(1 + 2)` lowers to its inner binary node, keeping the parentheses'
-    // span; no group node remains.
+    // `(1 + 2)` lowers to its inner binary node, keeping the *inner* span; no
+    // group node remains. The inner span matters: HIR literals carry no
+    // decoded value and the backend re-reads a literal's text from its span,
+    // so keeping the parentheses' span made `let x = (1);` fail `mink build`
+    // with E-B10 while `mink check` passed (session 277, defect D2).
     let src = "fn f() { let x = (1 + 2) * 3; }";
     let (_sources, _ast, _semantic, _types, program) = lower_src(src);
     let lets = stmt_lets(&hir_fn(&program, "f").body.stmts);
@@ -526,7 +529,8 @@ fn group_nodes_are_eliminated() {
         panic!("expected the grouped addition, not a group node");
     };
     assert_eq!(*inner_op, mink::ast::BinaryOp::Add);
-    assert_eq!(lhs.span, text_span(src, "(1 + 2)"));
+    // The lowered node covers `1 + 2`, not the parentheses around it.
+    assert_eq!(lhs.span, text_span(src, "1 + 2"));
 }
 
 #[test]
