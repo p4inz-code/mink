@@ -410,10 +410,21 @@ of §9.
 
 The acceptance run in §9 was made while these changes were uncommitted, so the
 runner reported `PARTIAL` for tree dirtiness even though all three stages
-passed. A clean-tree rerun through the same runner was made after the commits;
-its exact verdict, counts, artifact hash and report directory are appended
-below in a follow-up documentation commit, so this record carries the runner's
-output rather than a reconstruction.
+passed. The clean-tree rerun was made after the documentation commit:
+
+| Item | Value |
+| --- | --- |
+| Command | `python tools/release_acceptance.py --session 278 --label clean-tree` |
+| Verdict / exit code | **PASS** / 0 |
+| HEAD | `ae2c3b8` (`ae2c3b8b9062d620b7f506b4fae79536b0d1c5c6`) |
+| Stages | build pass (28.91 s), test-compile pass (13.36 s), test pass (108.84 s) |
+| Regression | **94 suites, 3,529 passed, 0 failed, 9 ignored** |
+| Artifact | 4,261,888 bytes, SHA-256 `727ff863b754b218d556403fa54a6266230a929ddb0d3767eabb302803fe0703`, `mink 1.0.5` |
+| Report | `target/acceptance/278/20261114T124736Z-ae2c3b8-clean-tree/` |
+| Limitation | the four untracked user files (§1) are present and are not part of the evidence; no tracked file differed from HEAD |
+
+The artifact hash differs from the §9 run because the Cargo target path is
+embedded. The only commits after this run are documentation.
 
 ## 11. Files changed
 
