@@ -89,6 +89,91 @@ fn s107_npm_stdlib_bundle_matches_repo_stdlib() {
     }
 }
 
+/// The bundled compiler itself must be built from the current source, not just
+/// carry the current version number.
+///
+/// Version equality (checked below in `m6_rc_package_manifest_is_complete` and
+/// `embedded_compiler_version_matches_the_crate`) cannot detect a stale binary:
+/// Session 277 changed the compiler while `npm/mink/bin/mink.exe` still
+/// reported `mink 1.0.5` and still contained the grouped-literal defect
+/// (`E-B10` on `let x = (1);`) and the unbounded-recursion crash on deep input.
+/// Nothing published this session, so the package was merely inconsistent —
+/// but it would have shipped defects.
+///
+/// This guard therefore runs the **behavioural** contracts that a fresh build
+/// satisfies: grouped literals compile and run, deep nesting is a bounded
+/// `E-P33` diagnostic instead of a crash, and a flat function with 3,000
+/// operators is accepted. Any stale binary fails at least one probe.
+#[test]
+fn s278_bundled_npm_compiler_is_not_stale() {
+    let exe = std::path::Path::new("npm/mink/bin/mink.exe");
+
+    let version = Command::new(exe)
+        .arg("--version")
+        .output()
+        .unwrap_or_else(|e| panic!("{}: {e}", exe.display()));
+    let stdout = String::from_utf8_lossy(&version.stdout);
+    assert_eq!(
+        stdout.trim(),
+        format!("mink {}", env!("CARGO_PKG_VERSION")),
+        "the bundled compiler reports a different version"
+    );
+
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mink_npm_stale_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // 1. Grouped literals (Session 277 fix): must build and run.
+    let grouped = dir.join(format!("grouped_{n}.mink"));
+    std::fs::write(&grouped, "fn main() -> Int { let x = (1); return x; }\n").unwrap();
+    let build = Command::new(exe).arg("build").arg(&grouped).output().unwrap();
+    assert!(
+        build.status.success(),
+        "the bundled compiler is stale: a grouped literal failed to build:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(grouped.with_extension("exe")).output().unwrap();
+    assert_eq!(run.status.code(), Some(1), "grouped literal ran incorrectly");
+
+    // 2. Deep input is a controlled `E-P33`, never a stack-overflow crash.
+    let deep = dir.join(format!("deep_{n}.mink"));
+    let nested = format!(
+        "fn main() -> Int {{ return {}7{}; }}\n",
+        "(".repeat(1000),
+        ")".repeat(1000)
+    );
+    std::fs::write(&deep, nested).unwrap();
+    let out = Command::new(exe).arg("build").arg(&deep).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("E-P33"),
+        "the bundled compiler is stale: deep nesting did not report E-P33 (exit {:?}):\n{stderr}",
+        out.status.code()
+    );
+    assert!(
+        !stderr.contains("overflowed its stack"),
+        "the bundled compiler crashed on deep input:\n{stderr}"
+    );
+
+    // 3. A flat function with many operators is not a nesting error
+    //    (Session 278 fix).
+    let flat = dir.join(format!("flat_{n}.mink"));
+    let body = "s = s + 1; ".repeat(3000);
+    std::fs::write(
+        &flat,
+        format!("fn main() -> Int {{ let mut s = 0; {body}return s % 7; }}\n"),
+    )
+    .unwrap();
+    let out = Command::new(exe).arg("check").arg(&flat).output().unwrap();
+    assert!(
+        out.status.success(),
+        "the bundled compiler is stale: a flat 3,000-statement function was rejected:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The npm package must be complete and internally consistent with the
 /// repository before it can be packed. This guard is intentionally independent
 /// of the pack step: it fails on missing files, a stale version, a manifest that
