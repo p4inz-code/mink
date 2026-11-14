@@ -125,6 +125,38 @@ fn frame_size(total_words: usize) -> i32 {
     (bytes.div_ceil(16) * 16) as i32
 }
 
+/// Allocates `frame` bytes of stack for a function's locals.
+///
+/// Frames larger than one page are reserved one page at a time, touching each
+/// page on the way down. Windows grows a thread's stack only while the guard
+/// page is touched in order; a single `sub rsp, N` followed by a store into
+/// the deepest part of the frame faults with an access violation once the jump
+/// skips past the guard page. That was a real defect (session 278): the first
+/// element of an array literal lives at the bottom of its slot, so a fixed
+/// array of 3,048 `Int`s compiled to a program that crashed before running its
+/// first statement.
+///
+/// `rax` is scratch here: the prologue runs before parameters are copied and
+/// before any statement, so no value is live.
+fn emit_frame_allocation(code: &mut Code, frame: i32) {
+    const PAGE: u32 = 0x1000;
+    if (frame as u32) <= PAGE {
+        code.sub_rsp(frame);
+        return;
+    }
+    code.mov_r32_imm32(Reg::Rax, frame as u32);
+    let probe = code.label();
+    code.bind_label(probe);
+    code.sub_rsp(PAGE as i32);
+    // Reading the page just below the committed stack is what makes the OS
+    // commit it; flags are dead at this point in the prologue.
+    code.cmp_mem8_imm8(Reg::Rsp, 0, 0);
+    code.sub_r_imm32(Reg::Rax, PAGE);
+    code.cmp_r_imm32(Reg::Rax, PAGE);
+    code.jcc_label(0x87, probe); // ja: more than one page left
+    code.sub_rr(Reg::Rsp, Reg::Rax); // the remainder, below one page
+}
+
 /// A patch: a `disp32` field that must be filled once layout is known.
 pub(crate) struct Patch {
     /// Byte offset of the `disp32` field within the code section.
@@ -1529,7 +1561,7 @@ fn emit_function(
     code.u8(0x55); // push rbp
     code.bytes(&[0x48, 0x89, 0xE5]); // mov rbp, rsp
     if frame > 0 {
-        code.sub_rsp(frame);
+        emit_frame_allocation(code, frame);
     }
 
     // Copy parameters into their slots. Each parameter occupies
