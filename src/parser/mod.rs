@@ -1709,6 +1709,12 @@ impl<'a> Parser<'a> {
     // ------------------------------------------------------------------
 
     fn parse_statement(&mut self) -> Result<Stmt, ()> {
+        // Every statement begins a fresh operator budget. [`MAX_EXPR_CHAIN`]
+        // bounds one outermost expression, so a long function made of many
+        // short statements must not accumulate into that budget (it did until
+        // session 278: a flat function with ~2,048 operator nodes was rejected
+        // as "nests too deeply").
+        self.expr_nodes = 0;
         match self.current_kind() {
             TokenKind::Let => {
                 let (binding, span) = self.parse_let()?;
@@ -3053,7 +3059,15 @@ impl<'a> Parser<'a> {
             return Ok(lhs);
         };
         let _ = self.bump();
-        let value = self.parse_assignment()?;
+        // A chained assignment (`a = b = c = …`) nests one level per `=`; the
+        // recursion is guarded so a pathological chain reports `E-P33` rather
+        // than exhausting the compiler stack.
+        if !self.enter_nesting() {
+            return Err(());
+        }
+        let value = self.parse_assignment();
+        self.leave_nesting();
+        let value = value?;
         if !is_place(&lhs) {
             self.record_error(ParseErrorKind::ExpectedAssignmentTarget, lhs.span);
         }
@@ -3076,7 +3090,14 @@ impl<'a> Parser<'a> {
             _ => return Ok(start),
         };
         let _ = self.bump();
-        let end = self.parse_range()?;
+        // Chained ranges nest one level per `..`; guarded for the same reason
+        // as chained assignment above.
+        if !self.enter_nesting() {
+            return Err(());
+        }
+        let end = self.parse_range();
+        self.leave_nesting();
+        let end = end?;
         let span = self.join(start.span, end.span);
         Ok(Expr {
             kind: ExprKind::Range {
@@ -3199,7 +3220,34 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Parses a prefix expression. Each prefix operator is one level of
+    /// nesting, so a chain like `!!!…!x` or `---…-x` is bounded by
+    /// [`MAX_NESTING`]: before session 278 the recursion was unguarded and a
+    /// long enough chain overflowed the compiler stack instead of reporting
+    /// `E-P33`.
     fn parse_unary(&mut self) -> Result<Expr, ()> {
+        if !matches!(
+            self.current_kind(),
+            TokenKind::Await
+                | TokenKind::Minus
+                | TokenKind::Bang
+                | TokenKind::Tilde
+                | TokenKind::Amp
+                | TokenKind::Star
+        ) {
+            return self.parse_postfix();
+        }
+        if !self.enter_nesting() {
+            return Err(());
+        }
+        let result = self.parse_unary_operator();
+        self.leave_nesting();
+        result
+    }
+
+    /// Parses one prefix operator and its operand (see [`Self::parse_unary`],
+    /// which owns the nesting guard).
+    fn parse_unary_operator(&mut self) -> Result<Expr, ()> {
         match self.current_kind() {
             TokenKind::Await => {
                 // `await expr` (Session 114, R20/S73): an await expression is
