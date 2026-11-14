@@ -160,6 +160,23 @@ Constraints must allow generic code to express the operations and capabilities i
 
 The final constraint mechanism may use interfaces, traits, protocols, or another equivalent abstraction.
 
+**Implementation status (Session 279):** not implemented, and deliberately not
+started. The compiler monomorphizes: every generic body is copied and checked
+for its concrete type arguments, so no body is ever checked against an abstract
+parameter, and soundness does not depend on constraints. Consequences, all
+pinned by `tests/constraints_conformance.rs`:
+
+- a generic body is checked per instantiation (`addg(true, false)` is `E-T02`);
+- a generic function that is never instantiated is never checked — a
+  documented gap, and the concrete argument for checking bodies once;
+- a call that cannot choose its type arguments is rejected as `E-T44` with a
+  request for explicit `::<Type>` arguments;
+- bound syntax (`<T: Bound>`), `trait`, `impl`, and `dyn` are rejected by the
+  parser rather than silently ignored.
+
+The design analysis and the decision to defer are in
+`docs/implementation/TRAITS_AND_CONSTRAINTS_DESIGN.md`.
+
 ## 13. Interfaces and traits
 
 MINK should provide a mechanism for describing shared capabilities across unrelated concrete types.
@@ -173,6 +190,13 @@ The mechanism must support:
 - Compile-time checking
 
 The final implementation model remains an architecture decision.
+
+**Implementation status (Session 279):** no trait, interface, or protocol
+mechanism exists, in any form. `trait` and `impl` are reserved words that fail
+at the parser; there is no type-erased representation and no dispatch to
+support. This section stays a design brief until a milestone takes it on; see
+`docs/implementation/TRAITS_AND_CONSTRAINTS_DESIGN.md` §6 for the questions
+that milestone must answer first.
 
 ## 14. Type aliases
 

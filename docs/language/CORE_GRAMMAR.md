@@ -822,6 +822,12 @@ declaration; `use` alone does not discover or load files. `use
 module_name;` is a no-op. Qualified names in expressions
 (`module_name::item_name`) are not supported.
 
+Imports are validated against the modules that were loaded (Session 279).
+An import that names a module that was never declared, an item the module
+does not declare, or a path with more than two segments is rejected with
+`E-S01` at the import, because accepting it would leave the imported name
+undefined and misattribute the mistake to its first use.
+
 ## §30  Public visibility (`pub`)
 
 Session 34.
@@ -835,6 +841,24 @@ is not enforced in the current implementation. All items from all loaded
 modules are included in the combined AST, so private items are also
 accessible, both unqualified and through `use`. True private-vs-public
 enforcement is a later milestone.
+
+This is a deliberate design decision, not an open defect (Session 279).
+The standard library declares no `pub fn` at all, while every documented
+public API is reached through `use`; enforcing `pub` today would reject
+the documented standard-library usage and the language as it is currently
+taught. What `pub` does change in this implementation:
+
+- `pub mod x;` loads `x` exactly like `mod x;` — the qualifier does not
+  hide or skip the file (it did before Session 279, which silently turned
+  `pub mod` into a module that never loaded);
+- `pub use m::item;` is validated like a plain import. MINK has no
+  re-exports, so the qualifier carries no additional meaning;
+- `pub` on anything else is accepted and ignored, including
+  `pub fn main`.
+
+Enforcement would need a visibility model with re-exports, per-module name
+spaces (the language has one flattened namespace), and a standard-library
+migration to `pub`. None of that is in this milestone.
 
 ## §31  Closures / lambdas
 

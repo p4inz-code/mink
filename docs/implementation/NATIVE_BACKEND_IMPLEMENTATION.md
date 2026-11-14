@@ -237,6 +237,36 @@ compiler constant. Any function whose frame exceeds the committed stack was
 affected (large arrays, many locals, large aggregates). Regression coverage:
 `tests/ownership_runtime_conformance.rs` (`B-RT-11`).
 
+**ABI conformance (session 279, Gate D).** The convention above is exercised by
+`tests/abi_conformance.rs` (16 cases, all executing real binaries), because
+these properties are only observable at run time:
+
+- argument slots: 12 and 20 parameters, mixed `Int`/`Bool`, a `Float` round
+trip, recursion, and a struct returned by value with an array field;
+- frames: 64 KiB and 160 KiB frames in a callee (page probing beyond the entry
+  function), a 16 KiB frame with a `defer` block that runs at scope exit, and
+  recursion where each level owns a page-sized array;
+- calls: 50 loop iterations of calls with 3 and 5 argument words followed by a
+  runtime call, which is where an alignment fixup that is missing or wrong
+  would fault; and nested calls that keep a live frame across many calls, which
+  would fail if a callee clobbered `rbp`;
+- entry stub: `main` returning an `Int` (exit code), `main` returning `Bool`
+  (0/1), and a unit `main` that prints and exits 0.
+
+No defect was found in Gate D; the audit confirmed the session 278 probing fix
+and the alignment rule rather than changing them.
+
+**Stack exhaustion.** The PE header asks for a 1 MiB stack reserve with a 4 KiB
+commit (`SizeOfStackReserve`/`SizeOfStackCommit` in `emit/pe.rs`), which is the
+Windows default. A recursion deeper than that reserve dies with the Windows
+stack-overflow exception (`0xC00000FD`; a shell reports exit code 253). There is
+no compiler-inserted depth check and no handler that turns it into a diagnostic:
+growth to the reserve is OS behaviour, and the limit is the frame size times the
+depth, not a compiler constant. `tests/abi_conformance.rs` keeps its deep
+recursion cases inside the reserve for that reason; the 200-level variant with
+4 KiB frames is deliberately not a test, because it would encode an exception
+code as a language guarantee.
+
 **Determinism.** Emission walks functions, blocks, and instructions in
 their stable source order and produces byte-identical images for identical
 input.

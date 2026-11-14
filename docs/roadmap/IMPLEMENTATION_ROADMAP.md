@@ -882,6 +882,29 @@ semantics changed, no version bump, tag or publication. M6 remains
 **OUTSTANDING**, M8 gated, Linux frozen, 1.0.5 unpublished. See
 [`SESSION_278_M7_PHASE_B_CONFORMANCE_STDLIB_DISTRIBUTION.md`](../implementation/SESSION_278_M7_PHASE_B_CONFORMANCE_STDLIB_DISTRIBUTION.md).
 
+*Dated status, 2026-11-14 (Session 279 — M7 Phase C).* **M7 Phase C is
+PASS.** Gates A–D were executed against `5ee91ba` and one defect was found in
+each of Gates A, B, and C, all fixed at the root cause with permanent corpora.
+Gate A: no `use` declaration was ever validated — the module registry that could
+have done it was dead code — so `use nowhere::thing;` and typos in imported names
+were accepted silently, and `pub mod x;` did not even load `x`; imports are now
+validated and `pub`-qualified declarations are handled like their plain forms.
+Gate B: a generic call whose type arguments could not be inferred was reported as
+`cannot find name \`f\`` — now `E-T44` at the call site, with the explicit
+`::<Type>` fix in the message; no trait or constraint syntax was added, and the
+deferral is recorded as a design decision. Gate C: every multi-module diagnostic
+was attributed to the root file, so a tool was sent to an unrelated line; spans
+now resolve their own source file, and `mink check --json` emits schema version 1
+for backend and driver failures too, with `null` code/span instead of invented
+ones. Gate D found no defect: the calling convention, page probing, aggregate
+returns, and entry stub are confirmed by 16 executed cases, and the 1 MiB stack
+reserve limit is documented. New corpora: `access_control` (26),
+`constraints_conformance` (15), `diagnostics_json` (14), `abi_conformance` (16),
+`phase_c_cross_gate` (7). Debug and release regression: **109 blocks, 3,608
+passed, 0 failed, 9 ignored**. No version bump, tag, or publication. M6 remains
+**OUTSTANDING**, M8 gated, Linux frozen, 1.0.5 unpublished. See
+[`SESSION_279_M7_PHASE_C_ACCESS_CONTROL_DIAGNOSTICS_CODEGEN.md`](../implementation/SESSION_279_M7_PHASE_C_ACCESS_CONTROL_DIAGNOSTICS_CODEGEN.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

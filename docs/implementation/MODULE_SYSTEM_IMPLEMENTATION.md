@@ -122,6 +122,18 @@ Backend compilation → native executable
   not supported; only file-based `mod name;` is implemented.
 - Private access enforcement: V1 does not enforce private-vs-public
   access across module boundaries. All items from all modules are
-  included in the flattened AST.
+  included in the flattened AST. This is a design decision (Session 279):
+  `CORE_GRAMMAR.md` §30 records why enforcement would break the standard
+  library and every documented API today. `tests/access_control.rs`
+  (`A-V3`) pins the current behaviour so a future change is deliberate.
 - `pub use` re-exports: Re-exporting imported items via `pub use`
-  is not yet supported.
+  is not yet supported. The declaration is accepted and validated like a
+  plain import (Session 279); it brings the name into scope, it does not
+  re-export it.
+- Duplicate `mod x;` declarations: declaring the same module twice is
+  accepted and loads it once (the loaded-file set is canonicalised). The
+  duplicate is not diagnosed.
+- Synthetic spans: a module file that cannot be read is reported at the
+  `mod` declaration that requested it, so the diagnostic points at real
+  source. Diagnostics with no real location at all carry no span in JSON
+  output rather than claiming the root file.

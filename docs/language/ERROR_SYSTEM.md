@@ -258,6 +258,20 @@ The format should support JSON or another structured representation suitable for
 
 Human-readable terminal output and machine-readable output must originate from the same underlying diagnostic model.
 
+**Implementation status (Session 279):** `mink check --json` emits schema
+version 1 of a JSON report built from the same `CheckReport` the human renderer
+uses. The full field-by-field contract, including per-file source attribution,
+byte-accurate spans, stage names, determinism, and current limitations, is in
+`docs/compiler/DIAGNOSTICS.md`. Codes are the stable identifiers required by
+§"Error codes"; their authoritative list is the `code()` implementation of each
+error type (`src/{lexer,parser,semantics,typecheck,...}/error.rs`). `E-T44`
+(`CannotInferTypeArguments`, added in Session 279) is the most recent addition.
+
+Diagnostics without a real source location (an unreadable file, a directory
+argument, an I/O failure) are reported with `"code": null` and
+`"span": null`. Inventing a code or a location for them would be a false
+promise to tools.
+
 ## 26. AI-Native diagnostics
 
 MINK diagnostics should be exceptionally useful to AI coding agents.
