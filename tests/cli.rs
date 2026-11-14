@@ -1234,8 +1234,20 @@ fn check_json_deterministic() {
 
     assert_eq!(out1.status.code(), Some(0));
     assert_eq!(out2.status.code(), Some(0));
+
+    // The two sources have different file names, and schema version 1 reports
+    // the checked files, so each path is expected to appear in its own output.
+    // Substituting the paths back to a placeholder leaves everything else
+    // byte-identical: the same input must never produce different JSON.
+    let normalize = |json: &[u8], path: &std::path::Path| -> String {
+        String::from_utf8_lossy(json).replace(
+            &path.display().to_string().replace('\\', "\\\\"),
+            "<source>",
+        )
+    };
     assert_eq!(
-        out1.stdout, out2.stdout,
+        normalize(&out1.stdout, &path1),
+        normalize(&out2.stdout, &path2),
         "JSON output should be deterministic"
     );
 }

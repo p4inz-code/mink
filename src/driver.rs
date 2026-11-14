@@ -298,10 +298,22 @@ fn check_single_module(sources: &mut SourceMap, path: &Path) -> Result<CheckRepo
     let (semantic, types, ownership, hir, mir) = if parsed.is_valid() {
         // Run monomorphization: create concrete copies of generic functions.
         let mut mono_ast = parsed.ast().clone();
-        crate::monomorphize::monomorphize(&mut mono_ast);
+        let uninferable = crate::monomorphize::monomorphize_reported(&mut mono_ast);
         let semantic = semantics::analyze(&mono_ast);
         let types = typecheck::check(&mono_ast, &semantic, sources);
-        errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
+        errors.extend(
+            semantic
+                .errors()
+                .iter()
+                .filter(|e| !explained_by_inference(e, &uninferable))
+                .cloned()
+                .map(CheckError::Semantic),
+        );
+        errors.extend(uninferable.iter().map(|(name, span)| {
+            CheckError::Type(crate::typecheck::TypeError::cannot_infer_type_arguments(
+                *span, name,
+            ))
+        }));
         errors.extend(types.errors().iter().cloned().map(CheckError::Type));
         let ownership = if errors.is_empty() {
             let result = crate::ownership::check(&mono_ast, &semantic, &types);
@@ -340,7 +352,7 @@ fn check_single_module(sources: &mut SourceMap, path: &Path) -> Result<CheckRepo
     } else {
         (None, None, None, None, None)
     };
-    errors.sort_by_key(|error| error.span().start());
+    sort_errors(&mut errors);
     Ok(CheckReport {
         source_id,
         token_count: parsed.token_count(),
@@ -394,41 +406,36 @@ fn check_multi_module(
 
         if module.source_id == root_source_id {
             root_valid = true;
-            // Collect the root module's items, stripping mod/use.
+            // Collect the root module's items, stripping mod/use (including
+            // the `pub`-qualified forms, which declare nothing themselves).
             for item in module.parsed.ast().items() {
-                match &item.kind {
-                    crate::ast::ItemKind::Module(_) | crate::ast::ItemKind::Use(_) => {}
-                    _ => root_items.push(item.clone()),
+                if let Some(item) = flattened_item(item) {
+                    root_items.push(item);
                 }
             }
         } else {
-            // Child modules: collect public items and add them to the
-            // combined root. Private items are excluded because they
-            // should not be visible from the root module.
+            // Child modules: every remaining item is included. `pub` is
+            // recorded but not enforced (CORE_GRAMMAR.md §30), so private
+            // items are included too — public items may call them.
             let mut items = Vec::new();
             for item in module.parsed.ast().items() {
-                match &item.kind {
-                    crate::ast::ItemKind::Module(_) | crate::ast::ItemKind::Use(_) => {}
-                    crate::ast::ItemKind::Pub(pub_item) => {
-                        // Public items are always included.
-                        items.push(pub_item.item.as_ref().clone());
-                    }
-                    _ => {
-                        // Non-public items are included too (they may be
-                        // needed by public items that reference them, e.g.
-                        // private helper functions called by public ones).
-                        // For V1, all items are included from all modules.
-                        items.push(item.clone());
-                    }
+                if let Some(item) = flattened_item(item) {
+                    items.push(item);
                 }
             }
             child_items.insert(module.name.clone(), items);
         }
     }
 
+    // Validate `use` declarations against the modules this compilation
+    // loaded. Flattening makes every item reachable by name, which is why a
+    // misspelled import used to go unreported until (and unless) the
+    // imported name was used.
+    all_errors.extend(validate_imports(modules));
+
     if !root_valid {
         // Root module had no valid content. Return whatever errors we have.
-        all_errors.sort_by_key(|e| e.span().start());
+        sort_errors(&mut all_errors);
         return Ok(CheckReport {
             source_id: root_source_id,
             token_count: total_tokens,
@@ -455,11 +462,23 @@ fn check_multi_module(
     let mut combined_ast = crate::ast::Ast::new(root_items);
 
     // Run monomorphization: create concrete copies of generic functions.
-    crate::monomorphize::monomorphize(&mut combined_ast);
+    let uninferable = crate::monomorphize::monomorphize_reported(&mut combined_ast);
 
     // Run semantic analysis.
     let semantic = semantics::analyze(&combined_ast);
-    all_errors.extend(semantic.errors().iter().cloned().map(CheckError::Semantic));
+    all_errors.extend(
+        semantic
+            .errors()
+            .iter()
+            .filter(|e| !explained_by_inference(e, &uninferable))
+            .cloned()
+            .map(CheckError::Semantic),
+    );
+    all_errors.extend(uninferable.iter().map(|(name, span)| {
+        CheckError::Type(crate::typecheck::TypeError::cannot_infer_type_arguments(
+            *span, name,
+        ))
+    }));
 
     // Run type checking.
     let types = typecheck::check(&combined_ast, &semantic, sources);
@@ -499,7 +518,7 @@ fn check_multi_module(
         (None, None)
     };
 
-    all_errors.sort_by_key(|e| e.span().start());
+    sort_errors(&mut all_errors);
     Ok(CheckReport {
         source_id: root_source_id,
         token_count: total_tokens,
@@ -510,6 +529,157 @@ fn check_multi_module(
         hir,
         mir,
     })
+}
+
+/// Orders diagnostics by source file, then by byte offset, so output is
+/// deterministic regardless of which pipeline stage produced an error.
+///
+/// Spans carry their own file id, and a compilation can cover several files;
+/// sorting by offset alone would interleave the files' diagnostics depending
+/// on the order the stages ran in.
+fn sort_errors(errors: &mut [CheckError]) {
+    errors.sort_by_key(|error| {
+        let span = error.span();
+        (span.file().raw(), span.start(), error.code())
+    });
+}
+
+/// Validates every `use` declaration against the modules loaded for this
+/// compilation.
+///
+/// `use module::item;` must name a module loaded by a `mod` declaration and
+/// an item that module declares. Nothing else is checked: items share one
+/// flattened namespace and `pub` is not enforced (see `CORE_GRAMMAR.md`
+/// §30), so importing a non-public item stays valid.
+fn validate_imports(modules: &[ModuleSource]) -> Vec<CheckError> {
+    use std::collections::{HashMap, HashSet};
+
+    // Module name → the names it declares at module scope.
+    let mut declared: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for module in modules {
+        if !module.parsed.is_valid() {
+            continue;
+        }
+        let names = declared.entry(module.name.as_str()).or_default();
+        for item in module.parsed.ast().items() {
+            if let Some(name) = module_level_name(&item.kind) {
+                names.insert(name);
+            }
+        }
+    }
+
+    let mut errors = Vec::new();
+    for module in modules {
+        if !module.parsed.is_valid() {
+            continue;
+        }
+        for item in module.parsed.ast().items() {
+            let crate::ast::ItemKind::Use(use_decl) = item_kind_through_pub(&item.kind) else {
+                continue;
+            };
+            // `pub use module::item;` is validated like a plain import: MINK
+            // has no re-exports (CORE_GRAMMAR.md §30), and the qualifier is
+            // ignored, so an unresolvable path is still a mistake.
+            // `use module;` is a documented no-op.
+            if use_decl.path.len() < 2 {
+                continue;
+            }
+            if use_decl.path.len() > 2 {
+                errors.push(CheckError::Semantic(SemanticError::module_not_found(
+                    format!(
+                        "`use` takes a module and one item (`use module::item;`), but this path has {} segments",
+                        use_decl.path.len()
+                    ),
+                    use_decl.span,
+                )));
+                continue;
+            }
+            let module_name = use_decl.path[0].name.as_str();
+            let item_name = use_decl.path[1].name.as_str();
+            // Importing from the declaring module itself is a no-op: the
+            // item is already in scope.
+            if module_name == module.name {
+                continue;
+            }
+            let Some(items) = declared.get(module_name) else {
+                errors.push(CheckError::Semantic(SemanticError::module_not_found(
+                    format!(
+                        "cannot find module `{module_name}`; declare it with `mod {module_name};`"
+                    ),
+                    use_decl.path[0].span,
+                )));
+                continue;
+            };
+            if !items.contains(item_name) {
+                errors.push(CheckError::Semantic(SemanticError::module_not_found(
+                    format!("cannot find `{item_name}` in module `{module_name}`"),
+                    use_decl.path[1].span,
+                )));
+            }
+        }
+    }
+    errors
+}
+
+/// Whether a semantic error is already explained by a failed generic-call
+/// inference.
+///
+/// Monomorphization drops generic declarations from the AST, so an
+/// uninstantiated call would also surface as "cannot find name". Reporting
+/// both would tell the user two contradictory things about one call, so the
+/// unresolved-name error at that exact callee is suppressed and the `E-T44`
+/// (which names the real fix) is the only diagnostic.
+fn explained_by_inference(
+    error: &crate::semantics::SemanticError,
+    uninferable: &[(String, crate::source::Span)],
+) -> bool {
+    if error.kind() != crate::semantics::SemanticErrorKind::UnresolvedName {
+        return false;
+    }
+    uninferable
+        .iter()
+        .any(|(name, span)| name == error.name() && *span == error.span())
+}
+
+/// The kind of an item, with a `pub` qualifier stripped.
+///
+/// `pub` neither declares nor loads anything on its own; the pipeline treats
+/// `pub fn`/`pub struct`/... as the declaration it wraps, and `pub mod`/
+/// `pub use` as the module or import it wraps.
+fn item_kind_through_pub(kind: &crate::ast::ItemKind) -> &crate::ast::ItemKind {
+    match kind {
+        crate::ast::ItemKind::Pub(pub_item) => item_kind_through_pub(&pub_item.item.kind),
+        other => other,
+    }
+}
+
+/// The item a module contributes to the flattened compilation unit.
+///
+/// Returns `None` for `mod`/`use` declarations (and their `pub` forms): they
+/// have been acted on during discovery, and the flattened unit sees a single
+/// namespace rather than per-module ones. Everything else is returned with
+/// any `pub` qualifier stripped, matching how the pipeline treats visibility.
+fn flattened_item(item: &crate::ast::Item) -> Option<crate::ast::Item> {
+    match item_kind_through_pub(&item.kind) {
+        crate::ast::ItemKind::Module(_) | crate::ast::ItemKind::Use(_) => None,
+        _ => match &item.kind {
+            crate::ast::ItemKind::Pub(pub_item) => Some(pub_item.item.as_ref().clone()),
+            _ => Some(item.clone()),
+        },
+    }
+}
+
+/// The name a module-level item is declared under, if it declares one.
+fn module_level_name(kind: &crate::ast::ItemKind) -> Option<&str> {
+    match kind {
+        crate::ast::ItemKind::Fn(item) => Some(item.name.name.as_str()),
+        crate::ast::ItemKind::Struct(item) => Some(item.name.name.as_str()),
+        crate::ast::ItemKind::Enum(item) => Some(item.name.name.as_str()),
+        crate::ast::ItemKind::Let(item) => Some(item.name.name.as_str()),
+        crate::ast::ItemKind::Const(item) => Some(item.name.name.as_str()),
+        crate::ast::ItemKind::Pub(item) => module_level_name(&item.item.kind),
+        crate::ast::ItemKind::Module(_) | crate::ast::ItemKind::Use(_) => None,
+    }
 }
 
 // ======================================================================
@@ -576,19 +746,27 @@ fn discover_modules_recursive(
     sources: &mut SourceMap,
     path: &Path,
     parent: Option<String>,
-    declared: Option<String>,
+    declared: Option<(String, Span)>,
     external_roots: &[PathBuf],
     modules: &mut Vec<ModuleSource>,
     visited: &mut HashSet<PathBuf>,
     errors: &mut Vec<CheckError>,
 ) {
+    // The `mod name;` declaration that requested this file, when there is
+    // one. A missing or unreadable module file is reported at that
+    // declaration, which is the only location the source actually contains;
+    // the synthetic empty span is the fallback when nothing points at it.
+    let declared_span = declared
+        .as_ref()
+        .map(|(_, span)| *span)
+        .unwrap_or_else(|| Span::new(SourceId::new(0), 0..0));
     // Canonicalize to detect cycles and missing files.
     let canon = match path.canonicalize() {
         Ok(p) => p,
         Err(_) => {
             errors.push(CheckError::Semantic(SemanticError::module_not_found(
                 format!("module file '{}' not found", path.display()),
-                Span::new(SourceId::new(0), 0..0),
+                declared_span,
             )));
             return;
         }
@@ -601,7 +779,7 @@ fn discover_modules_recursive(
         Err(_) => {
             errors.push(CheckError::Semantic(SemanticError::module_not_found(
                 format!("module file '{}' not found", path.display()),
-                Span::new(SourceId::new(0), 0..0),
+                declared_span,
             )));
             return;
         }
@@ -612,7 +790,7 @@ fn discover_modules_recursive(
     // Child modules take the name from their `mod` declaration, so a
     // directory package resolved to `<name>/mod.mink` is still known as
     // `<name>` (matching `use <name>::item`). The root uses its file stem.
-    let name = declared.unwrap_or_else(|| {
+    let name = declared.map(|(name, _)| name).unwrap_or_else(|| {
         path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown")
@@ -632,17 +810,16 @@ fn discover_modules_recursive(
     }
 
     // Collect mod declarations before moving `parsed` into ModuleSource.
-    let mod_names: Vec<String> = if parsed.is_valid() {
+    let mod_names: Vec<(String, Span)> = if parsed.is_valid() {
         parsed
             .ast()
             .items()
             .iter()
-            .filter_map(|item| {
-                if let crate::ast::ItemKind::Module(mod_decl) = &item.kind {
-                    Some(mod_decl.name.name.clone())
-                } else {
-                    None
+            .filter_map(|item| match item_kind_through_pub(&item.kind) {
+                crate::ast::ItemKind::Module(mod_decl) => {
+                    Some((mod_decl.name.name.clone(), mod_decl.name.span))
                 }
+                _ => None,
             })
             .collect()
     } else {
@@ -661,13 +838,13 @@ fn discover_modules_recursive(
     // Recurse into child modules.
     if !mod_names.is_empty() {
         let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        for child_name in mod_names {
+        for (child_name, decl_span) in mod_names {
             let child_path = resolve_module_path(&child_name, parent_dir, external_roots);
             discover_modules_recursive(
                 sources,
                 &child_path,
                 Some(module_name.clone()),
-                Some(child_name.clone()),
+                Some((child_name, decl_span)),
                 external_roots,
                 modules,
                 visited,

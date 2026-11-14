@@ -150,6 +150,12 @@ pub enum TypeErrorKind {
     /// The minimum value is only reachable as `-9223372036854775808`, a
     /// negated literal, so the legal range depends on the sign.
     IntegerLiteralOverflow,
+    /// A call to a generic function does not carry enough information to
+    /// choose its type arguments (M7 Phase C, Gate B): the arguments are not
+    /// literals or typed locals the monomorphizer can read. The call is
+    /// rejected here, by name, instead of being left generic and reported as
+    /// an unknown function later in the pipeline.
+    CannotInferTypeArguments,
 }
 
 impl TypeErrorKind {
@@ -203,6 +209,7 @@ impl TypeErrorKind {
             Self::StructPatternTypeMismatch => "E-T41",
             Self::InvalidCollectionKey => "E-T42",
             Self::IntegerLiteralOverflow => "E-T43",
+            Self::CannotInferTypeArguments => "E-T44",
         }
     }
 }
@@ -748,6 +755,26 @@ impl TypeError {
         )
     }
 
+    /// Creates a cannot-infer-type-arguments error at `span` (`E-T44`): a
+    /// call to a generic function whose type arguments cannot be inferred
+    /// from the call's arguments.
+    ///
+    /// The message names the callable and the fix, because the pipeline can
+    /// no longer resolve the call: monomorphization leaves generic
+    /// declarations out of the AST, and an uninstantiated call would
+    /// otherwise be reported as an unknown function.
+    pub fn cannot_infer_type_arguments(span: Span, fn_name: &str) -> Self {
+        Self::custom(
+            TypeErrorKind::CannotInferTypeArguments,
+            span,
+            format!(
+                "cannot infer the type arguments of `{fn_name}` from this call; \
+                 write `{fn_name}::<Type>(...)` or pass a literal or typed variable"
+            ),
+            None,
+        )
+    }
+
     /// Creates an unknown-struct-field-in-pattern error at `span` (`E-T39`):
     /// the pattern names a field the struct does not declare.
     pub fn unknown_struct_field_in_pattern(span: Span, field: &str, struct_name: &str) -> Self {
@@ -877,7 +904,8 @@ impl fmt::Display for TypeError {
             | TypeErrorKind::UnknownStructFieldInPattern
             | TypeErrorKind::MissingStructFieldInPattern
             | TypeErrorKind::StructPatternTypeMismatch
-            | TypeErrorKind::IntegerLiteralOverflow => actual.to_string(),
+            | TypeErrorKind::IntegerLiteralOverflow
+            | TypeErrorKind::CannotInferTypeArguments => actual.to_string(),
             TypeErrorKind::InvalidCollectionKey => {
                 format!("`{expected}` is not a valid key type: {actual}")
             }

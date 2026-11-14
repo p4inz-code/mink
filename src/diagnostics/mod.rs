@@ -15,63 +15,109 @@
 //! Reference: `docs/compiler/COMPILER_ARCHITECTURE.md` §10 (Diagnostics)
 //! and `docs/ai/AI_TOOLING_ARCHITECTURE.md`.
 
+use crate::driver::CheckError;
 use crate::driver::CheckReport;
-use crate::source::{SourceFile, SourceMap};
+use crate::source::{SourceFile, SourceMap, Span};
 
 // =========================================================================
 // JSON Diagnostic Output
 // =========================================================================
 
+/// The version of the machine-readable diagnostic schema.
+///
+/// The schema only grows: existing fields keep their meaning and type, so a
+/// consumer written against version 1 keeps working when fields are added.
+/// A change to an existing field's meaning increments this version.
+pub const SCHEMA_VERSION: u32 = 1;
+
 /// Renders a [`CheckReport`] as a machine-readable JSON string.
 ///
-/// The output is deterministic: identical reports produce identical JSON.
-/// The schema is:
+/// The output is deterministic: identical input produces byte-identical
+/// JSON. Errors are already ordered by file and byte offset, and every
+/// field is written from the diagnostic itself (nothing is inferred or
+/// invented).
+///
+/// Schema version 1:
 ///
 /// ```json
 /// {
+///   "schema_version": 1,
 ///   "success": bool,
+///   "exit_code": 0 | 1,
 ///   "files_checked": int,
+///   "files": ["path", ...],
 ///   "token_count": int,
 ///   "errors": [
 ///     {
-///       "code": "E-XXX",
+///       "code": "E-XXX" | null,
 ///       "severity": "error",
+///       "stage": "lexing" | "parsing" | "semantics" | "typecheck" | "hir" | "mir" | "driver",
 ///       "message": "...",
-///       "span": { "file": "...", "start_line": int, "start_column": int, "end_line": int, "end_column": int },
-///       "related": [ { "message": "...", "file": "...", "line": int, "column": int } ]
+///       "span": {
+///         "file": "...", "start_byte": int, "end_byte": int,
+///         "start_line": int, "start_column": int,
+///         "end_line": int, "end_column": int
+///       } | null,
+///       "related": [
+///         { "message": "...", "file": "...", "start_byte": int, "end_byte": int,
+///           "line": int, "column": int }
+///       ],
+///       "suggestions": []
 ///     }
 ///   ],
 ///   "warnings": []
 /// }
 /// ```
+///
+/// Positions are 1-based lines and columns; `start_byte`/`end_byte` are
+/// 0-based UTF-8 byte offsets and the end is exclusive. A diagnostic whose
+/// span does not belong to a loaded file reports `"span": null` rather than
+/// a guessed location. `suggestions` is always empty today: the compiler
+/// does not compute machine-applicable fixes, and empty means "none
+/// suggested", not "none needed". Documentation: `docs/compiler/DIAGNOSTICS.md`.
 pub fn render_json(report: &CheckReport, sources: &SourceMap) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str("{\n");
 
-    // success
-    out.push_str("  \"success\": ");
-    out.push_str(if report.errors.is_empty() {
-        "true"
-    } else {
-        "false"
-    });
-    out.push_str(",\n");
+    out.push_str(&format!("  \"schema_version\": {SCHEMA_VERSION},\n"));
 
-    // files_checked
-    out.push_str("  \"files_checked\": 1,\n");
+    // success
+    out.push_str(&format!("  \"success\": {},\n", report.errors.is_empty()));
+
+    // exit_code: the status `mink check --json` returns for this report.
+    out.push_str(&format!(
+        "  \"exit_code\": {},\n",
+        if report.errors.is_empty() { 0 } else { 1 }
+    ));
+
+    // files_checked / files: every source file this compilation loaded.
+    out.push_str(&format!("  \"files_checked\": {},\n", sources.len()));
+    out.push_str("  \"files\": [");
+    for i in 0..sources.len() {
+        let Some(file) = sources.get(crate::source::SourceId::new(i as u32)) else {
+            break;
+        };
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!(
+            "\"{}\"",
+            escape_json(&file.name().display().to_string())
+        ));
+    }
+    out.push_str("],\n");
 
     // token_count
     out.push_str(&format!("  \"token_count\": {},\n", report.token_count));
 
     // errors
     out.push_str("  \"errors\": [");
-    let file = sources.get(report.source_id);
     for (i, error) in report.errors.iter().enumerate() {
         if i > 0 {
-            out.push_str(",\n");
+            out.push_str(",");
         }
         out.push_str("\n    ");
-        render_error_json(&mut out, error, file);
+        render_error_json(&mut out, error, sources);
     }
     if !report.errors.is_empty() {
         out.push_str("\n  ");
@@ -85,21 +131,137 @@ pub fn render_json(report: &CheckReport, sources: &SourceMap) -> String {
     out
 }
 
+/// Renders a failure that has no front-end diagnostic behind it (a file that
+/// cannot be read, a path that is a directory, a backend rejection) in the
+/// same schema as [`render_json`], with `"code": null` and a `stage` naming
+/// the failing pipeline phase.
+///
+/// `code` is null rather than invented: these failures have no documented
+/// stable code, and a fabricated one would be a false promise to tools.
+pub fn render_failure_json(message: &str, stage: &str) -> String {
+    let mut out = String::with_capacity(512);
+    out.push_str("{\n");
+    out.push_str(&format!("  \"schema_version\": {SCHEMA_VERSION},\n"));
+    out.push_str("  \"success\": false,\n");
+    out.push_str("  \"exit_code\": 1,\n");
+    out.push_str("  \"files_checked\": 0,\n");
+    out.push_str("  \"files\": [],\n");
+    out.push_str("  \"token_count\": 0,\n");
+    out.push_str("  \"errors\": [\n    {\n");
+    out.push_str("      \"code\": null,\n");
+    out.push_str("      \"severity\": \"error\",\n");
+    out.push_str(&format!("      \"stage\": \"{}\",\n", escape_json(stage)));
+    out.push_str(&format!(
+        "      \"message\": \"{}\",\n",
+        escape_json(message)
+    ));
+    out.push_str("      \"span\": null,\n");
+    out.push_str("      \"related\": [],\n");
+    out.push_str("      \"suggestions\": []\n");
+    out.push_str("    }\n  ],\n");
+    out.push_str("  \"warnings\": []\n");
+    out.push_str("}\n");
+    out
+}
+
+/// Renders backend diagnostics (codes `E-B*`) in the schema of
+/// [`render_json`], so a code-generation rejection reaches tools in the same
+/// shape as a front-end error.
+pub fn render_backend_json(errors: &[crate::backend::BackendError], sources: &SourceMap) -> String {
+    let mut out = String::with_capacity(512);
+    out.push_str("{\n");
+    out.push_str(&format!("  \"schema_version\": {SCHEMA_VERSION},\n"));
+    out.push_str("  \"success\": false,\n");
+    out.push_str("  \"exit_code\": 1,\n");
+    out.push_str(&format!("  \"files_checked\": {},\n", sources.len()));
+    out.push_str("  \"files\": [");
+    for i in 0..sources.len() {
+        let Some(file) = sources.get(crate::source::SourceId::new(i as u32)) else {
+            break;
+        };
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!(
+            "\"{}\"",
+            escape_json(&file.name().display().to_string())
+        ));
+    }
+    out.push_str("],\n");
+    out.push_str("  \"token_count\": 0,\n");
+    out.push_str("  \"errors\": [");
+    for (i, error) in errors.iter().enumerate() {
+        if i > 0 {
+            out.push_str(",");
+        }
+        out.push_str("\n    {\n");
+        out.push_str(&format!("      \"code\": \"{}\",\n", error.code()));
+        out.push_str("      \"severity\": \"error\",\n");
+        out.push_str("      \"stage\": \"backend\",\n");
+        out.push_str(&format!(
+            "      \"message\": \"{}\",\n",
+            escape_json(&error.to_string())
+        ));
+        let span = error.span();
+        match sources.get(span.file()) {
+            Some(file) => {
+                let start = file.line_col(span.start());
+                let end = file.line_col(span.end());
+                out.push_str(&format!(
+                    "      \"span\": {{ \"file\": \"{}\", \"start_byte\": {}, \"end_byte\": {}, \"start_line\": {}, \"start_column\": {}, \"end_line\": {}, \"end_column\": {} }},\n",
+                    escape_json(&file.name().display().to_string()),
+                    span.start(),
+                    span.end(),
+                    start.line,
+                    start.column,
+                    end.line,
+                    end.column
+                ));
+            }
+            None => out.push_str("      \"span\": null,\n"),
+        }
+        out.push_str("      \"related\": [],\n");
+        out.push_str("      \"suggestions\": []\n");
+        out.push_str("    }");
+    }
+    if !errors.is_empty() {
+        out.push_str("\n  ");
+    }
+    out.push_str("],\n");
+    out.push_str("  \"warnings\": []\n");
+    out.push_str("}\n");
+    out
+}
+
+/// The pipeline stage that produced a diagnostic.
+fn stage_of(error: &CheckError) -> &'static str {
+    match error {
+        CheckError::Lex(_) => "lexing",
+        CheckError::Parse(_) => "parsing",
+        CheckError::Semantic(_) => "semantics",
+        CheckError::Type(_) => "typecheck",
+        CheckError::Hir(_) => "hir",
+        CheckError::Mir(_) => "mir",
+    }
+}
+
+/// Resolves the file a span belongs to.
+///
+/// Spans carry their own file id, so every diagnostic is attributed to the
+/// file it came from even when a compilation covers several modules. Spans
+/// synthesized without a real location resolve to nothing and are reported
+/// as `null`.
+fn file_of<'a>(span: Span, sources: &'a SourceMap) -> Option<&'a SourceFile> {
+    sources.get(span.file())
+}
+
 /// Renders a single [`CheckError`] as a JSON object (without outer braces).
-fn render_error_json(
-    out: &mut String,
-    error: &crate::driver::CheckError,
-    file: Option<&SourceFile>,
-) {
+fn render_error_json(out: &mut String, error: &CheckError, sources: &SourceMap) {
     out.push_str("{\n");
 
-    // code
     out.push_str(&format!("      \"code\": \"{}\",\n", error.code()));
-
-    // severity (all current diagnostics are errors)
     out.push_str("      \"severity\": \"error\",\n");
-
-    // message
+    out.push_str(&format!("      \"stage\": \"{}\",\n", stage_of(error)));
     out.push_str(&format!(
         "      \"message\": \"{}\",\n",
         escape_json(&error.to_string())
@@ -107,28 +269,31 @@ fn render_error_json(
 
     // span
     let span = error.span();
-    if let Some(f) = file {
-        let start = f.line_col(span.start());
-        let end = f.line_col(span.end());
-        out.push_str(&format!(
-            "      \"span\": {{ \"file\": \"{}\", \"start_line\": {}, \"start_column\": {}, \"end_line\": {}, \"end_column\": {} }},\n",
-            escape_json(&f.name().display().to_string()),
-            start.line,
-            start.column,
-            end.line,
-            end.column
-        ));
-    } else {
-        out.push_str("      \"span\": null,\n");
+    match file_of(span, sources) {
+        Some(file) => {
+            let start = file.line_col(span.start());
+            let end = file.line_col(span.end());
+            out.push_str(&format!(
+                "      \"span\": {{ \"file\": \"{}\", \"start_byte\": {}, \"end_byte\": {}, \"start_line\": {}, \"start_column\": {}, \"end_line\": {}, \"end_column\": {} }},\n",
+                escape_json(&file.name().display().to_string()),
+                span.start(),
+                span.end(),
+                start.line,
+                start.column,
+                end.line,
+                end.column
+            ));
+        }
+        None => out.push_str("      \"span\": null,\n"),
     }
 
     // related
     out.push_str("      \"related\": [");
     if let Some(related_span) = error.related_span() {
-        if let Some(f) = file {
-            let pos = f.line_col(related_span.start());
+        if let Some(file) = file_of(related_span, sources) {
+            let pos = file.line_col(related_span.start());
             let note = match error {
-                crate::driver::CheckError::Semantic(sem)
+                CheckError::Semantic(sem)
                     if sem.kind() == crate::semantics::SemanticErrorKind::DuplicateDefinition =>
                 {
                     "previous declaration is here"
@@ -136,17 +301,22 @@ fn render_error_json(
                 _ => "related location is here",
             };
             out.push_str(&format!(
-                "\n        {{ \"message\": \"{}\", \"file\": \"{}\", \"line\": {}, \"column\": {} }}",
+                "\n        {{ \"message\": \"{}\", \"file\": \"{}\", \"start_byte\": {}, \"end_byte\": {}, \"line\": {}, \"column\": {} }}",
                 note,
-                escape_json(&f.name().display().to_string()),
+                escape_json(&file.name().display().to_string()),
+                related_span.start(),
+                related_span.end(),
                 pos.line,
                 pos.column
             ));
         }
     }
-    out.push_str("\n      ]");
+    out.push_str("\n      ],\n");
 
-    out.push_str("\n    }");
+    // suggestions: no diagnostic computes one yet (documented above).
+    out.push_str("      \"suggestions\": []\n");
+
+    out.push_str("    }");
 }
 
 /// Escapes a string for JSON output.
@@ -970,5 +1140,14 @@ mod tests {
         assert!(json.contains("\"success\": true"));
         assert!(json.contains("\"errors\": []"));
         assert!(json.contains("\"warnings\": []"));
+    }
+
+    #[test]
+    fn render_failure_json_is_well_formed() {
+        let json = render_failure_json("failed to read 'x.mink'", "driver");
+        assert!(json.contains("\"schema_version\": 1"));
+        assert!(json.contains("\"code\": null"));
+        assert!(json.contains("\"stage\": \"driver\""));
+        assert!(json.contains("\"span\": null"));
     }
 }

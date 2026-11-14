@@ -66,6 +66,14 @@ pub struct Monomorphizer {
     /// types (for generic type-argument inference) and closure-variable
     /// bindings (for transitive capture expansion).
     scopes: Vec<Phase3Scope>,
+    /// Calls to generic functions whose type arguments could not be inferred,
+    /// as `(function name, callee span)`.
+    ///
+    /// These calls are left untouched, and the generic declaration is not in
+    /// the emitted AST, so resolving the call later would produce "cannot find
+    /// name". The driver turns each record into a `E-T44` at the call site
+    /// instead (M7 Phase C, Gate B).
+    uninferable_calls: Vec<(String, Span)>,
 }
 
 /// One lexical scope of the Phase 3 AST walk.
@@ -101,7 +109,16 @@ impl Monomorphizer {
             current_fn_params: None,
             simple_fn_returns: HashMap::new(),
             scopes: Vec::new(),
+            uninferable_calls: Vec::new(),
         }
+    }
+
+    /// The generic calls this pass could not instantiate, ordered by walk.
+    ///
+    /// Each entry is the called function's name and the span of the callee
+    /// expression, so the caller can report the failure at the call site.
+    pub fn uninferable_calls(&self) -> &[(String, Span)] {
+        &self.uninferable_calls
     }
 
     /// Generates the next unique synthetic span.
@@ -605,15 +622,27 @@ impl Monomorphizer {
                     None
                 };
                 if let Some(name) = fn_name {
-                    if let Some((generic_params, fn_item)) = self.generic_fns.get(&name) {
-                        let generic_params = generic_params.clone();
-                        let fn_item = fn_item.clone();
-                        if let Some(subst) = self.infer_type_args(
+                    // Clone the declaration so recording a failed inference does
+                    // not hold a borrow of `generic_fns`.
+                    let generic = self
+                        .generic_fns
+                        .get(&name)
+                        .map(|(params, item)| (params.clone(), item.clone()));
+                    if let Some((generic_params, fn_item)) = generic {
+                        let substitutions = self.infer_type_args(
                             &generic_params,
                             &fn_item.params,
                             args,
                             type_args.as_deref(),
-                        ) {
+                        );
+                        if substitutions.is_none() {
+                            let span = match &callee.kind {
+                                ExprKind::Ident(ident) => ident.span,
+                                _ => unreachable!("fn_name is only set for identifier callees"),
+                            };
+                            self.uninferable_calls.push((name.clone(), span));
+                        }
+                        if let Some(subst) = substitutions {
                             let concrete_name = self.mangle_name(&name, &subst);
                             if !self.instantiations.contains_key(&concrete_name) {
                                 let concrete_fn =
@@ -2874,6 +2903,18 @@ impl Monomorphizer {
 pub fn monomorphize(ast: &mut Ast) {
     let mut mono = Monomorphizer::new();
     mono.run(ast);
+}
+
+/// Runs monomorphization and returns the generic calls it could not
+/// instantiate.
+///
+/// The result is `(function name, callee span)` for each call whose type
+/// arguments could not be inferred (`E-T44`); see
+/// [`Monomorphizer::uninferable_calls`].
+pub fn monomorphize_reported(ast: &mut Ast) -> Vec<(String, Span)> {
+    let mut mono = Monomorphizer::new();
+    mono.run(ast);
+    mono.uninferable_calls().to_vec()
 }
 
 // ------------------------------------------------------------------

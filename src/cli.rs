@@ -215,15 +215,36 @@ pub fn main(args: &[String]) -> ExitCode {
                     }
                 }
                 Err(BuildError::FrontEnd(report)) => {
-                    print_errors(&sources, &report);
+                    // Even when `check` cannot produce a report (a module file
+                    // that vanished mid-run), a tool that asked for JSON gets
+                    // JSON on stdout: never an empty stdout plus prose.
+                    if json {
+                        print!("{}", crate::diagnostics::render_json(&report, &sources));
+                    } else {
+                        print_errors(&sources, &report);
+                    }
                     ExitCode::from(1)
                 }
                 Err(BuildError::Backend(errors)) => {
-                    print_backend_errors(&sources, &errors);
+                    if json {
+                        print!(
+                            "{}",
+                            crate::diagnostics::render_backend_json(&errors, &sources)
+                        );
+                    } else {
+                        print_backend_errors(&sources, &errors);
+                    }
                     ExitCode::from(1)
                 }
                 Err(error) => {
-                    eprintln!("mink: error: {error}");
+                    if json {
+                        print!(
+                            "{}",
+                            crate::diagnostics::render_failure_json(&error.to_string(), "driver")
+                        );
+                    } else {
+                        eprintln!("mink: error: {error}");
+                    }
                     build_error_exit_code(&error)
                 }
             }
@@ -341,12 +362,13 @@ pub fn main(args: &[String]) -> ExitCode {
 /// duplicate definition, or the target of a mismatched assignment) print a
 /// note for that location too.
 fn print_errors(sources: &SourceMap, report: &CheckReport) {
-    let Some(file) = sources.get(report.source_id) else {
-        return;
-    };
     for error in &report.errors {
         eprintln!("mink: error[{}]: {}", error.code(), error);
-        print_span_location(file, error.span());
+        // A span names its own file: in a multi-module compilation the error
+        // can come from any loaded module, so never assume the root file.
+        if let Some(file) = sources.get(error.span().file()) {
+            print_span_location(file, error.span());
+        }
         if let Some(related) = error.related_span() {
             let note = match error {
                 CheckError::Semantic(semantic)
@@ -357,7 +379,9 @@ fn print_errors(sources: &SourceMap, report: &CheckReport) {
                 _ => "related location is here",
             };
             eprintln!("  = note: {note}");
-            print_span_location(file, related);
+            if let Some(file) = sources.get(related.file()) {
+                print_span_location(file, related);
+            }
         }
     }
 }
