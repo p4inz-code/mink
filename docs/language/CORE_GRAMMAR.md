@@ -1033,7 +1033,7 @@ reported **once per file** rather than once per remaining level.
 
 | Limit | Constant | Value | Applies to |
 | --- | --- | --- | --- |
-| Nesting depth | `parser::MAX_NESTING` | 512 | parenthesized groups, blocks, types, patterns, and every other recursive production |
+| Nesting depth | `parser::MAX_NESTING` | 512 | parenthesized groups, blocks, types, patterns, prefix-operator chains, chained assignment and chained ranges |
 | Expression chain | `parser::MAX_EXPR_CHAIN` | 2,048 | operator nodes in one outermost expression |
 
 - **Nesting depth** is one budget shared by every recursive construct, so the
@@ -1042,11 +1042,24 @@ reported **once per file** rather than once per remaining level.
   500 were verified; 512 is rejected), and nested blocks and `Ptr<…>` types draw
   on the same budget. It is deliberately far beyond anything hand-written; 32
   levels compile and run.
+- **Prefix operators count one level each** (session 278). `-`, `!`, `~`, `&`,
+  `&mut`, `*` and `await` recurse into another `parse_unary`, and the recursion
+  is now guarded by the same nesting budget. Before session 278 it was not, so
+  a source such as `return ----…-1;` with ~8,000 operators overflowed the
+  compiler stack (exit `3221225725`) instead of reporting `E-P33`. Chained
+  assignment (`a = b = c = …`) and chained ranges (`1..2..…`) are guarded for
+  the same reason.
 - **Expression chain** bounds one outermost expression (a `let` initializer, a
   statement expression, a call argument list entry) to 2,048 binary operator
   nodes. A flat chain such as `a + b + c + …` is parsed iteratively, but its
   tree is one node deep per term, so this bounds the depth the later passes
   walk. 1,000 terms compile and run; 5,000 terms are rejected.
+- **The chain budget resets at every statement** (session 278). It used to be
+  reset only at `depth == 0`, which never happens inside a function body, so a
+  flat function accumulated every operator in the file: a 3,000-statement
+  function was rejected as `E-P33` — "source nests too deeply" — although its
+  syntax is perfectly flat. A function of any length whose *individual*
+  expressions stay under 2,048 operator nodes now compiles.
 - Neither limit bounds the size of a program: statement count, item count,
   token count, function count, and block length are unbounded and processed in
   linear time. The limits bound *depth*, not *size*.
@@ -1055,7 +1068,9 @@ reported **once per file** rather than once per remaining level.
   input is a diagnostic, never a crash: before session 277 the release
   compiler aborted with `thread 'main' has overflowed its stack` at roughly
   200 nested parentheses and roughly 500 chain terms.
-- Permanent coverage: `tests/compiler_robustness.rs`.
+- Permanent coverage: `tests/compiler_robustness.rs`,
+  `tests/frontend_conformance.rs` (`A-DIAG-04`–`A-DIAG-07`) and the bundled-
+  binary staleness guard in `tests/release.rs`.
 
 ## §35  Integer arithmetic and shift contracts (session 277)
 

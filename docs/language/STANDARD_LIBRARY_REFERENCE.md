@@ -489,6 +489,15 @@ Output: `name`, `mink`, `3`, `{"name":"mink","count":3}`.
 fit. A successful parse returns a non-zero offset; offset `0` can never be a
 valid value because the arena begins with the input bytes.
 
+**Nesting limit (session 278).** The parser recurses once per array/object
+level. It accepts at most **128** levels of nesting (`_JSON_MAX_DEPTH`); deeper
+input returns `0` without parsing. Before session 278 the recursion was
+unbounded, and roughly 500 levels of `[[[…]]]` overflowed the generated
+program's 1 MiB stack and terminated the process with `0xC00000FD` — an
+uncontrolled crash on untrusted input rather than a parse error. 100 levels
+still parse; 200 and above return `0`. Regression coverage:
+`tests/ownership_runtime_conformance.rs` (`B-LIB-01`–`B-LIB-03`).
+
 **Arena vs. returned strings.** The arena is one `rt_alloc` block owned by the
 caller and released with `rt_free(arena)`. The accessors do **not** return views
 into it: `json_as_str`, `json_obj_get_key`, `json_num_str` and `json_to_str`

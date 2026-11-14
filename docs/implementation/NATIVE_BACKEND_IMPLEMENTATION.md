@@ -222,6 +222,21 @@ against malformed hand-built or mutated instructions.
 - The `main` function's integer/boolean result becomes the process exit
   code; a unit `main` exits `0`.
 
+**Stack frames and probing (session 278).** The prologue is
+`push rbp; mov rbp, rsp` followed by reserving the function's frame. Frames up
+to one 4 KiB page are reserved with a single `sub rsp, N`. Larger frames are
+reserved one page at a time, reading the byte at each new `rsp` on the way down
+(`emit_frame_allocation`). Windows grows a thread's stack only while the guard
+page is touched *in order*; a single large `sub rsp` followed by a store into
+the deepest slot jumps past the guard page and faults with an access violation
+(`0xC0000005`) instead of growing the stack. This was a real defect: the first
+element of an array literal lives at the bottom of its slot, so a fixed array of
+3,048 `Int`s built a program that crashed before its first statement, while
+3,047 worked — the boundary was the initially committed stack region, not any
+compiler constant. Any function whose frame exceeds the committed stack was
+affected (large arrays, many locals, large aggregates). Regression coverage:
+`tests/ownership_runtime_conformance.rs` (`B-RT-11`).
+
 **Determinism.** Emission walks functions, blocks, and instructions in
 their stable source order and produces byte-identical images for identical
 input.

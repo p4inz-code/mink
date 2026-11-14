@@ -194,6 +194,16 @@ into an x86-64 Windows PE executable (see
   and roughly 500 chain terms; `tests/compiler_robustness.rs` is the
   permanent regression. `docs/language/CORE_GRAMMAR.md` §34 documents the
   limits.
+- Session 278 closed three gaps in that guard. (1) The prefix-operator
+  recursion (`-`, `!`, `~`, `&`, `&mut`, `*`, `await`) called `parse_unary`
+  directly, bypassing `enter_nesting`, so an 8,000-operator chain still
+  overflowed the compiler stack; the chain is now one nesting level per
+  operator. (2) Chained assignment and chained ranges recurse likewise and are
+  now guarded. (3) `expr_nodes` was reset only when `depth == 0`, which never
+  happens inside a function body, so a flat function accumulated every
+  operator in the file and a ~3,000-statement function was rejected as
+  "nests too deeply"; the budget now resets at each statement.
+  `tests/frontend_conformance.rs` is the permanent corpus.
 - Semantic validation is out of scope for the parser: for example
   `break` outside a loop, duplicate names, or assignment to immutable
   bindings are not the parser's concern. Semantic analysis landed in session
@@ -334,6 +344,9 @@ grammar description against the implementation. Findings and changes:
   of binary operators, postfix operations, and arguments are parsed
   iteratively and scale linearly; session 277 verified a 1,000-term chain
   through `check` and `build` and a 2,048-term chain through `check`.
+- Session 278 extended the depth guard to prefix-operator chains, chained
+  assignment and chained ranges, and made the operator budget per-statement so
+  it no longer rejects long but flat functions; see §8.
 
 No semantic analysis was introduced; assignment-target validation remains
 syntactic only.

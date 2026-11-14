@@ -858,6 +858,30 @@ contract audit. Milestone state is otherwise unchanged: M6 **OUTSTANDING**,
 M8 gated, Linux frozen, 1.0.5 unpublished, no tag and no release. See
 [`SESSION_277_M7_PHASE_A_COMPILER_FOUNDATION.md`](../implementation/SESSION_277_M7_PHASE_A_COMPILER_FOUNDATION.md).
 
+*Dated status, 2026-11-14 (Session 278 — M7 Phase B).* **M7 Phase B is
+PASS.** Gates A–D were executed against `41314d8` and four confirmed defects
+were fixed at the root cause with permanent regressions. The parser's operator
+budget was reset only at top level, so a flat ~2,050-statement function was
+rejected as "nests too deeply"; it now resets per statement, and prefix-operator
+chains, chained assignment and chained ranges are guarded (an 8,000-operator
+chain used to overflow the compiler stack). The backend reserved large frames
+with a single `sub rsp`, so the first store into an array literal's deepest slot
+jumped the Windows guard page: a 3,048-element array compiled to a program that
+died with `0xC0000005` before its first statement; the prologue now probes one
+page at a time (3,100–20,000-element arrays and 48 KiB frames run). The JSON
+parser recursed without a depth bound, so ~600 nested arrays overflowed the
+generated program's stack; it now refuses more than 128 levels with its
+documented `0` error. The stale npm compiler was rebuilt from this source
+(byte-identical to the release build) and a behavioural staleness guard was
+added, because version equality alone could not detect that the shipped binary
+still contained the Session 277 grouped-literal defect. New permanent corpora:
+`tests/frontend_conformance.rs` (51 cases) and
+`tests/ownership_runtime_conformance.rs` (29 executed cases); debug and release
+regression are **94 blocks, 3,529 passed, 0 failed, 9 ignored**. No language
+semantics changed, no version bump, tag or publication. M6 remains
+**OUTSTANDING**, M8 gated, Linux frozen, 1.0.5 unpublished. See
+[`SESSION_278_M7_PHASE_B_CONFORMANCE_STDLIB_DISTRIBUTION.md`](../implementation/SESSION_278_M7_PHASE_B_CONFORMANCE_STDLIB_DISTRIBUTION.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice
