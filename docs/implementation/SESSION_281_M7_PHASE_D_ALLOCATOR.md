@@ -328,18 +328,25 @@ validation remains outstanding; M8 remains gated.
 
 ## 12. Commits and remote verification
 
-Recorded after the push (see the repository history for this session):
+Four commits on top of `5f73cd7`, staged file by file (never `git add .`):
 
 | Commit | Content |
 |---|---|
-| `fix(runtime): …` | split/coalesce allocator, reference model, verifier invariants, ABI narrative, `process_run` register spill |
-| `fix(stdlib): …` | zlib code-length bounds, deterministic malformed-stream handling, npm bundle re-sync |
-| `test(allocator): …` | the 20-case mixed-size conformance corpus |
-| `docs(phase-d): …` | this report, the roadmap status, per-workload records, M2 defect closure |
+| `0e7d348` | `fix(runtime): preserve freed heap capacity when reusing a block` — split/coalesce allocator, reference model, verifier invariants, ABI narrative, `process_run` register spill |
+| `482a9ab` | `fix(stdlib): never index a Huffman table with a rejected code length` — zlib bounds, deterministic malformed-stream handling, npm bundle re-sync |
+| `1b0fde1` | `test(allocator): add the mixed-size allocator conformance corpus` — the 20 executed cases |
+| `6f8e6cf` | `docs(phase-d): record the allocator audit, fix and revalidation evidence` — this report, roadmap status, per-workload records, M2 defect closure |
 
-`tools/release_acceptance.py` on the committed tree: **PASS**, regression
-3,630 passed / 0 failed / 10 ignored. Local `main` equals `origin/main` after
-the push (`git rev-parse HEAD origin/main` agree).
+`python tools/release_acceptance.py` on `6f8e6cf` (clean checkout of the
+tracked tree): **verdict PASS**, exit 0, report
+`target/acceptance/unlabelled/20261115T113207Z-6f8e6cf/report.md`, regression
+**100 suites, 3,630 passed, 0 failed, 10 ignored**, one limitation — the four
+pre-existing untracked user files, which are deliberately not part of the
+acceptance evidence. (Before committing, the same run reported PARTIAL for the
+only reason it should: tracked files differed from the committed tree.)
+
+Local `main` equals `origin/main` after the push; both resolve to the final
+commit on this branch.
 
 ## 13. Roadmap position
 
