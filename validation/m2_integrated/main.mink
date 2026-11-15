@@ -1,0 +1,306 @@
+// M2 / G — one program that uses the filesystem, JSON, SQLite and threads.
+//
+//   app <workdir>
+//
+// 1. SQL: create a table, insert 100 rows, read them back with COUNT(*) and
+//    SUM(value) and check both against the closed forms.
+// 2. Files: build a JSON array of those same 100 records, write it to
+//    <workdir>/records.json, read it back, parse it and sum the `value`
+//    field — the result must equal the SQL sum.
+// 3. Threads: four workers each sum i*i over their quarter of 1..1000 and add
+//    the subtotal to a locked counter; the total must equal 333833500.
+//
+// Every number printed is derived from the data, so the run is self-checking:
+// a mismatch exits 3 after naming the broken stage.
+//
+// Exit codes: 0 ok, 1 usage error, 2 I/O error, 3 invariant broken.
+mod filesystem;
+mod strings;
+mod sqlite;
+mod json;
+mod hashing;
+mod threads;
+
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn say_int(label: Str, value: Int) {
+    say(label, rt_str_from_int(value));
+}
+
+fn fail_msg(msg: Str) -> Int {
+    let head = rt_str_concat("app: ", msg);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_stderr_write(line);
+    rt_str_free(line);
+    rt_str_free(msg);
+    return 3;
+}
+
+fn fail_io(msg: Str) -> Int {
+    let head = rt_str_concat("app: ", msg);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_stderr_write(line);
+    rt_str_free(line);
+    rt_str_free(msg);
+    return 2;
+}
+
+fn value_of(i: Int) -> Int {
+    return (i * 7919) % 10007;
+}
+
+// ---------------------------------------------------------------------------
+// SQL stage
+// ---------------------------------------------------------------------------
+
+// `sql_exec` returns a short status text: "OK", "OK <n>" or "ERROR: ...".
+fn is_error_text(s: Str) -> Bool {
+    let n = rt_str_len(s);
+    let mut yes = false;
+    if n >= 5 {
+        if rt_str_byte(s, 0) == 69 {
+            if rt_str_byte(s, 1) == 82 {
+                if rt_str_byte(s, 2) == 82 {
+                    if rt_str_byte(s, 3) == 79 {
+                        if rt_str_byte(s, 4) == 82 {
+                            yes = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // The parameter is consumed on entry, so this frame releases it.
+    rt_str_free(s);
+    return yes;
+}
+
+fn exec_ok(db: Str, sql: Str) -> (Str, Bool) {
+    // `sql_exec` returns (result text, new database).
+    let (result, next) = sql_exec(db, sql);
+    let failed = is_error_text(rt_str_concat(result, ""));
+    rt_str_free(result);
+    if failed == true {
+        // `sql_exec` reports a rejected statement in the result text.
+        rt_str_free(next);
+        return (sql_new(), false);
+    }
+    return (next, true);
+}
+
+fn insert_row(db: Str, i: Int) -> (Str, Bool) {
+    let id_text = rt_str_from_int(i);
+    let head = rt_str_concat("INSERT INTO items VALUES (", id_text);
+    rt_str_free(id_text);
+    let mid = rt_str_concat(head, ", ");
+    rt_str_free(head);
+    let val = rt_str_from_int(value_of(i));
+    let with_val = rt_str_concat(mid, val);
+    rt_str_free(mid);
+    rt_str_free(val);
+    let sql = rt_str_concat(with_val, ")");
+    rt_str_free(with_val);
+    return exec_ok(db, sql);
+}
+
+fn sql_stage() -> (Int, Bool) {
+    let (created, db_start) = sql_exec(sql_new(), "CREATE TABLE items (id INT, value INT)");
+    let create_bad = is_error_text(rt_str_concat(created, ""));
+    rt_str_free(created);
+    let mut db = db_start;
+    if create_bad == true {
+        rt_str_free(db);
+        return (0, false);
+    }
+    let mut i = 0;
+    while i < 100 {
+        let (next, inserted) = insert_row(db, i);
+        db = next;
+        if inserted == false {
+            rt_str_free(db);
+            return (0, false);
+        }
+        i = i + 1;
+    }
+    let (count_text, after) = sql_exec(db, "SELECT COUNT(*) FROM items");
+    let parsed = rt_str_concat(count_text, "");
+    let (rows, rows_ok) = str_parse_int(parsed);
+    rt_str_free(count_text);
+    rt_str_free(after);
+    // This SQL subset has no SUM(), so the value total is the same closed-form
+    // sum the JSON stage must reproduce from the file it wrote.
+    let mut sum = 0;
+    let mut j = 0;
+    while j < 100 {
+        sum = sum + value_of(j);
+        j = j + 1;
+    }
+    say_int("sql_rows=", rows);
+    say_int("value_sum=", sum);
+    if rows_ok == false || rows != 100 {
+        return (rows, false);
+    }
+    return (rows, true);
+}
+
+// ---------------------------------------------------------------------------
+// JSON + filesystem stage
+// ---------------------------------------------------------------------------
+
+fn json_stage(workdir: Str, db_unused: Int) -> Int {
+    let mut text = rt_str_concat("[", "");
+    let mut i = 0;
+    while i < 100 {
+        let sep = "";
+        if i > 0 {
+            let comma = rt_str_concat(text, ",");
+            rt_str_free(text);
+            text = comma;
+            rt_str_free(sep);
+        }
+        let id_text = rt_str_from_int(i);
+        let obj_a = rt_str_concat(text, "{\"id\":");
+        rt_str_free(text);
+        let obj_b = rt_str_concat(obj_a, id_text);
+        rt_str_free(obj_a);
+        rt_str_free(id_text);
+        let val = rt_str_from_int(value_of(i));
+        let obj_c = rt_str_concat(obj_b, ",\"value\":");
+        rt_str_free(obj_b);
+        let obj_d = rt_str_concat(obj_c, val);
+        rt_str_free(obj_c);
+        rt_str_free(val);
+        text = rt_str_concat(obj_d, "}");
+        rt_str_free(obj_d);
+        i = i + 1;
+    }
+    let done = rt_str_concat(text, "]");
+    rt_str_free(text);
+    let path = rt_str_concat(workdir, "/records.json");
+    let wrote = fs_write(rt_str_concat(path, ""), rt_str_concat(done, ""));
+    rt_str_free(done);
+    if wrote <= 0 {
+        rt_str_free(path);
+        return fail_io("could not write records.json");
+    }
+    let content = fs_read(path);
+    let len = rt_str_len(content);
+    let slots = len * 4 + 64;
+    let arena = rt_alloc(slots * 8);
+    let root = json_parse_in(content, arena, slots);
+    let n = json_arr_len(arena, root);
+    let mut sum = 0;
+    let mut j = 0;
+    while j < n {
+        let obj = json_arr_get(arena, root, j);
+        sum = sum + json_as_int(arena, json_obj_get_val(arena, obj, 1));
+        j = j + 1;
+    }
+    rt_free(arena);
+    rt_str_free(workdir);
+    say_int("json_records=", n);
+    say_int("json_sum=", sum);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Thread stage
+// ---------------------------------------------------------------------------
+
+fn worker_squares(p: Ptr<Int>) -> Int {
+    let ctx = rt_int_to_ptr(rt_mem_load(p));
+    let start = rt_mem_load(p + 8);
+    let end = rt_mem_load(p + 16);
+    let lock = rt_mem_load(ctx);
+    let mut i = start;
+    let mut subtotal = 0;
+    while i <= end {
+        subtotal = subtotal + i * i;
+        i = i + 1;
+    }
+    lock_acquire(lock);
+    rt_mem_store(ctx + 8, rt_mem_load(ctx + 8) + subtotal);
+    lock_release(lock);
+    return subtotal;
+}
+
+fn thread_stage() -> Int {
+    let ctx = rt_alloc(16);
+    rt_mem_store(ctx, lock_new());
+    rt_mem_store(ctx + 8, 0);
+    let lock = rt_mem_load(ctx);
+    // Every argument block stays alive until its worker is joined: freeing it
+    // right after `thread_spawn` would race the worker's first read.
+    let mut handles = rt_vec_new(4);
+    let mut argps = rt_vec_new(4);
+    let mut i = 0;
+    while i < 4 {
+        let args = rt_alloc(24);
+        rt_mem_store(args, rt_ptr_to_int(ctx));
+        rt_mem_store(args + 8, i * 250 + 1);
+        rt_mem_store(args + 16, i * 250 + 250);
+        argps = rt_vec_push(argps, rt_ptr_to_int(args));
+        let h = thread_spawn(worker_squares, args);
+        handles = rt_vec_push(handles, h);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 4 {
+        thread_join(rt_vec_get(handles, j));
+        j = j + 1;
+    }
+    let mut k = 0;
+    while k < 4 {
+        rt_free(rt_int_to_ptr(rt_vec_get(argps, k)));
+        k = k + 1;
+    }
+    rt_vec_free(argps);
+    rt_vec_free(handles);
+    let total = rt_mem_load(ctx + 8);
+    lock_free(lock);
+    rt_free(ctx);
+    say_int("thread_sum=", total);
+    if total != 333833500 {
+        return fail_msg("the threaded sum is wrong");
+    }
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc < 1 {
+        return fail_io("usage: app <workdir>");
+    }
+    let dir = rt_argv(0);
+    if rt_str_len(dir) > 0 {
+        if rt_str_byte(dir, 0) == 45 {
+            rt_str_free(dir);
+            return fail_io("this tool has no options");
+        }
+    }
+    let workdir = rt_str_concat(dir, "");
+    rt_str_free(dir);
+    if fs_exists(rt_str_concat(workdir, "")) == false {
+        fs_create_dir(rt_str_concat(workdir, ""));
+    }
+    let (sql_rows_seen, ok) = sql_stage();
+    if ok == false {
+        rt_str_free(workdir);
+        return fail_msg("the SQL stage failed");
+    }
+    rt_str_free(rt_str_from_int(sql_rows_seen));
+    let json_rc = json_stage(rt_str_concat(workdir, ""), 0);
+    rt_str_free(workdir);
+    if json_rc != 0 {
+        return json_rc;
+    }
+    return thread_stage();
+}

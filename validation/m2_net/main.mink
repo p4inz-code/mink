@@ -1,0 +1,264 @@
+// M2 / C — networking under stress (loopback).
+//
+//   netstress bulk   <port>      1 MiB TCP upload echoed back and verified
+//   netstress repeat <port> <n>  n sequential request/response round trips
+//   netstress udp    <port>      one 8 KiB datagram round trip
+//   netstress http   <port>      HTTP GET of /data through the stdlib client
+//   netstress refused <port>     connect to a closed port
+//   netstress timeout            connect to a black-holed address, 400 ms
+//
+// Exit codes: 0 ok, 1 usage error, 2 I/O failure (message on stderr).
+//
+// All payloads are deterministic, so python_ref.py reproduces every printed
+// number; verify.py runs both against the same Python fixture server.
+mod network;
+mod http;
+mod strings;
+mod hashing;
+
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn say_int(label: Str, value: Int) {
+    say(label, rt_str_from_int(value));
+}
+
+fn fail_msg(msg: Str) -> Int {    let head = rt_str_concat("netstress: ", msg);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_stderr_write(line);
+    rt_str_free(line);
+    rt_str_free(msg);
+    return 2;
+}
+
+fn parse_int_arg(s: Str) -> (Int, Bool) {
+    return str_parse_int(s);
+}
+
+fn sha_of(s: Str) -> Str {
+    let copy = rt_str_concat(s, "");
+    return hash_sha256(copy);
+}
+
+// 1 MiB of 'Z' sent to the echo server and read back.
+fn cmd_bulk(port: Int) -> Int {
+    let sock = net_dial("127.0.0.1", port);
+    if sock == -1 {
+        return fail_msg("bulk: connect failed");
+    }
+    let size = 1048576;
+    let mut out = rt_str_alloc(size);
+    let mut i = 0;
+    while i < size {
+        rt_str_set_byte(out, i, 90);
+        i = i + 1;
+    }
+    let sent = net_send(sock, out);
+    say_int("sent=", sent);
+    let mut got = rt_str_alloc(size);
+    let mut total = 0;
+    while total < size {
+        let chunk = net_recv(sock, size - total);
+        let n = rt_str_len(chunk);
+        if n <= 0 {
+            rt_str_free(chunk);
+            net_close(sock);
+            rt_str_free(got);
+            return fail_msg("bulk: connection closed early");
+        }
+        let mut j = 0;
+        while j < n {
+            rt_str_set_byte(got, total + j, rt_str_byte(chunk, j));
+            j = j + 1;
+        }
+        rt_str_free(chunk);
+        total = total + n;
+    }
+    say_int("recv=", total);
+    let got_copy = rt_str_concat(got, "");
+    say("recv_sha=", hash_sha256(got_copy));
+    net_close(sock);
+    rt_str_free(got);
+    return 0;
+}
+
+// n sequential small round trips on one connection.
+fn cmd_repeat(port: Int, n: Int) -> Int {
+    if n <= 0 || n > 10000 {
+        return fail_msg("repeat: count must be 1..10000");
+    }
+    let sock = net_dial("127.0.0.1", port);
+    if sock == -1 {
+        return fail_msg("repeat: connect failed");
+    }
+    let mut i = 0;
+    let mut last = 0;
+    while i < n {
+        let sent = net_send(sock, rt_str_concat("ping", ""));
+        if sent != 4 {
+            net_close(sock);
+            return fail_msg("repeat: short send");
+        }
+        let reply = net_recv(sock, 64);
+        last = rt_str_len(reply);
+        rt_str_free(reply);
+        i = i + 1;
+    }
+    say_int("rounds=", n);
+    say_int("last_reply=", last);
+    net_close(sock);
+    return 0;
+}
+
+fn cmd_udp(port: Int) -> Int {
+    net_init();
+    let sock = net_socket(2, 2, 17);
+    if sock == -1 {
+        return fail_msg("udp: socket failed");
+    }
+    let mut payload = rt_str_alloc(8192);
+    let mut i = 0;
+    while i < 8192 {
+        rt_str_set_byte(payload, i, 65 + (i % 26));
+        i = i + 1;
+    }
+    let sent = net_sendto(sock, payload, "127.0.0.1", port);
+    say_int("sent=", sent);
+    let reply = net_recvfrom(sock, 9000);
+    say_int("recv=", rt_str_len(reply));
+    let reply_copy = rt_str_concat(reply, "");
+    say("recv_sha=", hash_sha256(reply_copy));
+    rt_str_free(reply);
+    net_close(sock);
+    return 0;
+}
+
+fn cmd_http(port: Int) -> Int {
+    let port_text = rt_str_from_int(port);
+    let host = rt_str_concat("127.0.0.1:", port_text);
+    rt_str_free(port_text);
+    // rt_str_concat borrows its operands, so each intermediate is freed here
+    // and only the final owned copy is handed to the client.
+    let proto = rt_str_concat("http://", host);
+    rt_str_free(host);
+    let path_part = rt_str_concat(proto, "/data");
+    let url = rt_str_concat(path_part, "");
+    rt_str_free(proto);
+    rt_str_free(path_part);
+    let resp = http_client_get(url);
+    // The parsers take ownership of the response they are given and free it,
+    // so each gets a fresh copy of `resp`.
+    let status = http_status_code(rt_str_concat(resp, ""));
+    let body = http_body(rt_str_concat(resp, ""));
+    say_int("status=", status);
+    say_int("body_len=", rt_str_len(body));
+    let body_copy = rt_str_concat(body, "");
+    say("body_sha=", hash_sha256(body_copy));
+    rt_str_free(body);
+    rt_str_free(resp);
+    return 0;
+}
+
+fn cmd_refused(port: Int) -> Int {
+    let sock = net_dial("127.0.0.1", port);
+    if sock != -1 {
+        net_close(sock);
+        return fail_msg("refused: unexpected connection");
+    }
+    say_int("dial=", -1);
+    return 0;
+}
+
+fn cmd_timeout() -> Int {
+    net_init();
+    let sock = net_socket(2, 1, 6);
+    if sock == -1 {
+        return fail_msg("timeout: socket failed");
+    }
+    let started = rt_time_millis();
+    let code = net_connect_timeout(sock, "10.255.255.1", 81, 400);
+    let elapsed = rt_time_millis() - started;
+    say_int("connect=", code);
+    if code == 0 {
+        net_close(sock);
+        return fail_msg("timeout: unexpected connection");
+    }
+    if elapsed > 5000 {
+        net_close(sock);
+        return fail_msg("timeout: the 400 ms bound was not honoured");
+    }
+    say_int("bounded=", 1);
+    net_close(sock);
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc < 1 {
+        return fail_msg("usage: netstress <bulk|repeat|udp|http|refused|timeout> ...");
+    }
+    let argv0 = rt_argv(0);
+    if rt_str_len(argv0) > 0 {
+        if rt_str_byte(argv0, 0) == 45 {
+            rt_str_free(argv0);
+            return fail_msg("this tool has no options");
+        }
+    }
+    let cmd = rt_str_concat(argv0, "");
+    rt_str_free(argv0);
+    let is_timeout = rt_str_eq(cmd, "timeout");
+    if is_timeout == true {
+        rt_str_free(cmd);
+        return cmd_timeout();
+    }
+    if argc < 2 {
+        rt_str_free(cmd);
+        return fail_msg("missing port");
+    }
+    let (port, ok) = parse_int_arg(rt_argv(1));
+    if ok == false || port <= 0 || port > 65535 {
+        rt_str_free(cmd);
+        return fail_msg("bad port");
+    }
+    let is_bulk = rt_str_eq(cmd, "bulk");
+    let is_repeat = rt_str_eq(cmd, "repeat");
+    let is_udp = rt_str_eq(cmd, "udp");
+    let is_http = rt_str_eq(cmd, "http");
+    let is_refused = rt_str_eq(cmd, "refused");
+    if is_bulk == true {
+        rt_str_free(cmd);
+        return cmd_bulk(port);
+    }
+    if is_repeat == true {
+        if argc < 3 {
+            rt_str_free(cmd);
+            return fail_msg("repeat needs a count");
+        }
+        let (n, n_ok) = parse_int_arg(rt_argv(2));
+        rt_str_free(cmd);
+        if n_ok == false {
+            return fail_msg("bad count");
+        }
+        return cmd_repeat(port, n);
+    }
+    if is_udp == true {
+        rt_str_free(cmd);
+        return cmd_udp(port);
+    }
+    if is_http == true {
+        rt_str_free(cmd);
+        return cmd_http(port);
+    }
+    if is_refused == true {
+        rt_str_free(cmd);
+        return cmd_refused(port);
+    }
+    rt_str_free(cmd);
+    return fail_msg("unknown command");
+}

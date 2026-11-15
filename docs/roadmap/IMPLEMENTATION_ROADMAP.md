@@ -905,6 +905,30 @@ passed, 0 failed, 9 ignored**. No version bump, tag, or publication. M6 remains
 **OUTSTANDING**, M8 gated, Linux frozen, 1.0.5 unpublished. See
 [`SESSION_279_M7_PHASE_C_ACCESS_CONTROL_DIAGNOSTICS_CODEGEN.md`](../implementation/SESSION_279_M7_PHASE_C_ACCESS_CONTROL_DIAGNOSTICS_CODEGEN.md).
 
+*Dated status, 2026-11-15 (Session 280 — M2 Windows practical parity).* **M2 is
+PARTIAL.** Seven applications were built, executed and compared against
+independent Python references on Windows x86_64: large data/files/stdin/JSON
+(25/25), process automation (8/8), networking under load (11/11), a MINK HTTP
+server driven by 16 concurrent clients, thread contention and spawn/join churn,
+a 10-second soak and an integrated SQL+files+JSON+threads program. Two real
+runtime defects were found. **Fixed:** every string access scanned all 1,024
+liveness entries, so byte-wise buffer building ran at ~2.7 MB/s (8,000 × 64 KiB
+builds took 132 s); literals are now validated by their known range and heap
+strings by a re-checked liveness hint, a measured 43× improvement. **Open:**
+mixed-size alloc/free churn (64 KiB then 1 KiB) exhausts the 1 GiB arena after
+~16,000 iterations although every block is freed — the first-fit free list
+shrinks a reused block to the request size and drops the skipped blocks.
+`validation/m2_bigio/churn_repro.mink` reproduces it; two prototyped fixes broke
+`tests/zlib_lib.rs`, so it needs a dedicated allocator change (coalescing or
+size classes) with its own suite. Intentional limits reconfirmed: 4,096-byte
+child stdin, 8 MiB stdio windows, 1 GiB heap / 1,024 live allocations, O(N²) SQL
+database copies without `SUM`, one connection at a time in the HTTP server.
+Debug and release regression: **109 blocks, 3,610 passed, 0 failed, 9 ignored**.
+No version bump, tag or publication; M6 remains **OUTSTANDING**, M8 gated, Linux
+frozen, 1.0.5 unpublished. See
+[`SESSION_280_M2_WINDOWS_PRACTICAL_PARITY.md`](../implementation/SESSION_280_M2_WINDOWS_PRACTICAL_PARITY.md)
+and [`VALIDATION_MILESTONE_2_REPORT.md`](../validation/VALIDATION_MILESTONE_2_REPORT.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

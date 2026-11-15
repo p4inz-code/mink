@@ -1,0 +1,102 @@
+// M2 / D — a MINK HTTP/1.1 server under concurrent clients.
+//
+//   server <port> <requests>
+//
+// Listens on 127.0.0.1, answers `/health` with 200 "healthy", any other path
+// with 404 "nope", and exits after serving exactly <requests> requests,
+// printing `served=<n>`. verify.py drives it with 16 concurrent Python
+// clients and checks every status, body and the final count; it also checks
+// the 404 path and that a client which connects and sends nothing does not
+// wedge the server (the accept timeout bounds it).
+//
+// Exit codes: 0 served the requested count, 1 usage error, 2 listen failure.
+mod httpserver;
+mod strings;
+
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn say_int(label: Str, value: Int) {
+    say(label, rt_str_from_int(value));
+}
+
+fn fail_msg(msg: Str) -> Int {
+    let head = rt_str_concat("server: ", msg);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_stderr_write(line);
+    rt_str_free(line);
+    rt_str_free(msg);
+    return 2;
+}
+
+fn handle(client: Int, request: Str) {
+    let path = http_server_path(rt_str_concat(request, ""));
+    let is_health = rt_str_eq(path, "/health");
+    rt_str_free(path);
+    if is_health == true {
+        http_server_respond_ok(client, rt_str_concat("healthy", ""));
+    } else {
+        http_server_respond_not_found(client, rt_str_concat("nope", ""));
+    }
+    rt_str_free(request);
+}
+
+fn cmd_serve(port: Int, want: Int) -> Int {
+    if port <= 0 || port > 65535 {
+        return fail_msg("bad port");
+    }
+    if want <= 0 || want > 100000 {
+        return fail_msg("request count must be 1..100000");
+    }
+    let srv = http_server_listen("127.0.0.1", port);
+    if srv == -1 {
+        return fail_msg("listen failed");
+    }
+    let mut served = 0;
+    while served < want {
+        let (client, request) = http_server_serve_default(srv);
+        if client != -1 {
+            handle(client, request);
+            served = served + 1;
+        }
+    }
+    http_server_close(srv);
+    say_int("served=", served);
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc < 3 {
+        return fail_msg("usage: server <port> <requests>");
+    }
+    let argv0 = rt_argv(0);
+    if rt_str_len(argv0) > 0 {
+        if rt_str_byte(argv0, 0) == 45 {
+            rt_str_free(argv0);
+            return fail_msg("this tool has no options");
+        }
+    }
+    let cmd = rt_str_concat(argv0, "");
+    rt_str_free(argv0);
+    let is_serve = rt_str_eq(cmd, "serve");
+    rt_str_free(cmd);
+    if is_serve == false {
+        return fail_msg("unknown command");
+    }
+    let (port, port_ok) = str_parse_int(rt_argv(1));
+    if port_ok == false {
+        return fail_msg("bad port");
+    }
+    let (want, want_ok) = str_parse_int(rt_argv(2));
+    if want_ok == false {
+        return fail_msg("bad request count");
+    }
+    return cmd_serve(port, want);
+}

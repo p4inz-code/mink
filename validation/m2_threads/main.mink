@@ -1,0 +1,220 @@
+// M2 / E — thread stress: contention, spawn/join churn, failure propagation.
+//
+//   threads contend  <threads> <iterations>   locked increments; total must be
+//                                             threads * iterations
+//   threads cycles   <cycles> <per-cycle>     spawn/join churn; every cycle
+//                                             spawns `per-cycle` workers that
+//                                             increment a shared counter
+//   threads failure  <threads>                workers return 7; the join
+//                                             result must propagate it
+//
+// Every number printed is derived from the arguments, so verify.py checks the
+// invariants directly. Exit codes: 0 ok, 1 usage error, 3 invariant broken.
+mod strings;
+mod threads;
+
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn say_int(label: Str, value: Int) {
+    say(label, rt_str_from_int(value));
+}
+
+fn fail_msg(msg: Str) -> Int {
+    let head = rt_str_concat("threads: ", msg);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_stderr_write(line);
+    rt_str_free(line);
+    rt_str_free(msg);
+    return 3;
+}
+
+// Context block: [lock @ 0][counter @ 8]. Worker args: [ctx @ 0][iters @ 8].
+fn worker_inc(p: Ptr<Int>) -> Int {
+    let ctx = rt_int_to_ptr(rt_mem_load(p));
+    let iters = rt_mem_load(p + 8);
+    let lock = rt_mem_load(ctx);
+    let mut i = 0;
+    while i < iters {
+        lock_acquire(lock);
+        rt_mem_store(ctx + 8, rt_mem_load(ctx + 8) + 1);
+        lock_release(lock);
+        i = i + 1;
+    }
+    return iters;
+}
+
+fn worker_seven(p: Ptr<Int>) -> Int {
+    rt_mem_store(p, 7);
+    return 7;
+}
+
+fn cmd_contend(count: Int, iters: Int) -> Int {
+    if count <= 0 || count > 64 {
+        return fail_msg("thread count must be 1..64");
+    }
+    if iters <= 0 || iters > 1000000 {
+        return fail_msg("iteration count must be 1..1000000");
+    }
+    let ctx = rt_alloc(16);
+    rt_mem_store(ctx, lock_new());
+    rt_mem_store(ctx + 8, 0);
+    let lock = rt_mem_load(ctx);
+    // One argument block shared by every worker, freed only after the last
+    // join: a worker that outlives its args block would read freed memory.
+    let args = rt_alloc(16);
+    rt_mem_store(args, rt_ptr_to_int(ctx));
+    rt_mem_store(args + 8, iters);
+    let mut handles = rt_vec_new(count);
+    let mut i = 0;
+    while i < count {
+        let h = thread_spawn(worker_inc, args);
+        handles = rt_vec_push(handles, h);
+        i = i + 1;
+    }
+    let mut returned = 0;
+    let mut j = 0;
+    while j < count {
+        returned = returned + thread_join(rt_vec_get(handles, j));
+        j = j + 1;
+    }
+    rt_vec_free(handles);
+    rt_free(args);
+    let total = rt_mem_load(ctx + 8);
+    lock_free(lock);
+    rt_free(ctx);
+    say_int("threads=", count);
+    say_int("counter=", total);
+    say_int("returned=", returned);
+    if total != count * iters {
+        return fail_msg("the locked counter lost an increment");
+    }
+    if returned != count * iters {
+        return fail_msg("join results do not sum to the increments");
+    }
+    return 0;
+}
+
+fn cmd_cycles(cycles: Int, per_cycle: Int) -> Int {
+    if cycles <= 0 || cycles > 10000 {
+        return fail_msg("cycle count must be 1..10000");
+    }
+    if per_cycle <= 0 || per_cycle > 32 {
+        return fail_msg("per-cycle count must be 1..32");
+    }
+    let ctx = rt_alloc(16);
+    rt_mem_store(ctx, lock_new());
+    rt_mem_store(ctx + 8, 0);
+    let lock = rt_mem_load(ctx);
+    let args = rt_alloc(16);
+    rt_mem_store(args, rt_ptr_to_int(ctx));
+    rt_mem_store(args + 8, 1);
+    let mut c = 0;
+    while c < cycles {
+        let mut handles = rt_vec_new(per_cycle);
+        let mut i = 0;
+        while i < per_cycle {
+            let h = thread_spawn(worker_inc, args);
+            handles = rt_vec_push(handles, h);
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < per_cycle {
+            thread_join(rt_vec_get(handles, j));
+            j = j + 1;
+        }
+        rt_vec_free(handles);
+        c = c + 1;
+    }
+    rt_free(args);
+    let total = rt_mem_load(ctx + 8);
+    lock_free(lock);
+    rt_free(ctx);
+    say_int("cycles=", cycles);
+    say_int("counter=", total);
+    if total != cycles * per_cycle {
+        return fail_msg("a spawn/join cycle lost work");
+    }
+    return 0;
+}
+
+fn cmd_failure(count: Int) -> Int {
+    if count <= 0 || count > 64 {
+        return fail_msg("thread count must be 1..64");
+    }
+    let ctx = rt_alloc(8);
+    rt_mem_store(ctx, 0);
+    let mut handles = rt_vec_new(count);
+    let mut i = 0;
+    while i < count {
+        let h = thread_spawn(worker_seven, ctx);
+        handles = rt_vec_push(handles, h);
+        i = i + 1;
+    }
+    let mut codes = 0;
+    let mut j = 0;
+    while j < count {
+        if thread_join(rt_vec_get(handles, j)) == 7 {
+            codes = codes + 1;
+        }
+        j = j + 1;
+    }
+    rt_vec_free(handles);
+    rt_free(ctx);
+    say_int("joined=", count);
+    say_int("seven=", codes);
+    if codes != count {
+        return fail_msg("worker return values were not propagated");
+    }
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc < 2 {
+        return fail_msg("usage: threads <contend|cycles|failure> ...");
+    }
+    let argv0 = rt_argv(0);
+    if rt_str_len(argv0) > 0 {
+        if rt_str_byte(argv0, 0) == 45 {
+            rt_str_free(argv0);
+            return fail_msg("this tool has no options");
+        }
+    }
+    let cmd = rt_str_concat(argv0, "");
+    rt_str_free(argv0);
+    if rt_str_eq(cmd, "failure") == true {
+        rt_str_free(cmd);
+        let (count, ok) = str_parse_int(rt_argv(1));
+        if ok == false {
+            return fail_msg("bad thread count");
+        }
+        return cmd_failure(count);
+    }
+    if argc < 3 {
+        rt_str_free(cmd);
+        return fail_msg("missing count");
+    }
+    let (a, a_ok) = str_parse_int(rt_argv(1));
+    let (b, b_ok) = str_parse_int(rt_argv(2));
+    if a_ok == false || b_ok == false {
+        rt_str_free(cmd);
+        return fail_msg("bad numeric argument");
+    }
+    let is_contend = rt_str_eq(cmd, "contend");
+    let is_cycles = rt_str_eq(cmd, "cycles");
+    rt_str_free(cmd);
+    if is_contend == true {
+        return cmd_contend(a, b);
+    }
+    if is_cycles == true {
+        return cmd_cycles(a, b);
+    }
+    return fail_msg("unknown command");
+}

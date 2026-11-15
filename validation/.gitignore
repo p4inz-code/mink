@@ -1,7 +1,9 @@
 # Build outputs of each validation application.
-main.exe
+*.exe
 
 # Regenerated output trees written by verify.py (stdout, exit codes, destination
 # trees and compared files are reproduced on every run; `make_fixtures.py`
 # recreates the deterministic inputs).
 work/
+verify_work/
+soak_work/

@@ -1,0 +1,52 @@
+// Helper child process for the M2 process-automation workload.
+//
+//   child emit <count> <exit-code>   write <count> 'x' bytes to stdout (plus
+//                                    the CRLF that rt_print_str appends) and
+//                                    "ERR" to stderr, then exit with the code
+//   child echo-stdin                 echo standard input back, exit 0
+//
+// The parent app runs this program through `process_run` /
+// `process_run_input`; the Python reference reproduces the same byte streams
+// analytically, so both sides must agree on exactly what this writes.
+mod strings;
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc < 1 {
+        rt_stderr_write("child: missing mode");
+        return 2;
+    }
+    let mode = rt_argv(0);
+    let is_emit = rt_str_eq(mode, "emit");
+    let is_echo = rt_str_eq(mode, "echo-stdin");
+    if is_emit == true {
+        if argc < 3 {
+            rt_stderr_write("child: usage: emit <count> <code>");
+            rt_str_free(mode);
+            return 2;
+        }
+        let (count, count_ok) = str_parse_int(rt_argv(1));
+        let (code, code_ok) = str_parse_int(rt_argv(2));
+        if count_ok == false || code_ok == false || count < 0 {
+            rt_stderr_write("child: bad argument");
+            rt_str_free(mode);
+            return 2;
+        }
+        let payload = str_repeat("x", count);
+        rt_print_str(payload);
+        rt_str_free(payload);
+        rt_stderr_write("ERR");
+        rt_str_free(mode);
+        return code;
+    }
+    if is_echo == true {
+        let input = rt_stdin_read();
+        rt_print_str(input);
+        rt_str_free(input);
+        rt_str_free(mode);
+        return 0;
+    }
+    rt_stderr_write("child: unknown mode");
+    rt_str_free(mode);
+    return 2;
+}

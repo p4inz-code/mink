@@ -1,0 +1,30 @@
+// M2-D1 reproduction: mixed-size alloc/free churn exhausts the bounded arena.
+//
+// Every block below is freed before the next allocation, so a correct reuse
+// policy needs only two blocks (64 KiB + 1 KiB). The runtime instead hands the
+// 64 KiB free block to the 1 KiB request, re-records it at 1 KiB and grows the
+// arena by 64 KiB per iteration, so the loop dies with E-R02/102 after
+// ~16,000 iterations in a 1 GiB arena.
+//
+//   mink build validation/m2_bigio/churn_repro.mink
+//   main.exe 20000        -> exit 102 (E-R02, heap exhausted)   [defect]
+//   main.exe 8000         -> exit 0                             [fits]
+mod strings;
+
+fn main() -> Int {
+    let (n, ok) = str_parse_int(rt_argv(0));
+    if ok == false || n < 0 {
+        rt_stderr_write("churn_repro: usage: churn_repro <iterations>");
+        return 1;
+    }
+    let mut i = 0;
+    while i < n {
+        let a = rt_alloc(65536);
+        rt_free(a);
+        let b = rt_alloc(1024);
+        rt_free(b);
+        i = i + 1;
+    }
+    rt_print_str("ok");
+    return 0;
+}

@@ -1,0 +1,154 @@
+// M2 / B — process automation on Windows.
+//
+// Runs the helper `child.exe` through the process API and reports exactly what
+// was captured, so the Python reference can reproduce the same numbers from
+// the same documented contract:
+//
+//   capture   stdout/stderr capture of a 64 KiB child output and exit 7
+//   feed      child stdin through `process_run_input` (4096-byte pipe limit)
+//   many      50 sequential child runs in one process
+//   codes     non-zero exit propagation and `process_run_ok`
+//   missing   a command that cannot be launched
+//
+// Exit codes: 0 success, 1 usage/no such command, 2 missing child executable,
+// 3 capture mismatch (the app checks its own invariants).
+mod process;
+mod strings;
+mod hashing;
+
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn say_int(label: Str, value: Int) {
+    say(label, rt_str_from_int(value));
+}
+
+fn say_bool(label: Str, value: Bool) {
+    if value == true {
+        say(label, "true");
+    } else {
+        say(label, "false");
+    }
+}
+
+fn fail_msg(msg: Str) {
+    let line = rt_str_concat("procauto: ", msg);
+    rt_stderr_write(line);
+    rt_str_free(line);
+    rt_str_free(msg);
+}
+
+// 64 KiB of child stdout, 3 bytes of child stderr, exit code 7.
+fn cmd_capture() -> Int {
+    let code = process_run("child.exe emit 65536 7");
+    say_int("code=", code);
+    let out = process_stdout();
+    say_int("out_len=", rt_str_len(out));
+    let out_copy = rt_str_concat(out, "");
+    say("out_sha=", hash_sha256(out_copy));
+    let err = process_stderr();
+    say_int("err_len=", rt_str_len(err));
+    let err_copy = rt_str_concat(err, "");
+    say("err_sha=", hash_sha256(err_copy));
+    if code != 7 {
+        fail_msg("child exit code was not propagated");
+        return 3;
+    }
+    return 0;
+}
+
+// 5000 bytes offered on the child's stdin; the pipe delivers at most 4096.
+fn cmd_feed() -> Int {
+    let input = str_repeat("a", 5000);
+    let code = process_run_input("child.exe echo-stdin", input);
+    say_int("code=", code);
+    let out = process_stdout();
+    say_int("echo_len=", rt_str_len(out));
+    let out_copy = rt_str_concat(out, "");
+    say("echo_sha=", hash_sha256(out_copy));
+    return 0;
+}
+
+// Fifty child runs in a row: capture must be replaced, not appended.
+fn cmd_many() -> Int {
+    let mut i = 0;
+    let mut bytes = 0;
+    let mut last = 0;
+    while i < 50 {
+        let code = process_run("child.exe emit 16 0");
+        if code != 0 {
+            fail_msg("child failed during the repeated-run loop");
+            return 3;
+        }
+        last = process_stdout_len();
+        bytes = bytes + last;
+        i = i + 1;
+    }
+    say_int("runs=", 50);
+    say_int("bytes=", bytes);
+    say_int("last=", last);
+    return 0;
+}
+
+fn cmd_codes() -> Int {
+    let code = process_run("child.exe emit 0 42");
+    say_int("code=", code);
+    let ok_zero = process_run_ok("child.exe emit 0 0");
+    say_bool("ok_zero=", ok_zero);
+    let ok_fail = process_run_ok("child.exe emit 0 3");
+    say_bool("ok_fail=", ok_fail);
+    return 0;
+}
+
+fn cmd_missing() -> Int {
+    let code = process_run("procauto_no_such_program_9z.exe");
+    say_int("code=", code);
+    say_int("out_len=", process_stdout_len());
+    return 0;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc < 1 {
+        fail_msg("usage: procauto <capture|feed|many|codes|missing>");
+        return 1;
+    }
+    let argv0 = rt_argv(0);
+    if rt_str_len(argv0) > 0 {
+        if rt_str_byte(argv0, 0) == 45 {
+            fail_msg("this tool has no options");
+            rt_str_free(argv0);
+            return 1;
+        }
+    }
+    let cmd = rt_str_concat(argv0, "");
+    rt_str_free(argv0);
+    if rt_str_eq(cmd, "capture") == true {
+        rt_str_free(cmd);
+        return cmd_capture();
+    }
+    if rt_str_eq(cmd, "feed") == true {
+        rt_str_free(cmd);
+        return cmd_feed();
+    }
+    if rt_str_eq(cmd, "many") == true {
+        rt_str_free(cmd);
+        return cmd_many();
+    }
+    if rt_str_eq(cmd, "codes") == true {
+        rt_str_free(cmd);
+        return cmd_codes();
+    }
+    if rt_str_eq(cmd, "missing") == true {
+        rt_str_free(cmd);
+        return cmd_missing();
+    }
+    fail_msg("unknown command");
+    rt_str_free(cmd);
+    return 1;
+}

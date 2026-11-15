@@ -1,0 +1,118 @@
+// M2 / F — bounded soak: one process that keeps working for a fixed time.
+//
+//   soak <seconds> <workdir>
+//
+// Each iteration allocates and frees a 64 KiB string, every 50th iteration
+// copies a small file, and every 20th iteration spawns and joins two threads
+// that increment a locked counter. The process stops at the deadline, prints
+// the loop count, the checksum and the thread counter, and exits 0 — so a
+// leaked block, a lost increment or a stranded thread shows up as a non-zero
+// exit, a leak error (E-R06) or a mismatched counter.
+//
+// Exit codes: 0 ok, 1 usage error, 3 invariant broken.
+mod strings;
+mod threads;
+mod filesystem;
+
+fn say(label: Str, value: Str) {
+    let line = rt_str_concat(label, value);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(value);
+}
+
+fn say_int(label: Str, value: Int) {
+    say(label, rt_str_from_int(value));
+}
+
+fn fail_msg(msg: Str) -> Int {
+    let head = rt_str_concat("soak: ", msg);
+    let line = rt_str_concat(head, "\r\n");
+    rt_str_free(head);
+    rt_stderr_write(line);
+    rt_str_free(line);
+    rt_str_free(msg);
+    return 3;
+}
+
+fn worker_once(p: Ptr<Int>) -> Int {
+    let ctx = rt_int_to_ptr(rt_mem_load(p));
+    let lock = rt_mem_load(ctx);
+    lock_acquire(lock);
+    rt_mem_store(ctx + 8, rt_mem_load(ctx + 8) + 1);
+    lock_release(lock);
+    return 1;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc < 2 {
+        return fail_msg("usage: soak <seconds> <workdir>");
+    }
+    let (seconds, ok) = str_parse_int(rt_argv(0));
+    if ok == false || seconds <= 0 || seconds > 3600 {
+        return fail_msg("seconds must be 1..3600");
+    }
+    let dir_arg = rt_argv(1);
+    if rt_str_len(dir_arg) > 0 {
+        if rt_str_byte(dir_arg, 0) == 45 {
+            rt_str_free(dir_arg);
+            return fail_msg("this tool has no options");
+        }
+    }
+    let workdir = rt_str_concat(dir_arg, "");
+    rt_str_free(dir_arg);
+    if fs_exists(rt_str_concat(workdir, "")) == false {
+        fs_create_dir(rt_str_concat(workdir, ""));
+    }
+    let file = rt_str_concat(workdir, "/scratch.bin");
+
+    let ctx = rt_alloc(16);
+    rt_mem_store(ctx, lock_new());
+    rt_mem_store(ctx + 8, 0);
+    let lock = rt_mem_load(ctx);
+    let args = rt_alloc(16);
+    rt_mem_store(args, rt_ptr_to_int(ctx));
+
+    let deadline = rt_time_millis() + seconds * 1000;
+    let mut loops = 0;
+    let mut checksum = 0;
+    while rt_time_millis() < deadline {
+        let s = rt_str_alloc(65536);
+        rt_str_set_byte(s, 0, 65 + (loops % 26));
+        checksum = (checksum + rt_str_byte(s, 0)) % 1000003;
+        rt_str_free(s);
+        if loops % 50 == 0 {
+            fs_write(rt_str_concat(file, ""), rt_str_concat("soak-payload", ""));
+            let back = fs_read(rt_str_concat(file, ""));
+            checksum = (checksum + rt_str_len(back)) % 1000003;
+            rt_str_free(back);
+        }
+        if loops % 20 == 0 {
+            let a = thread_spawn(worker_once, args);
+            let b = thread_spawn(worker_once, args);
+            thread_join(a);
+            thread_join(b);
+        }
+        loops = loops + 1;
+    }
+    let counter = rt_mem_load(ctx + 8);
+    let expected_threads = (loops + 19) / 20 * 2;
+    lock_free(lock);
+    rt_free(args);
+    rt_free(ctx);
+    fs_remove_file(rt_str_concat(file, ""));
+    rt_str_free(file);
+    rt_str_free(workdir);
+    say_int("loops=", loops);
+    say_int("checksum=", checksum);
+    say_int("threads=", counter);
+    if loops <= 0 {
+        return fail_msg("the soak loop never ran");
+    }
+    if counter != expected_threads {
+        return fail_msg("thread increments were lost");
+    }
+    return 0;
+}
