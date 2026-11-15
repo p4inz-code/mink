@@ -68,7 +68,7 @@ time. None of these was disguised as a defect.
 | app harnesses A, B, C | 25/25, 8/8, 11/11 |
 | app harnesses D, E, G | PASS, invariants held, PASS |
 | app F soak (10 s) | 238,152 loops, 23,816 threads, exit 0 |
-| `tools/release_acceptance.py` | PASS |
+| `tools/release_acceptance.py` | PASS on the committed tree (`b402a59`) |
 
 ## Verdict
 

@@ -189,8 +189,17 @@ single size class reuses its block indefinitely (200,000 cycles).
 
 ## 7. Build and suite status
 
-Filled in after the full runs; both the debug and release suites and the release
-acceptance script are required to pass before this milestone is called complete.
+| Run | Result |
+|-----|--------|
+| `cargo test --all-targets` (debug) | 109 blocks, **3,610 passed, 0 failed, 9 ignored** |
+| `cargo test --release --all-targets` | 109 blocks, **3,610 passed, 0 failed, 9 ignored** |
+| `python tools/release_acceptance.py --session 280` | **PASS** on the committed tree (`report.md`, `report.json` under `target/acceptance/280/`) |
+
+The suite gained two tests over the Session 279 baseline (3,608 → 3,610), both
+from the D1 investigation (single-size free-list churn, alternating string
+validation). The acceptance verdict describes the artifact build and the suite
+on a clean checkout; it is not the milestone verdict — the milestone is PARTIAL
+because of D2, which no suite covers yet.
 
 ## 8. Verdict inputs
 
