@@ -929,6 +929,34 @@ frozen, 1.0.5 unpublished. See
 [`SESSION_280_M2_WINDOWS_PRACTICAL_PARITY.md`](../implementation/SESSION_280_M2_WINDOWS_PRACTICAL_PARITY.md)
 and [`VALIDATION_MILESTONE_2_REPORT.md`](../validation/VALIDATION_MILESTONE_2_REPORT.md).
 
+*Dated status, 2026-11-15 (Session 281 — M7 Phase D).* **M7 Phase D is
+PASS.** The mixed-size allocator defect left open by M2 is corrected at its root
+cause: a reused block was unlinked by overwriting the free-list head (dropping
+every block the first-fit walk had passed) and re-recorded at the smaller
+requested size (dropping the remainder), so a 64 KiB/1 KiB churn lost 64 512
+bytes per cycle and died with `E-R02` after ~16 000 cycles. The heap now keeps
+an address-ordered intrusive free list, splits a reused block at exactly the
+requested size and coalesces a freed block with its address neighbours, so
+released capacity is always reusable and the liveness table (the interior-access
+boundary) is unchanged. `churn_repro.mink` now completes 1,000,000 cycles in
+0.04 s (20,000 and 100,000 previously died at ~16,000); a 60-second soak with
+four worker threads plus the main thread performed 23.9 M mixed-size
+alloc/free operations with 0 mismatches and a 3.9 MiB high-water mark. The
+change exposed and closed two latent defects — `stdlib/zlib.mink` indexed a
+Huffman table with a code length it had already rejected (a real out-of-bounds
+access that only zero-filled reuse had hidden; `tests/zlib_lib.rs` now passes
+unchanged), and `rt_process_run` kept the command length in a volatile register
+across `rt_alloc`. New permanent corpus `tests/allocator_conformance.rs`
+(20 cases; 9 of them fail on the pre-fix tree). `tests/zlib_lib.rs` 15/15, all
+seven M2 workloads revalidated (25/25, 8/8, 11/11, server PASS, threads
+invariants, soak, integrated PASS). Debug and release regression: **3,630
+passed, 0 failed, 10 ignored** each; `tools/release_acceptance.py` PASS on the
+committed tree; Clippy 0 errors and the same 116 pre-existing warnings. M2's
+only open runtime defect (M2-D1) is therefore closed, with M6 still
+**OUTSTANDING** and separate, M8 gated, Linux frozen, 1.0.5 unpublished. No
+version bump, tag, publication or credential change. See
+[`SESSION_281_M7_PHASE_D_ALLOCATOR.md`](../implementation/SESSION_281_M7_PHASE_D_ALLOCATOR.md).
+
 ---
 
 ## Appendix A — Historical phase plan notice

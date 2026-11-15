@@ -13,3 +13,7 @@ validation/m2_soak/main.exe 10 soak_work
 
 See `docs/validation/VALIDATION_MILESTONE_2_REPORT.md` for classification of
 every failure found and the milestone verdict.
+
+**Revalidated (M7 Phase D, 2026-11-15, release compiler).** Exit 0 after the Phase D allocator change: 1,512,201 loops and 151,222 thread lifecycles in the 10 s window, no leak report. The same binary built against the pre-fix runtime managed 219,352 loops and 21,936 thread lifecycles in the same window on the same machine (6.9×).
+
+See [`SESSION_281_M7_PHASE_D_ALLOCATOR.md`](../../docs/implementation/SESSION_281_M7_PHASE_D_ALLOCATOR.md).

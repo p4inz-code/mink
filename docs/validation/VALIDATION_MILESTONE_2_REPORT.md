@@ -236,3 +236,32 @@ validated, and the largest performance defect was fixed, but D2 (mixed-size
 churn exhausting the bounded arena) is a real runtime defect that this
 milestone exposes and does not yet fix. Closing it is the first task of the
 next milestone.
+
+## 9. Update, 2026-11-15 (M7 Phase D) — D2 is closed
+
+D2 is corrected at its root cause by the Phase D allocator change: the heap now
+keeps an address-ordered free list, splits a reused block at exactly the
+requested size and coalesces a freed block with its address neighbours, so a
+released block (or a split remainder) is always reusable. The reproduction
+`validation/m2_bigio/churn_repro.mink`, run unchanged, completes 1,000,000
+cycles in 0.04 s; before the change it died with `E-R02` after ~16,000 cycles
+(measured: 8,000 exit 0, 20,000 exit 102). The liveness table is unchanged in
+size and meaning, and `tests/zlib_lib.rs` passes unchanged (15/15).
+
+All seven workloads were rerun against the modified runtime with the release
+compiler: big data/files/stdin/JSON 25/25, process automation 8/8, networking
+11/11, HTTP server PASS, thread contention/churn/failure invariants hold, the
+10 s soak exits 0 (1,512,201 loops, 151,222 thread lifecycles — 6.9× the
+pre-fix count in the same wall clock on this machine), and the integrated
+SQL+JSON+threads program PASSes. A permanent 20-case corpus
+(`tests/allocator_conformance.rs`) now covers mixed-size reuse, coalescing,
+splitting, invalid frees and the stdlib compatibility surface; 9 of its cases
+fail on the pre-fix tree.
+
+With D2 closed, the stated reason for this milestone's PARTIAL verdict no
+longer applies. The per-session verdict above is left as recorded; the
+milestone can be re-scored on the Phase D evidence in
+[`SESSION_281_M7_PHASE_D_ALLOCATOR.md`](../implementation/SESSION_281_M7_PHASE_D_ALLOCATOR.md).
+The remaining ceilings (4,096-byte child stdin, 8 MiB stdio windows, 1 GiB
+heap / 1,024 live allocations, O(N²) SQL copies, one HTTP connection at a time)
+are unchanged, documented limits, not defects.

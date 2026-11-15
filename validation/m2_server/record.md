@@ -13,3 +13,7 @@ python validation/m2_server/verify.py
 
 See `docs/validation/VALIDATION_MILESTONE_2_REPORT.md` for classification of
 every failure found and the milestone verdict.
+
+**Revalidated (M7 Phase D, 2026-11-15, release compiler).** PASS after the Phase D allocator change: every status and body correct, exact served count, usage errors exit 2 (1.2 s).
+
+See [`SESSION_281_M7_PHASE_D_ALLOCATOR.md`](../../docs/implementation/SESSION_281_M7_PHASE_D_ALLOCATOR.md).
