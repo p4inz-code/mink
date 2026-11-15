@@ -317,6 +317,19 @@ pub struct RuntimeLayout {
     /// process-global word. Appended last so every earlier BSS offset is
     /// unchanged.
     pub tls_slot: u64,
+    /// Fast-path hint for [`BSS::table`] validation: the byte offset of the
+    /// liveness entry that last validated a heap string (Session 280). A
+    /// string access (`rt_str_byte`, `rt_str_set_byte`, `rt_str_len`, …)
+    /// otherwise scans all 1024 liveness entries to prove the pointer is a
+    /// live block start, which makes byte-wise buffer building quadratic in
+    /// the string length. The hint is re-checked (entry still live, still
+    /// holding this exact address) before it is trusted, so a freed or
+    /// reused block can never be validated from a stale hint; without a hint
+    /// the full scan runs and re-arms it. Purely a cache — zero is a valid
+    /// "no hint" value because no live block starts at address 0.
+    pub str_validate_slot: u64,
+    /// The address the hint above was armed with.
+    pub str_validate_start: u64,
     /// The total `.bss` size.
     pub size: u64,
 }
@@ -697,7 +710,7 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 200,
-    size: 1488
+    str_validate_slot: 1488
         + HEAP_BSS_BYTES
         + LIVE_TABLE_BYTES
         + 4096 * 2
@@ -716,6 +729,44 @@ pub const BSS: RuntimeLayout = RuntimeLayout {
         + 8
         + 80
         + 208,
+    str_validate_start: 1488
+        + HEAP_BSS_BYTES
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 216,
+    size: 1488
+        + HEAP_BSS_BYTES
+        + LIVE_TABLE_BYTES
+        + 4096 * 2
+        + 16
+        + 17 * 8
+        + 4096
+        + 8
+        + 24
+        + 8
+        + 4096
+        + 8
+        + 16
+        + 64 * 16
+        + 4096
+        + 65536
+        + 8
+        + 80
+        + 224,
 };
 
 /// The arithmetic performed on sizes: round up to [`ALLOC_ALIGNMENT`].

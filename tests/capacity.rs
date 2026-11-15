@@ -278,3 +278,67 @@ fn main() {
         "expected E-R05 diagnostics, got {err:?}"
     );
 }
+
+/// Session 280: a single size class cycles indefinitely inside the 1 GiB
+/// arena — 200,000 allocate/free pairs of one 64 KiB block must reuse the
+/// same block rather than bump the cursor.
+#[test]
+fn cap08_single_size_churn_reuses_the_free_list() {
+    let body = r#"
+fn main() {
+    let mut i = 0;
+    let mut sum = 0;
+    while i < 200000 {
+        let a = rt_alloc(65536);
+        rt_mem_store(a, 1);
+        sum = sum + rt_mem_load(a);
+        rt_free(a);
+        i = i + 1;
+    }
+    rt_print_int(sum);
+    rt_exit(0);
+}
+"#;
+    let (code, out, err) = build_and_run("single_churn", body);
+    assert_eq!(
+        code, 0,
+        "single-size churn must reuse freed blocks, got {code} stdout={out:?} stderr={err:?}"
+    );
+    assert_eq!(first_int(&out), Some(200000), "sum: {out:?}");
+}
+
+/// Session 280: the string-validation fast paths (image range, liveness
+/// hint) must keep answering correctly when heap and literal strings are
+/// read alternately and the heap string is replaced.
+#[test]
+fn cap09_validation_fast_paths_alternate_strings() {
+    let body = r#"
+fn main() {
+    let mut total = 0;
+    let mut round = 0;
+    while round < 100 {
+        let s = rt_str_alloc(4);
+        rt_str_set_byte(s, 0, 65);
+        let mut i = 0;
+        while i < 100 {
+            total = total + rt_str_byte(s, 0) + rt_str_byte("abc", 1);
+            i = i + 1;
+        }
+        rt_str_free(s);
+        round = round + 1;
+    }
+    rt_print_int(total);
+    rt_exit(0);
+}
+"#;
+    let (code, out, err) = build_and_run("validation_paths", body);
+    assert_eq!(
+        code, 0,
+        "alternating heap/literal reads failed: stdout={out:?} stderr={err:?}"
+    );
+    assert_eq!(
+        first_int(&out),
+        Some(100 * 100 * (65 + 98)),
+        "byte sum: {out:?}"
+    );
+}

@@ -1407,26 +1407,68 @@ fn emit_str_validate(code: &mut Code, heap_only: bool) {
     prologue(code);
     code.sub_rsp(16);
 
-    // Scan the liveness table for a live entry whose start equals `s`.
+    // Fast path for `Str` reads (Session 280): image literals live in a known
+    // range, so proving one valid costs two loads instead of the full table
+    // scan. Byte loops almost always read from a literal or a buffer, and the
+    // scan made that quadratic.
+    if !heap_only {
+        let check_heap = code.label();
+        code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.str_data_start as u32));
+        code.mov_r_rip(Reg::Rdx, PatchKind::Bss(BSS.str_data_end as u32));
+        code.cmp_rr(Reg::Rax, Reg::Rcx);
+        code.jcc_label(0x82, check_heap); // jb — below the image region
+        code.cmp_rr(Reg::Rax, Reg::Rdx);
+        code.jcc_label(0x83, check_heap); // jae — one past its end
+        code.leave_ret(); // an immutable image literal
+        code.bind_label(check_heap);
+    }
+
+    // Fast path (Session 280): the hint records the liveness entry that
+    // validated the previous string, so the steady state of a byte loop (the
+    // same output buffer, byte after byte) is two loads instead of a scan of
+    // all 1024 entries. The hint is only trusted after re-reading the entry's
+    // live flag and start address, so a freed or reused block falls through
+    // to the full scan below.
     let scan = code.label();
+    let scan_loop = code.label();
     let next = code.label();
     let not_heap = code.label();
     let not_heap_next = code.label();
     let fail5 = code.label();
+    code.mov_r_rip(Reg::R9, PatchKind::Bss(BSS.str_validate_start as u32));
+    code.cmp_rr(Reg::R9, Reg::Rax);
+    code.jcc_label(0x85, scan); // jne — not the hinted string
+    code.mov_r_rip(Reg::R10, PatchKind::Bss(BSS.str_validate_slot as u32));
+    code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.table as u32));
+    code.add_rr(Reg::Rcx, Reg::R10);
+    code.cmp_mem_imm8(Reg::Rcx, 16, 0);
+    code.jcc_label(0x84, scan); // je — hinted entry has been freed
+    code.cmp_r_mem(Reg::Rax, Reg::Rcx, 0);
+    code.jcc_label(0x85, scan); // jne — entry now holds another block
+    code.leave_ret(); // still the live start of `s`
+
+    // Scan the liveness table for a live entry whose start equals `s`.
+    code.bind_label(scan);
     code.lea_r_rip(Reg::Rcx, PatchKind::Bss(BSS.table as u32));
     code.lea_r_mem(Reg::Rdx, Reg::Rcx, TABLE_BYTES);
-    code.bind_label(scan);
+    code.bind_label(scan_loop);
     code.cmp_rr(Reg::Rcx, Reg::Rdx);
     code.jcc_label(0x83, not_heap); // jae
     code.cmp_mem_imm8(Reg::Rcx, 16, 0);
     code.jcc_label(0x84, next); // je — dead entry
     code.cmp_r_mem(Reg::Rax, Reg::Rcx, 0);
     code.jcc_label(0x85, next); // jne — different start
-    code.leave_ret(); // a live heap string
+    // A live heap string: arm the fast-path hint with this entry, then
+    // return. `rcx` is the entry address; the hint stores its byte offset.
+    code.lea_r_rip(Reg::Rdx, PatchKind::Bss(BSS.table as u32));
+    code.sub_rr(Reg::Rcx, Reg::Rdx);
+    code.mov_rip_r(Reg::Rcx, PatchKind::Bss(BSS.str_validate_slot as u32));
+    code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.str_validate_start as u32));
+    code.leave_ret();
 
     code.bind_label(next);
     code.add_r_imm8(Reg::Rcx, 24);
-    code.jmp_label(scan);
+    code.jmp_label(scan_loop);
 
     // Not a heap block: only the image's immutable string-data region is
     // a valid home for a literal string (and only for reads).
