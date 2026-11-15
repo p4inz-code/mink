@@ -289,10 +289,15 @@ fn _z_h_build(h: Ptr<Int>, lens: Ptr<Int>, at: Int, n: Int) -> Int {
     i = 0;
     while i < n {
         let ln = _z_get(lens, at + i);
-        if ln > 15 {
+        // A length outside 0..15 is an impossible code. It must not be used
+        // as a table index: `h` holds only 16 count words, so indexing with
+        // it would read (and write) outside the table. The heap hands out
+        // reused blocks with their previous contents, so a bogus length is
+        // reachable from a malformed stream and was a live out-of-bounds
+        // access until this guard (E-R05 on a preserved-capacity heap).
+        if ln < 0 || ln > 15 {
             res = -5;
-        }
-        if ln > 0 {
+        } else if ln > 0 {
             _z_put(h, ln, _z_get(h, ln) + 1);
         }
         i = i + 1;
@@ -316,7 +321,7 @@ fn _z_h_build(h: Ptr<Int>, lens: Ptr<Int>, at: Int, n: Int) -> Int {
     let mut s = 0;
     while s < n {
         let ln = _z_get(lens, at + s);
-        if ln > 0 {
+        if ln > 0 && ln <= 15 {
             let o = _z_get(h, 16 + ln);
             if o < n {
                 _z_put(h, 32 + o, s);
@@ -633,15 +638,23 @@ fn _z_block_dynamic(src: Ptr<Int>, r: Ptr<Int>, out: Ptr<Int>, t: Ptr<Int>) -> P
     }
     let lh = _z_h_new(hlit);
     let dh = _z_h_new(hdist);
-    let e2 = _z_h_build(lh, lens, 0, hlit);
-    let e3 = _z_h_build(dh, lens, hlit, hdist);
-    if e2 != 0 {
-        _z_rd_seterr(r, -5);
+    let mut o = out;
+    // The code-length decode above may have stopped early, leaving the tail
+    // of `lens` unwritten. Building tables from it would read heap contents
+    // the previous owner left behind, so the result would depend on the
+    // allocation history instead of the stream. The first error is already
+    // recorded and is the one reported.
+    if _z_rd_err(r) == 0 {
+        let e2 = _z_h_build(lh, lens, 0, hlit);
+        let e3 = _z_h_build(dh, lens, hlit, hdist);
+        if e2 != 0 {
+            _z_rd_seterr(r, -5);
+        }
+        if e3 != 0 {
+            _z_rd_seterr(r, -5);
+        }
+        o = _z_decode_codes(src, r, out, lh, dh, t);
     }
-    if e3 != 0 {
-        _z_rd_seterr(r, -5);
-    }
-    let o = _z_decode_codes(src, r, out, lh, dh, t);
     rt_free(cl);
     rt_free(lens);
     rt_free(clh);
