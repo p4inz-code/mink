@@ -31,7 +31,10 @@
 //! filled by the loader, so the runtime state starts deterministic):
 //!
 //! - blocks are 16-byte aligned, sizes are rounded up to 16;
-//! - allocation is a validated bump allocator with LIFO free-list reuse;
+//! - allocation is a validated bump allocator with an address-ordered free
+//!   list: a reused block is split at the requested size (the remainder
+//!   returns to the list) and a freed block coalesces with an adjacent free
+//!   block, so released capacity is never lost to a smaller request;
 //! - every live allocation is recorded in a bounded liveness table
 //!   ([`MAX_LIVE_ALLOCS`] entries); invalid operations are detected
 //!   against the table and reported as runtime errors (`E-R02`…`E-R08`);
@@ -164,7 +167,10 @@ pub mod frame {
 pub struct RuntimeLayout {
     /// Process-entry stack pointer, captured by the entry stub.
     pub entry_rsp: u64,
-    /// Head of the LIFO free list (an absolute address, or 0 when empty).
+    /// Head of the free list (an absolute address, or 0 when empty). The
+    /// list is intrusive (each free block stores its successor at `+0` and
+    /// its size at `+8`) and ordered by ascending address, so a freed block
+    /// can be coalesced with its address neighbours.
     pub free_head: u64,
     /// The bump cursor: committed bytes from the arena base. Zero-initialized.
     pub cursor: u64,

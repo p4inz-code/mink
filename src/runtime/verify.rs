@@ -17,7 +17,16 @@
 //!    and not the start of a live allocation (freed blocks are removed
 //!    from the table before reuse);
 //! 5. the free list contains no duplicate offsets and no cycles (it is
-//!    bounded by the table size).
+//!    bounded by the table size);
+//! 6. no two live blocks overlap, and every free block lies inside the
+//!    committed region and overlaps neither a live block nor another free
+//!    block — together these make live and free blocks a partition of the
+//!    allocated regions, so a split remainder can never be handed out
+//!    twice;
+//! 7. the free list is sorted by address and holds no two adjacent blocks
+//!    (the coalescing invariant: a released block that touches another
+//!    free block must have been merged with it, so no released capacity is
+//!    left fragmented behind a neighbour).
 
 use super::abi::{ALLOC_ALIGNMENT, HEAP_MAX_BYTES, MAX_LIVE_ALLOCS};
 use super::allocator::Allocator;
@@ -146,6 +155,91 @@ pub fn check(heap: &Allocator) -> Vec<Violation> {
                 heap.table().len()
             ),
         ));
+    }
+
+    // V-07: live blocks do not overlap. Splitting makes this load-bearing: a
+    // remainder that still covers the live block's bytes would hand the same
+    // memory out twice.
+    let live = heap
+        .table()
+        .iter()
+        .flatten()
+        .map(|entry| (entry.start, entry.start + entry.size))
+        .collect::<Vec<_>>();
+    for (index, &(start, end)) in live.iter().enumerate() {
+        for &(other_start, other_end) in &live[index + 1..] {
+            if start < other_end && other_start < end {
+                violations.push(Violation::new(
+                    "V-07",
+                    format!("live block [{start}, {end}) overlaps live block [{other_start}, {other_end})"),
+                ));
+            }
+        }
+    }
+
+    // V-08: free blocks lie inside the committed region and overlap no other
+    // block, and their sizes are legal allocation units.
+    for &(block, size) in heap.free_list() {
+        if size == 0 || size % ALLOC_ALIGNMENT != 0 {
+            violations.push(Violation::new(
+                "V-08",
+                format!("free block at {block} has an illegal size {size}"),
+            ));
+        }
+        let end = block + size;
+        if end > heap.cursor() {
+            violations.push(Violation::new(
+                "V-08",
+                format!(
+                    "free block [{block}, {end}) extends beyond the cursor {}",
+                    heap.cursor()
+                ),
+            ));
+        }
+        for &(live_start, live_end) in &live {
+            if block < live_end && live_start < end {
+                violations.push(Violation::new(
+                    "V-08",
+                    format!(
+                        "free block [{block}, {end}) overlaps live block \
+                         [{live_start}, {live_end})"
+                    ),
+                ));
+            }
+        }
+        for &(other, other_size) in heap.free_list() {
+            if other == block {
+                continue;
+            }
+            if block < other + other_size && other < end {
+                violations.push(Violation::new(
+                    "V-08",
+                    format!(
+                        "free block [{block}, {end}) overlaps free block [{other}, {})",
+                        other + other_size
+                    ),
+                ));
+            }
+        }
+    }
+
+    // V-09: the free list is address-ordered and coalesced. Two adjacent
+    // free blocks mean a freed block was never merged with its neighbour,
+    // i.e. capacity that could serve a larger request is stranded.
+    for pair in heap.free_list().windows(2) {
+        let (start, size) = pair[0];
+        let (next_start, _) = pair[1];
+        if next_start < start {
+            violations.push(Violation::new(
+                "V-09",
+                format!("free list is not address-ordered: {start} precedes {next_start}"),
+            ));
+        } else if start + size == next_start {
+            violations.push(Violation::new(
+                "V-09",
+                format!("free blocks [{start}, {}) and [{next_start}, …) are adjacent and were not coalesced", start + size),
+            ));
+        }
     }
 
     violations

@@ -15,7 +15,8 @@
 //! - [`RuntimeService::Init`] — sets the bump cursor to the arena base;
 //!   called by the entry stub before `main`;
 //! - [`RuntimeService::Alloc`] — `rt_alloc(size)`: a validated bump
-//!   allocator with LIFO free-list reuse and a fixed-size liveness table;
+//!   allocator with an address-ordered free list that splits reused blocks
+//!   and coalesces adjacent free blocks, behind a fixed-size liveness table;
 //! - [`RuntimeService::Free`] — `rt_free(ptr)`: validates the pointer
 //!   against the liveness table (alignment, liveness, exact start) and
 //!   returns the block to the free list;
@@ -753,9 +754,10 @@ fn emit_init(code: &mut Code, offsets: &RuntimeOffsets) {
 
 /// `rt_alloc(size) -> addr` (size at `[rbp + 16]`).
 ///
-/// Validated bump allocation with LIFO free-list reuse and a bounded
-/// liveness table: every returned block is 16-aligned and recorded in the
-/// table as live, so later frees and accesses are checked against it.
+/// Validated bump allocation with an address-ordered free list, exact
+/// splitting of reused blocks, and a bounded liveness table: every returned
+/// block is 16-aligned and recorded in the table as live, so later frees and
+/// accesses are checked against it.
 fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
     prologue(code);
     code.sub_rsp(32);
@@ -772,31 +774,69 @@ fn emit_alloc(code: &mut Code, offsets: &RuntimeOffsets) {
     code.and_r_imm8(Reg::Rax, 0xF0); // align up to 16
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
 
-    // Walk the LIFO free list from the head and reuse the FIRST block
-    // large enough for this allocation. Small blocks freed after a large
-    // one must not permanently hide it (repeated large buffers would
-    // otherwise exhaust the arena although every block was freed).
-    // Skipped blocks are dropped only when a later block is reused;
-    // when nothing fits the whole list is preserved and we bump.
+    // Walk the address-ordered free list and reuse the FIRST block large
+    // enough for this allocation. A too-small block is skipped and stays
+    // on the list (it may serve a later small request); when no block fits
+    // the whole list is preserved and the allocator bumps.
+    //
+    // The reused block is *split* when it is larger than the request: the
+    // live block gets exactly the requested size (the liveness record is
+    // the request, never the reused block's original size, so interior
+    // validation cannot widen) and the remainder becomes an independent
+    // free block. Every free block is a multiple of 16 bytes, so a
+    // remainder is either absent or at least one alignment unit, which is
+    // enough for the two-word free header (next, size). Re-feeding the
+    // remainder is what makes a 64 KiB/1 KiB churn stay inside one 64 KiB
+    // block instead of growing the arena until `E-R02`.
+    // Registers: this service keeps the historical footprint (rax, rcx,
+    // rdx, r8, r9). `rt_alloc` is an ordinary call under the documented
+    // convention — `rbp`/`rsp` are the only callee-saved registers — so
+    // callers must not hold values in r10/r11 across it; several emitted
+    // services predate that rule, and clobbering those two here would
+    // silently corrupt them (it truncated the `process_run` command line).
     let bump = code.label();
     let record = code.label();
     let walk = code.label();
     let reuse = code.label();
+    let unlink = code.label();
+    let unlink_head = code.label();
+    code.xor_rr32(Reg::R8, Reg::R8); // prev = null
     code.mov_r_rip(Reg::Rax, PatchKind::Bss(BSS.free_head as u32));
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x84, bump); // jz (empty free list)
     code.bind_label(walk);
-    // Read the saved size from [block+8] and the next link from [block].
-    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // Rdx = old_size
-    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // Rcx = next block
-    code.cmp_r_mem(Reg::Rdx, Reg::Rbp, -8); // old_size vs needed
+    // Read the saved size from [block+8].
+    code.mov_r_mem(Reg::Rdx, Reg::Rax, 8); // Rdx = block size
+    code.cmp_r_mem(Reg::Rdx, Reg::Rbp, -8); // size vs needed
     code.jcc_label(0x8D, reuse); // jge — large enough, reuse this block
-    code.mov_rr(Reg::Rax, Reg::Rcx); // advance to the next block
+    code.mov_rr(Reg::R8, Reg::Rax); // prev = current
+    code.mov_r_mem(Reg::Rax, Reg::Rax, 0); // Rax = next block
     code.test_rr(Reg::Rax, Reg::Rax);
     code.jcc_label(0x85, walk); // jnz — keep walking
     code.jmp_label(bump); // walked off the end: nothing fits
+
     code.bind_label(reuse);
-    // Unlink the reused block: free_head = its next link.
+    code.mov_r_mem(Reg::Rcx, Reg::Rax, 0); // Rcx = fit's next link
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8); // needed
+    code.sub_rr(Reg::Rdx, Reg::R9); // Rdx = remainder after the split
+    code.test_rr(Reg::Rdx, Reg::Rdx);
+    code.jcc_label(0x84, unlink); // jz — the block is consumed exactly
+    // Split: the remainder starts `needed` bytes into the fit and inherits
+    // its successor link. Rcx becomes the replacement link.
+    code.mov_r_mem(Reg::R9, Reg::Rbp, -8);
+    code.add_rr(Reg::R9, Reg::Rax); // R9 = remainder address
+    code.mov_mem_r(Reg::R9, 0, Reg::Rcx); // remainder.next = fit's next
+    code.mov_mem_r(Reg::R9, 8, Reg::Rdx); // remainder.size = remainder
+    code.mov_rr(Reg::Rcx, Reg::R9); // the remainder takes the fit's place
+    // Unlink the fit: link the replacement (remainder or successor) where
+    // the fit was. Blocks ahead of the fit stay on the list, so no free
+    // capacity is ever dropped.
+    code.bind_label(unlink);
+    code.test_rr(Reg::R8, Reg::R8);
+    code.jcc_label(0x84, unlink_head);
+    code.mov_mem_r(Reg::R8, 0, Reg::Rcx); // prev.next = replacement
+    code.jmp_label(record);
+    code.bind_label(unlink_head);
     code.mov_rip_r(Reg::Rcx, PatchKind::Bss(BSS.free_head as u32));
     code.jmp_label(record);
 
@@ -1064,11 +1104,103 @@ fn emit_free(code: &mut Code, offsets: &RuntimeOffsets) {
     code.jcc_label(0x84, retire); // je — generation exhausted
     code.bind_label(no_lineage);
 
-    // Mark dead and push onto the LIFO free list.
+    // Mark dead and insert into the address-ordered free list, coalescing
+    // with an adjacent free block before and/or after it. Coalescing is
+    // what makes a split remainder reusable by the next large request: the
+    // 1 KiB block handed out of a 64 KiB block merges straight back with
+    // the 63 KiB remainder when it is freed. Adjacency is the exact
+    // address equality `left.start + left.size == right.start`, which also
+    // means the two ranges are contiguous, so a merge never spans unmapped
+    // memory (blocks never straddle the `.bss`/growth boundary).
+    //
+    // Registers: this service keeps the historical footprint (rax, rcx,
+    // rdx, r8) and spills the rest, because emitted callers are not
+    // guaranteed to treat r9-r11 as volatile across a service call (see the
+    // same note in `emit_alloc`). Frame slots: [rbp-8] block, [rbp-16]
+    // block size, [rbp-24] predecessor, [rbp-32] successor.
+    //
+    // Rax = block, Rdx = block size, Rcx = its (now dead) table slot.
     code.mov_mem_imm32(Reg::Rcx, 16, 0);
-    code.mov_r_rip(Reg::Rdx, PatchKind::Bss(BSS.free_head as u32));
+    code.mov_mem_r(Reg::Rbp, -8, Reg::Rax);
+    code.mov_mem_r(Reg::Rbp, -16, Reg::Rdx);
+    code.xor_rr32(Reg::R8, Reg::R8); // prev = null
+    code.mov_r_rip(Reg::Rcx, PatchKind::Bss(BSS.free_head as u32)); // cur
+    let seek = code.label();
+    let insert = code.label();
+    let try_next = code.label();
+    let plain_link = code.label();
+    let link_block = code.label();
+    let link_head = code.label();
+    let freed = code.label();
+    code.bind_label(seek);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, insert); // end of list: append
+    code.cmp_r_mem(Reg::Rcx, Reg::Rbp, -8);
+    code.jcc_label(0x87, insert); // cur > block: insert before cur
+    code.mov_rr(Reg::R8, Reg::Rcx); // prev = cur
+    code.mov_r_mem(Reg::Rcx, Reg::Rcx, 0); // cur = cur.next
+    code.jmp_label(seek);
+    code.bind_label(insert);
+    code.mov_mem_r(Reg::Rbp, -24, Reg::R8);
+    code.mov_mem_r(Reg::Rbp, -32, Reg::Rcx);
+
+    // Coalesce with the predecessor when it ends exactly at this block.
+    code.test_rr(Reg::R8, Reg::R8);
+    code.jcc_label(0x84, try_next); // no predecessor
+    code.mov_r_mem(Reg::Rdx, Reg::R8, 8); // prev.size
+    code.mov_rr(Reg::Rax, Reg::R8);
+    code.add_rr(Reg::Rax, Reg::Rdx); // prev end
+    code.cmp_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.jcc_label(0x85, try_next); // jnz — not adjacent
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -16);
+    code.add_rr(Reg::Rdx, Reg::Rax); // prev.size += block.size
+    code.mov_mem_r(Reg::R8, 8, Reg::Rdx);
+    // The merged block may now also touch the successor.
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, freed);
+    code.mov_rr(Reg::Rax, Reg::R8);
+    code.add_rr(Reg::Rax, Reg::Rdx); // merged end
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x85, freed); // jnz — successor not adjacent
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 8); // cur.size
+    code.add_rr(Reg::Rdx, Reg::Rax);
+    code.mov_mem_r(Reg::R8, 8, Reg::Rdx);
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 0); // cur.next
+    code.mov_mem_r(Reg::R8, 0, Reg::Rax);
+    code.jmp_label(freed);
+
+    // Otherwise coalesce with the successor when it starts exactly at this
+    // block's end.
+    code.bind_label(try_next);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.test_rr(Reg::Rcx, Reg::Rcx);
+    code.jcc_label(0x84, plain_link); // empty tail: link as the last block
+    code.mov_r_mem(Reg::Rdx, Reg::Rbp, -16);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.add_rr(Reg::Rax, Reg::Rdx); // block end
+    code.cmp_rr(Reg::Rax, Reg::Rcx);
+    code.jcc_label(0x85, plain_link); // jnz — not adjacent
+    code.mov_r_mem(Reg::Rax, Reg::Rcx, 8); // cur.size
+    code.add_rr(Reg::Rdx, Reg::Rax); // block.size += cur.size
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_mem_r(Reg::Rax, 8, Reg::Rdx);
+    code.mov_r_mem(Reg::Rdx, Reg::Rcx, 0); // cur.next
     code.mov_mem_r(Reg::Rax, 0, Reg::Rdx);
+    code.jmp_label(link_block); // link where cur was
+
+    code.bind_label(plain_link);
+    code.mov_r_mem(Reg::Rax, Reg::Rbp, -8);
+    code.mov_r_mem(Reg::Rcx, Reg::Rbp, -32);
+    code.mov_mem_r(Reg::Rax, 0, Reg::Rcx);
+    code.bind_label(link_block);
+    code.test_rr(Reg::R8, Reg::R8);
+    code.jcc_label(0x84, link_head);
+    code.mov_mem_r(Reg::R8, 0, Reg::Rax);
+    code.jmp_label(freed);
+    code.bind_label(link_head);
     code.mov_rip_r(Reg::Rax, PatchKind::Bss(BSS.free_head as u32));
+    code.bind_label(freed);
     code.xor_rr32(Reg::Rax, Reg::Rax);
     rt_lock_release(code);
     code.leave_ret();
@@ -8227,10 +8359,17 @@ fn emit_process_run_common(code: &mut Code, with_input: bool) {
 
     // Allocate 12 + len bytes (11 for "cmd.exe /c ", 1 for null)
     code.lea_r_mem(Reg::Rax, Reg::R11, 12); // RAX = len + 12
+    // `rt_alloc` is an ordinary call: r10/r11 are volatile, so the length
+    // must live in the frame across it. The command line used to stay in
+    // r11, which worked only while the allocator happened not to touch that
+    // register — the reused-block split does touch it, and the truncated
+    // command line made `cmd.exe /c` run an empty command.
+    code.mov_mem_r(Reg::Rbp, -104, Reg::R11);
     code.sub_rsp(8);
     code.u8(0x50); // push rax (push size for Alloc)
     code.call_patch(PatchKind::RuntimeService(RuntimeService::Alloc));
     code.add_rsp(16);
+    code.mov_r_mem(Reg::R11, Reg::Rbp, -104); // R11 = len
     code.mov_mem_r(Reg::Rbp, -16, Reg::Rax); // [rbp-16] = cmd_cstr
 
     // Copy "cmd.exe /c " (11 bytes)

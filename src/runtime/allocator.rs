@@ -2,7 +2,8 @@
 //!
 //! This is the *specification* of the heap the backend's machine-level
 //! runtime implements (see `src/backend/emit/runtime.rs`): a validated
-//! bump allocator with LIFO free-list reuse and a bounded liveness table.
+//! bump allocator with an address-ordered free list, exact block splitting
+//! and adjacent-block coalescing, behind a bounded liveness table.
 //! Keeping a pure-Rust, safe reference lets the tests validate the
 //! algorithm — alignment, bounds, reuse, leak detection, and every error
 //! path — without running machine code, and gives later safety work a
@@ -17,11 +18,20 @@
 //!   beyond it); the reference model backs its arena sparsely, so tests
 //!   can exercise far more than the `.bss` prefix without allocating it;
 //! - allocation rounds the requested size up to [`ALLOC_ALIGNMENT`],
-//!   then first-fits the LIFO free list from most recently freed (walking
-//!   past too-small blocks so they cannot hide a large reusable block),
+//!   then first-fits the free list in **address order** (each free block
+//!   is tried in turn; too-small blocks are skipped and stay reusable),
 //!   falling back to the bump cursor when nothing fits;
+//! - a reused block larger than the request is **split**: the live block
+//!   gets exactly the requested size and the remainder is re-inserted as
+//!   an independent free block, so skipped capacity is never discarded;
+//! - `free` inserts the block in address order and **coalesces** it with
+//!   an immediately preceding and/or following free block, so the free
+//!   list never holds two adjacent blocks and mixed-size churn returns to
+//!   the block it carved (this is what keeps a 64 KiB/1 KiB churn inside
+//!   one 64 KiB block instead of consuming the arena);
 //! - every live allocation occupies one slot of a fixed-size table; a
-//!   slot records the block's start offset and size;
+//!   slot records the block's start offset and size (exactly the
+//!   requested, aligned size — never the reused block's original size);
 //! - `free` requires the pointer to be the exact 16-aligned start of a
 //!   **live** slot — a double free, a never-allocated pointer, an
 //!   interior pointer, or a misaligned pointer is a structured error;
@@ -50,14 +60,14 @@ pub struct LiveEntry {
 /// The reference deterministic heap.
 ///
 /// The state mirrors the machine runtime's `.bss` layout: a bump cursor
-/// (an offset), a LIFO free list (offsets), a fixed-size liveness table,
-/// and the arena bytes themselves.
+/// (an offset), an intrusive free list sorted by address, a fixed-size
+/// liveness table, and the arena bytes themselves.
 #[derive(Debug, Clone)]
 pub struct Allocator {
     /// Committed bytes from the arena base (the high-water mark).
     cursor: u64,
-    /// The LIFO free list, most recently freed first.
-    /// Each entry is (start_offset, original_aligned_size).
+    /// The free list, sorted by start offset and holding no two adjacent
+    /// blocks. Each entry is (start_offset, size).
     free: Vec<(u64, u64)>,
     /// The liveness table: `MAX_LIVE_ALLOCS` slots, `None` when dead.
     table: Vec<Option<LiveEntry>>,
@@ -128,37 +138,35 @@ impl Allocator {
             return Err(RuntimeError::new(RuntimeErrorKind::InvalidSize, Some(size)));
         }
         let size = align_up(size, ALLOC_ALIGNMENT);
-        // First-fit scan over the LIFO free list, from most recently
-        // freed to least. Small blocks freed after a large one must not
-        // permanently hide the large block from later large allocations
-        // (repeated big receive buffers would otherwise exhaust the arena
-        // even though every block was freed). Blocks skipped before a fit
-        // are dropped, mirroring the machine runtime's walk; if nothing
-        // fits, the whole list is preserved and the allocator bumps.
-        let start = {
-            let mut fit = None;
-            for (i, (_block, old_size)) in self.free.iter().enumerate().rev() {
-                if *old_size >= size {
-                    fit = Some(i);
-                    break;
+        // First-fit over the address-ordered free list. A too-small block
+        // is skipped and stays on the list (it may serve a later small
+        // request); a block that fits is reused, and any capacity beyond
+        // the request is re-inserted as a free block of its own. Dropping
+        // either the skipped blocks or the remainder loses capacity that
+        // was already released, which is exactly how mixed-size churn used
+        // to grow the arena by a large block per iteration until `E-R02`.
+        let start = match self.free.iter().position(|&(_, old_size)| old_size >= size) {
+            Some(index) => {
+                let (block, old_size) = self.free.remove(index);
+                let remainder = old_size - size;
+                if remainder > 0 {
+                    // Sizes are multiples of ALLOC_ALIGNMENT and >= one
+                    // step, so the remainder is a legal free block. It
+                    // starts above the reused block and below the next
+                    // free block (the list never holds adjacent blocks),
+                    // so re-inserting at the fit's index keeps the order.
+                    debug_assert_eq!(remainder % ALLOC_ALIGNMENT, 0);
+                    self.free.insert(index, (block + size, remainder));
                 }
+                block
             }
-            match fit {
-                Some(i) => {
-                    // Drop the skipped (more recently freed) prefix
-                    // (indices i+1..), keeping the fit at the new tail.
-                    self.free.truncate(i + 1);
-                    let (block, _) = self.free.pop().expect("the fit is now the tail");
-                    block
+            None => {
+                if self.cursor + size > HEAP_MAX_BYTES {
+                    return Err(RuntimeError::new(RuntimeErrorKind::OutOfMemory, Some(size)));
                 }
-                None => {
-                    if self.cursor + size > HEAP_MAX_BYTES {
-                        return Err(RuntimeError::new(RuntimeErrorKind::OutOfMemory, Some(size)));
-                    }
-                    let block = self.cursor;
-                    self.cursor += size;
-                    block
-                }
+                let block = self.cursor;
+                self.cursor += size;
+                block
             }
         };
         let slot = self
@@ -172,6 +180,10 @@ impl Allocator {
 
     /// Frees the block at `ptr` (an arena offset), returning it to the
     /// free list.
+    ///
+    /// The block is inserted in address order and coalesced with an
+    /// adjacent free block before and/or after it, so released capacity is
+    /// always reusable and the list holds no two adjacent entries.
     ///
     /// Errors: [`RuntimeErrorKind::InvalidFree`] when the pointer is not
     /// the exact start of a live allocation (covers double frees,
@@ -194,7 +206,33 @@ impl Allocator {
             unreachable!("a matching slot is always live")
         };
         debug_assert_eq!(entry.start, ptr);
-        self.free.push((ptr, entry.size));
+
+        // Insert in address order: `index` is the first free block above
+        // the released one (or the end of the list).
+        let index = self.free.partition_point(|&(start, _)| start < ptr);
+        let mut block = ptr;
+        let mut size = entry.size;
+
+        // Coalesce with the preceding free block when it ends exactly at
+        // the released block's start.
+        if index > 0 {
+            let (prev_start, prev_size) = self.free[index - 1];
+            if prev_start + prev_size == block {
+                self.free.remove(index - 1);
+                block = prev_start;
+                size += prev_size;
+            }
+        }
+        // Coalesce with the following free block when it starts exactly at
+        // the (possibly merged) block's end.
+        let after = self.free.partition_point(|&(start, _)| start < block);
+        if let Some(&(next_start, next_size)) = self.free.get(after) {
+            if block + size == next_start {
+                self.free.remove(after);
+                size += next_size;
+            }
+        }
+        self.free.insert(after, (block, size));
         Ok(())
     }
 
@@ -349,8 +387,8 @@ impl Allocator {
         self.cursor
     }
 
-    /// The LIFO free list, most recently freed first.
-    /// Each entry is (start_offset, original_aligned_size).
+    /// The free list, sorted by start offset.
+    /// Each entry is (start_offset, size).
     pub(crate) fn free_list(&self) -> &[(u64, u64)] {
         &self.free
     }
@@ -401,12 +439,12 @@ mod tests {
     }
 
     #[test]
-    fn free_reuses_the_most_recent_block() {
+    fn free_reuses_the_freed_block() {
         let mut heap = Allocator::new();
         let _a = heap.alloc(16).unwrap();
         let b = heap.alloc(16).unwrap();
         heap.free(b).unwrap();
-        // The next allocation reuses b's block (LIFO).
+        // The next allocation reuses b's block.
         let c = heap.alloc(16).unwrap();
         assert_eq!(c, b);
         assert_eq!(heap.live_count(), 2);
