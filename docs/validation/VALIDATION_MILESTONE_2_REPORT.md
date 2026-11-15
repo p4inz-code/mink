@@ -47,6 +47,26 @@ Classifications used throughout, exactly as the brief defines them:
 | F | `m2_soak` | bounded long run (10 s) | 238,152 loops, 23,816 threads, exit 0, no leak |
 | G | `m2_integrated` | SQL + files + JSON + threads | PASS (self-checking, re-verified in Python) |
 
+### Capability matrix
+
+| Workload class | Capabilities exercised | Prior evidence (M1) | New validation in M2 | Result |
+|----------------|------------------------|---------------------|----------------------|--------|
+| Large data / files | `rt_str_alloc` + byte writes, `fs_write`/`fs_read`, SHA-256 over 5 MiB, line/digit scanning, `fs_remove_file` | `a1`/`a2`/`a3` apps, `fs_read` suite | `m2_bigio` gen/scan/copy/clean, 5 MiB round trip with Python parity | PASS |
+| stdin / stdout volume | `rt_stdin_read` (8 MiB window), CRLF print, 1 MiB piped input | M1 stdin cases | `m2_bigio stdin` 128 KiB and 1 MiB, byte-identical stdout | PASS |
+| JSON at scale | `json_parse_in` arena (slots), `json_arr_len/get`, `json_obj_get_key/val` | `c_json` app | `m2_bigio json` on a 12,000-record document, sum matched in Python | PASS |
+| Mixed allocation churn | allocator free-list reuse across 64 KiB + 1 KiB | capacity suite (single size) | `m2_bigio cycles`, `churn_repro.mink` | cycles PASS, churn **defect D2 open** |
+| Process automation | `process_run`, `process_run_input`, `process_stdout(_len)`, `process_stderr(_len)`, `process_run_ok` | `f_process` app | `m2_procauto` capture/feed/many/codes/missing vs Python reference | PASS |
+| Child stdin bound | `STDIN_PIPE_LIMIT` (4,096) | documented only | `m2_procauto feed` measured 4,096 of 5,000 | limitation **L1** |
+| TCP client load | `net_dial`, `net_send`, `net_recv` loop, 1 MiB payload | `e_network` basic TCP | `m2_net bulk` (1 MiB echo), `repeat` (200 round trips) | PASS |
+| UDP | `net_socket`, `net_sendto`, `net_recvfrom` | `e_network` basic UDP | `m2_net udp` 8 KiB datagram round trip | PASS |
+| HTTP client | `http_client_get`, `http_status_code`, `http_body` | `e_network` HTTP/HTTPS | `m2_net http` against the fixture server, body hash | PASS |
+| Network failure modes | refused connect, `net_connect_timeout` bound | partial in M1 | `m2_net refused`, `timeout` (400 ms budget enforced) | PASS |
+| HTTP server | `http_server_listen`, `_serve_default`, `_path`, `respond_ok`, `respond_not_found`, `_close` | `httpserver` unit corpus | `m2_server` with 16 concurrent Python clients, 160 requests | PASS |
+| Threads | `thread_spawn/join`, `lock_new/acquire/release/free`, `rt_mem_*` contexts | `g_threads` pool/pipeline | `m2_threads` 12×5,000 increments, 100 spawn/join cycles, return codes | PASS |
+| Long-running process | continuous alloc/file/thread work, leak check at exit | none | `m2_soak` 10 s, 238,152 loops, 23,816 threads | PASS |
+| Integrated program | SQL engine, filesystem, JSON, threads in one binary | `d_sqlite`, `c_json`, `g_threads` separately | `m2_integrated` 100 rows + JSON file round trip + threaded sum | PASS |
+| SQL aggregate | `sql_exec` subset | `d_sqlite` | `m2_integrated` COUNT only; no `SUM` in the engine | limitation **L4** |
+
 ### A — large data, files, stdin, JSON (`validation/m2_bigio`)
 
 Commands: `gen` (write a 5 MiB file byte by byte), `scan` (length, line count,
