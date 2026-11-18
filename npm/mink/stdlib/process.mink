@@ -45,10 +45,14 @@ fn process_run(cmd: Str) -> Int {
 // Run an external command with `input` written to its standard input and
 // return its exit code. The child then sees EOF on stdin, exactly as if the
 // input had been redirected from a file. At most one pipe buffer (4096
-// bytes) of input is delivered; longer input is truncated there, because a
-// larger synchronous write could deadlock against a child that has not
-// started reading stdin yet. stdout/stderr are captured and available via
-// process_stdout() and process_stderr(), as for process_run.
+// bytes) of input is delivered; longer input is truncated there *silently*,
+// because a larger synchronous write could deadlock against a child that has
+// not started reading stdin yet, and the return value is the child's exit
+// code, not a byte count. Measured: 4,095 and 4,096 bytes arrive whole, 4,097
+// and 5,000 arrive as 4,096. For larger input, write a file and redirect it
+// (`process_run("prog < file")`), or split the work into several children.
+// stdout/stderr are captured and available via process_stdout() and
+// process_stderr(), as for process_run.
 fn process_run_input(cmd: Str, input: Str) -> Int {
     let code = rt_process_run_input(cmd, input);
     // Both strings are Owned on entry and released here (see process_run).

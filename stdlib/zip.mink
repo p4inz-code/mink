@@ -81,10 +81,10 @@
 //     metadata preservation (timestamps are written as a fixed DOS epoch,
 //     1980-01-01, so archives are byte-deterministic).
 //   - Everything is buffered: one call needs roughly 8 bytes of heap per
-//     archive byte (one byte per word in the arenas) plus the output, and the
-//     runtime heap is a fixed 4 MiB arena, so archives are comfortable into
-//     the hundreds of kilobytes; larger data needs a larger HEAP_SIZE
-//     (src/runtime/abi.rs).
+//     archive byte (one byte per word in the arenas) plus the output. The
+//     runtime heap is a 1 GiB arena whose freed blocks are reused (Phase D
+//     free list), so archive size is bounded by the arena and that buffering
+//     factor rather than by a 4 MiB prefix.
 
 mod zlib;
 mod filesystem;

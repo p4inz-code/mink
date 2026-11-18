@@ -281,3 +281,16 @@ which lowers to ordinary branches over word values) it is **963 tests**.
   size is bounded by `MAX_AGGREGATE_BYTES` (1 MiB) so every value fits
   the arena's addressing model.
 - The arena is a fixed 1 MiB; exhaustion is a structured error.
+
+> **Update, 2026-11-18 (Session 282, M7 Phase E).** The single-threaded and
+> fixed-1 MiB-arena statements above describe the session-16 runtime and are
+> kept as history. The current runtime
+> is threaded and its heap is a 1 GiB logical arena (4 MiB in `.bss`, the rest
+> committed on demand) with an address-ordered first-fit free list that splits
+> reused blocks and coalesces neighbours; the usable arena is 1,020 MiB, a
+> single allocation is capped at 1,020 MiB, and the liveness table holds 1,024
+> live allocations. Every allocation, free and validated access takes one
+> process-wide spin lock, so allocation does not scale across threads. The
+> authoritative, re-measured statement of these limits is
+> [`docs/runtime/MEMORY_MODEL.md` §23a](../runtime/MEMORY_MODEL.md#23a-verified-runtime-limits-session-277),
+> and the permanent boundary corpus is `tests/runtime_boundaries.rs`.

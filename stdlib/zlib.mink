@@ -48,9 +48,11 @@
 // MEMORY
 //   Buffered only: a call needs roughly 8 bytes of heap per input byte (the
 //   word arenas) plus the compressed result, all released before it returns.
-//   The runtime heap is a fixed 4 MiB arena, so a single call is comfortable
-//   into the tens of kilobytes; larger data needs a larger HEAP_SIZE
-//   (src/runtime/abi.rs) and streaming, which V1 does not provide.
+//   The runtime heap is a 1 GiB arena whose freed blocks are reused (Phase D
+//   free list: address-ordered first fit, split and coalesced), so a single
+//   call is bounded by the buffering factor and the arena, not by a small
+//   prefix. Very large payloads still need streaming, which V1 does not
+//   provide.
 //
 //   Repeated calls reuse their own buffers: with no caller-side temporaries a
 //   compress/decompress loop ran 7272 / 20000+ cycles on the default heap in

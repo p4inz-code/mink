@@ -41,12 +41,19 @@
 //
 // Memory characteristic (measured, not theoretical). `sql_exec` returns a new
 // database blob, so each statement copies the whole database: appending N rows
-// costs O(N^2) bytes of allocation in total. The runtime heap is a fixed 1 MiB
-// arena with a non-coalescing first-fit allocator (see zlib.mink for the same
-// property), so an append-only workload on the default heap sustains about 220
-// four-column rows and then reports E-R02. Text is packed eight bytes per word
-// in both the arena and the builders to keep that constant as small as it can
-// be; the engine itself leaks nothing and always exits cleanly.
+// costs O(N^2) bytes and O(N^2) copy time in total. The runtime heap is a
+// 1 GiB arena whose freed blocks are reused (Phase D free list: address-ordered
+// first fit, split and coalesced), so fragmentation is not the limiting factor;
+// the quadratic per-statement copy is. Measured with the release compiler: 500
+// row inserts into a two-column table complete in 4.1 s. Text is packed eight
+// bytes per word in both the arena and the builders to keep the constant as
+// small as it can be; the engine itself leaks nothing and always exits
+// cleanly.
+//
+// Feeding statements from a file one line at a time holds one live Str per
+// line, so a script longer than the liveness table (1,024 live allocations)
+// reports E-R03 before the SQL text is even parsed — that is a property of the
+// caller's line buffer, not of this engine (see validation/d_sqlite).
 
 // ============================================================================
 // Arena primitives
@@ -62,8 +69,7 @@ fn _p(a: Ptr<Int>, i: Int, v: Int) {
 
 // Text is packed eight bytes to a word (byte b of word w lives in bits
 // b*8 .. b*8+7), so an arena costs about as much as the text it holds rather
-// than eight times as much. The fixed 1 MiB runtime heap makes that difference
-// the difference between a few dozen and a few hundred appended rows.
+// than eight times as much, which keeps the O(N^2) copy constant small.
 
 // Database text byte `i`.
 fn _db(a: Ptr<Int>, i: Int) -> Int {

@@ -1431,11 +1431,10 @@ fn tls_close(h: Ptr<Int>) -> Int {
 
 // Receive the whole TLS stream (owned Str; empty on EOF/error).
 fn _recv_all(h: Ptr<Int>, max_size: Int) -> Str {
-    // Start with a small staging buffer. The runtime arena is a fixed 4 MiB
-    // bump heap, so reserving `max_size` (1 MiB) for every request exhausts it
-    // after a handful of calls; most responses fit in the small buffer and
-    // never touch the big one, which is allocated only when a body actually
-    // outgrows the small buffer.
+    // Start with a small staging buffer. Reserving `max_size` (1 MiB) for
+    // every request costs 1 MiB of commit for a body that usually fits in a
+    // few KiB; most responses fit in the small buffer and never touch the big
+    // one, which is allocated only when a body actually outgrows it.
     let mut cap = 32768;
     if cap > max_size {
         cap = max_size;

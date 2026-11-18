@@ -245,10 +245,55 @@ accurate.
 | --- | --- | --- |
 | Live allocation slots | 1,024 live allocations are served; the 1,025th fails | `E-R03`, exit 103 |
 | Single allocation | A request of 1 GiB (1,073,741,824 bytes) or more is refused | `E-R02`, exit 102 |
+| Largest single block | 1,020 MiB (1,069,547,520 bytes) is served; 16 bytes more is refused | `E-R02`, exit 102 |
+| Two half-arena blocks | Two 512 MiB blocks cannot coexist (see the prefix note below) | `E-R02`, exit 102 |
 | Free-list reuse | 3,000 allocate/free cycles complete and reuse retired slots | exit 0 |
+| Generation retirement | A block reused 65,535 times is retired, not reissued | exit 0, one new block per lifetime |
 | Exit-time leak check | Unfreed live allocations at exit are reported | `E-R06`, exit 106 |
 | Integer division by zero | Traps instead of faulting | `E-R14`, exit 114 |
 | `i64::MIN / -1` and `i64::MIN % -1` | Traps instead of raising a hardware exception | `E-R15`, exit 115 |
+
+Update, 2026-11-18 (Session 282, M7 Phase E) — the boundaries above were
+re-measured on the Phase D allocator, and three statements need to be more
+precise than the pre-Phase-E table:
+
+* **The usable arena is 1,020 MiB, not 1,024 MiB.** The first 4 MiB of the
+  offset space live in the image's `.bss` and the rest in a separate
+  `VirtualAlloc` region; the two mappings are not address-contiguous, so a
+  block may not span the boundary. A bump that would straddle it is moved to
+  the start of the growth region, leaving the prefix tail unused. Two
+  consequences, both deterministic `E-R02`: the largest single block is
+  1,020 MiB, and two 512 MiB blocks do not fit. The cost is 0.39% of the
+  logical ceiling and no allocation is ever mis-sized or overlapped
+  (`tests/runtime_boundaries.rs` pe03–pe05).
+* **The free list is not a plain bump list.** Since Phase D it is
+  address-ordered first fit that splits a reused block at exactly the
+  requested size and coalesces a freed block with its address neighbours, so
+  released capacity is always reusable (`tests/allocator_conformance.rs`).
+* **Generation retirement is a growth source.** A block reused 65,535 times
+  is retired instead of reissued, because its 16-bit handle generation must
+  never wrap. Under sustained churn that costs one block per 65,535 reuses —
+  bounded and deterministic, never corruption (pe01/pe02).
+
+Concurrency boundary: the heap has one process-wide spin lock and every
+allocation, free and validated access takes it, so allocation scales
+negatively under tight multi-threaded contention. Measured on this machine
+with `validation/phase_e/concurrency` (2 s window, 256–7,936 byte blocks,
+median of three runs): 28.2 M alloc/free pairs/s with one thread, 6.3 M/s
+aggregate with two, 2.8 M/s with four and 1.4 M/s with eight — 0.22×, 0.10×
+and 0.05× of the single-thread total. A CPU-only control on the same machine
+scales 1.98×/3.93×/7.55× at 2/4/8 threads, so the collapse is the lock, not the
+scheduler. Workloads that allocate at a lower rate relative to their own work
+scale normally (a four-thread mixed-size loop with three allocations per
+iteration completed four times the total work in 1.7× the wall time), which is
+why the seven M2 workloads are unaffected. This is a documented performance
+limitation, not a correctness one: the lock is correct, and no validated
+workload depends on allocator scalability.
+
+Model boundary: the pure-Rust reference allocator (`src/runtime/allocator.rs`)
+abstracts two machine details — it has no `.bss`/growth straddle rule and no
+generation retirement. Unit tests that assert those behaviours use the
+compiled runtime, not the model.
 
 The exit-time leak check means a program that returns 0 has a balanced
 allocator: no heap allocation leaked. Every standard-library suite that runs a
