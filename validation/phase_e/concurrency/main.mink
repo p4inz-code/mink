@@ -1,0 +1,100 @@
+// M7 Phase E — allocator contention / throughput workload.
+//
+// Each worker thread runs a fixed-size mixed allocation loop against the
+// shared runtime heap until a deadline: allocate a block of 256..7936 bytes,
+// write and re-read both ends, free it. The runtime's single heap spin lock is
+// taken once per allocation and once per free, so this loop measures how the
+// lock behaves under contention rather than how fast the scheduler is.
+//
+//   concurrency.exe <threads> <milliseconds>
+//
+// Prints, in order: joined threads, total completed iterations, mismatches,
+// wall milliseconds measured by the program. `run.py` turns that into
+// iterations/second for 1, 2, 4 and 8 threads.
+mod strings;
+mod threads;
+mod time;
+
+// Worker argument block: [0] deadline (ms), [8] iterations, [16] mismatches.
+fn worker(p: Ptr<Int>) -> Int {
+    let deadline = rt_mem_load(p);
+    let mut i = 0;
+    let mut bad = 0;
+    // Work in bursts of 64 allocation cycles and read the clock once per
+    // burst, so the measurement is the allocator's critical section rather
+    // than the timer resolution.
+    let mut finished = 0;
+    while finished == 0 {
+        if time_millis() >= deadline {
+            finished = 1;
+        } else {
+            let mut burst = 0;
+            while burst < 64 {
+                let size = 256 + (i % 16) * 512;
+                let a = rt_alloc(size);
+                rt_mem_store(a, i);
+                rt_mem_store(a + size - 16, i + 1);
+                if rt_mem_load(a) != i {
+                    bad = bad + 1;
+                }
+                if rt_mem_load(a + size - 16) != i + 1 {
+                    bad = bad + 1;
+                }
+                rt_free(a);
+                i = i + 1;
+                burst = burst + 1;
+            }
+        }
+    }
+    rt_mem_store(p + 8, i);
+    rt_mem_store(p + 16, bad);
+    return bad;
+}
+
+fn main() -> Int {
+    let threads = rt_argc();
+    if threads < 2 {
+        rt_stderr_write("usage: concurrency <threads> <milliseconds>");
+        return 2;
+    }
+    let (count, count_ok) = str_parse_int(rt_argv(0));
+    let (millis, millis_ok) = str_parse_int(rt_argv(1));
+    if count_ok == false || millis_ok == false || count < 1 || count > 64 || millis < 1 {
+        rt_stderr_write("usage: concurrency <threads 1..64> <milliseconds>");
+        return 2;
+    }
+    let started = time_millis();
+    let deadline = started + millis;
+    let mut handles = rt_vec_new(64);
+    let mut args = rt_vec_new(64);
+    let mut w = 0;
+    while w < count {
+        let arg = rt_alloc(24);
+        rt_mem_store(arg, deadline);
+        rt_mem_store(arg + 8, 0);
+        rt_mem_store(arg + 16, 0);
+        args = rt_vec_push(args, rt_ptr_to_int(arg));
+        handles = rt_vec_push(handles, thread_spawn(worker, arg));
+        w = w + 1;
+    }
+    let mut joined = 0;
+    let mut ops = 0;
+    let mut bad = 0;
+    let mut k = 0;
+    while k < count {
+        bad = bad + thread_join(rt_vec_get(handles, k));
+        let arg = rt_int_to_ptr(rt_vec_get(args, k));
+        ops = ops + rt_mem_load(arg + 8);
+        rt_free(arg);
+        joined = joined + 1;
+        k = k + 1;
+    }
+    rt_vec_free(args);
+    rt_vec_free(handles);
+    let elapsed = time_millis() - started;
+    rt_print_int(joined);
+    rt_print_int(ops);
+    rt_print_int(bad);
+    rt_print_int(elapsed);
+    return 0;
+}

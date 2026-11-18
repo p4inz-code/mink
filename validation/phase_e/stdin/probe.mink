@@ -1,0 +1,45 @@
+// M7 Phase E — child-stdin boundary probe.
+//
+// `process_run_input` documents a one-pipe-buffer cap (4,096 bytes). This
+// program offers 0, 1, 4,095, 4,096, 4,097, 5,000 and 65,536 bytes to a child
+// that echoes its stdin, and prints:
+//
+//   offered=<n>
+//   code=<child exit code>
+//   captured=<stdout length the parent captured>
+//
+// The child's `rt_print_str` appends CRLF, so `captured = delivered + 2`.
+// `verify.py` turns the transcript into the delivered-byte table.
+mod process;
+mod strings;
+
+fn say_int(label: Str, value: Int) {
+    let num = rt_str_from_int(value);
+    let line = rt_str_concat(label, num);
+    rt_print_str(line);
+    rt_str_free(line);
+    rt_str_free(label);
+    rt_str_free(num);
+}
+
+fn probe(n: Int) {
+    let input = str_repeat("a", n);
+    rt_print_str("probe");
+    say_int("offered=", n);
+    let code = process_run_input("child.exe echo", input);
+    say_int("code=", code);
+    say_int("captured=", process_stdout_len());
+    // The captured stdout stays a view of the runtime's window; reading its
+    // length is enough here and it is never freed (it is not a heap block).
+}
+
+fn main() -> Int {
+    probe(0);
+    probe(1);
+    probe(4095);
+    probe(4096);
+    probe(4097);
+    probe(5000);
+    probe(65536);
+    return 0;
+}

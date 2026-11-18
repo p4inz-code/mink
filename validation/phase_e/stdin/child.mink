@@ -1,0 +1,13 @@
+// M7 Phase E — child helper for the child-stdin boundary probe.
+//
+// Reads standard input to EOF and prints it back, so the parent can measure
+// exactly which bytes the runtime delivered. `rt_print_str` appends CRLF, so
+// the parent observes `bytes_delivered + 2`.
+mod strings;
+
+fn main() -> Int {
+    let input = rt_stdin_read();
+    rt_print_str(input);
+    rt_str_free(input);
+    return 0;
+}
