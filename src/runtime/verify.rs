@@ -306,4 +306,63 @@ mod tests {
             "{violations:?}"
         );
     }
+
+    /// M7 Phase E: a long deterministic mixed-size sequence with far more live
+    /// blocks than can stay coalesced. Every operation must leave a state that
+    /// satisfies V-01…V-09, the free list must stay address-ordered with no two
+    /// adjacent entries, and the arena must not grow beyond what the live set
+    /// needs — the fragmentation/first-fit half of the Phase D contract.
+    #[test]
+    fn long_first_fit_sequence_keeps_every_invariant() {
+        let mut heap = Allocator::new();
+        let mut slots = [None::<(u64, u64)>; 64];
+        let mut rng: u64 = 0x2545_F491_4F6C_DD1D;
+
+        for op in 0..20_000u64 {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            let slot = (rng % 64) as usize;
+            if let Some((block, _size)) = slots[slot].take() {
+                heap.free(block)
+                    .unwrap_or_else(|e| panic!("op {op}: valid free rejected: {e:?}"));
+            } else {
+                let size = 16 + (rng % 128) * 512;
+                let block = heap
+                    .alloc(size)
+                    .unwrap_or_else(|e| panic!("op {op}: {size}-byte allocation rejected: {e:?}"));
+                heap.store(block, op).expect("first word of a live block");
+                heap.store(block + size - 16, op)
+                    .expect("last word of a live block");
+                assert_eq!(heap.load(block).unwrap(), op, "op {op}: first word");
+                assert_eq!(
+                    heap.load(block + size - 16).unwrap(),
+                    op,
+                    "op {op}: last word"
+                );
+                slots[slot] = Some((block, size));
+            }
+            let violations = check(&heap);
+            assert!(
+                violations.is_empty(),
+                "op {op}: invariants violated: {violations:?}"
+            );
+            let free = heap.free_list();
+            assert!(
+                free.windows(2)
+                    .all(|pair| pair[0].0 + pair[0].1 < pair[1].0),
+                "op {op}: the free list must stay address-ordered and coalesced: {free:?}"
+            );
+            assert!(
+                heap.cursor() <= 16 * 1024 * 1024,
+                "op {op}: 64 slots of at most 64 KiB must not grow past 16 MiB; cursor={}",
+                heap.cursor()
+            );
+            assert_eq!(
+                heap.live_count(),
+                slots.iter().filter(|slot| slot.is_some()).count(),
+                "op {op}: live slots must match the live set"
+            );
+        }
+    }
 }

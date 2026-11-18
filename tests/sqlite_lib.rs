@@ -144,6 +144,34 @@ fn s41_create_insert_select_count() {
     );
 }
 
+/// M7 Phase E: the engine supports `COUNT(*)` and deliberately not `SUM`.
+/// The rejection is a structured text result (never a crash), the database it
+/// was handed is not modified, and the next statement still works. This pins
+/// the documented subset so a future aggregate change is a deliberate one.
+#[test]
+fn s41_sum_is_rejected_as_a_documented_subset() {
+    let (code, out) = build_and_run(
+        SCHEMA,
+        "let mut db = seed();\n\
+         db = ex(db, \"SELECT SUM(id) FROM users\");\n\
+         db = ex(db, \"SELECT GROUP_CONCAT(name) FROM users\");\n\
+         db = ex(db, \"SELECT COUNT(*) FROM users\");\n\
+         sql_free(db);\n",
+    );
+    assert_eq!(code, 0, "exit={code}\n{out}");
+    let r = results(&out);
+    assert_eq!(&r[0..4], &SEED);
+    assert_eq!(
+        &r[4..],
+        &[
+            "ERROR: only SELECT * / SELECT COUNT(*) is supported",
+            "ERROR: only SELECT * / SELECT COUNT(*) is supported",
+            "3",
+        ],
+        "SUM/GROUP_CONCAT must be rejected without corrupting the database"
+    );
+}
+
 #[test]
 fn s41_where_operators() {
     let mut body = String::from("let mut db = seed();\n");
