@@ -17,3 +17,7 @@ every failure found and the milestone verdict.
 **Revalidated (M7 Phase D, 2026-11-15, release compiler).** All invariants hold after the Phase D allocator change: `contend 12 5000` → `counter=60000 returned=60000`, `cycles 100 7` → `counter=700`, `failure 8` → `joined=8 seven=8`, all exit 0.
 
 See [`SESSION_281_M7_PHASE_D_ALLOCATOR.md`](../../docs/implementation/SESSION_281_M7_PHASE_D_ALLOCATOR.md).
+
+**Revalidated (M7 Phase E, 2026-11-18, release compiler).** `contend 12 5000` → `threads=12 counter=60000 returned=60000`; `cycles 100 7` → `counter=700`; `failure 8` → `joined=8 seven=8`; exit 0.
+
+See [`SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md`](../../docs/implementation/SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md).

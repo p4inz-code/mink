@@ -17,3 +17,7 @@ every failure found and the milestone verdict.
 **Revalidated (M7 Phase D, 2026-11-15, release compiler).** PASS after the Phase D allocator change: every status and body correct, exact served count, usage errors exit 2 (1.2 s).
 
 See [`SESSION_281_M7_PHASE_D_ALLOCATOR.md`](../../docs/implementation/SESSION_281_M7_PHASE_D_ALLOCATOR.md).
+
+**Revalidated (M7 Phase E, 2026-11-18, release compiler).** PASS: 120 requests over 16 workers plus 40 over 4, every status and body correct.
+
+See [`SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md`](../../docs/implementation/SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md).

@@ -265,3 +265,37 @@ milestone can be re-scored on the Phase D evidence in
 The remaining ceilings (4,096-byte child stdin, 8 MiB stdio windows, 1 GiB
 heap / 1,024 live allocations, O(N²) SQL copies, one HTTP connection at a time)
 are unchanged, documented limits, not defects.
+
+## 10. Reassessment, 2026-11-18 (M7 Phase E) — verdict moves to PASS
+
+Phase E re-ran all seven workloads against the current tree and audited the two
+limitations this report called out. The original per-session verdict above is
+left as recorded; this section is the milestone's updated standing.
+
+**Updated verdict: PASS**, with the limitations below accepted and documented.
+
+### Defect disposition
+
+| Id | Original status | Phase E status |
+|----|-----------------|----------------|
+| D1 (string validation scanned 1,024 slots per access) | fixed in this milestone | **closed**, 15-test `zlib_lib` and the full suites pass unchanged |
+| D2 (mixed-size churn exhausted the arena) | open, the reason for PARTIAL | **closed in Phase D**, re-verified in Phase E: `churn_repro.mink 1000000` exits 0 in 0.038 s, and the boundary corpus pins the reuse, split and coalescing behaviour |
+
+### Limitation disposition (Phase E)
+
+| Id | Limitation | Phase E classification |
+|----|-----------|------------------------|
+| L1 | child stdin capped at 4,096 bytes | **intentional design constraint** (one pipe buffer prevents a synchronous-write deadlock). Measured at its boundary by `validation/phase_e/stdin`: 4,095/4,096 arrive whole, 4,097/5,000 arrive as 4,096, the child still exits 0, and the cap is documented in `stdlib/process.mink`. Truncation is silent; a larger feed needs a file redirect or several children. |
+| L2 | 1 GiB heap / 1,024 live allocations | **capacity limitations**, now measured exactly: largest single block 1,020 MiB, two 512 MiB blocks do not coexist (the 4 MiB `.bss`/growth boundary), `E-R02`/`E-R03` are deterministic and recoverable by freeing. No corruption at the boundary. |
+| L3 | 8 MiB stdio windows | **acceptable documented limitation**; overflow is a structured `E-R02`, re-confirmed by this run's 1 MiB stdin and 5 MiB file cases. |
+| L4 | SQL engine has no `SUM`/`GROUP BY`, copies the database per statement | **missing capability** of the MINK SQL subset, rejected as a structured text error without corrupting the database (pinned by `sqlite_lib::s41_sum_is_rejected_as_a_documented_subset`). Not implemented: no validated workload needs it, and value typing/NULL semantics would make it a deliberate engine change rather than a small library addition. |
+| L5 | HTTP server handles one connection at a time | **performance limitation**, not exercised as a failure by the 160-request workload; unchanged. |
+
+### Workload coverage re-verified in Phase E
+
+`m2_bigio` 25/25, `m2_procauto` 8/8, `m2_net` 11/11, `m2_server` PASS
+(120 + 40 requests), `m2_threads` all invariants (`60000`, `700`, `joined=8`),
+`m2_soak` 1,595,081 loops / 159,510 thread lifecycles / exit 0, and
+`m2_integrated` PASS. Debug and release regression are 3,640 passed / 0 failed
+/ 10 ignored each. See
+[`SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md`](../implementation/SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md).

@@ -17,3 +17,7 @@ every failure found and the milestone verdict.
 **Revalidated (M7 Phase D, 2026-11-15, release compiler).** PASS after the Phase D allocator change: 100 SQL rows, 100 JSON records re-parsed from disk, matching value total 501,981 and threaded total 333,833,500.
 
 See [`SESSION_281_M7_PHASE_D_ALLOCATOR.md`](../../docs/implementation/SESSION_281_M7_PHASE_D_ALLOCATOR.md).
+
+**Revalidated (M7 Phase E, 2026-11-18, release compiler).** PASS (100 SQL rows, 100 JSON records, totals and threaded sums match).
+
+See [`SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md`](../../docs/implementation/SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md).

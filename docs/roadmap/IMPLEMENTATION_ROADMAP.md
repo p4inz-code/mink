@@ -310,16 +310,24 @@ inactive and must not be executed.
 `jsontool` ports in all five languages before any M4 timing was claimed. M4 ran
 through Session 162 and M5 through Session 177; both are closed.
 
-**Current next action (2026-11-13 — Session 274):** re-run the full release-mode
-suite on the current tree (`60c2160`), where `cargo build --release` already
-succeeds; the last complete release regression was the Session 213 checkpoint at
-85 suites / 3,262 passed / 0 failed / 9 ignored on the older compiler source.
-After that, recruit an independent developer and run the M6 external validation.
-The package is **READY FOR EXTERNAL EVALUATION** (Session 218); no tester has
-started it. The Sessions 205–210 `rustc` release crash no longer reproduces
-(Session 212 records it as a transient host fault with no source or toolchain
-change). M6 — a developer who did not build MINK attempting predefined tasks —
-is the only open milestone item; M7 remains gated on demonstrated demand.
+*Superseded recommendation (retained for history), 2026-11-13 (Session 274):*
+re-run the full release-mode suite on the then-current tree (`60c2160`); the last
+complete release regression at that point was the Session 213 checkpoint at 85
+suites / 3,262 passed / 0 failed / 9 ignored. After that, recruit an independent
+developer and run the M6 external validation. The package is **READY FOR
+EXTERNAL EVALUATION** (Session 218); no tester has started it. The Sessions
+205–210 `rustc` release crash no longer reproduced (Session 212 records it as a
+transient host fault with no source or toolchain change). M7 was still gated on
+demonstrated demand at that time.
+
+**Current next action (2026-11-18 — Session 282):** recruit an independent
+developer and run the M6 external validation. M7 Phases A–E are complete and
+Phase E is **PASS**; the release regression is 100 binaries / 3,640 passed / 0
+failed / 10 ignored in both debug and release, release acceptance passes, and
+M2 is re-scored **PASS** with its limitations recorded as accepted design
+limits. Engineering work no longer gates M6. M6 — a developer who did not build
+MINK attempting predefined tasks — is the only open milestone item; M8 remains
+gated on that evidence, and Linux stays frozen until M8.
 
 *Dated status, 2026-11-06 (Sessions 190–193).* M4 and M5 are closed. The
 standard-library ownership work that this roadmap treats as a prerequisite is
@@ -956,6 +964,49 @@ only open runtime defect (M2-D1) is therefore closed, with M6 still
 **OUTSTANDING** and separate, M8 gated, Linux frozen, 1.0.5 unpublished. No
 version bump, tag, publication or credential change. See
 [`SESSION_281_M7_PHASE_D_ALLOCATOR.md`](../implementation/SESSION_281_M7_PHASE_D_ALLOCATOR.md).
+
+*Dated status, 2026-11-18 (Session 282 — M7 Phase E).* **M7 Phase E is PASS,
+and M7's engineering scope is complete.** Eight documented runtime boundaries
+were audited against executed code: generation retirement, O(n) free-list
+walks, first-fit fragmentation, the 1 GiB arena ceiling, the 1,024-live-allocation
+table, the single spin lock, the 4,096-byte child-stdin cap and the absent SQL
+`SUM`. None is a correctness or safety defect; all are classified below. Two
+measurement/documentation defects were fixed: a Phase D soak assertion that was
+one millisecond tick too strict (60 s workload unchanged), and stale comments in
+four stdlib modules plus `RUNTIME_IMPLEMENTATION.md` that still described a
+fixed 4 MiB bump heap. New permanent evidence: `tests/runtime_boundaries.rs`
+(8 executed boundary cases), a 20,000-operation invariant sequence in the
+verifier tests, `sqlite_lib::s41_sum_is_rejected_as_a_documented_subset`,
+`validation/phase_e/stdin` and `validation/phase_e/concurrency`. Measured: the
+largest single block is 1,020 MiB (two 512 MiB blocks cannot coexist, because a
+block may not span the `.bss`/growth boundary); a block retires after 65,535
+reuses and is never reissued; 1,024 live allocations are served and 511 freed
+slots are reusable; the 60 s mixed soak performs 2,517,059 main + 28,626,749
+worker operations with 0 mismatches and a 3.9 MiB high-water mark; allocator
+throughput under maximal contention degrades to 0.22×/0.10×/0.05× of the
+single-thread total at 2/4/8 threads while a CPU-only control scales 1.98×/3.93×/7.55×.
+Debug and release regression: **100 binaries, 3,640 passed, 0 failed, 10
+ignored** each; Clippy 0 errors / 116 pre-existing warnings; every touched file
+is rustfmt-clean. All seven M2 workloads were re-run unchanged (25/25, 8/8,
+11/11, server PASS, thread invariants, 1,595,081-loop soak, integrated PASS) and
+M2 is re-scored **PASS** with accepted limitations. No version bump, tag,
+publication, credential change or Linux work. See
+[`SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md`](../implementation/SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md).
+
+### Milestone closeout — state of M7
+
+| Category | Items |
+|---|---|
+| **Completed engineering work** | M7 Phases A–E. Compiler-foundation hardening, conformance corpora, access-control/diagnostics/codegen fixes, the split/coalescing allocator, runtime boundary and concurrency validation, documentation reconciliation. |
+| **Accepted design limitations** | 1,020 MiB usable arena / 1 GiB logical ceiling; 1,024 live allocations; generation retirement after 65,535 reuses; O(n) free-list walks and first fit; single spin lock with negative scaling under heavy contention; 8 MiB stdio capture windows; 4,096-byte child stdin, truncated silently; one HTTP connection at a time. |
+| **Missing capabilities (deliberate)** | SQL `SUM`/`GROUP BY`/`JOIN`/`ORDER BY`, on-disk databases, O(N²) per-statement copies; zero-copy/streaming compression; async runtime; Unicode path names; no `process_run_input_all`. |
+| **Outstanding external validation** | **M6**: an independent developer on predefined, realistic tasks. Not started; nothing here counts as M6 evidence. |
+| **Gated future work** | **M8** strategic V1 decision; Linux and other platforms frozen until M8; ecosystem/tooling work (registry, formatter, LSP, debugger) still demand-gated; allocator scalability redesign (backoff, per-thread arenas) requires its own justified milestone. |
+
+Recommended next step: option **C** — MINK has crossed the practical Windows-use
+threshold, so begin M6 external developer validation rather than another
+engineering phase. Do not start M8, do not publish 1.0.5, and do not treat M7
+Phase E as external validation.
 
 ---
 
