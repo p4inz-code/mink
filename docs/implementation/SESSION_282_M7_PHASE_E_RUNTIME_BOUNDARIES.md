@@ -299,9 +299,22 @@ Outstanding risks:
 
 ## 8. Release acceptance, formatting and Clippy
 
-- Release acceptance: `python tools/release_acceptance.py` is run on the
-  committed tree in the follow-up commit that records its verdict; the report
-  path, regression totals and any limitation are recorded there verbatim.
+- Release acceptance on the committed tree (`316f7eb`):
+  `python tools/release_acceptance.py --session 282` → **verdict PASS**, runner
+  exit 0, report
+  `target/acceptance/282/20261118T172415Z-316f7eb/report.md`. Build 19.7 s,
+  test compilation 12.5 s, regression 63.9 s; artifact `mink 1.0.5`,
+  4,337,664 bytes, SHA-256
+  `ac20e837980a0e967fd16301f80e710190cede32576dfce93e3c1c93918500c4`;
+  regression **101 suites, 3,640 passed, 0 failed, 10 ignored**. One
+  limitation, unchanged from Phase D: the four pre-existing untracked user
+  files, which are deliberately outside the acceptance evidence.
+- The runner does not retry, and several acceptance attempts aborted before the
+  build stage completed in the host-level `rustc` fault described in §5 (exit
+  101, no test stage run; their report directories remain under
+  `target/acceptance/282/`, which is git-ignored). The recorded run is the
+  first attempt whose build completed. No source, configuration or command
+  changed between attempts — the retry is the same command twice.
 - `cargo fmt --check`: 15 pre-existing files are not rustfmt-clean; the touched
   files (`tests/runtime_boundaries.rs`, `src/runtime/verify.rs`,
   `tests/allocator_conformance.rs`, `tests/sqlite_lib.rs`) are clean.
