@@ -348,8 +348,8 @@ M7 Phase E: **PASS**. M2: re-scored **PASS** with accepted limitations. M6:
 
 ## 12. Commits and remote verification
 
-Staged file by file (never `git add .` or `-A`), five coherent commits on top of
-`7b9a56b`:
+Staged file by file (never `git add .` or `-A`), five content commits on top of
+`7b9a56b`, followed by this commit-set record:
 
 | Commit | Content |
 |---|---|
