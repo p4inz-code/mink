@@ -359,6 +359,8 @@ Staged file by file (never `git add .` or `-A`), five content commits on top of
 | `316f7eb` | `docs(phase-e)` — Phase E report, M2 re-score, workload records, roadmap closeout |
 | `10db5f2` | `docs(phase-e)` — the release-acceptance PASS recorded |
 
-The four untracked user files were left untouched and are not part of the
-evidence. The branch was pushed to `origin/main`; local `HEAD` equals
-`origin/main` after the push (verified with `git rev-parse HEAD origin/main`).
+Two documentation commits follow the table (`docs(phase-e): pin the session
+commit set` and `docs(phase-e): correct the commit-set wording`). The four
+untracked user files were left untouched and are not part of the evidence. The
+branch was pushed to `origin/main`; local `HEAD` equals `origin/main` after the
+push (verified with `git rev-parse HEAD origin/main`).
