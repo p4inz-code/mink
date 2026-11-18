@@ -345,3 +345,20 @@ attempting realistic tasks. M8 stays gated until that evidence exists.
 M7 Phase E: **PASS**. M2: re-scored **PASS** with accepted limitations. M6:
 **OUTSTANDING** (external, not started). M8: **gated**. Linux: **frozen**.
 1.0.5: **unpublished**.
+
+## 12. Commits and remote verification
+
+Staged file by file (never `git add .` or `-A`), five coherent commits on top of
+`7b9a56b`:
+
+| Commit | Content |
+|---|---|
+| `b5b814e` | `test(runtime)` — Phase E boundary corpus, verifier invariant sequence, SQL-subset pin, soak assertion bound |
+| `6d5f556` | `docs(runtime)` — measured heap boundaries in four stdlib modules, `RUNTIME_IMPLEMENTATION`, `MEMORY_MODEL`; npm bundle re-sync |
+| `2ecdee7` | `test(validation)` — reproducible stdin-boundary and contention harnesses |
+| `316f7eb` | `docs(phase-e)` — Phase E report, M2 re-score, workload records, roadmap closeout |
+| `10db5f2` | `docs(phase-e)` — the release-acceptance PASS recorded |
+
+The four untracked user files were left untouched and are not part of the
+evidence. The branch was pushed to `origin/main`; local `HEAD` equals
+`origin/main` after the push (verified with `git rev-parse HEAD origin/main`).
