@@ -461,8 +461,10 @@ Planning is governed by the **canonical locked roadmap** ([`docs/roadmap/IMPLEME
 and caught one real semantic defect; M2 ran the practical stress validation and closed in
 Session 138; M3 closed the reliability and capability gaps it exposed; M4 measured the
 developer experience across MINK, Python, Rust, Go and C#; and M5 delivered three frozen
-Windows applications with 163 executable checks per run. Native compilation and ownership
-are treated as **capabilities that must be tested, not as proven differentiators.**
+Windows applications with 163 executable checks per run. **M7 Phases A–E are complete**
+(compiler, conformance, diagnostics, allocator and runtime hardening, Sessions 277–282);
+the M7 ecosystem half remains demand-gated. Native compilation and ownership are treated
+as **capabilities that must be tested, not as proven differentiators.**
 
 **Release-mode verification passed at the Session 213 compiler checkpoint.** A clean
 optimized build compiled in 30.78 s (4,048,384 bytes, `mink 1.0.5`, SHA-256
@@ -472,15 +474,16 @@ failed, 9 ignored** — the same counts as debug at that commit. The Sessions 20
 the evidence and Session 213 the verification. Ten validation applications rebuilt with
 the release compiler match their Python references on **228/228 cases**.
 
-The current tree has since been verified in both modes. At `0aa07e4` a clean
-release build completed in 20.77 s (4,242,944 bytes, `mink 1.0.5`, SHA-256
-`92bd263a…d2da436`) and the full release suite reported **91 suites, 3,436
-passed, 0 failed, 9 ignored** — the same counts as the Session 274 debug
-baseline, with the same nine intentional ignores. That binary is not comparable
-with the Session 213 reference: the current source includes struct patterns,
-`defer` and element-level aggregate ownership, which the reference binary does
-not implement. The 3,262 figure describes the Session 213 checkpoint, not the
-current total.
+The current tree has since been verified in both modes. After M7 Phases A–E the
+debug and release suites both report **100 suites, 3,640 passed, 0 failed, 10
+ignored**, with the same ten intentional ignores (eight bounded/extended soaks,
+the opt-in public-internet TLS control, and the extended allocator soak). A
+current release build is 4,337,664 bytes and reports `mink 1.0.5`. That binary
+is not comparable with the Session 213 reference: the current source includes
+struct patterns, `defer`, element-level aggregate ownership, the Session 279–282
+compiler fixes and the split/coalescing allocator, which the reference binary
+does not implement. The 3,262 figure describes the Session 213 checkpoint, not
+the current total.
 
 The procedure is now repository-native. `python tools/release_acceptance.py --session <id>`
 runs the fresh release build, the release test compilation and the full regression in a
@@ -489,8 +492,11 @@ PASS/FAIL/BLOCKED/PARTIAL from the stage results, writing JSON and Markdown repo
 `target/acceptance/`. See
 [`docs/validation/RELEASE_ACCEPTANCE.md`](docs/validation/RELEASE_ACCEPTANCE.md).
 
-One item is open. **M6 external developer validation is outstanding** — it requires a
-developer who did not build MINK. M7 tooling and ecosystem work remains gated on
+**M6 external developer validation is BLOCKED / PENDING EXTERNAL EXECUTION.** The
+package, protocol and repository are prepared and verified, but the milestone requires a
+developer who did not build MINK, and no such developer is available to this work. M6 is
+not PASS, and no internal test substitutes for it. The M7 engineering phases A–E
+(compiler/runtime hardening) are complete; M7 ecosystem and tooling work remains gated on
 demonstrated demand. No publication, tag or release was created: 1.0.5 remains unpublished.
 
 MINK targets **Windows x64**, the completed baseline and the only active platform for
@@ -506,8 +512,10 @@ strategic gate is passed**; a native ELF backend exists in source but is unmaint
 | Linux | **Frozen until M8** — native ELF backend exists in source, unmaintained |
 | macOS | Not supported — future / to be decided after M8 |
 
-Ecosystem and tooling work is **gated by the roadmap (M7)**: it begins only after actual
-demand is demonstrated, not speculatively.
+The **M7 engineering phases** (compiler foundation, conformance, access control,
+diagnostics, allocator and runtime boundaries) are complete. Ecosystem and tooling work
+(registry, formatter, language server, debugger) remains **gated by the roadmap**: it
+begins only after actual demand is demonstrated, not speculatively.
 
 ## Standard Library
 

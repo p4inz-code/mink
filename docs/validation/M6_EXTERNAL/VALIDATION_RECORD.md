@@ -221,3 +221,43 @@ itself is unchanged (4,048,384 bytes, SHA-256
 1.0.5`).
 
 **M6 verdict remains OUTSTANDING.** Nothing here is external validation.
+
+## 10. Session 283 package re-verification — 2026-11-20
+
+Baseline: local `HEAD` equals `origin/main` at
+`db696bcd521cb2360598a75fdd9020a2b52f3d6c`; the worktree contains only the four
+user-owned untracked files (`MINK UI SETS OFFICIAL.zip`,
+`freebuff-chat-2026-10-01T19-08-00.600Z.md`, `nl1.exe`, `nl1.mink`). No tester
+evidence was supplied, so §§1, 3, 4 and 5 remain empty and §2 remains the
+recruitment blocker.
+
+The package was re-verified against this tree rather than assumed current:
+
+| Check | Result |
+| --- | --- |
+| Referenced relative links in all seven package documents | 0 broken |
+| `stdlib/` modules | 27, as stated |
+| Example directories | 22 (15 in the Path A set, 7 newer and explicitly excluded) |
+| Tutorial programs | 10, plus the 5 program variants |
+| Validation applications | 10 (`a1`–`h_manifest`) |
+| Path B clean clone at `db696bc` | `cargo build --release` exit 0, 22.18 s, 62 warnings, 0 errors |
+| Version / artifact | `mink 1.0.5`, 4,337,664 bytes (newer source, not the reference binary) |
+| Module-resolution probe from the clone root | `mod filesystem;` program built and exited 0 |
+| Reference binary | 4,048,384 bytes, SHA-256 `87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`, unchanged |
+| Tutorial verifier | 15/15 after the harness fix below |
+
+One package/usability defect was confirmed and fixed. `verify.py` built every
+case in a temporary directory and assumed the compiler would find a bundled
+`stdlib`; a repository compiler resolves only `<exe>/../stdlib` and
+`<cwd>/stdlib`, so the documented
+`--compiler target/release/mink.exe` usage failed `10_imports` and
+`program_c_utility` with `E-S01: module file 'filesystem.mink' not found`.
+The verifier now copies the repository `stdlib/` into each disposable case
+directory, and the tutorial README no longer names a deleted `tmp/` install
+path. This is a validation-harness defect, not a compiler or runtime defect:
+no MINK source changed, and the same standard library is exercised.
+
+**M6 status: BLOCKED / PENDING EXTERNAL EXECUTION.** The canonical verdict
+remains **OUTSTANDING**: no independent developer was contacted, no invitation
+was sent, no task was attempted by an outside person, and no external feedback
+exists. Package verification is preparation, not validation.

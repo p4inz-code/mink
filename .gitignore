@@ -12,3 +12,8 @@ npm/mink/*.tgz
 
 # temporary test artifacts
 tmp/
+
+# outputs of running the documented examples/exercises from the repository root
+examples/*/main.exe
+/report.json
+/env_report.txt

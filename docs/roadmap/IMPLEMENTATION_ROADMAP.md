@@ -203,6 +203,17 @@ favorable results.**
 ### M6 — External Developer Validation
 A developer who did not build MINK must attempt predefined tasks.
 
+**Status (2026-11-20, Session 283): BLOCKED / PENDING EXTERNAL EXECUTION.**
+The self-contained package and 18-task protocol in
+[`docs/validation/M6_EXTERNAL/`](../validation/M6_EXTERNAL/README.md) were
+re-verified against `db696bc`: all referenced documents and inventory exist, the
+Path B clean-clone build succeeds in 22 s and reports `mink 1.0.5`, and the
+packaged tutorial verifier passes 15/15 after one harness defect was fixed
+(it could not resolve `stdlib` for module-import cases). **No independent
+developer is available to this work**, so no evaluator was invited, no external
+observation exists, and M6 is **not PASS**. The canonical criteria and evidence
+requirements are unchanged.
+
 Measure:
 
 - time to completion
@@ -213,8 +224,20 @@ Measure:
 - successful completion
 - willingness to use MINK again
 
-### M7 — Ecosystem / Tooling
-**Only after actual demand is demonstrated.** Potential scope:
+### M7 — Engineering Hardening and Ecosystem / Tooling
+
+**Engineering scope: COMPLETE (Sessions 277–282, Phases A–E; Phase E PASS).** Under the
+owner's explicit instruction the engineering half of M7 was executed before the
+ecosystem half: compiler-foundation hardening and conformance corpora (Phase A),
+stdlib/distribution conformance (Phase B), access-control, diagnostics and
+codegen fixes (Phase C), the split/coalescing allocator (Phase D), and runtime
+boundary and concurrency validation (Phase E). The completed scope is recorded
+in the dated statuses in §8 and in
+[`docs/implementation/`](../implementation/). It is internal engineering work
+and does not satisfy M6.
+
+**Ecosystem/tooling scope: only after actual demand is demonstrated.** Potential
+scope:
 
 - package registry
 - package discovery
@@ -320,7 +343,7 @@ EXTERNAL EVALUATION** (Session 218); no tester has started it. The Sessions
 transient host fault with no source or toolchain change). M7 was still gated on
 demonstrated demand at that time.
 
-**Current next action (2026-11-18 — Session 282):** recruit an independent
+**Previous next action (2026-11-18 — Session 282; superseded):** recruit an independent
 developer and run the M6 external validation. M7 Phases A–E are complete and
 Phase E is **PASS**; the release regression is 100 binaries / 3,640 passed / 0
 failed / 10 ignored in both debug and release, release acceptance passes, and
@@ -328,6 +351,16 @@ M2 is re-scored **PASS** with its limitations recorded as accepted design
 limits. Engineering work no longer gates M6. M6 — a developer who did not build
 MINK attempting predefined tasks — is the only open milestone item; M8 remains
 gated on that evidence, and Linux stays frozen until M8.
+
+**Current next action (2026-11-20 — Session 283):** M6 is **BLOCKED / PENDING
+EXTERNAL EXECUTION**. The repository and validation package are prepared,
+backed up and verified, but the required human step has not happened: the owner
+must send the invitation in
+[`VALIDATION_RECORD.md`](../validation/M6_EXTERNAL/VALIDATION_RECORD.md) §2 to a
+developer who has never contributed to MINK, and return that developer's
+completed submission form. Everything MINK can do without that person is done;
+no further internal audit can convert M6 to PASS. M8 remains gated on external
+evidence, 1.0.5 remains unpublished, and Linux remains frozen.
 
 *Dated status, 2026-11-06 (Sessions 190–193).* M4 and M5 are closed. The
 standard-library ownership work that this roadmap treats as a prerequisite is
@@ -993,6 +1026,23 @@ M2 is re-scored **PASS** with accepted limitations. No version bump, tag,
 publication, credential change or Linux work. See
 [`SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md`](../implementation/SESSION_282_M7_PHASE_E_RUNTIME_BOUNDARIES.md).
 
+*Dated status, 2026-11-20 (Session 283 — M6 preparation verification, backup
+and maintenance).* No MINK language, compiler or runtime behaviour changed.
+The M6 external package was re-verified against `db696bc` and one validation
+harness defect was fixed: `benchmarks/m6/session176/verify.py` builds each case
+in a temporary directory and previously assumed the compiler could find a
+bundled `stdlib`, so its documented `--compiler <repo>/target/release/mink.exe`
+usage failed the two `mod`-import cases with `E-S01`. It now copies the
+repository standard library into each case directory; 15/15 cases pass, and
+the tutorial README no longer names a deleted `tmp/` install path. The
+repository was fully backed up (verified bundle plus full worktree archive,
+SHA-256, restore-tested) and 20.9 GB of ignored build and scratch output was
+removed, leaving 87 MB; the reference compiler and acceptance evidence were
+preserved. Active roadmap statements for M7 and M6 were reconciled with
+Sessions 277–282. M6 remains **BLOCKED / PENDING EXTERNAL EXECUTION**, not PASS;
+M8 gated, Linux frozen, 1.0.5 unpublished. See
+[`SESSION_283_M6_VALIDATION_AND_MAINTENANCE.md`](../implementation/SESSION_283_M6_VALIDATION_AND_MAINTENANCE.md).
+
 ### Milestone closeout — state of M7
 
 | Category | Items |
@@ -1000,7 +1050,7 @@ publication, credential change or Linux work. See
 | **Completed engineering work** | M7 Phases A–E. Compiler-foundation hardening, conformance corpora, access-control/diagnostics/codegen fixes, the split/coalescing allocator, runtime boundary and concurrency validation, documentation reconciliation. |
 | **Accepted design limitations** | 1,020 MiB usable arena / 1 GiB logical ceiling; 1,024 live allocations; generation retirement after 65,535 reuses; O(n) free-list walks and first fit; single spin lock with negative scaling under heavy contention; 8 MiB stdio capture windows; 4,096-byte child stdin, truncated silently; one HTTP connection at a time. |
 | **Missing capabilities (deliberate)** | SQL `SUM`/`GROUP BY`/`JOIN`/`ORDER BY`, on-disk databases, O(N²) per-statement copies; zero-copy/streaming compression; async runtime; Unicode path names; no `process_run_input_all`. |
-| **Outstanding external validation** | **M6**: an independent developer on predefined, realistic tasks. Not started; nothing here counts as M6 evidence. |
+| **Outstanding external validation** | **M6**: an independent developer on predefined, realistic tasks. Status **BLOCKED / PENDING EXTERNAL EXECUTION** (2026-11-20): package re-verified, no tester available; nothing here counts as M6 evidence. |
 | **Gated future work** | **M8** strategic V1 decision; Linux and other platforms frozen until M8; ecosystem/tooling work (registry, formatter, LSP, debugger) still demand-gated; allocator scalability redesign (backoff, per-thread arenas) requires its own justified milestone. |
 
 Recommended next step: option **C** — MINK has crossed the practical Windows-use

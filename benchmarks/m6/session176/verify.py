@@ -69,6 +69,14 @@ def main():
             work = Path(td)
             src = work / source
             shutil.copy2(HERE / source, src)
+            # The compiler resolves `mod x;` from the declaring file's
+            # directory, then `<exe>/../stdlib`, then `<cwd>/stdlib`. A
+            # repository build has no stdlib beside the binary, and the case
+            # builds in a temporary directory, so provide the repository
+            # standard library in the case directory. Without this the two
+            # module-import cases fail with E-S01 even though the documented
+            # `--compiler` usage is followed exactly.
+            shutil.copytree(REPO / "stdlib", work / "stdlib")
 
             build_start = time.perf_counter()
             build = subprocess.run(

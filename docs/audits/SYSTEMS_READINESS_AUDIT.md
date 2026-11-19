@@ -565,3 +565,24 @@ patterns, `defer` and element-level aggregate ownership. Release verification
 is current; the publication verdict remains **NOT READY** and M6 external
 developer validation remains **OUTSTANDING**. See
 [`M6_SESSION_275_CURRENT_TREE_RELEASE_ACCEPTANCE.md`](../benchmarks/M6/M6_SESSION_275_CURRENT_TREE_RELEASE_ACCEPTANCE.md).
+
+## Addendum — 2026-11-20 (Session 283)
+
+*Dated addendum; earlier sections keep their original verdicts.* No MINK
+language, compiler or runtime behaviour changed in this session.
+
+| Item | Result |
+| --- | --- |
+| M7 engineering scope | Phases A–E complete (Sessions 277–282); ecosystem/tooling half still demand-gated |
+| M6 external validation | Package re-verified at `db696bc`; **BLOCKED / PENDING EXTERNAL EXECUTION** |
+| External evidence | none — no independent developer is available; nothing fabricated |
+| Package defect fixed | tutorial verifier could not resolve `stdlib` in temporary case directories; now 15/15 |
+| Debug / release regression | **100 suites, 3,640 passed, 0 failed, 10 ignored** in each mode |
+| Clippy / formatting | 0 errors, 116 pre-existing warnings; 15 pre-existing unformatted files, none touched |
+| Repository size | 20.99 GB → 81.2 MB; 20.91 GB of ignored build/scratch output removed |
+| Backup | verified bundle + full worktree archive, SHA-256, restore-tested |
+
+Publication readiness remains **NOT READY** because the external milestone is
+not satisfied. 1.0.5 remains unpublished, M8 is gated, and Linux remains
+frozen. See
+[`SESSION_283_M6_VALIDATION_AND_MAINTENANCE.md`](../implementation/SESSION_283_M6_VALIDATION_AND_MAINTENANCE.md).

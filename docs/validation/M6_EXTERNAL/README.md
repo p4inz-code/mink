@@ -3,13 +3,16 @@
 **Package version:** 1.0.5 (repository build)
 **Prepared:** 2026-11-08, Session 215
 **Re-verified:** 2026-11-08, Session 237
-**Inventory checked:** 2026-11-13, Session 274
+**Inventory checked:** 2026-11-20, Session 283
 **Audience:** a developer who did not build MINK and has no prior MINK knowledge
 **Platform:** Windows x86_64
 **Package status:** **READY FOR EXTERNAL EVALUATION** (internal reproducibility
 check passed 2026-11-08, Session 218; instructions and task expectations
-re-reviewed in Sessions 229–238). This is not external validation; M6 remains
-OUTSTANDING.
+re-reviewed in Sessions 229–238; package and inventory re-verified 2026-11-20,
+Session 283).
+**M6 status: BLOCKED / PENDING EXTERNAL EXECUTION** — no independent developer
+is available to this work. This is not external validation; the canonical M6
+verdict remains OUTSTANDING and is not PASS.
 
 This package exists so an independent developer can install MINK, learn it from
 its own documentation, build practical programs, and report what actually
@@ -157,6 +160,14 @@ self-build, expected to differ from the reference binary as explained above),
 and a `mod filesystem;` program ran from the clone root. Path A's supplied
 binary must match the reference checksum; a Path B self-build need not.
 
+Session 283 re-verified the source path at `db696bc`: `git clone` and
+`cargo build --release` exited 0 in 22.18 s with 62 warnings and 0 errors,
+`mink --version` printed `mink 1.0.5`, the binary was 4,337,664 bytes, and a
+`mod filesystem;` program built and ran with exit 0. That source is newer than
+the reference binary and is not identified with it. The reference binary under
+`target/s213_clean/release/mink.exe` is preserved at 4,048,384 bytes, SHA-256
+`87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`.
+
 ## 5. Quick start
 
 ```bash
@@ -255,6 +266,14 @@ against an expectation you write down **before** running it.
 
 Do not run the repository's Rust test suite (`cargo test`) for this evaluation;
 that is internal verification and is not part of the external tasks.
+
+The packaged tutorial exercises can be checked with
+`python benchmarks/m6/session176/verify.py` (the default compiler is
+`target/release/mink.exe`) or with `--compiler <path-to-mink.exe>`. The verifier
+copies the repository `stdlib/` into each disposable case directory, so it works
+with a repository build, the npm binary and the reference binary alike; it
+passes 15/15 on the tree verified in Session 283. This is a package self-check,
+not external evidence.
 
 ## 9. Known limitations
 
