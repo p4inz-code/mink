@@ -234,8 +234,11 @@ the first build of this session. Both were the documented non-reproducing host
 fault; the immediate retry succeeded (21.47 s and 22.31 s). They are recorded,
 not concealed, and are not counted as passes.
 
-Release acceptance on the final committed tree is recorded in `target/acceptance/`
-and summarized in the addendum below.
+Release acceptance was run through `tools/release_acceptance.py --session 283`
+on the committed tree. The authoritative report is kept under
+git-ignored `target/acceptance/283/`; its verdict is quoted in the milestone
+report. The source tree accepted in this session is `2ae5d51`; any later commit
+in the session is documentation-only and does not change compiler behaviour.
 
 ## 8. Commit
 
