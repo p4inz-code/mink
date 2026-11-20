@@ -12,6 +12,12 @@ import shutil
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "src")
 
+# The configs are tracked, so their `root` must not embed a machine-specific
+# absolute path (it used to, and running the harness dirtied the worktree for
+# whoever ran it). Both sides of the comparison run with the repository root as
+# the working directory, so a relative root resolves identically for them.
+SRC_REL = "validation/h_manifest/fixtures/src"
+
 FILES = {
     "readme.txt": b"manifest fixture\nsecond line\n",
     "empty.txt": b"",
@@ -30,22 +36,22 @@ FILES = {
 
 CONFIGS = {
     "config.json": {
-        "root": SRC,
+        "root": SRC_REL,
         "out": "@OUT",
         "extensions": [".txt", ".log", ".csv"],
     },
     "config_no_match.json": {
-        "root": SRC,
+        "root": SRC_REL,
         "out": "@OUT",
         "extensions": [".zzz"],
     },
     "config_missing_root.json": {
-        "root": os.path.join(SRC, "does-not-exist"),
+        "root": SRC_REL + "/does-not-exist",
         "out": "@OUT",
         "extensions": [".txt"],
     },
     "config_uppercase_ext.json": {
-        "root": SRC,
+        "root": SRC_REL,
         "out": "@OUT",
         "extensions": [".TXT"],
     },

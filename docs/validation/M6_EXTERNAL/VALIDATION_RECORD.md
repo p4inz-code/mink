@@ -261,3 +261,86 @@ no MINK source changed, and the same standard library is exercised.
 remains **OUTSTANDING**: no independent developer was contacted, no invitation
 was sent, no task was attempted by an outside person, and no external feedback
 exists. Package verification is preparation, not validation.
+
+## 11. Session 284 package execution pass — 2026-11-20
+
+Baseline: working from `F:\Works\Mink`; branch `main`; local `HEAD` equals
+`origin/main` at `99543ff1abc57ab9cd32e1d3e0bd5869360a6657`, verified after
+`git fetch origin`. The worktree contains only the four user-owned untracked
+files (`MINK UI SETS OFFICIAL.zip`, `freebuff-chat-2026-10-01T19-08-00.600Z.md`,
+`nl1.exe`, `nl1.mink`); no modified or staged content. No tester evidence was
+supplied, so §§1, 3, 4 and 5 remain empty and §2 remains the recruitment
+blocker. **No invitation was sent and no developer was contacted.**
+
+This session did not re-read the package; it executed it. Every packaged task
+path was run the way an evaluator running Path A would run it, using the
+preserved reference binary (`target/s213_clean/release/mink.exe`, 4,048,384
+bytes, SHA-256
+`87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`, `mink
+1.0.5`, checksum re-measured and matching §4).
+
+| Check | Result |
+| --- | --- |
+| Tutorial package, `verify.py --compiler <reference>` | **15/15 passed**, exit 0 |
+| Validation applications, build | 10/10 build (`a1`–`h_manifest`) |
+| Validation applications, `verify.py` vs Python reference | 10/10 harnesses exit 0; **228 cases, 0 differences** (`a1` 20, `a2` 18, `a3` 35, `b` 34, `c` 43, `d` 10, `e` 18, `f` 19, `g` 18, `h` 13) |
+| Examples, build with the reference binary | 15 build, 7 fail — exactly the seven the README §1.2 excludes (`struct_match_*`, `defer_*`) |
+| Examples, execution | all 15 run; `compress_util` 2, `regex_tool` 2, `http_client` 1, `tcp_client` 1 (usage paths, as documented); `runtime_error_report` 110 (intentional `E-R10` demo); the other 10 exit 0 with their documented output |
+| Module-resolution probe | `mod filesystem;` program builds and runs with exit 0 when invoked from the repository root; invoked from a directory with no `stdlib/` it fails with `E-S01: module file 'filesystem.mink' not found`, which is the documented resolution rule, not a defect |
+| CLI contract | `--version` → `mink 1.0.5`; `help` and bare `mink` print the command list and exit 0; `explain E-T01` prints the explanation; `check` on a type error exits 1 with `E-T01` and a source position |
+| Package links | 0 broken among the seven documents |
+| Package inventory | 27 `stdlib/` modules, 22 examples, 10 validation applications, 10 tutorial programs + 5 variants, 18 protocol tasks — all as stated |
+| Clean clone at `99543ff` | clone complete; `cargo build` (debug) exit 0; `mink 1.0.5`; tutorial 15/15 through the clone's own compiler |
+| Clean clone, `cargo build --release` (Path B) | **blocked by the host fault below**; no release artifact produced |
+
+The `verify.py` harnesses wrote `main.exe` beside each program, and the example
+builds wrote `main.exe` in each example directory; all are git-ignored and none
+was staged.
+
+### 11.1 Host-level `rustc` failure during this session
+
+The release profile could not be built. Nine `cargo build --release`
+invocations failed inside `rustc.exe` (opt-level 3) while compiling the library,
+producing no artifact, including one from a fresh clone in a new target
+directory. Recorded NTSTATUS codes: 3 × `0xc000001d`
+(`STATUS_ILLEGAL_INSTRUCTION`), 5 × `0xc0000005` (`STATUS_ACCESS_VIOLATION`);
+one attempt's exit code was not captured. Attempts used `-j 2`, `-j 1`,
+`CARGO_INCREMENTAL=0` and a clean target directory; none helped. The debug
+profile compiled successfully twice in the same period (exit 0, 62 warnings).
+
+This is the non-reproducing host fault characterized in
+`docs/benchmarks/M6/M6_SESSION_212_RELEASE_TOOLCHAIN_INVESTIGATION.md`, now
+reproducing. It is an environment fault, not a MINK defect: the same source
+compiles in debug, the reference binary is intact and matches its checksum, and
+no tree change was made between the last successful release build (Session 283,
+`db696bc`) and this HEAD, which differs only in documentation and the bundled
+npm binary. It is recorded, not concealed, and not counted as a pass. The
+remaining owner action for Path B re-verification is a host restart or
+hardware-stability check; until then Path B release evidence is the Session 283
+measurement.
+
+### 11.2 Defects found and fixed
+
+**Package defect (S3, fixed): running the packaged `h_manifest` harness dirtied
+the worktree.** `validation/h_manifest/fixtures/make_fixtures.py` wrote the
+config templates with an absolute `root` computed from the running machine, and
+those templates are tracked files, so `python verify.py` left four tracked
+fixtures modified with the evaluator's own local path — noise in every
+subsequent `git status`, and a local path that would travel in a submitted diff.
+The committed templates also still carried the old build machine's path
+(`C:\Users\Admin\Desktop\Mink\...`), which is stale machine-specific data. The
+generator now writes the repository-relative root
+`validation/h_manifest/fixtures/src`, which resolves identically for both sides
+because the harness runs each program with the repository root as its working
+directory. Retested: harness `13/13 cases match the Python reference`, exit 0,
+and a second run leaves `git status` unchanged apart from the intended edits.
+No compiler, runtime or standard-library source changed.
+
+**Documentation defect (S4, fixed): stale warning count.** The package README §3
+stated the Path B build emits "60 warnings". The current tree emits 62. The line
+now states 62 for the current tree and 60 for the 1.0.5 reference build.
+
+**M6 status: BLOCKED / PENDING EXTERNAL EXECUTION.** Canonical verdict remains
+**OUTSTANDING**: no independent developer, no invitation, no external execution,
+no feedback. Running the prepared package internally is a package check and is
+not validation.

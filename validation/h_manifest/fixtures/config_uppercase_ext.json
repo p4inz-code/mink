@@ -1,5 +1,5 @@
 {
- "root": "C:\\Users\\Admin\\Desktop\\Mink\\validation\\h_manifest\\fixtures\\src",
+ "root": "validation/h_manifest/fixtures/src",
  "out": "@OUT",
  "extensions": [
   ".TXT"

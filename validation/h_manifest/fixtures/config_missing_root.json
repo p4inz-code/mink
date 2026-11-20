@@ -1,5 +1,5 @@
 {
- "root": "C:\\Users\\Admin\\Desktop\\Mink\\validation\\h_manifest\\fixtures\\src\\does-not-exist",
+ "root": "validation/h_manifest/fixtures/src/does-not-exist",
  "out": "@OUT",
  "extensions": [
   ".txt"

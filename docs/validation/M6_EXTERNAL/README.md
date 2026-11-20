@@ -4,12 +4,14 @@
 **Prepared:** 2026-11-08, Session 215
 **Re-verified:** 2026-11-08, Session 237
 **Inventory checked:** 2026-11-20, Session 283
+**Package re-run:** 2026-11-20, Session 284 (reference binary, Path A)
 **Audience:** a developer who did not build MINK and has no prior MINK knowledge
 **Platform:** Windows x86_64
 **Package status:** **READY FOR EXTERNAL EVALUATION** (internal reproducibility
 check passed 2026-11-08, Session 218; instructions and task expectations
 re-reviewed in Sessions 229–238; package and inventory re-verified 2026-11-20,
-Session 283).
+Session 283; every packaged task path re-run against the reference binary in
+Session 284).
 **M6 status: BLOCKED / PENDING EXTERNAL EXECUTION** — no independent developer
 is available to this work. This is not external validation; the canonical M6
 verdict remains OUTSTANDING and is not PASS.
@@ -113,7 +115,8 @@ Requires the MSVC Rust toolchain. The build was verified with rustc 1.97.1.
 git clone https://github.com/p4inz-code/mink.git
 cd mink
 rustc --version          # must be a stable MSVC toolchain
-cargo build --release    # ~21-31 s on the verification host, 60 warnings, 0 errors
+cargo build --release    # ~21-31 s on the verification host, 62 warnings on the
+                         # current tree (60 at the 1.0.5 reference build), 0 errors
 ./target/release/mink.exe --version
 ```
 

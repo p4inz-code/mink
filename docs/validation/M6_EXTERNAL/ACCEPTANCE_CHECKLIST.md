@@ -83,6 +83,19 @@ tutorial-harness `stdlib` resolution defect was fixed (15/15 cases pass), but no
 independent developer is available and no external evidence exists. This status
 does not change any condition above or the canonical verdict.
 
+**Operational status (2026-11-20, Session 284): BLOCKED / PENDING EXTERNAL
+EXECUTION.** Every packaged task path was re-executed at `99543ff` with the
+reference binary: tutorial 15/15, validation applications 10/10 harnesses and
+228/228 cases, 15 examples build and run as documented, module probe and CLI
+contract correct, 0 broken links. One package defect was found and fixed: the
+`h_manifest` fixture generator wrote a machine-specific absolute `root` into
+tracked files, so running the documented harness dirtied the worktree; it now
+writes a repository-relative root and the harness passes 13/13 with a clean
+tree afterwards. The release profile could not be rebuilt
+because of the recurring host-level `rustc` fault recorded in
+`VALIDATION_RECORD.md` §11.1. No independent developer, invitation or external
+evidence exists; no condition above moves and the verdict stays OUTSTANDING.
+
 ## 7. Closure sign-off (to be completed only with evidence)
 
 - Tester and consent recorded: ______

@@ -352,7 +352,7 @@ limits. Engineering work no longer gates M6. M6 — a developer who did not buil
 MINK attempting predefined tasks — is the only open milestone item; M8 remains
 gated on that evidence, and Linux stays frozen until M8.
 
-**Current next action (2026-11-20 — Session 283):** M6 is **BLOCKED / PENDING
+**Previous next action (2026-11-20 — Session 283; superseded):** M6 is **BLOCKED / PENDING
 EXTERNAL EXECUTION**. The repository and validation package are prepared,
 backed up and verified, but the required human step has not happened: the owner
 must send the invitation in
@@ -361,6 +361,22 @@ developer who has never contributed to MINK, and return that developer's
 completed submission form. Everything MINK can do without that person is done;
 no further internal audit can convert M6 to PASS. M8 remains gated on external
 evidence, 1.0.5 remains unpublished, and Linux remains frozen.
+
+**Current next action (2026-11-20 — Session 284):** M6 is **BLOCKED / PENDING
+EXTERNAL EXECUTION**, and the package has now been executed end to end at
+`99543ff` rather than re-read: tutorial 15/15, validation applications 10/10
+harnesses / 228 cases, 15 supported examples build and run, module probe and CLI
+contract correct. One package defect was fixed: the `h_manifest` fixture
+generator embedded a machine-specific path in tracked fixtures and dirtied the
+worktree on every harness run. Nothing in the package blocks an unfamiliar
+developer, so the only open item remains human: the owner sends the §2 invitation in
+[`VALIDATION_RECORD.md`](../validation/M6_EXTERNAL/VALIDATION_RECORD.md) to a
+developer who has never contributed to MINK and returns the completed
+submission form. One environment caveat is recorded, not fixed: the recurring
+host-level `rustc` release crash (`STATUS_ILLEGAL_INSTRUCTION` /
+`STATUS_ACCESS_VIOLATION`) reproduced in Session 284, so the Path B release
+build must be re-measured after a host restart finishes that check. M8 stays
+gated, 1.0.5 stays unpublished, and Linux stays frozen.
 
 *Dated status, 2026-11-06 (Sessions 190–193).* M4 and M5 are closed. The
 standard-library ownership work that this roadmap treats as a prerequisite is
