@@ -234,6 +234,42 @@ restores the machine's previous state.
 machine-wide (`HKLM`) classes only and cannot see a per-user registration, even though
 Explorer resolves it correctly.
 
+### 10.1 Explorer rendering check — 2026-11-21
+
+A report that `.mink` files showed a generic icon was traced on a Windows x86_64
+machine. The cause was not the artwork, the ICO or the script: **no `.mink` association
+existed at all** — `HKCU\Software\Classes\.mink`, `HKLM\Software\Classes\.mink` and
+`HKCR\.mink` were all absent — so the shell had nothing to resolve. The globally
+installed npm package on that machine was `@p4inz-code/mink@1.0.2`, which predates the
+brand kit and ships only `bin/` and `stdlib/`; the registration files therefore were
+not present locally. The 1.0.5 candidate in this repository ships them
+(`npm/mink/package.json` lists `windows`).
+
+What was done and observed:
+
+| Check | Result |
+| --- | --- |
+| Both ICOs are valid multi-resolution icons | 7 frames each (16, 24, 32, 48, 64, 128, 256), all 32-bpp PNG, byte-identical between `assets/brand/windows/ico/` and `npm/mink/windows/` |
+| Registration from the source checkout | exit 0; `HKCU\Software\Classes\.mink` → `MINK.SourceFile`, `Content Type` = `text/x-mink`, `PerceivedType` = `text`, `DefaultIcon` = `"F:\Works\Mink\npm\mink\windows\mink-file.ico",0`, no `open` command |
+| Explorer, existing file | Type column reads **MINK Source File**; the 16 px glyph is the dark document with the white mink mark, not a generic page |
+| Explorer, file created after registration | same type name and icon |
+| Directory containing a space | same result |
+| Uninstall | exit 0, removed 4 MINK-owned values and both keys, left no empty `.mink` key |
+| Re-register after uninstall, twice | exit 0; identical registry state (idempotent) |
+| `verify_brand_assets.py` | PASS, 9 checks |
+| `verify_filetype_association.ps1` | PASS, 56 checks |
+
+Not verified: the 24–256 px frames were validated inside the ICO and against the PNG
+exports, but Explorer was only inspected in its default details view, so the icon was
+not visually reviewed at every view size; update/reinstall persistence could not be
+tested because no installer exists (§11.2); the icon cache was not stale on this machine,
+so the `ie4uinit.exe -show` path was exercised only as part of registration.
+
+Note on this machine's state: the live association points at the source checkout
+(`F:\Works\Mink\npm\mink\windows\mink-file.ico`), because the installed 1.0.2 package
+has no `windows/` directory. A normal 1.0.4+ install resolves the icon from the global
+package instead, as the script is designed to do.
+
 ## 11. Limitations
 
 1. `mink.exe` has no embedded icon resource; see §3 for the reason and the local procedure.
