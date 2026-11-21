@@ -50,6 +50,19 @@ Full design, validation and limitations:
 - `mink.exe` in this package has no embedded icon resource; the `.mink` file type is
   what carries MINK's identity in Explorer. `mink-app.ico` is provided for shortcuts,
   installers and embedding (`mink.rc`).
+- `.mink` is the only extension MINK registers. `mink.toml` and `mink.lock` are
+  recognised by file name, not by extension, so associating them would take over every
+  `.toml` and `.lock` file on the machine. Do not add them here.
 - The script resolves the icon from its own directory, so it works from any working
   directory, with any npm prefix, and from a path containing spaces or non-ASCII
-  characters.
+  characters. It never assumes a drive letter or a development directory.
+- The resolved icon must be a real ICO (header and frame count checked). If it is missing,
+  empty or malformed, registration exits 1 with the paths it searched and changes nothing.
+- The registered icon path is absolute and captured when the script runs. After moving,
+  upgrading or reinstalling the package, run it again; nothing repairs the path itself.
+- `.mink` files are not registered with an `open` command, so nothing in this kit can
+  compile or run source on double-click.
+
+Validation of this directory is permanent:
+[`validation/windows_filetype/verify_filetype_association.ps1`](../../../validation/windows_filetype/verify_filetype_association.ps1)
+(88 checks) checks the package layout, the icon resolution and the registry effects.

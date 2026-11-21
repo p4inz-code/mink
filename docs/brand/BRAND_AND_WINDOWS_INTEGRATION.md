@@ -1,7 +1,8 @@
 # MINK brand assets and Windows file identity
 
-**Status:** implemented · **Version:** 1.0.4 at implementation (unchanged by
-the 1.0.5 candidate) · **Platform:** Windows x86_64
+**Status:** implemented, file-type integration closed 2026-11-22 (Session 286) ·
+**Version:** 1.0.4 at implementation (unchanged by the 1.0.5 candidate) ·
+**Platform:** Windows x86_64
 **Design source:** the supplied `MINK UI SETS OFFICIAL` artwork package (2026-10-25), used as
 delivered — no artwork was redrawn, recoloured or rescaled.
 
@@ -123,6 +124,56 @@ that is empty afterwards is removed so no debris is left.
 when present, `ie4uinit.exe -show` to rebuild the cached file-type icon. Explorer is never
 restarted or killed.
 
+### 5.1 Every MINK file type and its Windows identity
+
+MINK has **exactly one** user-facing file type with its own extension: `.mink`. The other
+types that appear in a MINK project are identified by file *name* (or are generated), so
+registering them would take over an unrelated extension. This inventory is the complete
+set found in the compiler, the package manager, the standard library, `examples/`,
+`validation/`, `benchmarks/`, the npm manifests and this documentation:
+
+| Extension | Purpose | Status | Opening application | Windows association | Icon | Registration | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `.mink` | MINK source: programs, modules (`mod x;` → `x.mink`), the 27 stdlib modules, tests | **supported** | none by design (Windows' own "Open with"; `-Editor` binds one) | `HKCU\Software\Classes\.mink` → `MINK.SourceFile`, content type `text/x-mink`, perceived type `text` | `mink-file.ico` — 7 frames | `register-mink-filetype.ps1` (per-user) | 88-check harness, live registry cycle on this machine, Explorer visual check at 16 px and large-icon view, shell bitmap pixel-compared with the official frame |
+| `mink.toml` | Package manifest read and edited by `mink init/add/remove/install/update` (`src/package/manifest.rs`) | **supported** (project metadata) | any TOML/text editor the user chooses | **not registered**, and must not be: the extension is `.toml`, shared with unrelated applications | none — no manifest artwork exists in the brand kit, so none was invented | none | static inspection of `src/package/` and `tests/package_manager.rs`; deliberately outside the association |
+| `mink.lock` | Lockfile written by `mink install`/`update` (`src/package/lock.rs`) | **supported, generated** — not hand-edited | text editor | **not registered** (`.lock` is shared) | none | none | same as `mink.toml` |
+| `.mink/` | Per-project state directory: installed packages, environment state (`src/package/env.rs`, `STATE_DIR`) | **internal** | not applicable — it is a directory | not applicable | not applicable | not applicable | static inspection |
+| `.exe` | Output of `mink build` | **generated artifact** | Windows loader | Windows' own executable type — MINK does not touch it | Windows default executable icon (see §3) | none | not a MINK file type |
+
+Why the manifest and lockfile are not file types of their own: Windows associates by
+extension only, so a `.toml` or `.lock` registration would apply to every TOML file and
+every lockfile on the machine. `mink.toml` and `mink.lock` are recognised by full name,
+which the shell cannot express. No separate icon is defined for them, and no new visual
+identity was created for this audit.
+
+### 5.2 How the icon path is resolved (portability)
+
+The registered `DefaultIcon` has to be an absolute path, so the script derives it from the
+copy that is running, never from a hard-coded location, the current directory or a
+temporary file:
+
+| Invocation | Installation found | Icon used | Evidence |
+| --- | --- | --- | --- |
+| npm package `<prefix>\node_modules\@p4inz-code\mink\windows` (global or local) | `<package>\bin\mink.exe` | `<package>\windows\mink-file.ico` (the `bin` directory ships no ICO) | harness step 11, temporary package tree whose path contains a space |
+| Repository checkout `npm\mink\windows` | `mink.exe` beside the script if present, else on `PATH` | `<script dir>\mink-file.ico` | harness step 12 (no installation at all) and this machine's live association |
+| `-InstallDir` / `-MinkExe` | the directory given | `<install>\mink-file.ico`, else the script's own copy | harness steps 5 and 9 (space and Unicode path) |
+| `-IconPath <ico>` | not needed | exactly that file | harness step 13 |
+
+Before any registry value is written the resolved file must exist **and** carry a valid
+ICONDIR header (reserved 0, type 1, frame count > 0). A missing, empty or malformed icon
+makes registration exit 1 with the paths it searched, and the registry is left untouched —
+the harness checks that with a from-scratch signature comparison, so an earlier
+registration is never silently replaced by a broken one. Because the path is captured at
+registration time, re-run the script after moving, upgrading or reinstalling the package;
+`-Uninstall` and a fresh run is the supported repair.
+
+**Package requirement.** Only a package that ships `windows/` can resolve the icon from an
+installed copy. The published `@p4inz-code/mink@1.0.2` and `1.0.4` do not; `npm pack
+--dry-run` in `npm/mink` confirms the 1.0.5 candidate does (5 entries under `windows/`).
+Until 1.0.5 is published, a checkout is the only installation that carries the kit, and
+the association on such a machine necessarily points into the checkout. That is a release
+dependency, not a defect in the script.
+
 **Why one mechanism.** The design package also contains a `.reg` file and an Inno Setup
 snippet. Neither is shipped: a `.reg` file cannot resolve an installation path, so it has
 to hard-code one (the supplied reference assumes
@@ -218,7 +269,7 @@ CRCs, IDAT length, alpha channel, file-name/dimension agreement), checks both IC
 confirms the shipped kit copies are byte-identical to the brand tree, and reports whether
 `mink.exe` has a resource directory.
 
-`verify_filetype_association.ps1` (56 checks, 11 steps) works in a temporary install tree
+`verify_filetype_association.ps1` (88 checks, 15 steps) works in a temporary install tree
 whose path contains a space: it snapshots the keys it touches, proves that an association
 owned by another application is not taken over without `-Force` and that `-Force`
 preserves that application's entries, registers from the package layout alone, and then
@@ -229,6 +280,15 @@ editor and opens the fixture through the association to prove the file reaches t
 while no compilation happens, re-registers twice in one session, registers from a Unicode
 path, uninstalls and confirms that only MINK-owned entries disappeared, and finally
 restores the machine's previous state.
+
+Steps 11–14 were added in Session 286 to cover the gaps an audit found: the real npm
+package layout (icon only in `windows\`, none in `bin\`), a source checkout with no
+installation present, refusal with the registry provably untouched for a missing, empty or
+malformed icon and for a non-existent `-IconPath`, that the registered icon is a valid
+7-frame ICO, and that the shipped kit is complete (`windows/` in the npm manifest,
+`mink.rc`, `README.md`, both ICOs) while the script declares exactly one extension,
+claims no `.toml`/`.lock` type, assumes no drive letter and resolves assets from
+`$PSScriptRoot`. Existing assertions were not weakened; the count rose from 56 to 88.
 
 `cmd.exe`'s `assoc`/`ftype` are deliberately not used as evidence: they read the
 machine-wide (`HKLM`) classes only and cannot see a per-user registration, even though
@@ -267,8 +327,38 @@ so the `ie4uinit.exe -show` path was exercised only as part of registration.
 
 Note on this machine's state: the live association points at the source checkout
 (`F:\Works\Mink\npm\mink\windows\mink-file.ico`), because the installed 1.0.2 package
-has no `windows/` directory. A normal 1.0.4+ install resolves the icon from the global
-package instead, as the script is designed to do.
+has no `windows/` directory. A package that ships `windows/` resolves the icon from the
+package instead; see §5.2 and §10.2 for what was and was not verified.
+
+### 10.2 File-type integration closure — 2026-11-22 (Session 286)
+
+The previous check left two things unproven: every supported file type had not been
+enumerated, and Explorer had only been read in its default details view. Both were
+reproduced and closed on the same Windows x86_64 machine.
+
+| Check | Result |
+| --- | --- |
+| File-type inventory | exactly one user-facing MINK extension (`.mink`); `mink.toml`, `mink.lock`, `.mink/` and `.exe` are name-identified, internal or generated and must not be registered (§5.1) |
+| Brand asset validator | PASS, 9 checks (unchanged) |
+| Association validator | PASS, **88 checks / 15 steps** (was 56/11; the 32 new checks are listed in §10) |
+| Live idempotent re-registration | exit 0 twice; extension values and `DefaultIcon` byte-for-byte unchanged |
+| Live uninstall | exit 0, 4 MINK-owned values removed, `HKCU\Software\Classes\.mink`, `MINK.SourceFile` and the `FileExts` entry all absent, no empty key left |
+| Live re-registration after uninstall | exit 0; extension, guessable type name and `DefaultIcon` identical to before, `shell\open` still absent |
+| Explorer, Details view (16 px) | Type column reads **MINK Source File**; the glyph is the near-black sheet with the white mink mark, next to a `.txt` with the generic page icon |
+| Explorer, large-icon view (~128 px) | the same sheet with the MINK wordmark, no distortion, no stray "6", no clipped fold |
+| Shell bitmap vs official artwork | the bitmap `SHGetFileInfo` returns for a `.mink` file matches `assets/brand/icon/source-file/png/mink-file-{32,16}.png`: 10/1024 and 5/256 pixels differ, all at antialiased edges, against 696/1024 for the generic text-file icon — i.e. the same artwork composited, not a different icon |
+| npm package asset completeness | `npm pack --dry-run` in `npm/mink`: version 1.0.5, 35 files, 5 of them under `windows/` (both ICOs, the script, `mink.rc`, `README.md`). Nothing was published |
+| Malformed icon | `-IconPath` with text, an empty file or a missing path each exit 1 with the registry provably unchanged |
+
+Not verified, and not claimed: the association resolving from an **installed** package on
+this machine, because the locally installed `@p4inz-code/mink@1.0.2` predates the kit and
+the 1.0.5 candidate is unpublished. That path is covered only by the harness's temporary
+package tree (§10 step 11), which is a faithful copy of the shipped layout but not a real
+`npm install -g` of a published version. The 24/48/64/256 px frames were validated inside
+the ICO and visually inspected as rendered frames, but Explorer was driven only at the
+details and large-icon views, not at every size. No installer exists, so persistence
+across an upgrade or uninstall of MINK itself is untested (§11.2); the icon path is
+captured at registration time, so moving the package requires re-running the script.
 
 ## 11. Limitations
 
@@ -276,13 +366,21 @@ package instead, as the script is designed to do.
 2. No Windows installer exists, so nothing registers the association automatically on
    install; the user installs it with the shipped script, and the Inno Setup snippet from
    the design package is not shipped (it is for an installer this repository does not have).
-3. No MINK editor extension exists; §7 documents the integration path for one.
-4. The favicon set is not in this repository because there is no website here.
-5. Applying the GitHub avatar and social preview is a manual, external GitHub setting.
-6. If another application already owns `.mink` with a class-level `OpenWithProgids` list,
+   Because the registered `DefaultIcon` is an absolute path captured at registration time,
+   moving, upgrading or reinstalling the package requires re-running the script; nothing
+   repairs the path automatically.
+3. Distribution beyond a checkout depends on a package that ships `windows/`. Publishing
+   1.0.5 is an owner-authorized release action and has not happened, so on a machine whose
+   only installation is 1.0.2 the association points into a development directory. The
+   upgrade path is `npm install -g @p4inz-code/mink@1.0.5`, then re-run the registration
+   script from the package (§5.2).
+4. No MINK editor extension exists; §7 documents the integration path for one.
+5. The favicon set is not in this repository because there is no website here.
+6. Applying the GitHub avatar and social preview is a manual, external GitHub setting.
+7. If another application already owns `.mink` with a class-level `OpenWithProgids` list,
    Windows asks the user to confirm the default application once after a `-Force` takeover;
    that list is not deleted on purpose.
-7. The per-user "Open with" choice (`UserChoice`) is owned by Windows and the user. It is
+8. The per-user "Open with" choice (`UserChoice`) is owned by Windows and the user. It is
    never written or removed, so a previous manual choice for `.mink` keeps governing until
    the user resets it in *Settings → Default apps*.
 

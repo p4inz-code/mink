@@ -24,7 +24,11 @@
       8. re-registering without -Editor removes the stale open command
       9. the icon path round-trips from a Unicode installation directory
      10. uninstall from a clean extension removes every MINK-owned entry
-     11. the machine is restored to its starting state
+     11. the real npm package layout (icon only in windows\, not bin\) resolves the icon
+     12. a source checkout with no installation present resolves the icon beside the script
+     13. a missing, malformed or non-existent icon refuses and changes nothing
+     14. the shipped kit is complete, portable and registers exactly one extension
+     15. the machine is restored to its starting state
 
     Run with Windows PowerShell 5.1:
 
@@ -145,6 +149,32 @@ function Set-KeyValue {
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($SubKey)
     try { $key.SetValue($Name, $Value, [Microsoft.Win32.RegistryValueKind]::String) }
     finally { $key.Dispose() }
+}
+
+# A flat "name=value" signature of a key's own values, used to prove that a refused
+# registration wrote nothing at all.
+function Get-RegistrySignature {
+    param([string]$SubKey)
+    $key = Get-CurrentUserKey -SubKey $SubKey
+    if (-not $key) { return '<absent>' }
+    try {
+        $entries = foreach ($name in $key.GetValueNames()) {
+            "{0}={1}" -f $name, $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        }
+        return (($entries | Sort-Object) -join ';')
+    }
+    finally { $key.Dispose() }
+}
+
+# ICONDIR header: reserved 0, type 1 (icon), then the frame count.
+function Get-IconFrameCount {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return -1 }
+    try { $bytes = [System.IO.File]::ReadAllBytes($Path) }
+    catch { return -1 }
+    if ($bytes.Length -lt 6) { return -1 }
+    if ($bytes[0] -ne 0 -or $bytes[1] -ne 0 -or $bytes[2] -ne 1 -or $bytes[3] -ne 0) { return -1 }
+    return ([int]$bytes[4] + 256 * [int]$bytes[5])
 }
 
 # Snapshots are recursive (values and subkeys), so restoring a key puts the machine back
@@ -398,6 +428,8 @@ try {
     Assert-Equal -What 'default icon is the designed .mink icon, quoted, index 0' `
         -Expected ('"{0}",0' -f $installIcon) -Actual (Get-KeyValue -SubKey $DefaultIconSubKey)
     Assert-True -What 'the registered icon file exists' -Condition (Test-Path -LiteralPath $installIcon)
+    Assert-Equal -What 'the registered icon is a valid 7-frame ICO' `
+        -Expected 7 -Actual (Get-IconFrameCount -Path $installIcon)
     Assert-True -What 'no open command: a .mink file is never executed' `
         -Condition (-not (Test-KeyExists -SubKey $OpenCommandSubKey))
     Assert-True -What 'MINK is offered in "Open with"' `
@@ -535,7 +567,146 @@ public static class MinkFiletypeProbe
         -Condition (-not ((Get-KeyValueNames -SubKey $OpenWithSubKey) -contains $ProgId))
 
     # ---------------------------------------------------------------- step 11
-    Write-Step '11. previous machine state restored'
+    Write-Step '11. npm package layout: the icon lives in windows\, not in bin\'
+    # This is the layout a real install has: <package>\bin\mink.exe plus the kit in
+    # <package>\windows. The icon must be found from the script's own directory.
+    $npmPackage = Join-Path $work 'npm-layout'
+    $npmWindows = Join-Path $npmPackage 'windows'
+    $npmBin = Join-Path $npmPackage 'bin'
+    New-Item -ItemType Directory -Path $npmWindows -Force | Out-Null
+    New-Item -ItemType Directory -Path $npmBin -Force | Out-Null
+    Copy-Item -Path (Join-Path $KitDir '*') -Destination $npmWindows -Force
+    Set-Content -Path (Join-Path $npmBin 'mink.exe') -Value 'stand-in' -Encoding Ascii
+    $npmScript = Join-Path $npmWindows 'register-mink-filetype.ps1'
+    $npmIcon = (Resolve-Path -LiteralPath (Join-Path $npmWindows 'mink-file.ico')).Path
+
+    Remove-KeyIfPresent -SubKey $ExtensionSubKey
+    Remove-KeyIfPresent -SubKey $ProgIdSubKey
+    $run = Invoke-RegisterScript -Arguments @() -ScriptPath $npmScript
+    Assert-Equal -What 'registration from the package layout exits 0' -Expected 0 -Actual $run.ExitCode
+    if ($run.ExitCode -ne 0) { Show-Output -Output $run.Output }
+    Assert-Equal -What 'the icon is the copy shipped in windows\' `
+        -Expected ('"{0}",0' -f $npmIcon) -Actual (Get-KeyValue -SubKey $DefaultIconSubKey)
+    Assert-True -What 'the resolved icon is a valid 7-frame ICO' `
+        -Condition ((Get-IconFrameCount -Path $npmIcon) -eq 7)
+    Assert-True -What 'the registered icon path is inside the package' `
+        -Condition (& { param($icon, $root) $icon.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) } $npmIcon $npmPackage)
+
+    # ---------------------------------------------------------------- step 12
+    Write-Step '12. source checkout: no installation present, icon beside the script'
+    $checkout = Join-Path $work 'checkout\npm\mink\windows'
+    New-Item -ItemType Directory -Path $checkout -Force | Out-Null
+    Copy-Item -Path (Join-Path $KitDir '*') -Destination $checkout -Force
+    $checkoutScript = Join-Path $checkout 'register-mink-filetype.ps1'
+    $checkoutIcon = (Resolve-Path -LiteralPath (Join-Path $checkout 'mink-file.ico')).Path
+
+    Remove-KeyIfPresent -SubKey $ExtensionSubKey
+    Remove-KeyIfPresent -SubKey $ProgIdSubKey
+    $run = Invoke-RegisterScript -Arguments @() -ScriptPath $checkoutScript
+    Assert-Equal -What 'registration from a source checkout exits 0' -Expected 0 -Actual $run.ExitCode
+    if ($run.ExitCode -ne 0) { Show-Output -Output $run.Output }
+    Assert-Equal -What 'the icon resolves beside the script, not from the working directory' `
+        -Expected ('"{0}",0' -f $checkoutIcon) -Actual (Get-KeyValue -SubKey $DefaultIconSubKey)
+    Assert-True -What 'no path outside the invocation tree is registered' `
+        -Condition (& { param($icon, $root) $icon.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) } $checkoutIcon $work)
+
+    # ---------------------------------------------------------------- step 13
+    Write-Step '13. a missing, empty or malformed icon refuses and changes nothing'
+    $noIconWindows = Join-Path $work 'no-icon-package\windows'
+    $noIconBin = Join-Path $work 'no-icon-package\bin'
+    New-Item -ItemType Directory -Path $noIconWindows -Force | Out-Null
+    New-Item -ItemType Directory -Path $noIconBin -Force | Out-Null
+    Get-ChildItem -LiteralPath $KitDir -File |
+        Where-Object { $_.Extension -ne '.ico' } |
+        Copy-Item -Destination $noIconWindows -Force
+    Set-Content -Path (Join-Path $noIconBin 'mink.exe') -Value 'stand-in' -Encoding Ascii
+    $noIconScript = Join-Path $noIconWindows 'register-mink-filetype.ps1'
+
+    # Start from a working registration so "nothing changed" is observable.
+    Remove-KeyIfPresent -SubKey $ExtensionSubKey
+    Remove-KeyIfPresent -SubKey $ProgIdSubKey
+    $null = Invoke-RegisterScript -Arguments @() -ScriptPath $npmScript
+    $extensionBefore = Get-RegistrySignature -SubKey $ExtensionSubKey
+    $progIdBefore = Get-RegistrySignature -SubKey $ProgIdSubKey
+    Assert-True -What 'baseline registration exists for the refusal checks' `
+        -Condition ($extensionBefore -match 'MINK\.SourceFile')
+
+    $run = Invoke-RegisterScript -Arguments @() -ScriptPath $noIconScript
+    Assert-Equal -What 'a package without any ICO refuses' -Expected 1 -Actual $run.ExitCode
+    Assert-True -What 'the refusal says no icon was found' `
+        -Condition ($run.Output -match 'No mink-file\.ico found')
+    Assert-Equal -What 'the extension is untouched after a missing icon' `
+        -Expected $extensionBefore -Actual (Get-RegistrySignature -SubKey $ExtensionSubKey)
+    Assert-Equal -What 'the ProgID is untouched after a missing icon' `
+        -Expected $progIdBefore -Actual (Get-RegistrySignature -SubKey $ProgIdSubKey)
+
+    $malformedIcon = Join-Path $work 'malformed.ico'
+    Set-Content -Path $malformedIcon -Value 'this is not an icon' -Encoding Ascii
+    $run = Invoke-RegisterScript -Arguments @('-IconPath', $malformedIcon) -ScriptPath $npmScript
+    Assert-Equal -What 'a malformed -IconPath refuses' -Expected 1 -Actual $run.ExitCode
+    Assert-True -What 'the refusal calls the file invalid' `
+        -Condition ($run.Output -match 'not a valid \.ico')
+    Assert-Equal -What 'the registry is untouched after a malformed icon' `
+        -Expected $extensionBefore -Actual (Get-RegistrySignature -SubKey $ExtensionSubKey)
+
+    $emptyIcon = Join-Path $work 'empty.ico'
+    Set-Content -Path $emptyIcon -Value '' -Encoding Ascii
+    $run = Invoke-RegisterScript -Arguments @('-IconPath', $emptyIcon) -ScriptPath $npmScript
+    Assert-Equal -What 'an empty -IconPath refuses' -Expected 1 -Actual $run.ExitCode
+    Assert-Equal -What 'the registry is untouched after an empty icon' `
+        -Expected $extensionBefore -Actual (Get-RegistrySignature -SubKey $ExtensionSubKey)
+
+    $run = Invoke-RegisterScript -Arguments @('-IconPath', (Join-Path $work 'absent.ico')) -ScriptPath $npmScript
+    Assert-Equal -What 'a non-existent -IconPath refuses' -Expected 1 -Actual $run.ExitCode
+    Assert-True -What 'the refusal names the missing path' `
+        -Condition ($run.Output -match 'icon not found')
+    Assert-Equal -What 'the registry is untouched after a missing -IconPath' `
+        -Expected $extensionBefore -Actual (Get-RegistrySignature -SubKey $ExtensionSubKey)
+
+    # ---------------------------------------------------------------- step 14
+    Write-Step '14. shipped kit: complete, portable and one extension only'
+    $kitText = Get-Content -LiteralPath $registerScript -Raw
+    Assert-True -What 'the kit ships register-mink-filetype.ps1' `
+        -Condition (Test-Path -LiteralPath $registerScript)
+    Assert-True -What 'the kit ships mink-file.ico and mink-app.ico' `
+        -Condition ((Test-Path -LiteralPath (Join-Path $KitDir 'mink-file.ico')) -and
+        (Test-Path -LiteralPath (Join-Path $KitDir 'mink-app.ico')))
+    Assert-True -What 'the kit ships mink.rc and README.md' `
+        -Condition ((Test-Path -LiteralPath (Join-Path $KitDir 'mink.rc')) -and
+        (Test-Path -LiteralPath (Join-Path $KitDir 'README.md')))
+    Assert-Equal -What 'mink-file.ico has 7 frames' `
+        -Expected 7 -Actual (Get-IconFrameCount -Path (Join-Path $KitDir 'mink-file.ico'))
+    Assert-Equal -What 'mink-app.ico has 7 frames' `
+        -Expected 7 -Actual (Get-IconFrameCount -Path (Join-Path $KitDir 'mink-app.ico'))
+
+    # `.mink` is the only extension MINK owns. mink.toml and mink.lock are identified by
+    # file name, not by extension, so claiming .toml or .lock would take those types over
+    # from unrelated applications. MinkFileType / UninstallMinkFileType are function names,
+    # hence the `$Extension = ` anchor.
+    $declaredExtensions = @([regex]::Matches($kitText, "(?m)^\`$Extension\s*=\s*'([^']+)'") |
+        ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    Assert-Equal -What 'the script declares exactly one extension' `
+        -Expected '.mink' -Actual ($declaredExtensions -join ',')
+    Assert-True -What 'the script never claims .toml, .lock or a wildcard' `
+        -Condition ($kitText -notmatch '(?im)^\$Extension\s*=\s*''\.(toml|lock|\*)''')
+    # Help text may document an editor path as an example, so strip comments before
+    # asking whether the code itself assumes a drive or a development directory.
+    $kitCode = [regex]::Replace($kitText, '(?s)<#.*?#>', '')
+    $kitCode = [regex]::Replace($kitCode, '(?m)#.*$', '')
+    Assert-True -What 'the script code contains no hard-coded drive path' `
+        -Condition ($kitCode -notmatch '(?<![A-Za-z0-9])[A-Za-z]:\\')
+    Assert-True -What 'the script resolves assets from its own location' `
+        -Condition ($kitCode -match '\$PSScriptRoot')
+
+    $manifestPath = Join-Path (Split-Path -Parent $KitDir) 'package.json'
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    Assert-True -What 'the npm manifest publishes windows\' `
+        -Condition (@($manifest.files) -contains 'windows')
+    Assert-True -What 'the npm manifest publishes bin/mink.exe' `
+        -Condition (@($manifest.files) -contains 'bin/mink.exe')
+
+    # ---------------------------------------------------------------- step 15
+    Write-Step '15. previous machine state restored'
     Restore-MachineState
     $subKeys = @($ExtensionSubKey, $ProgIdSubKey, $FileExtsSubKey)
     $restored = $true

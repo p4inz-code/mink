@@ -133,8 +133,13 @@ double-click. The implementation is in a repository checkout only:
 npm/mink/windows/register-mink-filetype.ps1
 ```
 
-The published npm 1.0.4 package does **not** contain `windows/`, so this step
-is unavailable from that package. From a repository checkout:
+`.mink` is the only extension MINK registers — `mink.toml` and `mink.lock` are
+identified by file name, so associating them would take over every `.toml` and
+`.lock` file on the machine.
+
+The published `1.0.2` and `1.0.4` packages do **not** contain `windows/`, so this
+step is unavailable from them; the unpublished `1.0.5` candidate in this
+repository does ship it. From a repository checkout:
 
 ```powershell
 # Register the .mink extension and icons for the current user.
@@ -152,7 +157,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ```
 
 Safety properties verified by
-`validation/windows_filetype/verify_filetype_association.ps1` (56/56 checks):
+`validation/windows_filetype/verify_filetype_association.ps1` (88/88 checks):
 
 - writes only under `HKCU`; no `HKLM`, no elevation;
 - no default `open` verb is installed unless `-Editor` is supplied;
@@ -160,7 +165,15 @@ Safety properties verified by
 - source files are opened in the editor, never compiled or executed;
 - `-Uninstall` removes only values/keys the script created and restores a
   recorded prior owner;
-- a different existing owner requires `-Force` and is preserved on uninstall.
+- a different existing owner requires `-Force` and is preserved on uninstall;
+- the icon is resolved from the running copy of the script (repository checkout
+  or an installed package that ships `windows/`), never from a drive letter or
+  the current directory, and a missing, empty or malformed ICO makes
+  registration exit 1 without writing anything.
+
+The registered icon path is absolute and captured at registration time. After
+moving or upgrading the package, run the script again (or `-Uninstall` and
+re-register).
 
 Do not hand-edit `HKCU\Software\Classes\.mink` or `MINK.SourceFile`. Do not
 associate `.mink` with `mink.exe` directly: the compiler is not an editor and
@@ -173,7 +186,8 @@ a bare association can execute source unexpectedly.
 | `mink 1.0.2` | Older, unsupported package. Install 1.0.4 from the registry or use the repository build. |
 | `str_trim` prints then exit 106 | Published 1.0.4 has the pre-fix `strings.mink`; use the repository build or wait for the corrected release. |
 | `E-P01` on `mod environment;` | Published 1.0.4 has the old module; use the repository build. |
-| `windows\register-mink-filetype.ps1` not found | You installed from npm 1.0.4; the published package omits `windows/`. Use a repository checkout. |
+| `windows\register-mink-filetype.ps1` not found | You installed from npm 1.0.2 or 1.0.4; those published packages omit `windows/`. Use a repository checkout until a package that ships it is published. |
+| `.mink` files show a generic icon | No association exists, or its `DefaultIcon` points at a package directory that has moved. Re-run `register-mink-filetype.ps1` from the current checkout or package, then refresh the icon cache (see `docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md` §5, §5.2). |
 | `mink` not found | The prefix install does not add itself to `PATH`; invoke the full `bin\mink.exe` path or add its directory deliberately. |
 | Build succeeds but run fails with E-R06 | A `Str` returned by a helper was not freed exactly once. See the ownership cheat sheet in the standard-library reference. |
 
@@ -183,7 +197,7 @@ a bare association can execute source unexpectedly.
   and Windows association are not distribution-equivalent to HEAD.
 - **Repository HEAD (`1.0.5` in the manifest, unpublished):** the 12/12
   application verifier, fixed `strings` and `environment` modules and the
-  Windows association harness 56/56 were audited at the 1.0.4 baseline and
+  Windows association harness 88/88 were audited at the 1.0.4 baseline and
   still describe the source; the current build reports `mink 1.0.5` and the
   Session 213 release verification passes.
 - **1.0.2:** unsupported.

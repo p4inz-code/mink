@@ -385,7 +385,32 @@ host-level `rustc` release crash (`STATUS_ILLEGAL_INSTRUCTION` /
 build must be re-measured after a host restart finishes that check. M8 stays
 gated, 1.0.5 stays unpublished, and Linux stays frozen.
 
-**Current next action (2026-11-21 — Session 285):** M6 is **BLOCKED / PENDING
+**Current next action (2026-11-22 — Session 286):** M6 is **BLOCKED / PENDING
+EXTERNAL EXECUTION**, unchanged. This session did no compiler, language or
+ecosystem work; it closed the Windows file-type integration as maintenance.
+Every MINK file type was enumerated — `.mink` is the only registered one, and
+`mink.toml`, `mink.lock`, `.mink/` and `.exe` are name-identified, internal or
+generated and are deliberately not associated — the live per-user association
+was re-registered, uninstalled and re-registered with identical state, the
+Explorer rendering was verified visually in the details and large-icon views,
+and the association harness grew from 56 to 88 checks covering portable icon
+resolution, refusal on a missing or malformed icon and shipped-kit
+completeness. Both validators pass (9 and 88 checks) and the record is
+[`SESSION_286_BRAND_FILETYPE_INTEGRATION_CLOSURE.md`](../implementation/SESSION_286_BRAND_FILETYPE_INTEGRATION_CLOSURE.md).
+The remaining gap is distribution, not code: the machine's installed package is
+still `@p4inz-code/mink@1.0.2`, which ships no `windows/`, so its association
+resolves the icon from the checkout. Publishing 1.0.5 stays an
+owner-authorized release action; afterwards
+`npm install -g @p4inz-code/mink@1.0.5` plus the registration script resolves
+the icon from the installed package. The single open milestone item is still
+human: the owner sends the invitation in
+[`VALIDATION_RECORD.md`](../validation/M6_EXTERNAL/VALIDATION_RECORD.md) §2 to a
+developer who has never contributed to MINK and returns the submission form. M7
+Phases A–E stay documented as complete with ecosystem/tooling work demand-gated,
+M8 stays gated on M6 evidence, M9 is conditional on M8, Linux stays frozen, and
+MINK 1.0.5 remains unpublished.
+
+**Previous next action (2026-11-21 — Session 285; superseded):** M6 is **BLOCKED / PENDING
 EXTERNAL EXECUTION**. No tester submission exists in the repository and none
 was supplied, so no external developer was identified, no invitation was sent
 and no external task was executed. The package was not rebuilt; the reference

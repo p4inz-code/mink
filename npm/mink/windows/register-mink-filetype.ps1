@@ -33,7 +33,8 @@
 
 .PARAMETER IconPath
     Explicit path to the `.mink` icon file (`.ico`). Defaults to `mink-file.ico`, first
-    beside the installation, then beside this script.
+    beside the installation, then beside this script. The file must be a readable ICO;
+    registration refuses and changes nothing if it is missing, empty or malformed.
 
 .PARAMETER Editor
     Path to the editor executable that opens `.mink` files, for example
@@ -218,22 +219,55 @@ function Resolve-InstallDirectory {
     return $null
 }
 
+function Test-IconFile {
+    param([string]$Path)
+
+    # A path that exists is not enough: a truncated, empty or replaced file would
+    # register a DefaultIcon the shell cannot draw, and Explorer would silently fall
+    # back to a generic icon. Check the ICONDIR header (reserved 0, type 1, then the
+    # frame count) before any registry state is touched.
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try { $bytes = [System.IO.File]::ReadAllBytes($Path) }
+    catch { return $false }
+    if ($bytes.Length -lt 6) { return $false }
+    if ($bytes[0] -ne 0 -or $bytes[1] -ne 0 -or $bytes[2] -ne 1 -or $bytes[3] -ne 0) { return $false }
+    return (([int]$bytes[4] + 256 * [int]$bytes[5]) -gt 0)
+}
+
 function Resolve-FileIcon {
     param([string]$Explicit, [string]$ResolvedInstallDir)
 
     if ($Explicit) {
-        return (Get-FullPath -Path $Explicit -What 'icon')
+        $explicitPath = Get-FullPath -Path $Explicit -What 'icon'
+        if (-not (Test-IconFile -Path $explicitPath)) {
+            Stop-WithError ("-IconPath is not a valid .ico file: $explicitPath. " +
+                "Pass the mink-file.ico shipped with MINK. Nothing was changed.")
+        }
+        return $explicitPath
     }
+
+    # Resolution order: the installation directory (a manual install may keep the icon
+    # next to mink.exe), then this script's own directory, which is where the npm
+    # package ships it (<package>\windows). Both are derived from the running copy, so
+    # no development path and no current working directory is ever assumed.
     $candidates = New-Object System.Collections.Generic.List[string]
     if ($ResolvedInstallDir) { $candidates.Add((Join-Path $ResolvedInstallDir 'mink-file.ico')) }
     $candidates.Add((Join-Path $PSScriptRoot 'mink-file.ico'))
+
+    $present = New-Object System.Collections.Generic.List[string]
     foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate) {
+        if (Test-IconFile -Path $candidate) {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
+        if (Test-Path -LiteralPath $candidate) { $present.Add($candidate) }
     }
-    Stop-WithError ("No mink-file.ico found. Pass -IconPath, or put mink-file.ico next to " +
-        "mink.exe in the installation directory.")
+
+    if ($present.Count -gt 0) {
+        Stop-WithError (("Found an icon file that is not a valid .ico: {0}. " -f ($present -join ', ')) +
+            "Reinstall MINK or pass a valid -IconPath. Nothing was changed.")
+    }
+    Stop-WithError (("No mink-file.ico found. Searched: {0}. Pass -IconPath, or put " -f ($candidates -join ', ')) +
+        "mink-file.ico next to mink.exe in the installation directory. Nothing was changed.")
 }
 
 function Resolve-EditorPath {
