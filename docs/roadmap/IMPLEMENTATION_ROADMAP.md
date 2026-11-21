@@ -203,6 +203,13 @@ favorable results.**
 ### M6 — External Developer Validation
 A developer who did not build MINK must attempt predefined tasks.
 
+**Status (2026-11-21, Session 285): BLOCKED / PENDING EXTERNAL EXECUTION.**
+No tester submission exists; the reference binary, the 18-task protocol and the
+required set T1, T2, T3, T6, T8, T9, T17, T18 were re-verified and a concise
+[`TESTER_HANDOFF.md`](../validation/M6_EXTERNAL/TESTER_HANDOFF.md) was added for
+the owner to send with the package. No invitation was sent and no external
+evidence exists, so M6 is **not PASS**.
+
 **Status (2026-11-20, Session 283): BLOCKED / PENDING EXTERNAL EXECUTION.**
 The self-contained package and 18-task protocol in
 [`docs/validation/M6_EXTERNAL/`](../validation/M6_EXTERNAL/README.md) were
@@ -362,7 +369,7 @@ completed submission form. Everything MINK can do without that person is done;
 no further internal audit can convert M6 to PASS. M8 remains gated on external
 evidence, 1.0.5 remains unpublished, and Linux remains frozen.
 
-**Current next action (2026-11-20 — Session 284):** M6 is **BLOCKED / PENDING
+**Previous next action (2026-11-20 — Session 284; superseded):** M6 is **BLOCKED / PENDING
 EXTERNAL EXECUTION**, and the package has now been executed end to end at
 `99543ff` rather than re-read: tutorial 15/15, validation applications 10/10
 harnesses / 228 cases, 15 supported examples build and run, module probe and CLI
@@ -377,6 +384,28 @@ host-level `rustc` release crash (`STATUS_ILLEGAL_INSTRUCTION` /
 `STATUS_ACCESS_VIOLATION`) reproduced in Session 284, so the Path B release
 build must be re-measured after a host restart finishes that check. M8 stays
 gated, 1.0.5 stays unpublished, and Linux stays frozen.
+
+**Current next action (2026-11-21 — Session 285):** M6 is **BLOCKED / PENDING
+EXTERNAL EXECUTION**. No tester submission exists in the repository and none
+was supplied, so no external developer was identified, no invitation was sent
+and no external task was executed. The package was not rebuilt; the reference
+binary was re-verified (4,048,384 bytes, SHA-256
+`87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`, `mink
+1.0.5`), the 18-task protocol and the required minimum set **T1, T2, T3, T6,
+T8, T9, T17, T18** were confirmed, and the 4–6-hour budget was retained. The one
+missing deliverable was a short document an unfamiliar developer could start
+from, so
+[`TESTER_HANDOFF.md`](../validation/M6_EXTERNAL/TESTER_HANDOFF.md) was added
+(what MINK is, platform and prerequisites, exact setup, required tasks,
+expected results, failure reporting, submission return). The single open item
+is still human: the owner sends the invitation in
+[`VALIDATION_RECORD.md`](../validation/M6_EXTERNAL/VALIDATION_RECORD.md) §2 plus
+the handoff and package to a developer who has never contributed to MINK, then
+returns the completed submission form for triage. Preparation is not
+completion; no internal work can convert M6 to PASS. M7 Phases A–E stay
+documented as complete with ecosystem/tooling work demand-gated, M8 stays gated
+on M6 evidence, M9 is conditional on M8, Linux stays frozen, and MINK 1.0.5
+stays unpublished.
 
 *Dated status, 2026-11-06 (Sessions 190–193).* M4 and M5 are closed. The
 standard-library ownership work that this roadmap treats as a prerequisite is

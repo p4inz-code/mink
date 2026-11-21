@@ -344,3 +344,55 @@ now states 62 for the current tree and 60 for the 1.0.5 reference build.
 **OUTSTANDING**: no independent developer, no invitation, no external execution,
 no feedback. Running the prepared package internally is a package check and is
 not validation.
+
+## 12. Session 285 handoff preparation — 2026-11-21
+
+Baseline: working from `F:\Works\Mink`; branch `main`; local `HEAD` equals
+`origin/main` at `5536e8595b177cf791714f6f7a4be68f71fb6137`, verified after
+`git fetch origin`. The worktree contains only the four user-owned untracked
+files (`MINK UI SETS OFFICIAL.zip`, `freebuff-chat-2026-10-01T19-08-00.600Z.md`,
+`nl1.exe`, `nl1.mink`); no modified or staged content.
+
+Searched the repository for a tester submission directory or report: none
+exists. No tester evidence of any kind was supplied with this session, so §§1,
+3, 4 and 5 remain empty and §2 remains the recruitment blocker.
+
+**No external developer was identified. No invitation was sent. No external
+execution occurred.**
+
+The existing package was used unchanged rather than rebuilt. Two facts were
+re-verified against this tree before preparing the handoff:
+
+| Check | Result |
+| --- | --- |
+| Reference binary | `target/s213_clean/release/mink.exe`, 4,048,384 bytes, SHA-256 `87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`, `mink 1.0.5` |
+| CLI contract | `help` exits 0 with the command list (`build`, `run`, `check`, `test`, `repl`, `explain`, `version`); `explain` with no argument lists 50 documented codes |
+| Task set | 18 tasks (T1–T18) in `EVALUATION_PROTOCOL.md`; required minimum set is T1, T2, T3, T6, T8, T9, T17, T18 — unchanged |
+| Time budget | 4–6 hours retained; required set still about 3 hours of the stated boxes |
+
+The only gap in the package was that no short document told an unfamiliar
+developer what to do first: `README.md` mixes coordinator material (handoff
+manifest, checksum provenance, example exclusions) with tester instructions.
+[`TESTER_HANDOFF.md`](TESTER_HANDOFF.md) was added. It contains the seven
+required sections: what MINK is; supported platform and prerequisites; exact
+Path A and Path B setup with the expected checksum; the 18 tasks with the eight
+required ones marked and their time boxes; expected results and the documented
+non-defect limitations; how to report a failure; and how to complete and return
+`SUBMISSION_TEMPLATE.md`. It restates the protocol's rules (no coaching, no
+reading `docs/implementation/`, time-box and move on, keep the raw transcript)
+and does not weaken any acceptance condition.
+
+No compiler, runtime or standard-library source changed. No version bump, tag,
+release or publication was performed; Linux remains frozen and M8 was not
+started.
+
+### 12.1 Remaining action
+
+The blocker is unchanged and is human: the owner sends the invitation in §2 to
+a developer who has never contributed to MINK, together with
+[`TESTER_HANDOFF.md`](TESTER_HANDOFF.md) and the package, and returns that
+developer's completed submission form. Nothing further can be produced
+internally that counts toward M6.
+
+**M6 status: BLOCKED / PENDING EXTERNAL EXECUTION.** Canonical verdict remains
+**OUTSTANDING**.

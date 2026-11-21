@@ -96,6 +96,18 @@ because of the recurring host-level `rustc` fault recorded in
 `VALIDATION_RECORD.md` §11.1. No independent developer, invitation or external
 evidence exists; no condition above moves and the verdict stays OUTSTANDING.
 
+**Operational status (2026-11-21, Session 285): BLOCKED / PENDING EXTERNAL
+EXECUTION.** No tester submission exists in the repository and none was
+supplied. The package was not rebuilt; the reference binary was re-verified
+(4,048,384 bytes, SHA-256
+`87a1cae4946f121e292d1a516e6047ad287b6506c5fe52a16208717dc2b6da23`, `mink
+1.0.5`), the 18-task protocol and the required set **T1, T2, T3, T6, T8, T9,
+T17, T18** were confirmed, and the 4–6-hour budget was retained. A concise
+[`TESTER_HANDOFF.md`](TESTER_HANDOFF.md) was added so the owner has one short
+document to send an unfamiliar developer. No invitation was sent and no
+external observation exists, so C1–C5 remain NOT TESTED and the verdict stays
+OUTSTANDING.
+
 ## 7. Closure sign-off (to be completed only with evidence)
 
 - Tester and consent recorded: ______

@@ -36,6 +36,7 @@ notes or the project owner.
 | Small programs | `benchmarks/m6/session176/01_hello.mink` … `10_imports.mink` |
 | Practical applications | `examples/` — the 15 programs supported by the 1.0.5 reference binary, each a `main.mink` (§1.2 explains the seven newer ones) |
 | Validation-sized workloads | `validation/a1_fileinspect` … `validation/h_manifest` (10 programs) |
+| Concise tester handoff — start here | [`TESTER_HANDOFF.md`](TESTER_HANDOFF.md) |
 | Evaluation tasks and expected outcomes | [`EVALUATION_PROTOCOL.md`](EVALUATION_PROTOCOL.md) |
 | Evidence record and report format | [`VALIDATION_RECORD.md`](VALIDATION_RECORD.md) |
 | Per-task submission form | [`SUBMISSION_TEMPLATE.md`](SUBMISSION_TEMPLATE.md) |
@@ -54,8 +55,9 @@ test, or a folder with the same items:
 - `examples/` (15 programs), `validation/` (10 applications), and
   `benchmarks/m6/session176/` (the 10 tutorial programs `01_hello.mink` …
   `10_imports.mink`);
-- this README, `EVALUATION_PROTOCOL.md`, `VALIDATION_RECORD.md`,
-  `SUBMISSION_TEMPLATE.md`, `FAQ.md`, and `ACCEPTANCE_CHECKLIST.md`.
+- this README, `TESTER_HANDOFF.md`, `EVALUATION_PROTOCOL.md`,
+  `VALIDATION_RECORD.md`, `SUBMISSION_TEMPLATE.md`, `FAQ.md`, and
+  `ACCEPTANCE_CHECKLIST.md`.
 
 A folder containing only `mink.exe` is not sufficient: the documentation,
 examples, and protocol are part of the evaluation. The coordinator keeps
