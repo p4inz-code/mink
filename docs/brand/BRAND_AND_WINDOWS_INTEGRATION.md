@@ -168,8 +168,10 @@ registration time, re-run the script after moving, upgrading or reinstalling the
 `-Uninstall` and a fresh run is the supported repair.
 
 **Package requirement.** Only a package that ships `windows/` can resolve the icon from an
-installed copy. The published `@p4inz-code/mink@1.0.2` and `1.0.4` do not; `npm pack
---dry-run` in `npm/mink` confirms the 1.0.5 candidate does (5 entries under `windows/`).
+installed copy. The published `1.0.4` tarball was downloaded and inspected on 2026-11-22:
+28 files, `bin/mink.exe` plus `stdlib/`, `package.json` and `LICENSE`, **no `windows/`**. The
+1.0.2 package is the same. `npm pack` in `npm/mink` confirms the 1.0.5 candidate does ship it
+(35 files, 5 under `windows/`).
 Until 1.0.5 is published, a checkout is the only installation that carries the kit, and
 the association on such a machine necessarily points into the checkout. That is a release
 dependency, not a defect in the script.
@@ -184,7 +186,17 @@ that does not exist. The PowerShell script is the single authoritative mechanism
 ## 6. Register and unregister
 
 The shipped package resolves everything from its own location, so any npm prefix, drive
-or Unicode path works:
+or Unicode path works — but only a package that actually contains `windows/` can be used,
+and the published `1.0.4` does not (verified from its tarball: 28 files, no `windows/`).
+Until a version shipping the kit is published, run it from a checkout:
+
+```powershell
+git clone https://github.com/p4inz-code/mink.git
+powershell -ExecutionPolicy Bypass -File .\mink\npm\mink\windows\register-mink-filetype.ps1            # register
+powershell -ExecutionPolicy Bypass -File .\mink\npm\mink\windows\register-mink-filetype.ps1 -Uninstall # remove
+```
+
+From an installed package that ships the kit:
 
 ```powershell
 $package = Join-Path (npm root -g) '@p4inz-code\mink'
@@ -325,10 +337,14 @@ not visually reviewed at every view size; update/reinstall persistence could not
 tested because no installer exists (§11.2); the icon cache was not stale on this machine,
 so the `ie4uinit.exe -show` path was exercised only as part of registration.
 
-Note on this machine's state: the live association points at the source checkout
-(`F:\Works\Mink\npm\mink\windows\mink-file.ico`), because the installed 1.0.2 package
-has no `windows/` directory. A package that ships `windows/` resolves the icon from the
-package instead; see §5.2 and §10.2 for what was and was not verified.
+Note on this machine's state (2026-11-21): the live association then pointed at the source
+checkout (`F:\Works\Mink\npm\mink\windows\mink-file.ico`), because the only installed
+package was 1.0.2, which has no `windows/` directory. That association and that package
+were both removed on 2026-11-22 during clean-PC preparation (Session 287), so the machine
+currently has **no** `.mink` association; the next registration is the owner's installation
+test, and it should come from an installed package that ships the kit. A package that ships
+`windows/` resolves the icon from the package rather than from a checkout; see §5.2 and
+§10.2 for what was and was not verified.
 
 ### 10.2 File-type integration closure — 2026-11-22 (Session 286)
 
@@ -351,8 +367,9 @@ reproduced and closed on the same Windows x86_64 machine.
 | Malformed icon | `-IconPath` with text, an empty file or a missing path each exit 1 with the registry provably unchanged |
 
 Not verified, and not claimed: the association resolving from an **installed** package on
-this machine, because the locally installed `@p4inz-code/mink@1.0.2` predates the kit and
-the 1.0.5 candidate is unpublished. That path is covered only by the harness's temporary
+this machine, because the locally installed 1.0.2 predated the kit and the 1.0.5 candidate
+is unpublished. (That 1.0.2 installation and the association itself were removed during
+Session 287, so the condition described here no longer exists on this machine.) That path is covered only by the harness's temporary
 package tree (§10 step 11), which is a faithful copy of the shipped layout but not a real
 `npm install -g` of a published version. The 24/48/64/256 px frames were validated inside
 the ICO and visually inspected as rendered frames, but Explorer was driven only at the
@@ -370,10 +387,11 @@ captured at registration time, so moving the package requires re-running the scr
    moving, upgrading or reinstalling the package requires re-running the script; nothing
    repairs the path automatically.
 3. Distribution beyond a checkout depends on a package that ships `windows/`. Publishing
-   1.0.5 is an owner-authorized release action and has not happened, so on a machine whose
-   only installation is 1.0.2 the association points into a development directory. The
-   upgrade path is `npm install -g @p4inz-code/mink@1.0.5`, then re-run the registration
-   script from the package (§5.2).
+   1.0.5 is an owner-authorized release action and has not happened; the registry serves
+   1.0.4, whose tarball was inspected on 2026-11-22 and has no `windows/`, so an
+   association can only be created from a checkout today. The upgrade path is
+   `npm install -g @p4inz-code/mink@1.0.5`, then re-run the registration script from the
+   package (§5.2).
 4. No MINK editor extension exists; §7 documents the integration path for one.
 5. The favicon set is not in this repository because there is no website here.
 6. Applying the GitHub avatar and social preview is a manual, external GitHub setting.

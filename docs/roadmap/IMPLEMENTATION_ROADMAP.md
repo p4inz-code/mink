@@ -385,7 +385,29 @@ host-level `rustc` release crash (`STATUS_ILLEGAL_INSTRUCTION` /
 build must be re-measured after a host restart finishes that check. M8 stays
 gated, 1.0.5 stays unpublished, and Linux stays frozen.
 
-**Current next action (2026-11-22 — Session 286):** M6 is **BLOCKED / PENDING
+**Current next action (2026-11-22 — Session 287):** M6 is **BLOCKED / PENDING
+EXTERNAL EXECUTION**, unchanged, and the machine is now clean for the owner's
+installation test. This session did no compiler, language or ecosystem work. It
+verified the public registry state — `latest` is **1.0.4**, the locally installed
+`1.0.2` was obsolete — downloaded and unpacked the real 1.0.4 tarball (28 files,
+no `windows/`, no ICO, no registration script), and confirmed the local 1.0.5
+candidate (35 files, `windows/` present). It removed the obsolete global package
+with `npm uninstall -g` and the association with the project's own `-Uninstall`
+path, keeping every unrelated registration and the user's editor choice, and
+recorded before/after state in
+[`../implementation/SESSION_287_CLEAN_PC_PREPARATION.md`](../implementation/SESSION_287_CLEAN_PC_PREPARATION.md).
+It also corrected the user-facing documents that told readers to run the
+registration script from an installed 1.0.4 package, and documented a defect it
+reproduced from the published artifact: on 1.0.4, string transformations leak and
+abort with `E-R06` at exit, while the same programs exit 0 on the 1.0.5 candidate.
+The owner test is
+[`../validation/CLEAN_INSTALL_CHECKLIST.md`](../validation/CLEAN_INSTALL_CHECKLIST.md).
+Publishing 1.0.5 — the only way to test the association from an installed package
+— remains an owner-authorized action and did not happen. M7 Phases A–E stay
+complete with ecosystem/tooling work demand-gated, M8 stays gated on M6 evidence,
+M9 is conditional on M8, and Linux stays frozen.
+
+**Previous next action (2026-11-22 — Session 286; superseded):** M6 is **BLOCKED / PENDING
 EXTERNAL EXECUTION**, unchanged. This session did no compiler, language or
 ecosystem work; it closed the Windows file-type integration as maintenance.
 Every MINK file type was enumerated — `.mink` is the only registered one, and

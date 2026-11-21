@@ -11,9 +11,15 @@ Shipped inside the npm package (`@p4inz-code/mink`), next to `..\bin\mink.exe`.
 
 ## Register the `.mink` file type
 
+This directory only exists in packages that ship `windows/` — the current candidate, not the
+published `1.0.4` (28 files, no `windows/`). Run the script from wherever this kit actually
+is:
+
 ```powershell
-$package = Join-Path (npm root -g) '@p4inz-code\mink'
+$package = Join-Path (npm root -g) '@p4inz-code\mink'   # once such a package is installed
 powershell -ExecutionPolicy Bypass -File "$package\windows\register-mink-filetype.ps1"
+# or, from a repository checkout:
+powershell -ExecutionPolicy Bypass -File npm\mink\windows\register-mink-filetype.ps1
 ```
 
 Per-user only (`HKCU`), no administrator rights, no `HKLM`. `.mink` files become a file

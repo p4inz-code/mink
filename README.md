@@ -8,7 +8,7 @@
 **A systems-oriented native programming language for Windows x86_64.**
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Version](https://img.shields.io/badge/version-1.0.5-brightgreen)
+![npm](https://img.shields.io/badge/npm-1.0.4-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
 Created by [Atharva Patil / p4inz-code](https://github.com/p4inz-code). Stewarded by P4inz Interactive Labs.
@@ -112,18 +112,33 @@ mink --version
 
 ### Optional: give `.mink` files their own Windows identity
 
-The package ships the official MINK source-file icon and a per-user registration script that
-makes `.mink` a real Windows file type — **MINK Source File**, content type `text/x-mink`, with
-the MINK source-file icon. It applies to your account only, needs no administrator rights, and
-double-clicking a `.mink` file never compiles or runs it: Windows asks once which editor to use
-and remembers that answer.
+The official MINK source-file icon and a per-user registration script make `.mink` a real
+Windows file type — **MINK Source File**, content type `text/x-mink`, with the MINK source-file
+icon. It applies to your account only, needs no administrator rights, and double-clicking a
+`.mink` file never compiles or runs it: Windows asks once which editor to use and remembers that
+answer.
+
+**The published 1.0.4 package does not include this kit** — its 28 files are the compiler
+binary, `stdlib/`, `package.json` and `LICENSE`, with no `windows/` directory. The 1.0.5
+candidate in this repository ships it, so today this optional step runs from a repository
+clone:
+
+```powershell
+git clone https://github.com/p4inz-code/mink.git
+powershell -ExecutionPolicy Bypass -File .\mink\npm\mink\windows\register-mink-filetype.ps1
+# remove it again:
+powershell -ExecutionPolicy Bypass -File .\mink\npm\mink\windows\register-mink-filetype.ps1 -Uninstall
+```
+
+Once a version that ships the kit is installed, the same script runs from the package:
 
 ```powershell
 $package = Join-Path (npm root -g) '@p4inz-code\mink'
 powershell -ExecutionPolicy Bypass -File "$package\windows\register-mink-filetype.ps1"
-# remove it again:
-powershell -ExecutionPolicy Bypass -File "$package\windows\register-mink-filetype.ps1" -Uninstall
 ```
+
+The registration stores the icon's absolute path, so run the script from the copy of MINK you
+intend to keep.
 
 Bind one editor immediately with `-Editor "C:\Program Files\Microsoft VS Code\Code.exe"`, or
 take over an existing `.mink` association with `-Force` (the previous owner is restored by
@@ -441,6 +456,13 @@ MINK is explicit about its edges:
   and fixed arrays, but rejects whole arrays and tuples, nested aggregates,
   collections, pointers, references and unused captures with `E-S19`. It is not a
   general destructor system.
+- **The published 1.0.4 standard library leaks when transforming strings.** With `mod
+  strings;`, calls such as `str_trim`, `str_to_upper` and `str_reverse` keep an allocation
+  alive that the caller cannot release, so a program that frees what it creates still exits
+  106 with `E-R06: memory leak: live allocations remain at exit`. The repository's
+  `stdlib/strings.mink` and the prepared 1.0.5 tarball fix this — the same programs exit 0 —
+  but the registry still serves 1.0.4. Intrinsics-only programs are unaffected. Until 1.0.5
+  is published, use a source build for standard-library work.
 - **Tooling is CLI-only.** There is no integrated debugger or profiler.
 - **Some ecosystem capabilities remain partial.** There is no package registry or
   publishing workflow (dependencies are declared requirements or local paths), no
