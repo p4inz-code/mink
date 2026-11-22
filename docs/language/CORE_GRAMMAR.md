@@ -819,8 +819,16 @@ UsePath     = Ident { "::" Ident } ;
 `use module_name::item_name;` brings `item_name` from `module_name`
 into the current scope. The module must already be loaded by a `mod`
 declaration; `use` alone does not discover or load files. `use
-module_name;` is a no-op. Qualified names in expressions
-(`module_name::item_name`) are not supported.
+module_name;` is a no-op.
+
+A qualified name in an expression, `module_name::item_name` or
+`module_name::item_name(args)`, is accepted when the same file declares
+`mod module_name;` (the declaration may come before or after the use). It
+denotes `item_name` itself: all loaded modules share one namespace, so the
+qualifier is checked and then dropped. The item must be declared by that
+module (`E-S01` otherwise). If `module_name` is also an enum's name, the
+module wins. Parser support lives in `Parser::declared_modules`; the driver's
+`validate_imports` checks the members.
 
 Imports are validated against the modules that were loaded (Session 279).
 An import that names a module that was never declared, an item the module

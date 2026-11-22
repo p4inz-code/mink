@@ -431,7 +431,9 @@ fn check_multi_module(
     // loaded. Flattening makes every item reachable by name, which is why a
     // misspelled import used to go unreported until (and unless) the
     // imported name was used.
-    all_errors.extend(validate_imports(modules));
+    let import_errors = validate_imports(modules);
+    let import_error_spans: Vec<Span> = import_errors.iter().map(|error| error.span()).collect();
+    all_errors.extend(import_errors);
 
     if !root_valid {
         // Root module had no valid content. Return whatever errors we have.
@@ -471,6 +473,7 @@ fn check_multi_module(
             .errors()
             .iter()
             .filter(|e| !explained_by_inference(e, &uninferable))
+            .filter(|e| !explained_by_import_error(e, &import_error_spans))
             .cloned()
             .map(CheckError::Semantic),
     );
@@ -518,6 +521,7 @@ fn check_multi_module(
         (None, None)
     };
 
+    all_errors.extend(explain_shadowed_modules(modules, &all_errors));
     sort_errors(&mut all_errors);
     Ok(CheckReport {
         source_id: root_source_id,
@@ -529,6 +533,46 @@ fn check_multi_module(
         hir,
         mir,
     })
+}
+
+/// Explains a module that was found beside the program and hides a bundled
+/// standard-library module of the same name.
+///
+/// A file such as `json.mink` or `math.mink` next to the program is loaded
+/// instead of the bundled module, which is the long-standing lookup order and
+/// keeps programs that ship their own module of that name working. When the
+/// compilation then fails with a name or definition error, that shadowing is
+/// the most likely cause and is otherwise invisible: the program shows a
+/// duplicate `main` or a missing bundled function with no hint that a
+/// different file was loaded. So the explanation is reported, at the
+/// `mod name;` declaration, only when such an error exists.
+fn explain_shadowed_modules(modules: &[ModuleSource], errors: &[CheckError]) -> Vec<CheckError> {
+    let has_name_error = errors
+        .iter()
+        .any(|error| matches!(error, CheckError::Semantic(_)));
+    if !has_name_error {
+        return Vec::new();
+    }
+    let mut notes = Vec::new();
+    for module in modules {
+        let (Some(bundled), Some(span)) = (&module.shadows_bundled, module.declared_at) else {
+            continue;
+        };
+        let local = module
+            .path
+            .file_name()
+            .map(|file| file.to_string_lossy().into_owned())
+            .unwrap_or_else(|| module.path.display().to_string());
+        notes.push(CheckError::Semantic(SemanticError::module_not_found(
+            format!(
+                "`mod {name};` loaded `{local}` from beside the program instead of the bundled `{name}` module ({bundled}); rename or move `{local}` to use the bundled module",
+                name = module.name,
+                bundled = bundled.display(),
+            ),
+            span,
+        )));
+    }
+    notes
 }
 
 /// Orders diagnostics by source file, then by byte offset, so output is
@@ -569,6 +613,29 @@ fn validate_imports(modules: &[ModuleSource]) -> Vec<CheckError> {
     }
 
     let mut errors = Vec::new();
+    // `module::member` written against a module the file declares must name
+    // something that module declares, so a misspelled member reads as a
+    // module error rather than as an unrelated missing name.
+    for module in modules {
+        if !module.parsed.is_valid() {
+            continue;
+        }
+        for (module_ident, member) in module.parsed.qualified_uses() {
+            let Some(items) = declared.get(module_ident.name.as_str()) else {
+                // The module file was not loaded; its own error says why.
+                continue;
+            };
+            if !items.contains(member.name.as_str()) {
+                errors.push(CheckError::Semantic(SemanticError::module_not_found(
+                    format!(
+                        "cannot find `{}` in module `{}`",
+                        member.name, module_ident.name
+                    ),
+                    member.span,
+                )));
+            }
+        }
+    }
     for module in modules {
         if !module.parsed.is_valid() {
             continue;
@@ -619,6 +686,20 @@ fn validate_imports(modules: &[ModuleSource]) -> Vec<CheckError> {
         }
     }
     errors
+}
+
+/// Whether an unresolved-name error sits exactly where an import or
+/// module-path error was already reported.
+///
+/// `math::absx(1)` is read as a call to `absx`, which is not declared anywhere,
+/// so name resolution fails too. The module error names the real cause and
+/// says which module was searched, so the second report is dropped.
+fn explained_by_import_error(
+    error: &crate::semantics::SemanticError,
+    import_error_spans: &[Span],
+) -> bool {
+    error.kind() == crate::semantics::SemanticErrorKind::UnresolvedName
+        && import_error_spans.contains(&error.span())
 }
 
 /// Whether a semantic error is already explained by a failed generic-call
@@ -699,6 +780,12 @@ pub(crate) struct ModuleSource {
     pub parsed: parser::ParseOutput,
     /// The parent module name, if any (None for root).
     pub parent: Option<String>,
+    /// Set when this module was found next to the program and a bundled
+    /// standard-library module of the same name also exists. The bundled copy
+    /// is the path that lost the lookup.
+    pub shadows_bundled: Option<PathBuf>,
+    /// Where the `mod name;` declaration that requested this module sits.
+    pub declared_at: Option<Span>,
 }
 
 /// Discovers all modules reachable from `root_path` by following `mod`
@@ -728,6 +815,7 @@ pub(crate) fn discover_modules(
         root_path,
         None,
         None,
+        None,
         &external,
         &mut modules,
         &mut visited,
@@ -736,7 +824,7 @@ pub(crate) fn discover_modules(
     if errors.is_empty() {
         Ok(modules)
     } else {
-        errors.sort_by_key(|e| e.span().start());
+        errors.sort_by_key(|e| (e.span().file().raw(), e.span().start()));
         Err(Some(errors))
     }
 }
@@ -747,6 +835,7 @@ fn discover_modules_recursive(
     path: &Path,
     parent: Option<String>,
     declared: Option<(String, Span)>,
+    shadows_bundled: Option<PathBuf>,
     external_roots: &[PathBuf],
     modules: &mut Vec<ModuleSource>,
     visited: &mut HashSet<PathBuf>,
@@ -760,6 +849,7 @@ fn discover_modules_recursive(
         .as_ref()
         .map(|(_, span)| *span)
         .unwrap_or_else(|| Span::new(SourceId::new(0), 0..0));
+    let declared_at = declared.as_ref().map(|(_, span)| *span);
     // Canonicalize to detect cycles and missing files.
     let canon = match path.canonicalize() {
         Ok(p) => p,
@@ -833,18 +923,21 @@ fn discover_modules_recursive(
         source_id,
         parsed,
         parent,
+        shadows_bundled,
+        declared_at,
     });
 
     // Recurse into child modules.
     if !mod_names.is_empty() {
         let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
         for (child_name, decl_span) in mod_names {
-            let child_path = resolve_module_path(&child_name, parent_dir, external_roots);
+            let resolved = resolve_module(&child_name, parent_dir, external_roots);
             discover_modules_recursive(
                 sources,
-                &child_path,
+                &resolved.path,
                 Some(module_name.clone()),
                 Some((child_name, decl_span)),
+                resolved.shadowed_bundled,
                 external_roots,
                 modules,
                 visited,
@@ -854,10 +947,69 @@ fn discover_modules_recursive(
     }
 }
 
-/// Resolves a `mod name;` declaration to a `.mink` file.
+/// The outcome of resolving a `mod name;` declaration.
+struct ResolvedModule {
+    /// The file the module loads from.
+    path: PathBuf,
+    /// When the module was found next to the program (steps 1 and 2) and a
+    /// bundled standard-library module of the same name exists too, the
+    /// bundled file that lost the lookup.
+    shadowed_bundled: Option<PathBuf>,
+}
+
+/// The directories that hold the bundled standard library, in lookup order:
+/// next to the installed executable, then `./stdlib` for a development
+/// checkout.
+fn bundled_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            roots.push(exe_dir.join("..").join("stdlib"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd.join("stdlib"));
+    }
+    roots
+}
+
+/// The first module file for `name` inside one search root, if any.
+fn find_in_root(root: &Path, name: &str) -> Option<PathBuf> {
+    let candidate = root.join(format!("{name}.mink"));
+    if candidate.exists() {
+        return Some(candidate);
+    }
+    // A directory package: `<dir>/<name>/mod.mink` (the MINK equivalent
+    // of Python's `<name>/__init__.py`).
+    let package = root.join(name).join("mod.mink");
+    if package.exists() {
+        return Some(package);
+    }
+    // An installed package: `<packages>/<name>/<name>.mink`. `mink
+    // install` copies a package into `<packages>/<name>/`, keeping the
+    // package's own entry file beside its manifest, so the entry module
+    // is the file named after the package.
+    let installed = root.join(name).join(format!("{name}.mink"));
+    if installed.exists() {
+        return Some(installed);
+    }
+    None
+}
+
+/// Whether two paths name the same file on disk.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// Resolves a `mod name;` declaration to a `.mink` file (see [`ResolvedModule`]).
 ///
 /// Search order:
-/// 1. the declaring file's directory (classic sibling-module behavior);
+/// 1. the declaring file's directory (classic sibling-module behavior). A
+///    file found here hides a bundled module of the same name; the lookup
+///    records that so the driver can explain it (see [`ResolvedModule`]);
 /// 2. the declaring file's directory as a *directory package*: the package
 ///    root file is `<dir>/<name>/mod.mink` (MINK's equivalent of Python's
 ///    `<name>/__init__.py`); submodules declared by that root resolve
@@ -873,45 +1025,44 @@ fn discover_modules_recursive(
 /// The first candidate that exists wins; when none exist the returned
 /// path is the sibling path so the existing "module file not found"
 /// error still names the most intuitive location.
-fn resolve_module_path(child_name: &str, parent_dir: &Path, external_roots: &[PathBuf]) -> PathBuf {
+fn resolve_module(child_name: &str, parent_dir: &Path, external_roots: &[PathBuf]) -> ResolvedModule {
     let sibling = parent_dir.join(format!("{child_name}.mink"));
-    if sibling.exists() {
-        return sibling;
-    }
     let sibling_package = parent_dir.join(child_name).join("mod.mink");
-    if sibling_package.exists() {
-        return sibling_package;
+    let local = if sibling.exists() {
+        Some(sibling.clone())
+    } else if sibling_package.exists() {
+        Some(sibling_package)
+    } else {
+        None
+    };
+    let bundled_roots = bundled_roots();
+    if let Some(path) = local {
+        // A file beside the program wins, which keeps programs that ship
+        // their own `math.mink` or `strings.mink` working. It also hides the
+        // bundled module of that name, so remember the bundled file: the
+        // driver explains the shadowing when it would otherwise surface as a
+        // confusing duplicate-definition or missing-name error.
+        let shadowed_bundled = bundled_roots
+            .iter()
+            .filter_map(|root| find_in_root(root, child_name))
+            .find(|bundled| !same_file(bundled, &path));
+        return ResolvedModule {
+            path,
+            shadowed_bundled,
+        };
     }
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            roots.push(exe_dir.join("..").join("stdlib"));
+    for root in bundled_roots.iter().chain(external_roots.iter()) {
+        if let Some(path) = find_in_root(root, child_name) {
+            return ResolvedModule {
+                path,
+                shadowed_bundled: None,
+            };
         }
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd.join("stdlib"));
+    ResolvedModule {
+        path: sibling,
+        shadowed_bundled: None,
     }
-    for root in roots.into_iter().chain(external_roots.iter().cloned()) {
-        let candidate = root.join(format!("{child_name}.mink"));
-        if candidate.exists() {
-            return candidate;
-        }
-        // A directory package: `<dir>/<name>/mod.mink` (the MINK equivalent
-        // of Python's `<name>/__init__.py`).
-        let package = root.join(child_name).join("mod.mink");
-        if package.exists() {
-            return package;
-        }
-        // An installed package: `<packages>/<name>/<name>.mink`. `mink
-        // install` copies a package into `<packages>/<name>/`, keeping the
-        // package's own entry file beside its manifest, so the entry module
-        // is the file named after the package.
-        let installed = root.join(child_name).join(format!("{child_name}.mink"));
-        if installed.exists() {
-            return installed;
-        }
-    }
-    sibling
 }
 
 // ======================================================================

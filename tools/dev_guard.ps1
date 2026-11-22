@@ -68,8 +68,14 @@ $peak = 0; $pauses = 0; $high = 0; $suspended = $false
 while (-not $proc.HasExited) {
     Start-Sleep -Seconds $SampleSeconds
     # The performance counter is cheap; querying WMI for load would itself spike the CPU.
-    $sample = Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue
-    $cpu = if ($sample) { [int]$sample.CounterSamples[0].CookedValue } else { 0 }
+    # A counter read can fail transiently (the performance library reports
+    # 0x800007D6 now and then); a missed sample counts as 0 and the next one
+    # recovers.
+    $cpu = 0
+    try {
+        $sample = Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction Stop
+        $cpu = [int]$sample.CounterSamples[0].CookedValue
+    } catch { }
     if ($cpu -gt $peak) { $peak = $cpu }
     if ($cpu -gt $MaxCpu) { $high++ } else { $high = 0 }
     if (-not $suspended -and $high -ge 2) {

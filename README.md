@@ -340,6 +340,15 @@ and is still unpublished:
 - **Element-level aggregate ownership** (Session 273) — tuple and fixed-array
   elements can be moved and freed independently, within the documented
   aggregate limits.
+- **Module-qualified calls** (1.0.5 sprint, M2) — after `mod math;` you can write
+  `math::math_abs(-42)`. It means the same as `math_abs(-42)`, because MINK still shares one
+  namespace across modules, but a misspelled member now reads
+  `cannot find math_absx in module math` instead of an unrelated type error.
+- **A clearer error when a local file hides a bundled module** — a leftover `json.mink`
+  next to your program is loaded instead of the bundled `json` module, as it always was. When
+  that breaks the build, the compiler now says which file it loaded, where the bundled one is,
+  and that renaming the local file fixes it. This is what caused the duplicate-`main` error
+  reported during the 1.0.4 clean-install test.
 
 These are covered by permanent tests and are present in a source build, not in
 the published 1.0.4 package or the prepared 1.0.5 tarball.

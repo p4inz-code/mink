@@ -188,15 +188,17 @@ value was moved; it does not decide whether your program is leak-free. A value
 freed inside a conditional is treated as moved for the rest of the function,
 so prefer one return path with unconditional cleanup.
 
-Qualified module calls are unsupported and produce a misleading diagnostic:
+A qualified call such as `helper::double(4)` works only when the same file
+declares `mod helper;`. If it does not, you get a misleading diagnostic,
+because the compiler reads `helper` as an enum name:
 
 ```text
 mink: error[E-T15]: `` is not a valid key type: cannot find type helper
 ```
 
-The message points at map key typing, but the real issue is that
-`helper::double(4)` is not a supported expression. Call `double(4)` after
-`mod helper;`.
+The message points at map key typing, but the real issue is a missing
+`mod helper;` in that file. Add it, or call `double(4)` directly. (Before
+1.0.5 qualified calls were not supported at all.)
 
 ### 4.5 What diagnostics do not tell you
 

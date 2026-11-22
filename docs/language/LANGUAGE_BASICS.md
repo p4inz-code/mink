@@ -251,7 +251,13 @@ Module rules:
   does not load the file: without `mod helper;` the call fails with
   `E-S01: cannot find name double`.
 - `use helper;` is accepted and does nothing.
-- Qualified expression paths such as `helper::double(4)` are not supported.
+- A qualified path such as `helper::double(4)` works for any module the same
+  file declares with `mod helper;`. It means exactly the member itself:
+  MINK still has one shared namespace, so `helper::double(4)` and `double(4)`
+  are the same call. The qualified form is checked, though: `helper::doubel(4)`
+  reports `cannot find doubel in module helper`. Declare the module in the file
+  that uses the path; a module declared in another file does not make the path
+  valid here. A module and an enum with the same name resolve to the module.
 - `pub` is parsed but visibility is not enforced in 1.0.4. Loaded items are
   reachable even without `pub`.
 - Standard-library modules are loaded the same way: `mod filesystem;`, then
@@ -268,7 +274,13 @@ Module lookup order, first match wins:
 5. package roots from the active project or environment.
 
 A local `filesystem.mink` beside the source therefore shadows the bundled
-one.
+one. That keeps programs that ship their own `math.mink` working, but it also
+catches a stray file by accident: a leftover `json.mink` test file makes
+`mod json;` load that file, and the build then fails with a duplicate `main` or
+a missing function that looks unrelated. When a build fails with a name or
+definition error and a local file hid a bundled module, the compiler adds an
+error at the `mod` line saying which file was loaded and where the bundled one
+is. Rename or move the file to use the bundled module.
 
 ## 5. Ownership and cleanup
 

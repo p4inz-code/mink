@@ -74,6 +74,7 @@ pub struct ParseOutput {
     token_count: usize,
     lex_errors: Vec<LexError>,
     parse_errors: Vec<ParseError>,
+    qualified_uses: Vec<(Ident, Ident)>,
 }
 
 impl ParseOutput {
@@ -97,6 +98,13 @@ impl ParseOutput {
         &self.parse_errors
     }
 
+    /// Every `module::member` use this file wrote against a module it declares
+    /// with `mod module;`, as (module, member) pairs in source order. The
+    /// driver checks each member against what that module declares.
+    pub fn qualified_uses(&self) -> &[(Ident, Ident)] {
+        &self.qualified_uses
+    }
+
     /// Whether the source is both lexically and syntactically valid.
     pub fn is_valid(&self) -> bool {
         self.lex_errors.is_empty() && self.parse_errors.is_empty()
@@ -106,6 +114,30 @@ impl ParseOutput {
     pub fn into_parts(self) -> (Ast, Vec<LexError>, Vec<ParseError>) {
         (self.ast, self.lex_errors, self.parse_errors)
     }
+}
+
+/// The names a file declares with `mod name;`.
+///
+/// A separate, cheap pass over the tokens: the parser needs to know, at the
+/// first `name::member` it meets, whether `name` is a module of this file. A
+/// module declared below its first use is still a module.
+fn declared_module_names(file: &SourceFile) -> Vec<String> {
+    let mut lexer = Lexer::new(file);
+    let mut names = Vec::new();
+    let mut after_mod = false;
+    while let Some(token) = lexer.next_token() {
+        let kind = token.kind();
+        if kind == TokenKind::Eof {
+            break;
+        }
+        if after_mod && kind == TokenKind::Ident {
+            if let Some(text) = file.span_text(token.span()) {
+                names.push(text.to_string());
+            }
+        }
+        after_mod = kind == TokenKind::Mod;
+    }
+    names
 }
 
 /// Parses an entire source file into a syntax tree.
@@ -158,6 +190,12 @@ struct Parser<'a> {
     /// outermost expression, bounded by [`MAX_EXPR_CHAIN`]. It bounds tree
     /// depth from above, because a tree's depth never exceeds its node count.
     expr_nodes: usize,
+    /// Names this file declares with `mod name;`, collected before parsing so a
+    /// `name::member` written above the declaration still reads as a module
+    /// path rather than as an enum variant.
+    declared_modules: Vec<String>,
+    /// Module-qualified uses recorded while parsing, as (module, member).
+    qualified_uses: Vec<(Ident, Ident)>,
 }
 
 impl<'a> Parser<'a> {
@@ -176,6 +214,8 @@ impl<'a> Parser<'a> {
             depth: 0,
             depth_reported: false,
             expr_nodes: 0,
+            declared_modules: declared_module_names(file),
+            qualified_uses: Vec::new(),
         }
     }
 
@@ -186,6 +226,7 @@ impl<'a> Parser<'a> {
             token_count: self.token_count,
             lex_errors: self.lexer.errors().to_vec(),
             parse_errors: self.errors,
+            qualified_uses: self.qualified_uses,
         }
     }
 
@@ -3690,6 +3731,33 @@ impl<'a> Parser<'a> {
                             name: self.text(token.span()),
                             span: token.span(),
                         };
+                        if self.declared_modules.iter().any(|m| *m == ident.name) {
+                            // `module::member` or `module::member(args)`: a
+                            // path into a module this file declares, not an
+                            // enum variant. MINK keeps one flat namespace, so
+                            // the qualified spelling is the member itself.
+                            self.qualified_uses.push((ident.clone(), variant.clone()));
+                            let member = Expr {
+                                kind: ExprKind::Ident(variant.clone()),
+                                span: variant.span,
+                            };
+                            if self.current_kind() == TokenKind::LParen {
+                                let (args, close) = self.parse_args()?;
+                                let call_span = self.join(span, close);
+                                return Ok(Expr {
+                                    kind: ExprKind::Call {
+                                        callee: Box::new(member),
+                                        args,
+                                        type_args: None,
+                                    },
+                                    span: call_span,
+                                });
+                            }
+                            return Ok(Expr {
+                                kind: member.kind,
+                                span: self.join(span, variant.span),
+                            });
+                        }
                         let mut vspan = self.join(span, variant.span);
                         let mut payload = None;
                         if self.current_kind() == TokenKind::LParen {
