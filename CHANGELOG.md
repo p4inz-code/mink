@@ -1,0 +1,38 @@
+# Changelog
+
+All notable changes to MINK. The newest release is first.
+
+## 1.0.5 (in progress)
+
+### Added
+- **Windows file association.** `.mink` files get an icon and a name, right-click Run, Check, Build and
+  Edit, a New > MINK Source File entry, a preview pane and search support, and a Settings > Default apps
+  entry. Double-click opens an editor and never runs a file. Registration only touches your own account.
+- **Icons and version information in built programs.** `mink build --icon file.ico` and
+  `--no-icon`. `mink resource` adds them to an existing program.
+- **`mink setup`.** A step-by-step setup in the terminal with numbered choices and y/n questions.
+  `--yes` takes the defaults, `--status` shows the state, `--remove` undoes it. npm installs run it
+  automatically.
+- **A setup file and a portable zip.** `mink-Setup-<version>.exe` installs for your account without
+  administrator rights, shows the license and credit, and removes cleanly from Apps & features. The
+  setup window has larger text, light and dark colours, back navigation, About and Help pages.
+- **Side-by-side versions.** `mink versions` lists them and `mink use <version>` picks one.
+- **`mink upgrade`.** Checks GitHub only when you run it and verifies the download's SHA-256.
+- **`mink fmt`.** One layout, no settings, with a check that its output matches the input token for
+  token.
+- **`mink lsp`.** A language server: errors as you type, completion, hover, go to definition, references,
+  rename, outline, signature help and formatting.
+- **A VS Code extension** in `editors/vscode`: colours, snippets, Run / Check / Build commands and a
+  language-server client.
+- **`module::name` calls** for functions in loaded modules.
+- **A NOTICE file** that carries the creator credit with every copy.
+
+### Fixed
+- A local module with the same name as a standard-library module silently replaced it and caused
+  confusing errors. The compiler now says which one was used and which one was ignored.
+
+### Known limits
+See [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
+
+## 1.0.4
+The last release on npm before this sprint.

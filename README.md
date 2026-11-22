@@ -379,6 +379,11 @@ and is still unpublished:
   keeps your earlier choices and never takes `.mink` from another program. It can also put MINK on
   your PATH. `mink upgrade` checks GitHub only when you run it, and for an installer install
   verifies the download's SHA-256 before starting it. The association test is now 191 checks.
+- **Project papers** (1.0.5 sprint, M10) — [`docs/WHY_MINK.md`](docs/WHY_MINK.md) says why MINK exists and
+  what it does not claim. [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md) lists what does not work
+  yet. [`CHANGELOG.md`](CHANGELOG.md), [`SECURITY.md`](SECURITY.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md)
+  are new. Specs for extra file types, a package registry, `mink doc` and debug information are in
+  [`docs/specs`](docs/specs); they are plans, not features.
 - **A VS Code extension** (1.0.5 sprint, M9) — `editors/vscode` holds the MINK extension: syntax colours,
   snippets, the MINK file icon, Run / Check / Build commands (Ctrl+F5 runs the file) and a client that starts
   `mink lsp`, so errors, completion, hover, rename and format work in the editor. It packages cleanly as a
