@@ -1,0 +1,198 @@
+// serve: a static file server for one folder, like `python -m http.server` in one small .exe.
+//
+//   mink build testapps/serve/main.mink
+//   serve <folder> [port] [max-requests]
+//
+// Listens on 127.0.0.1 only. GET and HEAD are served; "/" and any folder path serve index.html. Paths with
+// "..", a backslash or a colon are refused. With max-requests the server stops after that many requests,
+// which is how the tests run it; without it, it runs until it is closed (Ctrl+C).
+mod network;
+mod http;
+mod httpserver;
+mod strings;
+
+// Takes (frees) the path. Returns the Content-Type for its extension.
+fn type_for(path: Str) -> Str {
+    let n = rt_str_len(path);
+    let mut dot = -1;
+    let mut i = 0;
+    while i < n {
+        if rt_str_byte(path, i) == 46 {
+            dot = i;
+        }
+        i = i + 1;
+    }
+    let mut kind = "application/octet-stream";
+    if dot >= 0 {
+        let ext = str_to_lower(str_sub(path, dot + 1, n));
+        if rt_str_eq(ext, "html") || rt_str_eq(ext, "htm") {
+            kind = "text/html; charset=utf-8";
+        } else if rt_str_eq(ext, "css") {
+            kind = "text/css; charset=utf-8";
+        } else if rt_str_eq(ext, "js") {
+            kind = "text/javascript; charset=utf-8";
+        } else if rt_str_eq(ext, "json") {
+            kind = "application/json";
+        } else if rt_str_eq(ext, "svg") {
+            kind = "image/svg+xml";
+        } else if rt_str_eq(ext, "png") {
+            kind = "image/png";
+        } else if rt_str_eq(ext, "jpg") || rt_str_eq(ext, "jpeg") {
+            kind = "image/jpeg";
+        } else if rt_str_eq(ext, "woff2") {
+            kind = "font/woff2";
+        } else if rt_str_eq(ext, "ttf") {
+            kind = "font/ttf";
+        } else if rt_str_eq(ext, "txt") || rt_str_eq(ext, "md") || rt_str_eq(ext, "mink") {
+            kind = "text/plain; charset=utf-8";
+        } else if rt_str_eq(ext, "ico") {
+            kind = "image/x-icon";
+        }
+        rt_str_free(ext);
+    } else {
+        rt_str_free(path);
+    }
+    return kind;
+}
+
+// Whether a request path is safe to map onto the folder. Takes (frees) the path.
+fn safe(path: Str) -> Bool {
+    let n = rt_str_len(path);
+    let mut ok = n > 0 && rt_str_byte(path, 0) == 47;
+    let mut i = 0;
+    while ok && i < n {
+        let b = rt_str_byte(path, i);
+        if b == 92 || b == 58 || b == 0 {
+            ok = false;
+        }
+        if b == 46 && i + 1 < n && rt_str_byte(path, i + 1) == 46 {
+            ok = false;
+        }
+        i = i + 1;
+    }
+    rt_str_free(path);
+    return ok;
+}
+
+fn reply(client: Int, status: Int, reason: Str, kind: Str, body: Str) {
+    let response = http_server_response(status, reason, kind, body);
+    http_server_send(client, response);
+    net_close(client);
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    if argc < 1 {
+        rt_print_str("usage: serve <folder> [port] [max-requests]");
+        return 2;
+    }
+    let folder = rt_argv(0);
+    let mut port = 8080;
+    let mut max = 0;
+    if argc >= 2 {
+        let p = rt_argv(1);
+        let parsed = str_parse_int(p);
+        if parsed.1 {
+            port = parsed.0;
+        }
+    }
+    if argc >= 3 {
+        let m = rt_argv(2);
+        let parsed = str_parse_int(m);
+        if parsed.1 {
+            max = parsed.0;
+        }
+    }
+    if !rt_fs_exists(folder) || rt_fs_file_size(folder) >= 0 {
+        rt_print_str("serve: not a folder");
+        rt_str_free(folder);
+        return 2;
+    }
+    net_init();
+    let sock = http_server_listen("127.0.0.1", port);
+    if sock < 0 {
+        rt_print_str("serve: cannot listen on that port");
+        rt_str_free(folder);
+        net_cleanup();
+        return 1;
+    }
+    rt_print_str("serving on http://127.0.0.1:");
+    rt_print_int(port);
+    let mut served = 0;
+    while max == 0 || served < max {
+        let got = http_server_serve(sock, 300, 65536);
+        if got.0 != -1 {
+            served = served + 1;
+            let client = got.0;
+            let for_method = rt_str_concat(got.1, "");
+            let for_path = rt_str_concat(got.1, "");
+            rt_str_free(got.1);
+            let method = http_server_method(for_method);
+            let target = http_server_path(for_path);
+            // Drop any query string.
+            let mut cut = rt_str_len(target);
+            let mut q = 0;
+            while q < rt_str_len(target) {
+                if rt_str_byte(target, q) == 63 {
+                    cut = q;
+                    q = rt_str_len(target);
+                }
+                q = q + 1;
+            }
+            let path = str_sub(rt_str_concat(target, ""), 0, cut);
+            rt_str_free(target);
+            let is_get = rt_str_eq(method, "GET");
+            let is_head = rt_str_eq(method, "HEAD");
+            rt_str_free(method);
+            if !is_get && !is_head {
+                reply(client, 405, "Method Not Allowed", "text/plain", "method not allowed");
+                rt_str_free(path);
+            } else if !safe(rt_str_concat(path, "")) {
+                reply(client, 400, "Bad Request", "text/plain", "bad request");
+                rt_str_free(path);
+            } else {
+                // Map the URL onto the folder.
+                let mut url = path;
+                if rt_str_byte(url, rt_str_len(url) - 1) == 47 {
+                    let joined = rt_str_concat(url, "index.html");
+                    rt_str_free(url);
+                    url = joined;
+                }
+                let mut rel = "";
+                let mut r = 0;
+                let ulen = rt_str_len(url);
+                let buf = rt_str_alloc(ulen);
+                while r < ulen {
+                    let b = rt_str_byte(url, r);
+                    if b == 47 {
+                        rt_str_set_byte(buf, r, 92);
+                    } else {
+                        rt_str_set_byte(buf, r, b);
+                    }
+                    r = r + 1;
+                }
+                rel = buf;
+                let full = rt_str_concat(folder, rel);
+                rt_str_free(rel);
+                if rt_fs_exists(full) && rt_fs_file_size(full) >= 0 && rt_fs_file_size(full) <= 50000000 {
+                    let body = rt_fs_read(full);
+                    let kind = type_for(rt_str_concat(full, ""));
+                    if is_head {
+                        rt_str_free(body);
+                        reply(client, 200, "OK", kind, "");
+                    } else {
+                        reply(client, 200, "OK", kind, body);
+                    }
+                } else {
+                    reply(client, 404, "Not Found", "text/plain", "not found");
+                }
+                rt_str_free(full);
+                rt_str_free(url);
+            }
+        }
+    }
+    http_server_close(sock);
+    net_cleanup();
+    rt_str_free(folder);
+    return 0;
+}

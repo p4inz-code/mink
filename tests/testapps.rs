@@ -119,3 +119,48 @@ fn dupfind_groups_identical_files_and_ignores_empty_and_same_size_files() {
     assert_eq!(run(&exe, &[tree.join("a.txt").to_str().unwrap()]).0, 2, "a file is not a folder");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn http_get(port: u16, request: &str) -> String {
+    use std::io::{Read, Write};
+    for _ in 0..40 {
+        if let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            s.write_all(request.as_bytes()).unwrap();
+            let mut out = Vec::new();
+            let _ = s.read_to_end(&mut out);
+            return String::from_utf8_lossy(&out).into_owned();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("the server never answered on port {port}");
+}
+
+#[test]
+fn serve_serves_files_with_types_and_refuses_bad_requests() {
+    let (exe, dir) = build("serve");
+    let site = dir.join("site");
+    std::fs::create_dir_all(site.join("sub")).unwrap();
+    std::fs::write(site.join("index.html"), "<h1>home</h1>").unwrap();
+    std::fs::write(site.join("a.css"), "body{}").unwrap();
+    std::fs::write(site.join("sub").join("index.html"), "sub").unwrap();
+    let port = 18_100 + (std::process::id() % 400) as u16;
+    let mut server = Command::new(&exe)
+        .args([site.to_str().unwrap(), &port.to_string(), "7"])
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let get = |path: &str| http_get(port, &format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n"));
+    let home = get("/");
+    assert!(home.starts_with("HTTP/1.1 200") && home.contains("text/html") && home.ends_with("<h1>home</h1>"), "{home}");
+    let css = get("/a.css?v=1");
+    assert!(css.contains("text/css") && css.ends_with("body{}"), "{css}");
+    assert!(get("/sub/").ends_with("sub"), "a folder path serves its index.html");
+    assert!(get("/missing.html").starts_with("HTTP/1.1 404"));
+    assert!(get("/../Cargo.toml").starts_with("HTTP/1.1 400"), "traversal is refused");
+    assert!(http_get(port, "POST / HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 405"));
+    let head = http_get(port, "HEAD / HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(head.starts_with("HTTP/1.1 200") && !head.contains("<h1>"), "HEAD sends no body: {head}");
+    let status = server.wait().unwrap();
+    assert_eq!(status.code(), Some(0), "after its seventh request the server ends cleanly with no leaks");
+    let _ = std::fs::remove_dir_all(&dir);
+}
