@@ -37,6 +37,7 @@ mod emit;
 mod error;
 mod ir;
 mod lower;
+pub mod resource;
 mod target;
 mod verify;
 

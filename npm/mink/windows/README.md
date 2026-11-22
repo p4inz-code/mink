@@ -8,7 +8,7 @@ Shipped inside the npm package (`@p4inz-code/mink`), next to `..\bin\mink.exe`.
 | `mink-file.ico` | Icon for `.mink` source files (7 sizes, 16 to 256 px) |
 | `mink-app.ico` | Application icon for MINK, used on the right-click entries and for shortcuts |
 | `template.mink` | The starter program that "New > MINK Source File" copies |
-| `mink.rc` | Reference resource script for embedding the icons in `mink.exe` |
+| `mink.rc` | Reference resource script, for anyone who prefers a resource compiler. `mink resource` does the same without one |
 
 ## Set it up
 
@@ -83,8 +83,10 @@ left as it is.
 
 ## Notes
 
-- `mink.exe` does not carry an icon itself yet. The `.mink` file type is what shows MINK's
-  identity in Explorer. `mink-app.ico` is there for shortcuts, installers and embedding (`mink.rc`).
+- `mink.exe` and every program `mink build` writes carry the MINK icon and version information.
+  `mink build --icon app.ico` picks another icon, `--no-icon` drops it, and `mink resource`
+  adds both to any Windows executable that has none. `mink-app.ico` is also used for shortcuts
+  and installers.
 - `.mink` is the only extension MINK registers. `mink.toml` and `mink.lock` are recognised by name,
   not by extension, so associating them would take over every `.toml` and `.lock` file on the
   machine. Do not add them here.

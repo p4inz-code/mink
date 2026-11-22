@@ -20,17 +20,32 @@ use crate::semantics::{self, SemanticError, SemanticResult};
 use crate::source::{SourceId, SourceMap, Span};
 use crate::typecheck::{self, TypeError, TypeResult};
 
+/// Which icon a built Windows program carries.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum IconChoice {
+    /// The MINK application icon that ships with the compiler.
+    #[default]
+    Default,
+    /// No icon: the program shows Windows' generic executable icon.
+    None,
+    /// An `.ico` file chosen by the user.
+    File(PathBuf),
+}
+
 /// Options controlling a [`build`] run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildOptions {
     /// The target to compile for.
     pub target: Target,
+    /// The icon for a Windows executable (ignored for other targets).
+    pub icon: IconChoice,
 }
 
 impl Default for BuildOptions {
     fn default() -> Self {
         Self {
             target: Target::native(),
+            icon: IconChoice::Default,
         }
     }
 }
@@ -76,6 +91,11 @@ pub enum BuildError {
         /// The underlying I/O error.
         source: io::Error,
     },
+    /// The icon or version information could not be added to the executable.
+    Resource {
+        /// What went wrong, in a sentence.
+        reason: String,
+    },
 }
 
 impl fmt::Display for BuildError {
@@ -100,6 +120,7 @@ impl fmt::Display for BuildError {
             Self::Output { path, source: _ } => {
                 write!(f, "failed to write '{}'", path.display())
             }
+            Self::Resource { reason } => write!(f, "{reason}"),
         }
     }
 }
@@ -108,7 +129,10 @@ impl std::error::Error for BuildError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } | Self::Output { source, .. } => Some(source),
-            Self::NotAFile { .. } | Self::FrontEnd(_) | Self::Backend(_) => None,
+            Self::NotAFile { .. }
+            | Self::FrontEnd(_)
+            | Self::Backend(_)
+            | Self::Resource { .. } => None,
         }
     }
 }
@@ -262,7 +286,8 @@ pub fn build(
     let image = backend::compile(&mir, sources, options.target)
         .map_err(|errors| BuildError::Backend(errors.into_boxed_slice()))?;
     let output = executable_path(path);
-    std::fs::write(&output, &image.bytes).map_err(|source| BuildError::Output {
+    let bytes = add_resources(image.bytes, path, &options.icon)?;
+    std::fs::write(&output, &bytes).map_err(|source| BuildError::Output {
         path: output.clone(),
         source,
     })?;
@@ -272,6 +297,65 @@ pub fn build(
         target: options.target,
         functions: image.functions,
         statics: image.statics,
+    })
+}
+
+/// Adds the icon and version information to a freshly built Windows program.
+///
+/// Only a PE image gets them (the image starts with `MZ`); anything else is
+/// returned as it is. The version strings come from the project's `mink.toml`
+/// when the source sits inside a project, and otherwise name just the program.
+fn add_resources(bytes: Vec<u8>, source: &Path, icon: &IconChoice) -> Result<Vec<u8>, BuildError> {
+    use crate::backend::resource;
+
+    if !bytes.starts_with(b"MZ") {
+        return Ok(bytes);
+    }
+    let icon_bytes = match icon {
+        IconChoice::Default => Some(resource::DEFAULT_ICON.to_vec()),
+        IconChoice::None => None,
+        IconChoice::File(file) => Some(std::fs::read(file).map_err(|error| BuildError::Resource {
+            reason: format!("cannot read the icon '{}': {error}", file.display()),
+        })?),
+    };
+    let stem = source
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "program".to_string());
+    let manifest = crate::package::find_project_root(source)
+        .and_then(|root| crate::package::manifest::Manifest::load(&root).ok());
+    let (product, version) = match &manifest {
+        Some(manifest) => (manifest.name.clone(), Some(manifest.version.to_string())),
+        None => (stem.clone(), None),
+    };
+    let numbers = version
+        .as_deref()
+        .map(resource::VersionInfo::parse_version)
+        .unwrap_or([0; 4]);
+    let mut strings = vec![
+        ("FileDescription".to_string(), product.clone()),
+        ("ProductName".to_string(), product),
+        ("InternalName".to_string(), stem.clone()),
+        ("OriginalFilename".to_string(), format!("{stem}.exe")),
+        (
+            "Comments".to_string(),
+            format!("Built with MINK {}", env!("CARGO_PKG_VERSION")),
+        ),
+    ];
+    if let Some(version) = version {
+        strings.push(("FileVersion".to_string(), version.clone()));
+        strings.push(("ProductVersion".to_string(), version));
+    }
+    let spec = resource::ResourceSpec {
+        icon: icon_bytes,
+        version: Some(resource::VersionInfo {
+            file_version: numbers,
+            product_version: numbers,
+            strings,
+        }),
+    };
+    resource::embed(&bytes, &spec).map_err(|error| BuildError::Resource {
+        reason: error.to_string(),
     })
 }
 

@@ -43,28 +43,26 @@ the official application icon: 7 frames â€” 16, 24, 32, 48, 64, 128 and 256 px â
 PNG-compressed, and each frame is byte-identical to the PNG export it was built from
 (`assets/brand/icon/application/png/`).
 
-**Limitation: `mink.exe` carries no icon resource.** The compiler binary is produced by
-`cargo build` with zero crate dependencies and no build script, which is a documented
-property of the project. Embedding an icon means compiling a resource script with
-`rc.exe`/`windres` and adding the object to the link; that would
+**`mink.exe` and every program MINK builds now carry this icon (1.0.5).** Cargo builds the
+compiler with no crate dependencies and no build script, so a resource compiler (`rc.exe`,
+`windres`) was never an option: it would add an external toolchain to a build that
+deliberately has none. Instead MINK writes the resources itself. `src/backend/resource.rs`
+builds the `.rsrc` section (one `RT_ICON` per frame, the `RT_GROUP_ICON` directory, and an
+`RT_VERSION` block) and appends it to a finished PE image, moving no existing address.
 
-1. add an external toolchain prerequisite to a build that deliberately has none, and
-2. make the content of the released binary depend on the machine that built it, while
-   [`docs/implementation/SESSION_121_V1_0_4_RELEASE.md`](../implementation/SESSION_121_V1_0_4_RELEASE.md)
-   records a verified SHA-256 for the released artifact.
+- `mink build` does this for every Windows program. The icon is the MINK icon unless you pass
+  `--icon <file.ico>` or `--no-icon`. The version strings name the program, and inside a project
+  they take the name and version from `mink.toml`. Adding all seven frames costs about 19 KB.
+- `mink resource <exe> --icon mink-app.ico --product MINK --version 1.0.5 ...` does the same for
+  an executable that has none. A release uses it to brand `mink.exe`. It refuses an executable
+  that already has resources instead of replacing them, and it writes a temporary file first
+  and then moves it into place, so an interruption never leaves a half-written file. A running
+  program cannot be replaced, so the compiler brands a copy of itself, not itself.
+- The result is checked against Windows itself: `FileVersionInfo` reports the strings, and
+  `ExtractAssociatedIcon` returns the 32 px frame. A string table without `FileVersion` and
+  `ProductVersion` showed up empty in Windows, so those two strings are always written.
 
-The integration therefore stops at the distribution layer instead of changing the build:
-the ICO is shipped next to the compiler, and `mink.rc` (with corrected icon paths) is
-provided for anyone who wants to embed it locally:
-
-```bat
-rc /fo mink.res mink.rc            :: MSVC, from npm\mink\windows
-windres mink.rc -O coff -o mink.res.o   :: MinGW
-```
-
-What users see today: `mink.exe` keeps the default executable icon, while `.mink` source
-files carry the MINK identity through the file association below. `mink-app.ico` is still
-useful on shortcuts, in installers and as the icon of a future editor extension.
+`mink.rc` stays in the package as a reference for anyone who prefers a resource compiler.
 
 ## 4. `.mink` source-file icon
 

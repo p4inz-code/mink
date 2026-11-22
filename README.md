@@ -262,12 +262,14 @@ executed evidence and the exact claim boundary.
 | Command | Description |
 | --- | --- |
 | `mink run <file>` | Compile and execute a MINK source file |
-| `mink build <file>` | Compile to a native Windows executable |
+| `mink build <file>` | Compile to a native Windows executable with the MINK icon (`--icon <file.ico>` picks another, `--no-icon` drops it) |
 | `mink check <file>` | Analyze source for errors without producing output |
 | `mink test <file>` | Discover and run `fn test_*` functions in a source file |
 | `mink repl [file]` | Start an interactive compile-eval session (ends at EOF — the end of piped input, or `Ctrl-Z` then `Enter` at a Windows console — or with `:quit`) |
 | `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
 | `mink version` | Print the compiler version |
+| `mink shell <run\|check\|build> <file>` | Run one of those and keep the console open until Enter; the Explorer right-click entries use it |
+| `mink resource <exe> --icon <ico> ...` | Add an icon and version information to a Windows executable that has none |
 | `mink help` | Show usage information |
 | `mink explain` | With no code, list all documented error codes |
 
@@ -358,6 +360,12 @@ and is still unpublished:
   search support, and a Default apps entry, all per user and all removed again by `-Uninstall`.
   Double-click opens an editor and never runs anything. A new `mink shell` command keeps the
   console open for those entries. The association test grew from 88 to 140 checks.
+- **Icons and version information in executables** (1.0.5 sprint, M4) — every program
+  `mink build` writes now carries the MINK icon and version strings, so Explorer, the taskbar and
+  the file Properties dialog show something better than the generic executable icon. Inside a
+  project the name and version come from `mink.toml`. `--icon` and `--no-icon` change it, and
+  `mink resource` does the same for an executable that has none, which is how `mink.exe` gets its
+  icon without a resource compiler. It costs about 19 KB per program.
 - **A clearer error when a local file hides a bundled module** — a leftover `json.mink`
   next to your program is loaded instead of the bundled `json` module, as it always was. When
   that breaks the build, the compiler now says which file it loaded, where the bundled one is,

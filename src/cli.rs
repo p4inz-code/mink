@@ -22,8 +22,9 @@ Usage:
   mink <command> [arguments]
 
 Commands:
-  build <path> [--target <target>]
+  build <path> [--target <target>] [--icon <file.ico> | --no-icon]
                   Compile a MINK source file into a native executable
+                  (Windows programs carry the MINK icon unless you choose another)
   run <path>      Compile and execute a MINK source file
   check <path> [--json]
                   Analyze a MINK source file without producing output
@@ -34,6 +35,10 @@ Commands:
   shell <run|check|build> <path>
                   Run one of those commands and keep the console open until
                   Enter is pressed (the Explorer right-click entries use this)
+  resource <exe> [--icon <file.ico>] [--product <name>] [--version <x.y.z>]
+           [--description <text>] [--company <name>] [--copyright <text>]
+                  Add an icon and version information to a Windows executable
+                  that has none (this is how mink.exe gets its icon)
   version         Print the compiler version
   help            Print this help
 
@@ -85,6 +90,7 @@ enum Command {
     Build {
         path: PathBuf,
         target: Target,
+        icon: driver::IconChoice,
     },
     Run {
         path: PathBuf,
@@ -105,6 +111,8 @@ enum Command {
     Explain {
         code: Option<String>,
     },
+    /// `mink resource <exe> ...`: add an icon and version information.
+    Resource(ResourceArgs),
     /// `mink shell <run|check|build> <path>`: run a command, then wait for Enter.
     Shell {
         verb: String,
@@ -169,9 +177,9 @@ pub fn main(args: &[String]) -> ExitCode {
             print!("{USAGE}");
             ExitCode::SUCCESS
         }
-        Ok(Command::Build { path, target }) => {
+        Ok(Command::Build { path, target, icon }) => {
             let mut sources = SourceMap::new();
-            let options = driver::BuildOptions { target };
+            let options = driver::BuildOptions { target, icon };
             match driver::build(&mut sources, &path, options) {
                 Ok(outcome) => {
                     println!(
@@ -258,6 +266,7 @@ pub fn main(args: &[String]) -> ExitCode {
             }
         }
         Ok(Command::Shell { verb, path }) => run_shell_command(&verb, &path),
+        Ok(Command::Resource(args)) => run_resource_command(&args),
         Ok(Command::Explain { code: None }) => {
             // No code given: list all documented error codes.
             let mut codes = crate::diagnostics::all_codes();
@@ -296,7 +305,10 @@ pub fn main(args: &[String]) -> ExitCode {
         },
         Ok(Command::Run { path, target }) => {
             let mut sources = SourceMap::new();
-            let options = driver::BuildOptions { target };
+            let options = driver::BuildOptions {
+                target,
+                ..driver::BuildOptions::default()
+            };
             match driver::build(&mut sources, &path, options) {
                 Ok(outcome) => {
                     // Execute the generated binary and forward its exit code.
@@ -424,6 +436,7 @@ fn build_error_exit_code(error: &BuildError) -> ExitCode {
         | BuildError::NotAFile { .. }
         | BuildError::FrontEnd(_)
         | BuildError::Backend(_)
+        | BuildError::Resource { .. }
         | BuildError::Output { .. } => ExitCode::from(1),
     }
 }
@@ -594,6 +607,7 @@ fn run_env_command(path: &PathBuf, action: EnvCommand, name: Option<&str>) -> Ex
 fn parse_build(args: &[String], command: &str) -> Result<Command, String> {
     let mut path: Option<PathBuf> = None;
     let mut target = Target::native();
+    let mut icon = driver::IconChoice::Default;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -605,6 +619,16 @@ fn parse_build(args: &[String], command: &str) -> Result<Command, String> {
             target = parse_target(name)?;
         } else if let Some(name) = arg.strip_prefix("--target=") {
             target = parse_target(name)?;
+        } else if command == "build" && arg == "--no-icon" {
+            icon = driver::IconChoice::None;
+        } else if command == "build" && arg == "--icon" {
+            index += 1;
+            let file = args
+                .get(index)
+                .ok_or("missing file after '--icon' (usage: mink build <path> [--icon <file.ico>])")?;
+            icon = driver::IconChoice::File(PathBuf::from(file));
+        } else if let Some(file) = arg.strip_prefix("--icon=").filter(|_| command == "build") {
+            icon = driver::IconChoice::File(PathBuf::from(file));
         } else if arg.starts_with('-') {
             return Err(format!("unknown option '{arg}' for '{command}'"));
         } else {
@@ -618,7 +642,150 @@ fn parse_build(args: &[String], command: &str) -> Result<Command, String> {
     let path = path.ok_or(format!(
         "missing path argument for '{command}' (usage: mink {command} <path> [--target <target>])"
     ))?;
-    Ok(Command::Build { path, target })
+    Ok(Command::Build { path, target, icon })
+}
+
+/// The arguments of `mink resource`.
+#[derive(Debug, Clone, Default)]
+struct ResourceArgs {
+    exe: PathBuf,
+    icon: Option<PathBuf>,
+    product: Option<String>,
+    version: Option<String>,
+    description: Option<String>,
+    company: Option<String>,
+    copyright: Option<String>,
+}
+
+/// Parses `mink resource <exe> [--icon <file.ico>] [--product <name>] ...`.
+fn parse_resource(args: &[String]) -> Result<Command, String> {
+    const USAGE: &str = "usage: mink resource <exe> [--icon <file.ico>] [--product <name>] \
+[--version <x.y.z>] [--description <text>] [--company <name>] [--copyright <text>]";
+    let mut parsed = ResourceArgs::default();
+    let mut exe: Option<PathBuf> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        let mut value = |name: &str| -> Result<String, String> {
+            index += 1;
+            args.get(index)
+                .cloned()
+                .ok_or(format!("missing value after '{name}' ({USAGE})"))
+        };
+        match arg.as_str() {
+            "--icon" => parsed.icon = Some(PathBuf::from(value("--icon")?)),
+            "--product" => parsed.product = Some(value("--product")?),
+            "--version" => parsed.version = Some(value("--version")?),
+            "--description" => parsed.description = Some(value("--description")?),
+            "--company" => parsed.company = Some(value("--company")?),
+            "--copyright" => parsed.copyright = Some(value("--copyright")?),
+            other if other.starts_with('-') => {
+                return Err(format!("unknown option '{other}' for 'resource'"));
+            }
+            other => {
+                if exe.is_some() {
+                    return Err(format!("unexpected argument '{other}' for 'resource'"));
+                }
+                exe = Some(PathBuf::from(other));
+            }
+        }
+        index += 1;
+    }
+    parsed.exe = exe.ok_or(format!("missing executable path for 'resource' ({USAGE})"))?;
+    if parsed.icon.is_none()
+        && parsed.product.is_none()
+        && parsed.version.is_none()
+        && parsed.description.is_none()
+        && parsed.company.is_none()
+        && parsed.copyright.is_none()
+    {
+        return Err(format!("nothing to add: give at least one option ({USAGE})"));
+    }
+    Ok(Command::Resource(parsed))
+}
+
+/// Adds an icon and version information to a Windows executable that has none.
+///
+/// The result is written beside the original first and then moved over it, so
+/// an interruption never leaves a half-written executable.
+fn run_resource_command(args: &ResourceArgs) -> ExitCode {
+    use crate::backend::resource::{self, ResourceSpec, VersionInfo};
+
+    let fail = |message: String| {
+        eprintln!("mink: error: {message}");
+        ExitCode::from(1)
+    };
+    let bytes = match std::fs::read(&args.exe) {
+        Ok(bytes) => bytes,
+        Err(error) => return fail(format!("cannot read '{}': {error}", args.exe.display())),
+    };
+    let icon = match &args.icon {
+        Some(file) => match std::fs::read(file) {
+            Ok(icon) => Some(icon),
+            Err(error) => return fail(format!("cannot read the icon '{}': {error}", file.display())),
+        },
+        None => None,
+    };
+    let has_version = args.product.is_some()
+        || args.version.is_some()
+        || args.description.is_some()
+        || args.company.is_some()
+        || args.copyright.is_some();
+    let version = has_version.then(|| {
+        let numbers = args
+            .version
+            .as_deref()
+            .map(VersionInfo::parse_version)
+            .unwrap_or([0; 4]);
+        let mut strings = Vec::new();
+        let mut add = |name: &str, value: &Option<String>| {
+            if let Some(value) = value {
+                strings.push((name.to_string(), value.clone()));
+            }
+        };
+        add("CompanyName", &args.company);
+        add("FileDescription", &args.description);
+        add("FileVersion", &args.version);
+        add("ProductName", &args.product);
+        add("ProductVersion", &args.version);
+        add("LegalCopyright", &args.copyright);
+        if let Some(name) = args.exe.file_name() {
+            strings.push(("OriginalFilename".to_string(), name.to_string_lossy().into_owned()));
+        }
+        VersionInfo {
+            file_version: numbers,
+            product_version: numbers,
+            strings,
+        }
+    });
+    let spec = ResourceSpec { icon, version };
+    let output = match resource::embed(&bytes, &spec) {
+        Ok(output) => output,
+        Err(error) => return fail(error.to_string()),
+    };
+    let mut temporary = args.exe.clone().into_os_string();
+    temporary.push(".mink-resource.tmp");
+    let temporary = PathBuf::from(temporary);
+    if let Err(error) = std::fs::write(&temporary, &output) {
+        return fail(format!("cannot write '{}': {error}", temporary.display()));
+    }
+    if let Err(error) = std::fs::rename(&temporary, &args.exe) {
+        let _ = std::fs::remove_file(&temporary);
+        return fail(format!(
+            "cannot replace '{}': {error} (is the program running?)",
+            args.exe.display()
+        ));
+    }
+    println!(
+        "mink: resource: '{}' now carries {}",
+        args.exe.display(),
+        match (spec.icon.is_some(), spec.version.is_some()) {
+            (true, true) => "an icon and version information",
+            (true, false) => "an icon",
+            _ => "version information",
+        }
+    );
+    ExitCode::SUCCESS
 }
 
 /// Parses `mink shell <run|check|build> <path>`.
@@ -758,9 +925,10 @@ fn parse(args: &[String]) -> Result<Command, String> {
         }
         "run" => parse_run(&args[1..]),
         "shell" => parse_shell(&args[1..]),
+        "resource" => parse_resource(&args[1..]),
         "repl" => parse_repl(&args[1..]),
         "test" => parse_build(&args[1..], "test").map(|cmd| match cmd {
-            Command::Build { path, target } => Command::Test { path, target },
+            Command::Build { path, target, .. } => Command::Test { path, target },
             _ => unreachable!(),
         }),
         "init" => parse_init(&args[1..]),
@@ -1130,7 +1298,10 @@ fn repl_build_and_run(
         ));
     }
     let mut sources = SourceMap::new();
-    let options = driver::BuildOptions { target };
+    let options = driver::BuildOptions {
+                target,
+                ..driver::BuildOptions::default()
+            };
     let outcome = match driver::build(&mut sources, &path, options) {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -1398,7 +1569,10 @@ fn run_test_command(path: &PathBuf, target: Target) -> ExitCode {
         }
 
         let mut sources = SourceMap::new();
-        let options = driver::BuildOptions { target };
+        let options = driver::BuildOptions {
+                target,
+                ..driver::BuildOptions::default()
+            };
         match driver::build(&mut sources, &wrapper_path, options) {
             Ok(outcome) => {
                 // Run the test executable.
