@@ -1,6 +1,6 @@
 # Plan: the MINK website on GitHub Pages
 
-**Status:** Plan, for the owner to approve. Nothing here is built yet.
+**Status:** Plan. The owner has chosen the address and the look (2026-11-22). Nothing here is built yet.
 
 ## Goal
 
@@ -10,9 +10,16 @@ and short sections. Same pattern, our own look.
 
 ## Look
 
-- Black background with the white MINK symbol as a faint watermark, as in the setup window.
+- Taken from the MINK design system (`assets/brand/`): black and white with grey. The palette is Ink
+  `#1C1D21`, White `#FFFFFF`, Fold `#3A3C44`, Edge `#45474F` and Paper `#F4F4F2`. No colour accent.
+- The owner's direction: a little grey gradient, like liquid metal or glass. That goes on surfaces only:
+  a soft brushed-metal sheen on cards and buttons, glass-style panels with a thin light edge, and a
+  faint highlight that follows the pointer.
+- The logo itself is never given gradients, outlines or shadows. The brand rules forbid it, so the logo
+  stays flat, as supplied.
+- The white MINK symbol sits behind the hero as a faint watermark, as in the setup window.
 - Fonts: Atkinson Hyperlegible Next for text, Familjen Grotesk for headings, bundled with the site.
-- One accent, teal `#4fd1d6`. 8px corners, hairline borders, no gradients, no animation beyond hover.
+- Motion: slow and small, and off when the visitor asks for reduced motion.
 - Works with no JavaScript for reading. No trackers, no cookies, no third-party requests.
 - Readable at large text sizes and on a phone. Contrast checked against WCAG AA.
 
@@ -68,9 +75,13 @@ and short sections. Same pattern, our own look.
 | W5 | GitHub Actions deploy, search-engine and sharing tags, a social preview image | The site is live and shares well on Discord |
 | W6 | Examples page | Filled in as test apps are finished |
 
-## Decisions needed from the owner
+## Decided
 
-1. Address: GitHub Pages address for now, or a custom domain?
-2. Keep the teal accent, or use another colour?
-3. Is the site content in English only?
-4. Turn on GitHub Pages for the repository yourself, or should I try with the GitHub command line?
+- Address: `https://p4inz-code.github.io/mink/` for now.
+- Look: the MINK design system, black and white with a liquid-metal and glass feel on surfaces.
+
+## Still open
+
+1. English only?
+2. Turn on GitHub Pages in the repository settings yourself, or should I try with the GitHub command line?
+3. Should the setup window move to the same palette? It uses a teal accent today, which is not in the MINK palette.

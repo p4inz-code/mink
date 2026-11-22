@@ -1,6 +1,6 @@
 # Test apps plan (twelve small apps)
 
-**Status:** Plan, second version, for the owner to approve. Nothing here is built yet.
+**Status:** Plan, second version. The owner has chosen where the apps live and how bugs are handled (2026-11-22). Nothing here is built yet.
 
 ## The idea
 
@@ -72,9 +72,11 @@ not run in a browser, and there is no Android or iOS target. So:
 - Builds and runs go through `tools/dev_guard.ps1` to stay inside the machine-heat limit.
 - App text and READMEs are written in plain language.
 
-## Decisions needed from the owner
+## Decided
 
-1. Is this the right twelve? Tell me what to swap.
-2. Should the apps live in this repository under `testapps/`, or in their own repository so people can
-   find and star them?
-3. Fix bugs straight away on `next-1.0.6`, or log them all and fix after the round?
+- The apps live in this repository under `testapps/`.
+- A real bug is fixed straight away on `next-1.0.6`, with a regression test, then the app carries on.
+
+## Still open
+
+- Is this the right twelve? Tell me what to swap.
