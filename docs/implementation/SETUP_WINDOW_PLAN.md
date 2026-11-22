@@ -1,6 +1,6 @@
 # Plan: a custom setup window with no system title bar
 
-**Status:** Plan. Nothing here is built yet. Written for the owner to approve or change.
+**Status:** Rejected by the owner for now (2026-11-22). Setup stays in an Edge window. Kept for later.
 
 ## The problem
 
