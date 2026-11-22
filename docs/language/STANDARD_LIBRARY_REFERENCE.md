@@ -858,9 +858,12 @@ Limits: `http_server_backlog()` 16, `http_server_timeout_ms()` 5000,
 `tls_connect(host, port, ca_path, out_err: Ptr<Int>) -> Ptr<Int>`,
 `tls_status(h)`, `tls_err(h)`, `tls_cipher(h)`, `tls_send(h, data)`,
 `tls_recv(h, maxlen)`, `tls_close(h)`, `https_client_get_with(host, port,
-path, ca_path)`, `https_client_get(url, ca_path)`. A CA bundle path is
-required; certificate validation includes hostname and chain checks. Handles
-are `Ptr<Int>` values released by `tls_close`. Not executed here.
+path, ca_path)`, `https_client_get(url, ca_path)`. Pass an empty `ca_path`
+(`""`) to validate against the Windows trust store; a non-empty path pins
+trust to exactly one PEM certificate (a multi-certificate bundle is not read).
+Certificate validation includes hostname and chain checks. Handles are
+`Ptr<Int>` values released by `tls_close`. Executed against github.com with an
+empty `ca_path` on 2026-11-22: status 200, 468,710 bytes.
 
 ## 18. SQLite (`mod sqlite`)
 
