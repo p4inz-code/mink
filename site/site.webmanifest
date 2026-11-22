@@ -1,0 +1,10 @@
+{
+  "name": "MINK",
+  "short_name": "MINK",
+  "description": "Native Windows programs from small, readable source.",
+  "start_url": "./",
+  "display": "browser",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [{ "src": "img/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

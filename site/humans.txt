@@ -1,0 +1,6 @@
+MINK
+Created by Atharva Patil
+Studio: P4inz Interactive Labs
+License: Apache-2.0
+Site: hand-written HTML and CSS, no trackers, no cookies, no third-party requests
+Fonts: Atkinson Hyperlegible Next, Familjen Grotesk, IBM Plex Mono (SIL OFL 1.1)

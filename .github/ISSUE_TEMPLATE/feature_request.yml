@@ -1,0 +1,19 @@
+name: Feature request
+description: Something MINK should be able to do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the task first, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like MINK to do?
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What do you do today instead?

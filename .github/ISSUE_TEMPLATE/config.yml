@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/p4inz-code/mink/tree/main/docs
+    about: The language guide, standard library reference and error codes
+  - name: Security problem
+    url: https://github.com/p4inz-code/mink/security/advisories/new
+    about: Report a vulnerability privately

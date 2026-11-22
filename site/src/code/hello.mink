@@ -1,0 +1,11 @@
+fn square(n: Int) -> Int {
+    return n * n;
+}
+
+fn main() {
+    let mut total = 0;
+    for i in 1..6 {
+        total = total + square(i);
+    }
+    rt_print_int(total);
+}

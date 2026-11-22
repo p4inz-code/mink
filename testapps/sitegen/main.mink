@@ -1,0 +1,106 @@
+// sitegen: builds a web page from a template and a small data file.
+//
+//   mink build testapps/sitegen/main.mink
+//   sitegen <template> <data> <output>
+//
+// The template holds tokens such as {{VERSION}}. Each line of the data file is NAME=value, and every
+// {{NAME}} in the template is replaced by the value. A value that starts with @ is the name of a file whose
+// text is put in, escaped for HTML (for code samples). A value that starts with @@ is put in as it is.
+// Lines that start with # are comments. This program builds the MINK website.
+mod strings;
+mod collections;
+
+fn escape_html(s: Str) -> Str {
+    let a = str_replace_all(s, "&", "&amp;");
+    let b = str_replace_all(a, "<", "&lt;");
+    return str_replace_all(b, ">", "&gt;");
+}
+
+// Reads a whole file and takes the path string with it (the path is freed here).
+fn load(path: Str) -> Str {
+    if !rt_fs_exists(path) {
+        rt_print_str("sitegen: cannot find the file:");
+        rt_print_str(path);
+        rt_str_free(path);
+        return "";
+    }
+    let text = rt_fs_read(path);
+    rt_str_free(path);
+    return text;
+}
+
+fn resolve(value: Str) -> Str {
+    let n = rt_str_len(value);
+    if n > 1 && rt_str_byte(value, 0) == 64 {
+        if rt_str_byte(value, 1) == 64 {
+            let raw_path = str_sub(rt_str_concat(value, ""), 2, n);
+            let raw = load(raw_path);
+            rt_str_free(value);
+            return raw;
+        }
+        let path = str_sub(rt_str_concat(value, ""), 1, n);
+        let text = load(path);
+        rt_str_free(value);
+        return escape_html(text);
+    }
+    return value;
+}
+
+fn main() -> Int {
+    if rt_argc() < 3 {
+        rt_print_str("usage: sitegen <template> <data> <output>");
+        return 2;
+    }
+    let tpl_path = rt_argv(0);
+    let data_path = rt_argv(1);
+    let out_path = rt_argv(2);
+    let mut page = load(tpl_path);
+    let data = load(data_path);
+    if rt_str_len(page) == 0 || rt_str_len(data) == 0 {
+        rt_str_free(page);
+        rt_str_free(data);
+        rt_str_free(out_path);
+        return 1;
+    }
+    let lines = str_split(data, "\n");
+    let count = rt_vec_len(lines);
+    let mut used = 0;
+    let mut i = 0;
+    while i < count {
+        let line = rt_str_concat(rt_vec_get(lines, i), "");
+        // Find the first = on the line.
+        let mut eq = -1;
+        let mut k = 0;
+        while k < rt_str_len(line) && eq < 0 {
+            if rt_str_byte(line, k) == 61 {
+                eq = k;
+            }
+            k = k + 1;
+        }
+        if eq > 0 && rt_str_byte(line, 0) != 35 {
+            let key = str_sub(rt_str_concat(line, ""), 0, eq);
+            let raw_value = str_sub(rt_str_concat(line, ""), eq + 1, rt_str_len(line));
+            let value = resolve(raw_value);
+            let open = rt_str_concat("{{", key);
+            let token = rt_str_concat(open, "}}");
+            rt_str_free(open);
+            rt_str_free(key);
+            page = str_replace_all(page, token, value);
+            used = used + 1;
+        }
+        rt_str_free(line);
+        i = i + 1;
+    }
+    rt_vec_free(lines);
+    let written = rt_fs_write(out_path, page);
+    rt_print_str("sitegen: values used:");
+    rt_print_int(used);
+    rt_print_str("sitegen: bytes written:");
+    rt_print_int(written);
+    rt_str_free(page);
+    rt_str_free(out_path);
+    if written < 0 {
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,40 @@
+name: Bug report
+description: Something does not work the way the docs say
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: MINK version
+      description: Run `mink --version`
+      placeholder: mink 1.0.5
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 23H2
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install MINK?
+      options: [Setup file, Portable zip, npm, Built from source]
+    validations:
+      required: true
+  - type: textarea
+    id: program
+    attributes:
+      label: The smallest program that shows it
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What you expected, and what happened
+      description: Paste any error text.
+    validations:
+      required: true

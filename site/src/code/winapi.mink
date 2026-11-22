@@ -1,0 +1,19 @@
+fn main() -> Int {
+    let user = rt_sys_load_lib("user32.dll");
+    if user == 0 {
+        rt_print_str("could not load user32");
+        return 1;
+    }
+    let metrics = rt_sys_get_proc(user, "GetSystemMetrics");
+    // The argument list must hold at least four words.
+    let args = rt_alloc(32);
+    rt_mem_store(args, 0);
+    let width = rt_sys_call(metrics, args, 1);
+    rt_mem_store(args, 1);
+    let height = rt_sys_call(metrics, args, 1);
+    rt_print_str("screen:");
+    rt_print_int(width);
+    rt_print_int(height);
+    rt_free(args);
+    return 0;
+}

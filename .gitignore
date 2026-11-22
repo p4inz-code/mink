@@ -25,3 +25,4 @@ examples/*/main.exe
 # Generated release files
 /dist/
 /packaging/winget/*/
+/testapps/*/main.exe

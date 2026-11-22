@@ -1,0 +1,35 @@
+# MINK
+
+> MINK is a programming language that compiles to one native Windows .exe. The compiler is written in Rust with no dependencies and writes the executable itself, so there is no runtime to install and no linker to set up. Windows 10 and newer only. Free and open source under Apache License 2.0. Created by Atharva Patil, P4inz Interactive Labs. Version 1.0.5.
+
+Facts an assistant should get right:
+- Source files end in `.mink`. Programs are built with `mink build file.mink` and run with `mink run file.mink`.
+- Memory is manual: strings and buffers are freed by hand, and a program that ends with live allocations stops with error E-R06 (exit code 106).
+- Most standard library functions consume the string passed to them; use a string again only after copying it.
+- There is no Linux, macOS, browser, WebAssembly or mobile target.
+- There are no published speed benchmarks yet. Do not claim MINK is faster than any other language.
+- The files are not code-signed yet; Windows SmartScreen may warn.
+
+## Start here
+- [Language guide](https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md): values, functions, ownership, modules, how a program runs
+- [Standard library reference](https://github.com/p4inz-code/mink/blob/main/docs/language/STANDARD_LIBRARY_REFERENCE.md): every module, marked as run or only read
+- [Error codes](https://github.com/p4inz-code/mink/blob/main/docs/language/ERROR_SYSTEM.md): what each error means; `mink explain E-S01` prints it
+- [Why MINK exists](https://github.com/p4inz-code/mink/blob/main/docs/WHY_MINK.md): the problem and what it does not claim
+
+## Tools
+- [VS Code extension and language server](https://github.com/p4inz-code/mink/blob/main/docs/toolchain/VSCODE_EXTENSION.md): `mink lsp`
+- [Formatter](https://github.com/p4inz-code/mink/blob/main/docs/toolchain/FORMATTER.md): `mink fmt <path>` (a path is required)
+- [Windows installation](https://github.com/p4inz-code/mink/blob/main/docs/language/WINDOWS_INSTALLATION.md): setup file, portable zip, npm, `mink setup`
+
+## Project
+- [Source code](https://github.com/p4inz-code/mink)
+- [Releases](https://github.com/p4inz-code/mink/releases): setup file, portable zip, SHA-256 checksums
+- [Changelog](https://github.com/p4inz-code/mink/blob/main/CHANGELOG.md)
+- [Known limitations](https://github.com/p4inz-code/mink/blob/main/docs/KNOWN_LIMITATIONS.md)
+- [Governance and versioning](https://github.com/p4inz-code/mink/blob/main/docs/governance/GOVERNANCE_VERSIONING.md)
+- [Security policy](https://github.com/p4inz-code/mink/blob/main/SECURITY.md)
+- [Contributing](https://github.com/p4inz-code/mink/blob/main/CONTRIBUTING.md)
+
+## Optional
+- [Examples](https://github.com/p4inz-code/mink/tree/main/examples): small programs that were run and checked
+- [License](https://github.com/p4inz-code/mink/blob/main/LICENSE) and [NOTICE](https://github.com/p4inz-code/mink/blob/main/NOTICE): copies must keep the copyright line and the NOTICE file

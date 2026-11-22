@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MINK: native Windows programs from small, readable source</title>
+<meta name="description" content="MINK is a programming language that compiles to one native Windows .exe. No runtime to install, no linker to set up. Free and open source under Apache 2.0.">
+<meta name="theme-color" content="#000000">
+<link rel="canonical" href="https://p4inz-code.github.io/mink/">
+<meta property="og:title" content="MINK: native Windows programs from small, readable source">
+<meta property="og:description" content="One compiler, one .exe. No runtime to install. Free and open source.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://p4inz-code.github.io/mink/">
+<meta property="og:image" content="https://p4inz-code.github.io/mink/img/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="manifest" href="site.webmanifest">
+<link rel="stylesheet" href="style.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"MINK","applicationCategory":"DeveloperApplication","operatingSystem":"Windows 10, Windows 11","softwareVersion":"{{VERSION}}","license":"https://www.apache.org/licenses/LICENSE-2.0","author":{"@type":"Person","name":"Atharva Patil"},"publisher":{"@type":"Organization","name":"P4inz Interactive Labs"},"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"url":"https://p4inz-code.github.io/mink/","downloadUrl":"https://github.com/p4inz-code/mink/releases/tag/v{{VERSION}}"}</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="MINK home"><img src="img/mink-logo-compact-white.svg" alt="MINK" width="120" height="32"></a>
+    <nav class="nav" aria-label="Main">
+      <a href="#start">Get started</a>
+      <a href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">Learn</a>
+      <a href="#docs">Docs</a>
+      <a href="#compare">Compare</a>
+      <a href="#help">Help</a>
+      <a href="https://github.com/p4inz-code/mink">GitHub</a>
+      <a class="cta" href="#download">Download</a>
+    </nav>
+    <details class="menu">
+      <summary aria-label="Menu"><span class="bars"></span></summary>
+      <div class="panel">
+        <a href="#start">Get started</a>
+        <a href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">Learn</a>
+        <a href="#docs">Docs</a>
+        <a href="#compare">Compare</a>
+        <a href="#help">Help</a>
+        <a href="https://github.com/p4inz-code/mink">GitHub</a>
+        <a class="cta" href="#download">Download for Windows</a>
+      </div>
+    </details>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <img class="mark" src="img/mink-symbol-white.svg" alt="">
+    <div class="wrap">
+      <div>
+        <a class="eyebrow" href="https://github.com/p4inz-code/mink/releases/tag/v{{VERSION}}">Native Windows &middot; one .exe &middot; open source</a>
+        <h1>Native Windows programs from small, readable source.</h1>
+        <p class="lead">MINK is a programming language that compiles to <b>one .exe</b>. There is no runtime to install and no linker to set up. The compiler is written in Rust with no dependencies.</p>
+        <div class="actions">
+          <a class="btn metal" href="#download">Download for Windows</a>
+          <a class="btn glass" href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">Read the language guide</a>
+        </div>
+        <p class="meta">Version {{VERSION}} &nbsp;&middot;&nbsp; Windows 10 and newer &nbsp;&middot;&nbsp; Apache License 2.0</p>
+      </div>
+      <div class="window" role="img" aria-label="A MINK program and the output it prints">
+        <div class="bar"><span>hello.mink</span><span class="ctl">&minus;&#9633;&times;</span></div>
+<pre>{{CODE_HELLO}}</pre>
+        <div class="run"><pre><span class="dim">PS&gt;</span> mink run hello.mink
+55
+<span class="dim">PS&gt;</span> mink build hello.mink
+<span class="dim">PS&gt;</span> .\hello.exe
+55</pre></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="stats">
+    <div class="wrap">
+      <ul>
+        <li><b>0</b>dependencies in the compiler</li>
+        <li><b>1</b>.exe per program</li>
+        <li><b>27</b>standard library modules</li>
+        <li><b>0</b>admin rights to install</li>
+        <li><b>{{SETUP_SIZE}}</b>setup file</li>
+      </ul>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <div class="kicker">What you get</div>
+      <h2>Small tools, clear errors, one format.</h2>
+      <div class="grid four" style="margin-top:40px">
+        <div class="card feature"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5"/></svg><h3>One small program</h3><p><span class="mono">mink build</span> writes a native Windows program itself. No linker, no runtime to ship.</p></div>
+        <div class="card feature"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg><h3>Errors that explain</h3><p>Every error has a code, a location and an explanation. Try <span class="mono">mink explain E-S01</span>.</p></div>
+        <div class="card feature"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h16"/></svg><h3>One format</h3><p><span class="mono">mink fmt</span> has no settings, and checks it never changes what your program does.</p></div>
+        <div class="card feature"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg><h3>Editor support</h3><p>A language server and a VS Code extension: errors as you type, completion, hover and rename.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="code" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">The language</div>
+      <h2>Write it. Run it. Ship one file.</h2>
+      <p class="sub">Every example is a real program from the repository, with the output it produced.</p>
+      <div class="tabs">
+        <input type="radio" name="tab" id="t1" checked aria-label="Hello">
+        <input type="radio" name="tab" id="t2" aria-label="JSON">
+        <input type="radio" name="tab" id="t3" aria-label="Hash and compress">
+        <input type="radio" name="tab" id="t4" aria-label="Web server">
+        <input type="radio" name="tab" id="t5" aria-label="Windows">
+        <div class="tablist">
+          <label for="t1">Hello</label><label for="t2">Read JSON</label><label for="t3">Hash and compress</label><label for="t4">Web server</label><label for="t5">Call Windows</label>
+        </div>
+
+        <div class="pane p1">
+          <div class="card"><div class="cardhead"><span>hello.mink</span><span>5 steps from nothing</span></div>
+<pre class="code">{{CODE_HELLO}}</pre></div>
+          <div class="card out"><div class="cardhead"><span>PowerShell</span><span>mink run hello.mink</span></div><pre>55</pre></div>
+        </div>
+
+        <div class="pane p2">
+          <div class="card"><div class="cardhead"><span>json_config</span><span>examples/json_config</span></div>
+<pre class="code">{{CODE_JSON}}</pre></div>
+          <div class="card out"><div class="cardhead"><span>Output</span><span>exit 0, no leaks</span></div><pre>mink
+4
+{"name":"mink","workers":4,"debug":true}</pre></div>
+        </div>
+
+        <div class="pane p3">
+          <div class="card"><div class="cardhead"><span>hash_and_compress</span><span>examples/hash_and_compress</span></div>
+<pre class="code">{{CODE_HASH}}</pre></div>
+          <div class="card out"><div class="cardhead"><span>Output</span><span>SHA-256 and bytes after compression</span></div><pre>7116c83efd0dd269877f09e2
+87c25fda77c7fb112ad1a861
+e14b9dd4670f36d0
+11</pre></div>
+        </div>
+
+        <div class="pane p4">
+          <div class="card"><div class="cardhead"><span>web_loopback</span><span>examples/web_loopback</span></div>
+<pre class="code">{{CODE_WEB}}</pre></div>
+          <div class="card out"><div class="cardhead"><span>Output</span><span>a server thread and a client, one program</span></div><pre>/hello
+200
+hello from mink</pre></div>
+        </div>
+
+        <div class="pane p5">
+          <div class="card"><div class="cardhead"><span>winapi_info</span><span>based on examples/winapi_info</span></div>
+<pre class="code">{{CODE_WIN}}</pre></div>
+          <div class="card out"><div class="cardhead"><span>Output</span><span>on the author's PC</span></div><pre>screen:
+2560
+1440</pre></div>
+        </div>
+      </div>
+
+      <p class="note">Strings and buffers are freed by hand, and a program that leaves any behind ends with a memory-leak error. That is on purpose, and it is the biggest thing to get used to. See <a href="#limits">what MINK does not do yet</a>.</p>
+    </div>
+  </section>
+
+  <section id="start" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">Get started</div>
+      <h2>Three steps, about a minute.</h2>
+      <div class="grid steps">
+        <div class="card feature"><h3>Install</h3><p>Run the setup file, or <span class="mono">npm install -g @p4inz-code/mink</span>. It installs for your account and needs no administrator rights.</p></div>
+        <div class="card feature"><h3>Write</h3><p>Make <span class="mono">hello.mink</span> in any editor, or right-click, New, MINK Source File once setup has run.</p></div>
+        <div class="card feature"><h3>Run or build</h3><p><span class="mono">mink run hello.mink</span> runs it. <span class="mono">mink build hello.mink</span> writes a <span class="mono">hello.exe</span> you can give to anyone.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">How it compares</div>
+      <h2>Where MINK fits next to Python and C++.</h2>
+      <p class="sub">Facts about how you build and ship a program. There is no speed row because we have not measured one yet.</p>
+      <table class="compare">
+        <thead><tr><th scope="col"></th><th scope="col">MINK</th><th scope="col">Python</th><th scope="col">C++</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Shipping a program</th><td class="us" data-l="MINK">One .exe</td><td data-l="Python">An interpreter, or a bundling tool</td><td data-l="C++">The program plus any libraries it uses</td></tr>
+          <tr><th scope="row">Building it</th><td class="us" data-l="MINK"><span class="mono">mink build</span>. The compiler writes the .exe itself</td><td data-l="Python">Nothing to build</td><td data-l="C++">A compiler, a linker and usually a build system</td></tr>
+          <tr><th scope="row">Memory</th><td class="us" data-l="MINK">Manual, with leaks reported when the program ends</td><td data-l="Python">Automatic</td><td data-l="C++">Manual, or smart pointers</td></tr>
+          <tr><th scope="row">Errors</th><td class="us" data-l="MINK">A code, a location, and <span class="mono">mink explain</span></td><td data-l="Python">Tracebacks while running</td><td data-l="C++">Compiler messages, which vary by compiler</td></tr>
+          <tr><th scope="row">Libraries</th><td class="us" data-l="MINK">Small: 27 standard modules</td><td data-l="Python">Very large</td><td data-l="C++">Very large</td></tr>
+          <tr><th scope="row">Platforms</th><td class="us" data-l="MINK">Windows 10 and newer</td><td data-l="Python">Most systems</td><td data-l="C++">Most systems</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">Built for Windows</div>
+      <h2>It feels like part of the system.</h2>
+      <div class="grid" style="grid-template-columns:repeat(2,1fr)">
+        <div class="card feature"><h3>Files, icons and menus</h3><p>.mink files get an icon, right-click Run, Check, Build and Edit, a New menu entry and a preview pane. Double-click only opens an editor. It never runs a file.</p></div>
+        <div class="card feature"><h3>A real standard library</h3><p>Files, JSON, CSV, SQLite, an HTTP client and server, threads, regular expressions, hashing, compression and more. You can also call Windows directly.</p></div>
+        <div class="card feature"><h3>Setup that respects you</h3><p>Installs for your account with no administrator rights, lists itself in Apps &amp; features, keeps several versions side by side, and removes cleanly.</p></div>
+        <div class="card feature"><h3>Open and credited</h3><p>Apache License 2.0. Free for any use, including work. Copies keep the copyright line and the NOTICE file, so the credit stays with its creator.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="docs" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">Documentation</div>
+      <h2>Everything is written down.</h2>
+      <p class="sub">The documentation lives in the repository next to the code, so it always matches the version you have.</p>
+      <div class="grid">
+        <a class="card feature" href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md"><h3>Language guide</h3><p>Values, functions, ownership, modules and how a program runs.</p></a>
+        <a class="card feature" href="https://github.com/p4inz-code/mink/blob/main/docs/language/STANDARD_LIBRARY_REFERENCE.md"><h3>Standard library</h3><p>Every module and function, marked with whether it was run or only read.</p></a>
+        <a class="card feature" href="https://github.com/p4inz-code/mink/blob/main/docs/language/ERROR_SYSTEM.md"><h3>Error codes</h3><p>What each error means and what to try.</p></a>
+        <a class="card feature" href="https://github.com/p4inz-code/mink/blob/main/docs/toolchain/VSCODE_EXTENSION.md"><h3>VS Code and the language server</h3><p>Install the extension and see what it gives you.</p></a>
+        <a class="card feature" href="https://github.com/p4inz-code/mink/blob/main/docs/WHY_MINK.md"><h3>Why MINK exists</h3><p>The problem it goes after, and what it does not claim.</p></a>
+        <a class="card feature" href="https://github.com/p4inz-code/mink/blob/main/docs/governance/GOVERNANCE_VERSIONING.md"><h3>Governance and versions</h3><p>How the language changes and how releases are numbered.</p></a>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">Download</div>
+      <h2>MINK {{VERSION}} for Windows.</h2>
+      <p class="sub">Windows 10 and newer, 64-bit. Pick one way to install.</p>
+      <div class="dl">
+        <div class="card dlcard"><h3>Setup file</h3><p>The easiest way. A setup window with options, in your own account.</p><div class="hash">SHA-256<br>{{SETUP_SHA}}</div><a class="btn metal" href="https://github.com/p4inz-code/mink/releases/download/v{{VERSION}}/mink-Setup-{{VERSION}}.exe">Download setup &nbsp;&middot;&nbsp; {{SETUP_SIZE}}</a></div>
+        <div class="card dlcard"><h3>Portable zip</h3><p>Unzip anywhere and run. Nothing is written to your account.</p><div class="hash">SHA-256<br>{{ZIP_SHA}}</div><a class="btn glass" href="https://github.com/p4inz-code/mink/releases/download/v{{VERSION}}/mink-{{VERSION}}-portable.zip">Download zip &nbsp;&middot;&nbsp; {{ZIP_SIZE}}</a></div>
+        <div class="card dlcard"><h3>npm</h3><p>If you already use Node.js and npm.</p><div class="cmd">npm install -g @p4inz-code/mink</div><a class="btn glass" href="https://www.npmjs.com/package/@p4inz-code/mink">View on npm</a></div>
+      </div>
+      <div class="card warn"><p><b style="color:#fff">The files are not code-signed yet.</b> Windows SmartScreen may ask you to confirm before it runs the setup file. Signing is coming. To check a download, compare its hash: <span class="mono">Get-FileHash .\mink-Setup-{{VERSION}}.exe -Algorithm SHA256</span></p></div>
+      <p class="note">All releases and notes: <a href="https://github.com/p4inz-code/mink/releases">github.com/p4inz-code/mink/releases</a></p>
+    </div>
+  </section>
+
+  <section id="limits" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">What MINK does not do yet</div>
+      <h2>Honest limits.</h2>
+      <ul class="limits">
+        <li><b>Windows only.</b> Windows 10 and newer. There is no Linux, macOS, browser or mobile target.</li>
+        <li><b>Young.</b> Version {{VERSION}}. Expect rough edges, and tell us about them.</li>
+        <li><b>You manage memory.</b> Strings and buffers are freed by hand, and leaks are reported when a program ends.</li>
+        <li><b>No speed claims.</b> A benchmark suite against Python and C is planned. Until it exists, this page does not say MINK is fast.</li>
+        <li><b>VS Code only.</b> Other editors can use the language server directly. The extension is not on the Marketplace yet.</li>
+        <li><b>Unsigned.</b> Signing is coming.</li>
+      </ul>
+      <p class="note">The full list is in <a href="https://github.com/p4inz-code/mink/blob/main/docs/KNOWN_LIMITATIONS.md">KNOWN_LIMITATIONS.md</a>.</p>
+    </div>
+  </section>
+
+  <section id="help" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">Need a hand?</div>
+      <h2>Ask, report, or contribute.</h2>
+      <p class="sub">Found a bug or something confusing? Open an issue with your MINK version and the smallest program that shows it.</p>
+      <div class="actions">
+        <a class="btn glass" href="https://github.com/p4inz-code/mink/issues">Report a problem</a>
+        <a class="btn glass" href="https://github.com/p4inz-code/mink/blob/main/CONTRIBUTING.md">Contribute</a>
+        <a class="btn glass" href="https://github.com/p4inz-code/mink/blob/main/CHANGELOG.md">Changelog</a>
+        <a class="btn glass" href="https://github.com/p4inz-code/mink/blob/main/SECURITY.md">Security</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <div><img src="img/mink-logo-compact-white.svg" alt="MINK" width="110" height="30"><div>Native Windows programs from<br>small, readable source.</div></div>
+      <div><h4>Learn</h4><ul><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">Language guide</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/STANDARD_LIBRARY_REFERENCE.md">Standard library</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/ERROR_SYSTEM.md">Error codes</a></li><li><a href="llms.txt">llms.txt</a></li></ul></div>
+      <div><h4>Project</h4><ul><li><a href="https://github.com/p4inz-code/mink">GitHub</a></li><li><a href="https://github.com/p4inz-code/mink/releases">Releases</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/CHANGELOG.md">Changelog</a></li><li><a href="https://github.com/p4inz-code/mink/issues">Issues</a></li></ul></div>
+      <div><h4>Legal</h4><ul><li><a href="https://github.com/p4inz-code/mink/blob/main/LICENSE">Apache License 2.0</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/NOTICE">Notice and credit</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/SECURITY.md">Security</a></li></ul></div>
+    </div>
+    <div class="credit">This page was built by a MINK program, <a href="https://github.com/p4inz-code/mink/tree/main/testapps/sitegen">testapps/sitegen</a>, from a template and a data file. The code samples above are the real files.<br>&copy; 2026 Atharva Patil &nbsp;|&nbsp; P4inz Interactive Labs. MINK and the MINK logo belong to their creator. Fonts: Atkinson Hyperlegible Next, Familjen Grotesk and IBM Plex Mono, all under the SIL Open Font License 1.1 (licenses in <a href="fonts/">fonts</a>).</div>
+  </div>
+</footer>
+<a class="trust" href="humans.txt" title="This site loads nothing from other sites">0 external requests &middot; 0 trackers &middot; 0 cookies</a>
+<script src="site.js" defer></script>
+</body>
+</html>
