@@ -5,10 +5,14 @@
   "bin": {
     "mink": "bin/mink.exe"
   },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
   "files": [
     "bin/mink.exe",
     "stdlib",
     "windows",
+    "scripts/postinstall.js",
     "LICENSE"
   ],
   "os": [

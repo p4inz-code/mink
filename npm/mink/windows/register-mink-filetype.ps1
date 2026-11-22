@@ -65,6 +65,16 @@
 .PARAMETER Quiet
     Print nothing except errors. The exit code still reports the result.
 
+.PARAMETER Status
+    Print what is registered now as `name=value` lines and change nothing. `mink setup --status`
+    reads this.
+
+.PARAMETER Refresh
+    Register again with the choices that are already in place (the same right-click entries,
+    editor, New menu, preview and Default apps entry), so the stored paths point at the copy
+    of MINK that is running. Does nothing when MINK is not registered. `mink setup --auto`
+    and the npm install step use this after an upgrade.
+
 .PARAMETER Force
     Replace a `.mink` association that another application currently owns. The previous
     owner is recorded and restored by -Uninstall. Another application's own values, and
@@ -111,6 +121,8 @@ param(
     [switch]$NoDefaultApps,
     [switch]$NoPreview,
     [switch]$Quiet,
+    [switch]$Status,
+    [switch]$Refresh,
     [switch]$Force,
     [switch]$Uninstall
 )
@@ -648,10 +660,75 @@ function Unregister-MinkFileType {
     $notes.Add('the per-user "Open with" choice for .mink is user-owned and was not touched')
 }
 
+# --- Current state ---------------------------------------------------------
+function Get-CurrentChoices {
+    $owner = Read-RegistryValue -SubKey $ExtensionSubKey
+    $owned = Read-OwnedSet
+    $verbsNow = @()
+    foreach ($verb in $VerbLabels.Keys) {
+        if (Test-RegistryKey -SubKey "$ShellSubKey\$verb") { $verbsNow += $verb }
+    }
+    $editor = $null
+    $openCommand = Read-RegistryValue -SubKey $OpenCommandSubKey
+    if ($openCommand -and $openCommand -match '^"([^"]+)"') { $editor = $Matches[1] }
+    $runCommand = Read-RegistryValue -SubKey "$ShellSubKey\run\command"
+    $installedExe = $null
+    if ($runCommand -and $runCommand -match '^"([^"]+)"') { $installedExe = $Matches[1] }
+    return [pscustomobject]@{
+        Registered      = ($owner -eq $ProgId)
+        Owner           = $owner
+        Icon            = Read-RegistryValue -SubKey $DefaultIconSubKey
+        Editor          = $editor
+        Verbs           = $verbsNow
+        DefaultVerb     = Read-RegistryValue -SubKey $ShellSubKey
+        NewMenu         = (Test-Owned $owned 'NewMenu')
+        Preview         = ((Test-Owned $owned 'PersistentHandler') -or (Test-Owned $owned 'PreviewHandler'))
+        DefaultApps     = (Test-RegistryKey -SubKey $CapabilitiesSubKey)
+        MinkExe         = $installedExe
+    }
+}
+
+function Write-Status {
+    $c = Get-CurrentChoices
+    Write-Host ("registered={0}" -f ([string]$c.Registered).ToLowerInvariant())
+    Write-Host ("owner={0}" -f $c.Owner)
+    Write-Host ("icon={0}" -f $c.Icon)
+    Write-Host ("editor={0}" -f $c.Editor)
+    Write-Host ("default_verb={0}" -f $c.DefaultVerb)
+    Write-Host ("verbs={0}" -f ($c.Verbs -join ','))
+    Write-Host ("new_menu={0}" -f ([string]$c.NewMenu).ToLowerInvariant())
+    Write-Host ("preview={0}" -f ([string]$c.Preview).ToLowerInvariant())
+    Write-Host ("default_apps={0}" -f ([string]$c.DefaultApps).ToLowerInvariant())
+    Write-Host ("mink_exe={0}" -f $c.MinkExe)
+}
+
 # --- Main ------------------------------------------------------------------
 function Write-Info {
     param([string]$Text = '')
     if (-not $Quiet) { Write-Host $Text }
+}
+
+if ($Status) {
+    Write-Status
+    exit 0
+}
+
+if ($Refresh) {
+    $current = Get-CurrentChoices
+    if (-not $current.Registered) {
+        Write-Info 'MINK is not registered for .mink; nothing to refresh.'
+        exit 0
+    }
+    # Keep every choice already in place; only the stored paths are renewed.
+    $Verbs = @($current.Verbs | Where-Object { $_ -ne 'edit' })
+    if (-not $current.Editor -and $current.Verbs -contains 'edit' -and $Verbs.Count -eq 0) { $Verbs = @('edit') }
+    if ($current.Verbs.Count -eq 0) { $NoContextMenu = $true }
+    if (-not $current.NewMenu) { $NoNewMenu = $true }
+    if (-not $current.Preview) { $NoPreview = $true }
+    if (-not $current.DefaultApps) { $NoDefaultApps = $true }
+    if (-not $Editor -and $current.Editor -and (Test-Path -LiteralPath $current.Editor -PathType Leaf)) {
+        $Editor = $current.Editor
+    }
 }
 
 Write-Info 'MINK file association (.mink)'

@@ -41,5 +41,7 @@ pub mod package;
 pub mod parser;
 pub mod runtime;
 pub mod semantics;
+pub mod setup;
 pub mod source;
 pub mod typecheck;
+pub mod upgrade;

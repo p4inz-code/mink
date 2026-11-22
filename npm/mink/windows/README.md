@@ -8,11 +8,14 @@ Shipped inside the npm package (`@p4inz-code/mink`), next to `..\bin\mink.exe`.
 | `mink-file.ico` | Icon for `.mink` source files (7 sizes, 16 to 256 px) |
 | `mink-app.ico` | Application icon for MINK, used on the right-click entries and for shortcuts |
 | `template.mink` | The starter program that "New > MINK Source File" copies |
+| `mink-path.ps1` | Adds or removes a folder on your own PATH (`mink setup` uses it) |
 | `mink.rc` | Reference resource script, for anyone who prefers a resource compiler. `mink resource` does the same without one |
 
 ## Set it up
 
-The easiest way is `mink setup`, which asks a few questions and runs this script for you.
+The easiest way is `mink setup`, which asks a few questions and runs this script for you
+(`mink setup --yes` takes the defaults, `--status` shows what is set up, `--remove` undoes it).
+`npm install -g` runs `mink setup --auto` for you.
 You can also run the script yourself from wherever this folder is:
 
 ```powershell
@@ -66,6 +69,8 @@ have already told Windows which app to use for `.mink`, that choice wins.
 | `-Editor <path>` | Open files in this editor |
 | `-Force` | Take over `.mink` from another application (see below) |
 | `-Quiet` | Print only errors |
+| `-Status` | Print what is registered now as `name=value` lines, and change nothing |
+| `-Refresh` | Register again with the choices already in place, so the stored paths follow a moved or reinstalled package |
 | `-Uninstall` | Remove everything this script added |
 
 If another program already owns `.mink`, the script stops and tells you. `-Force` takes it over,

@@ -602,6 +602,151 @@ try {
     }
     else { Write-Note 'target\debug\mink.exe not built; the verb execution check is skipped' }
 
+    # ---------------------------------------------------------------- step 6c
+    Write-Step '6c. -Status reports the state and -Refresh keeps the choices when the package moves'
+    $run = Invoke-RegisterScript -Arguments @('-Verbs', 'run', '-NoNewMenu', '-NoPreview') -ScriptPath $packageScript
+    Assert-Equal -What 'a customised registration exits 0' -Expected 0 -Actual $run.ExitCode
+    $run = Invoke-RegisterScript -Arguments @('-Status') -ScriptPath $packageScript
+    Assert-Equal -What '-Status exits 0' -Expected 0 -Actual $run.ExitCode
+    $status = @{}
+    foreach ($line in ($run.Output -split "`n")) {
+        if ($line -match '^([a-z_]+)=(.*)$') { $status[$Matches[1]] = $Matches[2].Trim() }
+    }
+    Assert-Equal -What '-Status says registered' -Expected 'true' -Actual $status['registered']
+    Assert-Equal -What '-Status lists the verbs' -Expected 'run,edit' -Actual $status['verbs']
+    Assert-Equal -What '-Status reports the default verb' -Expected 'edit' -Actual $status['default_verb']
+    Assert-Equal -What '-Status reports the New menu as off' -Expected 'false' -Actual $status['new_menu']
+    Assert-Equal -What '-Status reports preview as off' -Expected 'false' -Actual $status['preview']
+    Assert-Equal -What '-Status reports Default apps as on' -Expected 'true' -Actual $status['default_apps']
+    Assert-Equal -What '-Status reports the installed mink.exe' -Expected $installExe -Actual $status['mink_exe']
+    Assert-True -What '-Status changed nothing' -Condition (-not (Test-KeyExists -SubKey $NewMenuSubKey))
+
+    $moved = Join-Path $work 'moved package'
+    Copy-Item -Path $package -Destination $moved -Recurse -Force
+    $movedScript = Join-Path $moved 'windows\register-mink-filetype.ps1'
+    $movedExe = (Resolve-Path -LiteralPath (Join-Path $moved 'bin\mink.exe')).Path
+    $movedIcon = (Resolve-Path -LiteralPath (Join-Path $moved 'bin\mink-file.ico')).Path
+    $run = Invoke-RegisterScript -Arguments @('-Refresh', '-Quiet') -ScriptPath $movedScript
+    Assert-Equal -What '-Refresh from the moved package exits 0' -Expected 0 -Actual $run.ExitCode
+    Assert-Equal -What 'the run entry now points at the moved mink.exe' `
+        -Expected ('"{0}" shell run "%1"' -f $movedExe) -Actual (Get-KeyValue -SubKey "$ShellSubKey\run\command")
+    Assert-Equal -What 'the icon now points at the moved package' `
+        -Expected ('"{0}",0' -f $movedIcon) -Actual (Get-KeyValue -SubKey $DefaultIconSubKey)
+    Assert-True -What 'the right-click entries that were off stay off' `
+        -Condition (-not (Test-KeyExists -SubKey "$ShellSubKey\check") -and -not (Test-KeyExists -SubKey "$ShellSubKey\build"))
+    Assert-True -What 'the New menu that was off stays off' -Condition (-not (Test-KeyExists -SubKey $NewMenuSubKey))
+    Assert-True -What 'the preview handler that was off stays off' `
+        -Condition (-not (Test-KeyExists -SubKey $PersistentHandlerSubKey))
+    Assert-True -What 'Default apps that was on stays on' -Condition (Test-KeyExists -SubKey $CapabilitiesSubKey)
+    Assert-True -What '-Refresh produced no output with -Quiet' -Condition (-not $run.Output.Trim())
+
+    $run = Invoke-RegisterScript -Arguments @('-Uninstall', '-Quiet') -ScriptPath $movedScript
+    Assert-Equal -What 'uninstall from the moved package exits 0' -Expected 0 -Actual $run.ExitCode
+    $run = Invoke-RegisterScript -Arguments @('-Refresh') -ScriptPath $movedScript
+    Assert-Equal -What '-Refresh with nothing registered exits 0' -Expected 0 -Actual $run.ExitCode
+    Assert-True -What '-Refresh with nothing registered registers nothing' `
+        -Condition (-not (Test-KeyExists -SubKey $ProgIdSubKey))
+    Assert-True -What '-Refresh says there is nothing to refresh' -Condition ($run.Output -match 'nothing to refresh')
+    # Back to a fully registered state for the steps that follow.
+    $run = Invoke-RegisterScript -Arguments @() -ScriptPath $packageScript
+    Assert-Equal -What 'registration for the next steps exits 0' -Expected 0 -Actual $run.ExitCode
+
+    # ---------------------------------------------------------------- step 6d
+    Write-Step '6d. mink-path.ps1 adds and removes a folder on the per-user PATH'
+    $pathScript = Join-Path $package 'windows\mink-path.ps1'
+    $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    $pathRaw = [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $pathKind = if ($envKey.GetValueNames() -contains 'Path') { $envKey.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+    $envKey.Dispose()
+    $probeDir = Join-Path $work 'path probe dir'
+    try {
+        $run = Invoke-RegisterScript -Arguments @('-Status', '-Directory', $probeDir) -ScriptPath $pathScript
+        Assert-Equal -What 'the folder is not on PATH to begin with' -Expected 'on_path=false' -Actual $run.Output.Trim()
+        $run = Invoke-RegisterScript -Arguments @('-Add', '-Directory', $probeDir) -ScriptPath $pathScript
+        Assert-Equal -What '-Add exits 0' -Expected 0 -Actual $run.ExitCode
+        $afterAdd = [string][Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        Assert-True -What 'the folder is now the last PATH entry' -Condition ($afterAdd.EndsWith($probeDir))
+        Assert-True -What 'every earlier PATH entry is unchanged' -Condition ($afterAdd.StartsWith($pathRaw))
+        $run = Invoke-RegisterScript -Arguments @('-Add', '-Directory', ($probeDir.ToUpper() + '\')) -ScriptPath $pathScript
+        Assert-True -What 'adding it again (other case, trailing slash) is recognised' -Condition ($run.Output -match 'already on your PATH')
+        $afterSecond = [string][Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        Assert-Equal -What 'the second add changed nothing' -Expected $afterAdd -Actual $afterSecond
+        $run = Invoke-RegisterScript -Arguments @('-Status', '-Directory', $probeDir) -ScriptPath $pathScript
+        Assert-Equal -What '-Status sees it' -Expected 'on_path=true' -Actual $run.Output.Trim()
+        $run = Invoke-RegisterScript -Arguments @('-Remove', '-Directory', $probeDir) -ScriptPath $pathScript
+        Assert-Equal -What '-Remove exits 0' -Expected 0 -Actual $run.ExitCode
+        $afterRemove = [string][Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        Assert-Equal -What 'PATH is exactly what it was before' -Expected $pathRaw.TrimEnd(';') -Actual $afterRemove.TrimEnd(';')
+        $run = Invoke-RegisterScript -Arguments @('-Add', '-Remove', '-Directory', $probeDir) -ScriptPath $pathScript
+        Assert-Equal -What 'asking for two actions at once is refused' -Expected 1 -Actual $run.ExitCode
+    }
+    finally {
+        # Whatever happened, the user's PATH goes back to the exact original text and type.
+        $restore = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+        $restore.SetValue('Path', $pathRaw, $pathKind)
+        $restore.Dispose()
+    }
+    Assert-Equal -What 'the original PATH text and type are restored' -Expected $pathRaw `
+        -Actual ([string][Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))
+
+    # ---------------------------------------------------------------- step 6e
+    Write-Step '6e. mink setup (the real compiler) drives the script'
+    $realMinkForSetup = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'target\debug\mink.exe'
+    if (Test-Path -LiteralPath $realMinkForSetup) {
+        $e2e = Join-Path $work 'setup package'
+        Copy-Item -Path $package -Destination $e2e -Recurse -Force
+        Copy-Item -LiteralPath $realMinkForSetup -Destination (Join-Path $e2e 'bin\mink.exe') -Force
+        $e2eExe = (Resolve-Path -LiteralPath (Join-Path $e2e 'bin\mink.exe')).Path
+        $e2eIcon = (Resolve-Path -LiteralPath (Join-Path $e2e 'bin\mink-file.ico')).Path
+        $null = Invoke-RegisterScript -Arguments @('-Uninstall', '-Quiet') -ScriptPath $packageScript
+
+        $out = & $e2eExe setup --status 2>&1 | Out-String
+        Assert-True -What 'setup --status says not set up' -Condition ($out -match 'not set up')
+
+        $out = & $e2eExe setup --yes --no-path --editor notepad 2>&1 | Out-String
+        Assert-Equal -What 'setup --yes exits 0' -Expected 0 -Actual $LASTEXITCODE
+        Assert-Equal -What 'setup registered .mink' -Expected $ProgId -Actual (Get-KeyValue -SubKey $ExtensionSubKey)
+        Assert-Equal -What 'setup stored the icon of this package' -Expected ('"{0}",0' -f $e2eIcon) `
+            -Actual (Get-KeyValue -SubKey $DefaultIconSubKey)
+        Assert-Equal -What 'the run entry runs this mink.exe' -Expected ('"{0}" shell run "%1"' -f $e2eExe) `
+            -Actual (Get-KeyValue -SubKey "$ShellSubKey\run\command")
+        Assert-Equal -What 'double-click is the safe edit verb' -Expected 'edit' -Actual (Get-KeyValue -SubKey $ShellSubKey)
+
+        $out = & $e2eExe setup --status 2>&1 | Out-String
+        Assert-True -What 'setup --status says set up, with the right-click entries' `
+            -Condition ($out -match '\.mink file type : set up' -and $out -match 'Run, Check, Build, Edit')
+
+        $out = & $e2eExe setup --yes --no-path 2>&1 | Out-String
+        $conflictSnapshot = Get-KeyValue -SubKey $ExtensionSubKey
+        Assert-Equal -What 'running setup again keeps the file type' -Expected $ProgId -Actual $conflictSnapshot
+
+        # --auto refreshes without a word and keeps the choices.
+        $null = Invoke-RegisterScript -Arguments @('-NoNewMenu', '-Verbs', 'run') -ScriptPath (Join-Path $e2e 'windows\register-mink-filetype.ps1')
+        $out = & $e2eExe setup --auto 2>&1 | Out-String
+        Assert-Equal -What 'setup --auto exits 0' -Expected 0 -Actual $LASTEXITCODE
+        Assert-Equal -What 'setup --auto prints nothing' -Expected '' -Actual $out.Trim()
+        Assert-True -What 'setup --auto kept the New menu off' -Condition (-not (Test-KeyExists -SubKey $NewMenuSubKey))
+        Assert-True -What 'setup --auto kept the entries that were off, off' `
+            -Condition (-not (Test-KeyExists -SubKey "$ShellSubKey\check"))
+
+        $out = & $e2eExe setup --remove 2>&1 | Out-String
+        Assert-Equal -What 'setup --remove exits 0' -Expected 0 -Actual $LASTEXITCODE
+        Assert-True -What 'setup --remove left no MINK ProgID' -Condition (-not (Test-KeyExists -SubKey $ProgIdSubKey))
+
+        # --auto never takes .mink over from another program.
+        Set-KeyValue -SubKey $ExtensionSubKey -Name '' -Value 'Contoso.SourceFile'
+        $out = & $e2eExe setup --auto 2>&1 | Out-String
+        Assert-Equal -What 'setup --auto leaves another program''s association' -Expected 'Contoso.SourceFile' `
+            -Actual (Get-KeyValue -SubKey $ExtensionSubKey)
+        $out = & $e2eExe setup --yes --no-path 2>&1 | Out-String
+        Assert-True -What 'setup --yes explains that .mink belongs to another program' -Condition ($out -match 'Contoso\.SourceFile')
+        Assert-Equal -What 'setup --yes left it alone too' -Expected 'Contoso.SourceFile' -Actual (Get-KeyValue -SubKey $ExtensionSubKey)
+        Remove-KeyIfPresent -SubKey $ExtensionSubKey
+        Remove-KeyIfPresent -SubKey $ProgIdSubKey
+        $null = Invoke-RegisterScript -Arguments @() -ScriptPath $packageScript
+    }
+    else { Write-Note 'target\debug\mink.exe not built; the mink setup checks are skipped' }
+
     # ---------------------------------------------------------------- step 7
     Write-Step '7. open behaviour with an editor bound'
     $probeExe = Join-Path $package 'probe-editor.exe'

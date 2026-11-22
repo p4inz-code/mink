@@ -126,58 +126,69 @@ project unless you intend to shadow the bundled module.
 
 ## 5. `.mink` file association
 
-The association is **per-user**, reversible, and does not execute source on
-double-click. The implementation is in a repository checkout only:
+MINK can give `.mink` files their own identity in Windows: the MINK icon at every size,
+right-click entries (Run, Check, Build, Edit), **New > MINK Source File**, preview and search
+support, and a **MINK** entry under Settings > Apps > Default apps. It is **per user**,
+reversible, and double-clicking a `.mink` file opens an editor; it never runs the file.
 
-```text
-npm/mink/windows/register-mink-filetype.ps1
-```
+`.mink` is the only extension MINK registers. `mink.toml` and `mink.lock` are identified by file
+name, so associating them would take over every `.toml` and `.lock` file on the machine.
 
-`.mink` is the only extension MINK registers — `mink.toml` and `mink.lock` are
-identified by file name, so associating them would take over every `.toml` and
-`.lock` file on the machine.
+> The published `1.0.2` and `1.0.4` packages do **not** contain the `windows/` folder or the
+> `setup` command. This section describes the 1.0.5 release. Until it is published, the same thing
+> works from a repository checkout with the script named at the end of this section.
 
-The published `1.0.2` and `1.0.4` packages do **not** contain `windows/`, so this
-step is unavailable from them; the unpublished `1.0.5` candidate in this
-repository does ship it. From a repository checkout:
+### Use `mink setup`
 
 ```powershell
-# Register the .mink extension and icons for the current user.
-powershell -NoProfile -ExecutionPolicy Bypass `
-  -File .\npm\mink\windows\register-mink-filetype.ps1
-
-# Optional: safely open .mink files in an editor instead of executing them.
-powershell -NoProfile -ExecutionPolicy Bypass `
-  -File .\npm\mink\windows\register-mink-filetype.ps1 `
-  -Editor "C:\Program Files\Notepad++\notepad++.exe"
-
-# Remove only the MINK-owned association.
-powershell -NoProfile -ExecutionPolicy Bypass `
-  -File .\npm\mink\windows\register-mink-filetype.ps1 -Uninstall
+mink setup            # asks a few questions
+mink setup --yes      # takes every default without asking
+mink setup --status   # shows what is set up
+mink setup --remove   # takes it all away again
 ```
 
-Safety properties verified by
-`validation/windows_filetype/verify_filetype_association.ps1` (88/88 checks):
+The questions use numbered lists (`1 2 3`, `1-3`, `all`, `none`; Enter keeps the marked ones) and
+`y`/`n` for yes or no. If you install with `npm install -g`, an install step runs
+`mink setup --auto` for you. It asks nothing, keeps the choices of an earlier setup and only
+renews the stored paths. It never takes `.mink` away from another program. Set
+`MINK_SKIP_SETUP=1` before installing to skip it. `mink setup --help` lists every option.
 
-- writes only under `HKCU`; no `HKLM`, no elevation;
-- no default `open` verb is installed unless `-Editor` is supplied;
-- the editor command is `"<editor>" "%1"`, so the file path is quoted;
-- source files are opened in the editor, never compiled or executed;
-- `-Uninstall` removes only values/keys the script created and restores a
-  recorded prior owner;
-- a different existing owner requires `-Force` and is preserved on uninstall;
-- the icon is resolved from the running copy of the script (repository checkout
-  or an installed package that ships `windows/`), never from a drive letter or
-  the current directory, and a missing, empty or malformed ICO makes
-  registration exit 1 without writing anything.
+Things worth knowing:
 
-The registered icon path is absolute and captured at registration time. After
-moving or upgrading the package, run the script again (or `-Uninstall` and
-re-register).
+- Setup writes under `HKCU` only. It needs no administrator rights and leaves `HKLM` alone.
+- If another program already owns `.mink`, setup says so and stops. `--force` takes it over and
+  `--remove` gives it back. That program's own entries are left alone either way.
+- With the right-click entries on, double-click opens Notepad, or the editor you choose. Turn the
+  entries off and Windows asks which app to use the first time. If you have already told Windows
+  which app to use, that choice wins.
+- Setup can add the folder holding `mink.exe` to your own PATH. Open a new terminal afterwards.
+- The icon and the entries store absolute paths. After you move or reinstall MINK, run
+  `mink setup --auto` (or `mink setup`) again.
 
-Do not hand-edit `HKCU\Software\Classes\.mink` or `MINK.SourceFile`. Do not
-associate `.mink` with `mink.exe` directly: the compiler is not an editor and
-a bare association can execute source unexpectedly.
+### What it runs
+
+`mink setup` runs `windows\register-mink-filetype.ps1` from the MINK folder, which you can also run
+yourself. Its switches are documented in `npm/mink/windows/README.md`.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\npm\mink\windows\register-mink-filetype.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\npm\mink\windows\register-mink-filetype.ps1 -Uninstall
+```
+
+The behaviour is checked by `validation/windows_filetype/verify_filetype_association.ps1`
+(191 checks): it builds a throwaway install, registers it, asks Windows itself what it sees,
+opens a real file by double-click, runs a registered right-click command with the real compiler
+and puts your registry back exactly as it found it. Do not hand-edit `HKCU\Software\Classes\.mink`
+or `MINK.SourceFile`, and do not associate `.mink` with `mink.exe` directly: the compiler is not an
+editor, and a bare association can run source unexpectedly.
+
+### Updating
+
+`mink upgrade --check` tells you whether a newer version exists. MINK contacts the network only when
+you run it, and only `api.github.com` and `github.com`. If you installed with npm it prints
+`npm install -g @p4inz-code/mink@latest` for you to run in a new terminal, because Windows will not
+let npm replace the program that is running it. An installer install downloads the new installer,
+checks its SHA-256 against the checksum published beside it, and only then starts it.
 
 ## 6. Troubleshooting
 
@@ -186,8 +197,8 @@ a bare association can execute source unexpectedly.
 | `mink 1.0.2` | Older, unsupported package. Install 1.0.4 from the registry or use the repository build. |
 | `str_trim` prints then exit 106 | Published 1.0.4 has the pre-fix `strings.mink`; use the repository build or wait for the corrected release. |
 | `E-P01` on `mod environment;` | Published 1.0.4 has the old module; use the repository build. |
-| `windows\register-mink-filetype.ps1` not found | You installed from npm 1.0.2 or 1.0.4; those published packages omit `windows/`. Use a repository checkout until a package that ships it is published. |
-| `.mink` files show a generic icon | No association exists, or its `DefaultIcon` points at a package directory that has moved. Re-run `register-mink-filetype.ps1` from the current checkout or package, then refresh the icon cache (see `docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md` §5, §5.2). |
+| `mink setup` says it cannot find `register-mink-filetype.ps1` | The package you installed has no `windows` folder (1.0.2 and 1.0.4 omit it). Install 1.0.5 or later, or use a repository checkout. |
+| `.mink` files show a generic icon | No association exists, or its `DefaultIcon` points at a package directory that has moved. Run `mink setup --auto` (or re-run `register-mink-filetype.ps1`) from the current checkout or package, then refresh the icon cache (see `docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md` §5, §5.2). |
 | `mink` not found | The prefix install does not add itself to `PATH`; invoke the full `bin\mink.exe` path or add its directory deliberately. |
 | Build succeeds but run fails with E-R06 | A `Str` returned by a helper was not freed exactly once. See the ownership cheat sheet in the standard-library reference. |
 

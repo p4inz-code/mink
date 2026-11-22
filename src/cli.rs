@@ -35,6 +35,13 @@ Commands:
   shell <run|check|build> <path>
                   Run one of those commands and keep the console open until
                   Enter is pressed (the Explorer right-click entries use this)
+  setup [options] Set up .mink files in Windows (icon, right-click entries,
+                  New menu, preview) and your PATH. It asks questions;
+                  --yes takes the defaults, --status shows the state, --remove
+                  undoes it, --help lists every option
+  upgrade [--check] [--yes] [--to <version>]
+                  Look for a newer MINK on GitHub and, for an installer install,
+                  download it, verify its checksum and run it
   resource <exe> [--icon <file.ico>] [--product <name>] [--version <x.y.z>]
            [--description <text>] [--company <name>] [--copyright <text>]
                   Add an icon and version information to a Windows executable
@@ -113,6 +120,14 @@ enum Command {
     },
     /// `mink resource <exe> ...`: add an icon and version information.
     Resource(ResourceArgs),
+    /// `mink upgrade ...`: look for a newer MINK.
+    Upgrade {
+        args: Vec<String>,
+    },
+    /// `mink setup ...`: set up Windows file associations from the command line.
+    Setup {
+        args: Vec<String>,
+    },
     /// `mink shell <run|check|build> <path>`: run a command, then wait for Enter.
     Shell {
         verb: String,
@@ -267,6 +282,8 @@ pub fn main(args: &[String]) -> ExitCode {
         }
         Ok(Command::Shell { verb, path }) => run_shell_command(&verb, &path),
         Ok(Command::Resource(args)) => run_resource_command(&args),
+        Ok(Command::Setup { args }) => crate::setup::main(&args),
+        Ok(Command::Upgrade { args }) => crate::upgrade::main(&args),
         Ok(Command::Explain { code: None }) => {
             // No code given: list all documented error codes.
             let mut codes = crate::diagnostics::all_codes();
@@ -926,6 +943,12 @@ fn parse(args: &[String]) -> Result<Command, String> {
         "run" => parse_run(&args[1..]),
         "shell" => parse_shell(&args[1..]),
         "resource" => parse_resource(&args[1..]),
+        "upgrade" => Ok(Command::Upgrade {
+            args: args[1..].to_vec(),
+        }),
+        "setup" => Ok(Command::Setup {
+            args: args[1..].to_vec(),
+        }),
         "repl" => parse_repl(&args[1..]),
         "test" => parse_build(&args[1..], "test").map(|cmd| match cmd {
             Command::Build { path, target, .. } => Command::Test { path, target },

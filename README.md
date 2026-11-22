@@ -123,8 +123,9 @@ account only and needs no administrator rights. The same script adds:
 
 Double-clicking a `.mink` file opens it in an editor (Notepad, or the one you choose). It never
 compiles or runs the file; only the right-click entries you pick do that. Another program that
-already owns `.mink` is left alone unless you pass `-Force`. The 1.0.5 sprint extends the script,
-and the unreleased installer and `mink setup` command will run it for you.
+already owns `.mink` is left alone unless you pass `-Force`. In 1.0.5 you do not have to run the
+script yourself: `mink setup` asks a few questions and runs it, and `npm install -g` will run
+`mink setup --auto` for you. (Neither exists in the published 1.0.4.)
 
 **The published 1.0.4 package does not include this kit** — its 28 files are the compiler
 binary, `stdlib/`, `package.json` and `LICENSE`, with no `windows/` directory. The 1.0.5
@@ -269,6 +270,8 @@ executed evidence and the exact claim boundary.
 | `mink explain <code>` | Explain an error code (e.g., `mink explain E-T01`) |
 | `mink version` | Print the compiler version |
 | `mink shell <run\|check\|build> <file>` | Run one of those and keep the console open until Enter; the Explorer right-click entries use it |
+| `mink setup` | Set up `.mink` files in Windows (icon, right-click entries, New menu, preview) and your PATH. It asks questions; `--yes` takes the defaults, `--status` shows the state, `--remove` undoes it |
+| `mink upgrade` | Check GitHub for a newer MINK (`--check`), and for an installer install download, verify and run it |
 | `mink resource <exe> --icon <ico> ...` | Add an icon and version information to a Windows executable that has none |
 | `mink help` | Show usage information |
 | `mink explain` | With no code, list all documented error codes |
@@ -366,6 +369,12 @@ and is still unpublished:
   project the name and version come from `mink.toml`. `--icon` and `--no-icon` change it, and
   `mink resource` does the same for an executable that has none, which is how `mink.exe` gets its
   icon without a resource compiler. It costs about 19 KB per program.
+- **`mink setup` and `mink upgrade`** (1.0.5 sprint, M5) — `mink setup` is a small question-and-answer
+  wizard for the Windows integration (numbered lists such as `1 2 3`, and y/n questions), with
+  `--yes`, `--status` and `--remove`. `npm install -g` runs `mink setup --auto`, which asks nothing,
+  keeps your earlier choices and never takes `.mink` from another program. It can also put MINK on
+  your PATH. `mink upgrade` checks GitHub only when you run it, and for an installer install
+  verifies the download's SHA-256 before starting it. The association test is now 191 checks.
 - **A clearer error when a local file hides a bundled module** — a leftover `json.mink`
   next to your program is loaded instead of the bundled `json` module, as it always was. When
   that breaks the build, the compiler now says which file it loaded, where the bundled one is,

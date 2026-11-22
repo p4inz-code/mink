@@ -206,6 +206,17 @@ fn m6_rc_package_manifest_is_complete() {
         );
     }
 
+    // The install step that sets up the .mink file type must be wired in, and the
+    // script it runs must be published.
+    assert!(
+        manifest.contains("\"postinstall\": \"node scripts/postinstall.js\""),
+        "package.json does not run scripts/postinstall.js after install"
+    );
+    assert!(
+        manifest.contains("\"scripts/postinstall.js\""),
+        "package.json `files` does not publish scripts/postinstall.js"
+    );
+
     // The license must travel with the artifact.
     assert!(
         pkg_dir.join("LICENSE").exists(),
@@ -225,6 +236,8 @@ fn m6_rc_package_manifest_is_complete() {
         "windows/mink-app.ico",
         "windows/mink.rc",
         "windows/template.mink",
+        "windows/mink-path.ps1",
+        "scripts/postinstall.js",
     ] {
         assert!(
             pkg_dir.join(asset).exists(),
@@ -1204,4 +1217,41 @@ fn main() -> Int {
     return 0;
 }"#;
     assert_exit_code(src, 42);
+}
+
+// =========================================================================
+// The npm install step (1.0.5 sprint, M5)
+// =========================================================================
+
+/// Runs `npm/mink/scripts/postinstall.js` with the given environment, when Node
+/// is installed (the project's own packaging needs it, but a plain `cargo
+/// test` machine may not have it).
+fn run_postinstall(envs: &[(&str, &str)]) -> Option<std::process::Output> {
+    let mut command = Command::new("node");
+    command.arg("npm/mink/scripts/postinstall.js");
+    command.env_remove("npm_config_global").env_remove("MINK_SKIP_SETUP");
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    command.output().ok()
+}
+
+#[test]
+fn postinstall_never_fails_an_install() {
+    // A local install, a skipped install and a global install each exit 0 and print
+    // nothing. The global case runs the packaged compiler's `setup --auto`, which
+    // must not be allowed to register anything from a test, so it is skipped with
+    // MINK_SKIP_SETUP and the real call is covered by the association validator.
+    for envs in [
+        vec![],
+        vec![("npm_config_global", "true"), ("MINK_SKIP_SETUP", "1")],
+        vec![("npm_config_global", "false")],
+    ] {
+        let Some(output) = run_postinstall(&envs) else {
+            eprintln!("node is not installed; skipping the postinstall check");
+            return;
+        };
+        assert_eq!(output.status.code(), Some(0), "envs: {envs:?}");
+        assert!(output.stdout.is_empty() && output.stderr.is_empty(), "envs: {envs:?}");
+    }
 }
