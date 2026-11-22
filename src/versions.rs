@@ -91,6 +91,12 @@ pub fn dispatch(args: &[String]) -> Option<ExitCode> {
         );
         return Some(ExitCode::from(1));
     };
+    if !engine::is_version_name(&version) {
+        eprintln!(
+            "mink: error: '{version}' (from {source}) is not a version name. Use something like 1.0.5."
+        );
+        return Some(ExitCode::from(1));
+    }
     let target = layout.version_dir(&version).join("bin").join("mink.exe");
     if !target.is_file() {
         let installed = engine::list_versions(&layout);
@@ -106,7 +112,14 @@ pub fn dispatch(args: &[String]) -> Option<ExitCode> {
         .env(ENV_DISPATCHED, "1")
         .status();
     Some(match status {
-        Ok(status) => ExitCode::from(status.code().unwrap_or(1).clamp(0, 255) as u8),
+        // Windows exit codes are 32 bits wide, but a process exit status here is one byte. A crash
+        // (for example 0xC0000005) would be cut to 255 and could even wrap to 0, so anything above
+        // 255 is reported as 255 rather than losing the fact that it failed.
+        Ok(status) => ExitCode::from(match status.code() {
+            Some(0) => 0,
+            Some(code) if (1..=255).contains(&code) => code as u8,
+            _ => 255,
+        }),
         Err(error) => {
             eprintln!("mink: error: cannot start '{}': {error}", target.display());
             ExitCode::from(1)

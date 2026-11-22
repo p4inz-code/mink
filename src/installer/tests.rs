@@ -731,3 +731,33 @@ fn tokens_differ_between_calls() {
     assert_ne!(a, b);
     assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
 }
+
+#[test]
+fn version_names_cannot_leave_the_versions_folder() {
+    use crate::installer::engine::is_version_name;
+    for good in ["1.0.5", "1.0.5-beta.1", "2.0.0+build_7", "v1"] {
+        assert!(is_version_name(good), "{good}");
+    }
+    for bad in ["", ".", "..", "..\\..\\evil", "../x", "a\\b", "C:\\x", ".hidden", "1.0 5", "a;b", &"9".repeat(65)] {
+        assert!(!is_version_name(bad), "{bad:?} must be refused");
+    }
+}
+
+#[test]
+fn a_manifest_with_an_unsafe_version_is_refused() {
+    let digest = "0".repeat(64);
+    let text = format!("mink-payload 1\nversion ..\\..\\evil\n{digest} 1 a.txt\n");
+    let err = crate::installer::manifest::Manifest::parse(&text).unwrap_err();
+    assert!(err.contains("unsafe version"), "{err}");
+}
+
+#[test]
+fn a_hostile_version_file_never_reaches_the_launcher_path() {
+    use crate::installer::engine::{default_version, Layout};
+    let dir = std::env::temp_dir().join(format!("mink_hostile_ver_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("default-version.txt"), "..\\..\\evil\n").unwrap();
+    assert_eq!(default_version(&Layout::new(&dir)), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}

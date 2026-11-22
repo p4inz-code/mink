@@ -39,7 +39,8 @@ impl Layout {
         self.root.join("versions")
     }
 
-    /// `versions\<version>`.
+    /// `versions\<version>`. The name must pass [`is_version_name`], or the path stays inside
+    /// `versions\` only by luck; callers that take a name from outside check it first.
     pub fn version_dir(&self, version: &str) -> PathBuf {
         self.versions_dir().join(version)
     }
@@ -68,6 +69,17 @@ impl Layout {
     pub fn default_path(&self) -> PathBuf {
         self.root.join("default-version.txt")
     }
+}
+
+/// Whether `name` is safe to use as a folder name under `versions\`: letters, digits and `.`, `-`,
+/// `_`, `+`, no separators, not starting with a dot. A version named by a project file or an
+/// environment variable is checked with this before it is turned into a path, so a hostile
+/// `.mink-version` cannot point the launcher at a program outside the install.
+pub fn is_version_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('.')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
 }
 
 /// What the user chose to set up besides the files.
@@ -474,6 +486,9 @@ pub fn list_versions(layout: &Layout) -> Vec<String> {
 pub fn default_version(layout: &Layout) -> Option<String> {
     let text = fs::read_to_string(layout.default_path()).ok()?;
     let version = text.trim().to_string();
+    if !is_version_name(&version) {
+        return None;
+    }
     layout
         .version_dir(&version)
         .join("bin")
@@ -484,6 +499,9 @@ pub fn default_version(layout: &Layout) -> Option<String> {
 
 /// Makes `version` the one the launcher runs.
 pub fn set_default(layout: &Layout, version: &str) -> Result<(), InstallError> {
+    if !is_version_name(version) {
+        return Err(InstallError::Folder(format!("'{version}' is not a version name")));
+    }
     if !layout.version_dir(version).join("bin").join("mink.exe").is_file() {
         return Err(InstallError::Folder(format!(
             "MINK {version} is not installed (installed: {})",

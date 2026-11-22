@@ -65,6 +65,11 @@ impl Manifest {
             .filter(|v| !v.is_empty())
             .ok_or("the payload manifest has no version line")?
             .to_string();
+        if !super::engine::is_version_name(&version) {
+            return Err(format!("the payload manifest names an unsafe version '{version}'"));
+        }
+        let version = version
+            .to_string();
         let mut files = Vec::new();
         for (number, line) in lines.enumerate() {
             if line.is_empty() {

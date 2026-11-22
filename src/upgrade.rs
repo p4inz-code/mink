@@ -409,7 +409,12 @@ fn install(
         say(console, &format!("mink: error: cannot create '{}': {error}\n", context.work_dir.display()));
         return exit::FAILED;
     }
-    let target = context.work_dir.join(&installer.name);
+    // The name comes from the release; keep only its last part so it cannot name another folder.
+    let Some(file_name) = Path::new(&installer.name).file_name().map(|n| n.to_os_string()) else {
+        say(console, "mink: error: the installer has no usable file name\n");
+        return exit::FAILED;
+    };
+    let target = context.work_dir.join(file_name);
     say(console, &format!("Downloading {} ...\n", installer.name));
     if let Err(why) = fetcher.download(&installer.url, &target) {
         let _ = std::fs::remove_file(&target);
