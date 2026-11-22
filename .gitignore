@@ -26,3 +26,5 @@ examples/*/main.exe
 /dist/
 /packaging/winget/*/
 /testapps/*/main.exe
+/testapps/bench/out/
+/testapps/bench/mink/*.exe

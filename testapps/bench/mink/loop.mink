@@ -1,0 +1,10 @@
+fn main() -> Int {
+    let mut s = 0;
+    let mut i = 0;
+    while i < 30000000 {
+        s = s + i * i % 7;
+        i = i + 1;
+    }
+    rt_print_int(s);
+    return 0;
+}

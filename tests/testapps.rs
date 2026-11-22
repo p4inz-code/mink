@@ -370,3 +370,21 @@ fn snake_autopilot_is_deterministic_obeys_the_rules_and_ends_cleanly() {
     assert_eq!(run(&exe, &["--nonsense"]).0, 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn bench_programs_build_and_print_the_known_answers() {
+    let expected = [("fib", "2178309"), ("loop", "59999997"), ("sieve", "148933"), ("collatz", "77031 350")];
+    for (name, answer) in expected {
+        let dir = std::env::temp_dir().join(format!("mink_bench_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("main.mink");
+        std::fs::copy(repo().join("testapps").join("bench").join("mink").join(format!("{name}.mink")), &src).unwrap();
+        let built = Command::new(env!("CARGO_BIN_EXE_mink")).arg("build").arg(&src).output().unwrap();
+        assert!(built.status.success(), "{name}: {}", String::from_utf8_lossy(&built.stderr));
+        let (code, out) = run(&dir.join("main.exe"), &[]);
+        assert_eq!(code, 0, "{name} ends cleanly with no leaks");
+        assert_eq!(out.split_whitespace().collect::<Vec<_>>().join(" "), answer, "{name}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

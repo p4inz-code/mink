@@ -1,0 +1,25 @@
+fn main() -> Int {
+    let mut best = 0;
+    let mut best_start = 0;
+    let mut start = 1;
+    while start < 100000 {
+        let mut n = start;
+        let mut steps = 0;
+        while n != 1 {
+            if n % 2 == 0 {
+                n = n / 2;
+            } else {
+                n = 3 * n + 1;
+            }
+            steps = steps + 1;
+        }
+        if steps > best {
+            best = steps;
+            best_start = start;
+        }
+        start = start + 1;
+    }
+    rt_print_int(best_start);
+    rt_print_int(best);
+    return 0;
+}

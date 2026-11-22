@@ -1,0 +1,31 @@
+fn main() -> Int {
+    let n = 2000000;
+    let flags = rt_alloc((n + 1) * 8);
+    let mut i = 0;
+    while i <= n {
+        rt_mem_store(flags + i * 8, 1);
+        i = i + 1;
+    }
+    let mut p = 2;
+    while p * p <= n {
+        if rt_mem_load(flags + p * 8) == 1 {
+            let mut m = p * p;
+            while m <= n {
+                rt_mem_store(flags + m * 8, 0);
+                m = m + p;
+            }
+        }
+        p = p + 1;
+    }
+    let mut count = 0;
+    i = 2;
+    while i <= n {
+        if rt_mem_load(flags + i * 8) == 1 {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    rt_print_int(count);
+    rt_free(flags);
+    return 0;
+}

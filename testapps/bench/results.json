@@ -1,0 +1,29 @@
+{
+  "info": {
+    "cpu": "Intel(R) Core(TM) i9-14900K",
+    "os": "Windows-10-10.0.26200-SP0",
+    "mink": "mink 1.0.5",
+    "python": "Python 3.11.9",
+    "go": "go version go1.26.7 windows/amd64",
+    "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "runs": 7
+  },
+  "median_ms": {
+    "MINK/fib": 14.0,
+    "Python/fib": 192.7,
+    "Go/fib": 11.1,
+    "Rust/fib": 6.8,
+    "MINK/loop": 55.2,
+    "Python/loop": 2136.5,
+    "Go/loop": 19.5,
+    "Rust/loop": 19.2,
+    "MINK/sieve": 56.4,
+    "Python/sieve": 368.7,
+    "Go/sieve": 14.5,
+    "Rust/sieve": 13.1,
+    "MINK/collatz": 60.6,
+    "Python/collatz": 762.8,
+    "Go/collatz": 18.9,
+    "Rust/collatz": 12.2
+  }
+}
