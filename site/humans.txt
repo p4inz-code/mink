@@ -1,5 +1,6 @@
 MINK
 Created by Atharva Patil
+Portfolio: https://atharvapatil.tech
 Studio: P4inz Interactive Labs
 License: Apache-2.0
 Site: hand-written HTML and CSS, no trackers, no cookies, no third-party requests

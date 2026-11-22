@@ -1,0 +1,645 @@
+// mdgen: turns a Markdown document into an HTML fragment, and lists its headings for a search index.
+//
+//   mink build testapps/mdgen/main.mink
+//   mdgen <input.md> <output.html> <index-file> <doc-id>
+//
+// Supported Markdown: headings, paragraphs, bullet and numbered lists, fenced code blocks, tables,
+// block quotes, horizontal rules, and inline `code`, **bold**, *italic* and [links](url). Anything else
+// is shown as plain text, with & < > escaped. Every heading gets an id (the GitHub style slug), and one JSON
+// object per heading is appended to <index-file> as {"d":doc,"t":title,"a":slug,"l":level},
+// which the website's search reads. This program builds the MINK documentation pages.
+//
+// Everything works on arenas of integers (one byte per word) because a pointer argument is not moved by a
+// call, while every string argument is (see docs/testing/FRICTION_LOG.md, entry 17).
+//
+// State arena words: 0 output length, 1 output capacity, 2 index length, 3 index capacity, 4 error,
+//   10 in code block, 11 code is MINK, 12 list kind (0 none, 1 bullets, 2 numbers), 13 list item open,
+//   14 table state (0 none, 1 header seen, 2 body), 15 quote open, 16 paragraph open,
+//   99 length of the document id, 100.. the document id.
+mod strings;
+
+fn get(a: Ptr<Int>, i: Int) -> Int {
+    return rt_mem_load(a + i * 8);
+}
+
+fn put(a: Ptr<Int>, i: Int, v: Int) {
+    rt_mem_store(a + i * 8, v);
+}
+
+// Appends one byte to the output.
+fn ob(st: Ptr<Int>, out: Ptr<Int>, b: Int) {
+    let p = get(st, 0);
+    if p >= get(st, 1) {
+        put(st, 4, 1);
+        return;
+    }
+    put(out, p, b);
+    put(st, 0, p + 1);
+}
+
+// Appends a fixed piece of text to the output.
+fn ol(st: Ptr<Int>, out: Ptr<Int>, s: Str) {
+    let n = rt_str_len(s);
+    let mut i = 0;
+    while i < n {
+        ob(st, out, rt_str_byte(s, i));
+        i = i + 1;
+    }
+}
+
+// Appends the bytes src[from, to), escaping & < > (and the quote character when `quote` is 1).
+fn osrc(st: Ptr<Int>, out: Ptr<Int>, src: Ptr<Int>, from: Int, to: Int, quote: Int) {
+    let mut i = from;
+    while i < to {
+        let c = get(src, i);
+        if c == 38 {
+            ol(st, out, "&amp;");
+        } else if c == 60 {
+            ol(st, out, "&lt;");
+        } else if c == 62 {
+            ol(st, out, "&gt;");
+        } else if c == 34 && quote == 1 {
+            ol(st, out, "&quot;");
+        } else {
+            ob(st, out, c);
+        }
+        i = i + 1;
+    }
+}
+
+// Appends one byte to the heading index.
+fn ib(st: Ptr<Int>, idx: Ptr<Int>, b: Int) {
+    let p = get(st, 2);
+    if p >= get(st, 3) {
+        return;
+    }
+    put(idx, p, b);
+    put(st, 2, p + 1);
+}
+
+fn il(st: Ptr<Int>, idx: Ptr<Int>, s: Str) {
+    let n = rt_str_len(s);
+    let mut i = 0;
+    while i < n {
+        ib(st, idx, rt_str_byte(s, i));
+        i = i + 1;
+    }
+}
+
+// Whether src[from, to) contains `byte` at some position from `start`. Returns the position, or -1.
+fn find_byte(src: Ptr<Int>, start: Int, to: Int, byte: Int) -> Int {
+    let mut i = start;
+    while i < to {
+        if get(src, i) == byte {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// The position of the next "**" at or after `start`, or -1.
+fn find_double_star(src: Ptr<Int>, start: Int, to: Int) -> Int {
+    let mut i = start;
+    while i + 1 < to {
+        if get(src, i) == 42 && get(src, i + 1) == 42 {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// A single * that closes an italic span: not part of **, and not after a space.
+fn find_single_star(src: Ptr<Int>, start: Int, to: Int) -> Int {
+    let mut i = start;
+    while i < to {
+        if get(src, i) == 42 {
+            if i + 1 < to && get(src, i + 1) == 42 {
+                i = i + 2;
+            } else if i > start && get(src, i - 1) != 32 {
+                return i;
+            } else {
+                i = i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    return -1;
+}
+
+// Converts src[from, to) as running text: `code`, **bold**, *italic*, [links](url).
+fn inline(st: Ptr<Int>, out: Ptr<Int>, src: Ptr<Int>, from: Int, to: Int) {
+    let mut i = from;
+    let mut strong = false;
+    let mut em = false;
+    while i < to {
+        let c = get(src, i);
+        let next = 0;
+        let mut nx = next;
+        if i + 1 < to {
+            nx = get(src, i + 1);
+        }
+        if c == 92 && nx == 124 {
+            ob(st, out, 124);
+            i = i + 2;
+        } else if c == 96 {
+            let close = find_byte(src, i + 1, to, 96);
+            if close > i {
+                ol(st, out, "<code>");
+                osrc(st, out, src, i + 1, close, 0);
+                ol(st, out, "</code>");
+                i = close + 1;
+            } else {
+                ob(st, out, 96);
+                i = i + 1;
+            }
+        } else if c == 42 && nx == 42 {
+            if strong {
+                ol(st, out, "</strong>");
+                strong = false;
+                i = i + 2;
+            } else if find_double_star(src, i + 2, to) > 0 {
+                ol(st, out, "<strong>");
+                strong = true;
+                i = i + 2;
+            } else {
+                ol(st, out, "**");
+                i = i + 2;
+            }
+        } else if c == 42 && nx != 32 && nx != 0 {
+            if em {
+                ol(st, out, "</em>");
+                em = false;
+                i = i + 1;
+            } else if find_single_star(src, i + 1, to) > 0 {
+                ol(st, out, "<em>");
+                em = true;
+                i = i + 1;
+            } else {
+                ob(st, out, 42);
+                i = i + 1;
+            }
+        } else if c == 42 && em && i > from && get(src, i - 1) != 32 {
+            ol(st, out, "</em>");
+            em = false;
+            i = i + 1;
+        } else if c == 91 {
+            let close = find_byte(src, i + 1, to, 93);
+            let mut done = false;
+            if close > 0 && close + 1 < to && get(src, close + 1) == 40 {
+                let end = find_byte(src, close + 2, to, 41);
+                if end > 0 {
+                    ol(st, out, "<a href=\"");
+                    osrc(st, out, src, close + 2, end, 1);
+                    ol(st, out, "\">");
+                    inline(st, out, src, i + 1, close);
+                    ol(st, out, "</a>");
+                    i = end + 1;
+                    done = true;
+                }
+            }
+            if !done {
+                ob(st, out, 91);
+                i = i + 1;
+            }
+        } else {
+            osrc(st, out, src, i, i + 1, 0);
+            i = i + 1;
+        }
+    }
+    if strong {
+        ol(st, out, "</strong>");
+    }
+    if em {
+        ol(st, out, "</em>");
+    }
+}
+
+fn close_para(st: Ptr<Int>, out: Ptr<Int>) {
+    if get(st, 16) == 1 {
+        ol(st, out, "</p>\n");
+        put(st, 16, 0);
+    }
+}
+
+fn close_list(st: Ptr<Int>, out: Ptr<Int>) {
+    if get(st, 13) == 1 {
+        ol(st, out, "</li>\n");
+        put(st, 13, 0);
+    }
+    if get(st, 12) == 1 {
+        ol(st, out, "</ul>\n");
+    }
+    if get(st, 12) == 2 {
+        ol(st, out, "</ol>\n");
+    }
+    put(st, 12, 0);
+}
+
+fn close_table(st: Ptr<Int>, out: Ptr<Int>) {
+    if get(st, 14) == 1 {
+        ol(st, out, "</tr></thead></table></div>\n");
+    }
+    if get(st, 14) == 2 {
+        ol(st, out, "</tbody></table></div>\n");
+    }
+    put(st, 14, 0);
+}
+
+fn close_quote(st: Ptr<Int>, out: Ptr<Int>) {
+    if get(st, 15) == 1 {
+        ol(st, out, "</blockquote>\n");
+        put(st, 15, 0);
+    }
+}
+
+fn close_blocks(st: Ptr<Int>, out: Ptr<Int>) {
+    close_para(st, out);
+    close_list(st, out);
+    close_table(st, out);
+    close_quote(st, out);
+}
+
+// Whether the line [s, e) is only | - : and spaces, with at least one dash (a table separator row).
+fn is_separator(src: Ptr<Int>, s: Int, e: Int) -> Bool {
+    let mut dash = false;
+    let mut i = s;
+    while i < e {
+        let c = get(src, i);
+        if c == 45 {
+            dash = true;
+        } else if c != 124 && c != 58 && c != 32 {
+            return false;
+        }
+        i = i + 1;
+    }
+    return dash;
+}
+
+// Writes the cells of a table row as <th> or <td>.
+fn table_row(st: Ptr<Int>, out: Ptr<Int>, src: Ptr<Int>, s: Int, e: Int, head: Bool) {
+    let mut a = s;
+    let mut b = e;
+    while a < b && get(src, a) == 32 {
+        a = a + 1;
+    }
+    while b > a && get(src, b - 1) == 32 {
+        b = b - 1;
+    }
+    if a < b && get(src, a) == 124 {
+        a = a + 1;
+    }
+    if b > a && get(src, b - 1) == 124 && !(b - 2 >= a && get(src, b - 2) == 92) {
+        b = b - 1;
+    }
+    let mut start = a;
+    let mut i = a;
+    while i <= b {
+        let at_end = i == b;
+        if at_end || (get(src, i) == 124 && !(i > a && get(src, i - 1) == 92)) {
+            let mut cs = start;
+            let mut ce = i;
+            while cs < ce && get(src, cs) == 32 {
+                cs = cs + 1;
+            }
+            while ce > cs && get(src, ce - 1) == 32 {
+                ce = ce - 1;
+            }
+            if head {
+                ol(st, out, "<th>");
+            } else {
+                ol(st, out, "<td>");
+            }
+            inline(st, out, src, cs, ce);
+            if head {
+                ol(st, out, "</th>");
+            } else {
+                ol(st, out, "</td>");
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+}
+
+// Writes a heading's id: lowercase letters and digits, spaces and hyphens as hyphens.
+fn slug(st: Ptr<Int>, out: Ptr<Int>, src: Ptr<Int>, from: Int, to: Int) {
+    let mut i = from;
+    while i < to {
+        let c = get(src, i);
+        if c >= 65 && c <= 90 {
+            ob(st, out, c + 32);
+        } else if (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 {
+            ob(st, out, c);
+        } else if c == 32 || c == 45 {
+            ob(st, out, 45);
+        }
+        i = i + 1;
+    }
+}
+
+fn main() -> Int {
+    if rt_argc() < 4 {
+        rt_print_str("usage: mdgen <input.md> <output.html> <index-file> <doc-id>");
+        return 2;
+    }
+    let in_path = rt_argv(0);
+    let out_path = rt_argv(1);
+    let idx_path = rt_argv(2);
+    let doc = rt_argv(3);
+    if !rt_fs_exists(in_path) {
+        rt_print_str("mdgen: no such file");
+        rt_str_free(in_path);
+        rt_str_free(out_path);
+        rt_str_free(idx_path);
+        rt_str_free(doc);
+        return 2;
+    }
+    let text = rt_fs_read(in_path);
+    rt_str_free(in_path);
+    let n = rt_str_len(text);
+    let src = rt_alloc((n + 8) * 8);
+    let mut k = 0;
+    while k < n {
+        put(src, k, rt_str_byte(text, k));
+        k = k + 1;
+    }
+    rt_str_free(text);
+    let out_cap = n * 12 + 200000;
+    let out = rt_alloc(out_cap * 8);
+    let idx_cap = 400000;
+    let idx = rt_alloc(idx_cap * 8);
+    let st = rt_alloc(256 * 8);
+    let mut z = 0;
+    while z < 256 {
+        put(st, z, 0);
+        z = z + 1;
+    }
+    put(st, 1, out_cap);
+    put(st, 3, idx_cap);
+    let dl = rt_str_len(doc);
+    put(st, 99, dl);
+    let mut d = 0;
+    while d < dl && d < 120 {
+        put(st, 100 + d, rt_str_byte(doc, d));
+        d = d + 1;
+    }
+    rt_str_free(doc);
+
+    let mut i = 0;
+    while i <= n {
+        let mut e = i;
+        while e < n && get(src, e) != 10 {
+            e = e + 1;
+        }
+        let mut le = e;
+        if le > i && get(src, le - 1) == 13 {
+            le = le - 1;
+        }
+        let mut s = i;
+        while s < le && (get(src, s) == 32 || get(src, s) == 9) {
+            s = s + 1;
+        }
+        let indent = s - i;
+        let c0 = get(src, s);
+        let c1 = get(src, s + 1);
+        let c2 = get(src, s + 2);
+        if get(st, 10) == 1 {
+            if c0 == 96 && c1 == 96 && c2 == 96 {
+                ol(st, out, "</pre></div>\n");
+                put(st, 10, 0);
+            } else {
+                osrc(st, out, src, i, le, 0);
+                ob(st, out, 10);
+            }
+        } else if s < le && c0 == 96 && c1 == 96 && c2 == 96 {
+            close_blocks(st, out);
+            let lang_start = s + 3;
+            let is_mink = le - lang_start >= 4 && get(src, lang_start) == 109 && get(src, lang_start + 1) == 105 && get(src, lang_start + 2) == 110 && get(src, lang_start + 3) == 107;
+            if is_mink {
+                ol(st, out, "<div class=\"card has-copy\"><pre class=\"code\">");
+            } else {
+                ol(st, out, "<div class=\"card has-copy\"><pre class=\"plain\">");
+            }
+            put(st, 10, 1);
+        } else if s >= le {
+            close_blocks(st, out);
+        } else if c0 == 35 && indent == 0 {
+            let mut level = 0;
+            while get(src, s + level) == 35 {
+                level = level + 1;
+            }
+            if level <= 6 && get(src, s + level) == 32 {
+                close_blocks(st, out);
+                let mut ts = s + level + 1;
+                while ts < le && get(src, ts) == 32 {
+                    ts = ts + 1;
+                }
+                ol(st, out, "<h");
+                ob(st, out, 48 + level);
+                ol(st, out, " id=\"");
+                slug(st, out, src, ts, le);
+                ol(st, out, "\">");
+                inline(st, out, src, ts, le);
+                ol(st, out, "</h");
+                ob(st, out, 48 + level);
+                ol(st, out, ">\n");
+                // One entry in the search index.
+                il(st, idx, "{\"d\":\"");
+                let mut q = 0;
+                while q < get(st, 99) {
+                    ib(st, idx, get(st, 100 + q));
+                    q = q + 1;
+                }
+                il(st, idx, "\",\"t\":\"");
+                let mut t = ts;
+                while t < le {
+                    let ch = get(src, t);
+                    if ch == 34 || ch == 92 {
+                        ib(st, idx, 92);
+                        ib(st, idx, ch);
+                    } else if ch != 96 && ch != 42 {
+                        ib(st, idx, ch);
+                    }
+                    t = t + 1;
+                }
+                il(st, idx, "\",\"a\":\"");
+                // The same slug, written to the index.
+                let mut u = ts;
+                while u < le {
+                    let ch = get(src, u);
+                    if ch >= 65 && ch <= 90 {
+                        ib(st, idx, ch + 32);
+                    } else if (ch >= 97 && ch <= 122) || (ch >= 48 && ch <= 57) || ch == 95 {
+                        ib(st, idx, ch);
+                    } else if ch == 32 || ch == 45 {
+                        ib(st, idx, 45);
+                    }
+                    u = u + 1;
+                }
+                il(st, idx, "\",\"l\":");
+                ib(st, idx, 48 + level);
+                il(st, idx, "},");
+            } else {
+                // Not a heading: running text.
+                if get(st, 16) == 0 {
+                    close_list(st, out);
+                    close_table(st, out);
+                    close_quote(st, out);
+                    ol(st, out, "<p>");
+                    put(st, 16, 1);
+                } else {
+                    ob(st, out, 32);
+                }
+                inline(st, out, src, s, le);
+            }
+        } else if c0 == 124 {
+            close_para(st, out);
+            close_list(st, out);
+            close_quote(st, out);
+            if get(st, 14) == 0 {
+                ol(st, out, "<div class=\"tablewrap\"><table><thead><tr>");
+                table_row(st, out, src, s, le, true);
+                put(st, 14, 1);
+            } else if get(st, 14) == 1 && is_separator(src, s, le) {
+                ol(st, out, "</tr></thead><tbody>\n");
+                put(st, 14, 2);
+            } else {
+                if get(st, 14) == 1 {
+                    ol(st, out, "</tr></thead><tbody>\n");
+                    put(st, 14, 2);
+                }
+                ol(st, out, "<tr>");
+                table_row(st, out, src, s, le, false);
+                ol(st, out, "</tr>\n");
+            }
+        } else if c0 == 62 && indent == 0 {
+            close_para(st, out);
+            close_list(st, out);
+            close_table(st, out);
+            if get(st, 15) == 0 {
+                ol(st, out, "<blockquote>");
+                put(st, 15, 1);
+            }
+            let mut qs = s + 1;
+            if get(src, qs) == 32 {
+                qs = qs + 1;
+            }
+            ol(st, out, "<p>");
+            inline(st, out, src, qs, le);
+            ol(st, out, "</p>\n");
+        } else if (c0 == 45 || c0 == 42) && c1 == 32 && indent < 2 {
+            close_para(st, out);
+            close_table(st, out);
+            close_quote(st, out);
+            if get(st, 12) != 1 {
+                close_list(st, out);
+                ol(st, out, "<ul>\n");
+                put(st, 12, 1);
+            }
+            if get(st, 13) == 1 {
+                ol(st, out, "</li>\n");
+            }
+            ol(st, out, "<li>");
+            put(st, 13, 1);
+            inline(st, out, src, s + 2, le);
+        } else if c0 >= 48 && c0 <= 57 && indent < 2 && (c1 == 46 || (c1 >= 48 && c1 <= 57 && c2 == 46)) {
+            close_para(st, out);
+            close_table(st, out);
+            close_quote(st, out);
+            if get(st, 12) != 2 {
+                close_list(st, out);
+                ol(st, out, "<ol>\n");
+                put(st, 12, 2);
+            }
+            if get(st, 13) == 1 {
+                ol(st, out, "</li>\n");
+            }
+            ol(st, out, "<li>");
+            put(st, 13, 1);
+            let mut ns = s;
+            while ns < le && get(src, ns) != 32 {
+                ns = ns + 1;
+            }
+            inline(st, out, src, ns + 1, le);
+        } else if (c0 == 45 && c1 == 45 && c2 == 45) || (c0 == 42 && c1 == 42 && c2 == 42) {
+            close_blocks(st, out);
+            ol(st, out, "<hr>\n");
+        } else if indent >= 2 && get(st, 13) == 1 {
+            // A continuation of the list item above.
+            ob(st, out, 32);
+            inline(st, out, src, s, le);
+        } else {
+            if get(st, 16) == 0 {
+                close_list(st, out);
+                close_table(st, out);
+                close_quote(st, out);
+                ol(st, out, "<p>");
+                put(st, 16, 1);
+            } else {
+                ob(st, out, 32);
+            }
+            inline(st, out, src, s, le);
+        }
+        i = e + 1;
+    }
+    close_blocks(st, out);
+    if get(st, 10) == 1 {
+        ol(st, out, "</pre></div>\n");
+    }
+
+    if get(st, 4) != 0 {
+        rt_print_str("mdgen: the output was too large");
+        rt_free(src);
+        rt_free(out);
+        rt_free(idx);
+        rt_free(st);
+        rt_str_free(out_path);
+        rt_str_free(idx_path);
+        return 1;
+    }
+    // The page fragment.
+    let olen = get(st, 0);
+    let html = rt_str_alloc(olen);
+    let mut w = 0;
+    while w < olen {
+        rt_str_set_byte(html, w, get(out, w));
+        w = w + 1;
+    }
+    let written = rt_fs_write(out_path, html);
+    rt_str_free(html);
+    // The index: appended to what is already in the file.
+    let ilen = get(st, 2);
+    let mut code = 0;
+    if ilen > 0 {
+        let piece = rt_str_alloc(ilen);
+        let mut x = 0;
+        while x < ilen {
+            rt_str_set_byte(piece, x, get(idx, x));
+            x = x + 1;
+        }
+        let mut before = "";
+        if rt_fs_exists(idx_path) {
+            before = rt_fs_read(idx_path);
+        }
+        let all = rt_str_concat(before, piece);
+        rt_str_free(before);
+        rt_str_free(piece);
+        rt_fs_write(idx_path, all);
+        rt_str_free(all);
+    }
+    if written < 0 {
+        code = 1;
+    }
+    rt_print_str("mdgen: bytes written:");
+    rt_print_int(written);
+    rt_free(src);
+    rt_free(out);
+    rt_free(idx);
+    rt_free(st);
+    rt_str_free(out_path);
+    rt_str_free(idx_path);
+    return code;
+}
