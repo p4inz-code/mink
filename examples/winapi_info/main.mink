@@ -1,0 +1,25 @@
+// Talking to Windows: ask user32 for the screen size and kernel32 for uptime.
+fn main() -> Int {
+    let user = rt_sys_load_lib("user32.dll");
+    let kern = rt_sys_load_lib("kernel32.dll");
+    if user == 0 || kern == 0 {
+        rt_print_str("could not load system libraries");
+        return 1;
+    }
+    let metrics = rt_sys_get_proc(user, "GetSystemMetrics");
+    // argv must hold at least four words, even for a call that takes fewer.
+    let args = rt_alloc(32);
+    rt_mem_store(args, 0);
+    let width = rt_sys_call(metrics, args, 1);
+    rt_mem_store(args, 1);
+    let height = rt_sys_call(metrics, args, 1);
+    rt_print_str("screen:");
+    rt_print_int(width);
+    rt_print_int(height);
+    let tick = rt_sys_get_proc(kern, "GetTickCount64");
+    let up = rt_sys_call(tick, args, 0);
+    rt_print_str("uptime seconds:");
+    rt_print_int(up / 1000);
+    rt_free(args);
+    return 0;
+}

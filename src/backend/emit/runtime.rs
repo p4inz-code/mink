@@ -11743,9 +11743,9 @@ fn emit_sys_call(code: &mut Code, _offsets: &RuntimeOffsets) {
     code.mov_r_mem(Reg::R11, Reg::Rbp, 24);
     code.mov_mem_r(Reg::Rbp, -16, Reg::R11); // argv
 
-    // Zero arguments is a no-op: report "no call" rather than jumping through
-    // a function pointer with stale registers.  More than twelve arguments is
-    // rejected (no caller needs a wider signature) and also reported as 0.
+    // More than twelve arguments is rejected (no caller needs a wider signature) and reported
+    // as 0. Zero arguments is a real call: GetLastError, GetTickCount64, GetCurrentProcessId and
+    // many other Win32 entry points take none, and the callee simply ignores the registers.
     code.mov_r_mem(Reg::R12, Reg::Rbp, 32); // nargs
     code.cmp_r_imm32(Reg::R12, 12);
     let arity_ok = code.label();
@@ -11753,12 +11753,13 @@ fn emit_sys_call(code: &mut Code, _offsets: &RuntimeOffsets) {
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
     code.bind_label(arity_ok);
-    code.test_rr(Reg::R12, Reg::R12);
-    let do_call = code.label();
-    code.jcc_label(0x85, do_call); // jnz -> at least one argument
+    // A null function pointer (a GetProcAddress that failed) reports 0 instead of crashing.
+    code.test_rr(Reg::R10, Reg::R10);
+    let have_fn = code.label();
+    code.jcc_label(0x85, have_fn); // jnz -> a real address
     code.xor_rr32(Reg::Rax, Reg::Rax);
     code.leave_ret();
-    code.bind_label(do_call);
+    code.bind_label(have_fn);
 
     // Force a 16-byte stack boundary so the callee sees the alignment the
     // Win64 ABI promises.  `leave` restores RSP from RBP, so the pre-`and`

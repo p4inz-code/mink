@@ -2,7 +2,15 @@
 
 All notable changes to MINK. The newest release is first.
 
-## 1.0.5 (in progress)
+## 1.0.6 (next)
+
+### Fixed
+- Calls into Windows with no arguments (`GetTickCount64`, `GetCurrentProcessId`, `GetLastError` and others) through `rt_sys_call` always returned 0. They now make the call. A function that could not be found returns 0 instead of crashing.
+
+### Added
+- Four examples: `json_config`, `web_loopback`, `winapi_info`, `hash_and_compress`, and a field check of what MINK can build in `docs/language/WHAT_YOU_CAN_BUILD.md`.
+
+## 1.0.5
 
 ### Added
 - **Windows file association.** `.mink` files get an icon and a name, right-click Run, Check, Build and

@@ -1,0 +1,13 @@
+// Security and storage: a SHA-256 digest (printed as hex) and the size of a compressed buffer.
+mod hashing;
+mod zlib;
+
+fn main() -> Int {
+    let hex = hash_sha256("mink");
+    rt_print_str(hex);
+    rt_str_free(hex);
+    let packed = zlib_compress("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 6);
+    rt_print_int(rt_str_len(packed));
+    rt_str_free(packed);
+    return 0;
+}

@@ -1,0 +1,44 @@
+// A tiny web service on this PC: a server thread answers one request, the main thread asks it.
+mod network;
+mod http;
+mod httpserver;
+mod threads;
+
+fn serve_one(arg: Ptr<Int>) -> Int {
+    let sock = rt_mem_load(arg);
+    let got = http_server_serve_default(sock);
+    if got.0 == -1 {
+        rt_str_free(got.1);
+        return 1;
+    }
+    let copy = http_server_request_copy(got.1);
+    let path = http_server_path(copy);
+    rt_print_str(path);
+    rt_str_free(path);
+    http_server_respond_ok(got.0, "hello from mink");
+    net_close(got.0);
+    return 0;
+}
+
+fn main() -> Int {
+    net_init();
+    let sock = http_server_listen("127.0.0.1", 18080);
+    if sock < 0 {
+        rt_print_str("listen failed");
+        return 1;
+    }
+    let arg = rt_alloc(8);
+    rt_mem_store(arg, sock);
+    let t = thread_spawn(serve_one, arg);
+    let response = http_client_get_with("127.0.0.1", 18080, "/hello");
+    let dup = rt_str_concat(response, "");
+    let body = http_body(dup);
+    rt_print_int(http_status_code(response));
+    rt_print_str(body);
+    rt_str_free(body);
+    thread_join(t);
+    http_server_close(sock);
+    rt_free(arg);
+    net_cleanup();
+    return 0;
+}

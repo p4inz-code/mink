@@ -1,0 +1,20 @@
+// Configuration: read a JSON document and print what it says.
+mod json;
+
+fn main() -> Int {
+    let arena = rt_alloc(65536);
+    let v = json_parse("{\"name\":\"mink\",\"workers\":4,\"debug\":true}", arena);
+    if v == 0 {
+        rt_print_str("bad json");
+        return 1;
+    }
+    let name = json_as_str(arena, json_obj_get_val(arena, v, 0));
+    rt_print_str(name);
+    rt_str_free(name);
+    rt_print_int(json_as_int(arena, json_obj_get_val(arena, v, 1)));
+    let out = json_to_str(arena, v);
+    rt_print_str(out);
+    rt_str_free(out);
+    rt_free(arena);
+    return 0;
+}
