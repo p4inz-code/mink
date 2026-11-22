@@ -147,8 +147,13 @@ impl FileIndex {
 
     /// The identifier token under (or just before) `offset`.
     pub fn ident_at(&self, offset: usize) -> Option<usize> {
-        let i = self.token_at(offset)?;
-        (self.tokens[i].kind == TokenKind::Ident).then_some(i)
+        if let Some(i) = self.token_at(offset) {
+            if self.tokens[i].kind == TokenKind::Ident {
+                return Some(i);
+            }
+        }
+        // Right after a word, as when the cursor sits at the end of `foo` in `foo(`.
+        self.tokens.iter().position(|t| t.kind == TokenKind::Ident && t.end == offset)
     }
 
     fn scan(&mut self, text: &str) {
@@ -378,7 +383,7 @@ impl FileIndex {
                             .map_or(self.tokens[n].end, |e| self.tokens[e].start);
                         // A binding is in scope after its own statement ends.
                         let decl_end = self.find_at_depth0(n + 1, &[TokenKind::Semi]).map_or(self.tokens[n].end, |s| self.tokens[s].end);
-                        if decl_end <= offset || self.tokens[n].end <= offset {
+                        if decl_end <= offset || (self.tokens[n].start <= offset && offset <= self.tokens[n].end) {
                             found.push(self.local_symbol(text, SymKind::Variable, n, k, header_end));
                         }
                     }

@@ -34,6 +34,7 @@ pub mod formatter;
 pub mod installer;
 pub mod hir;
 pub mod lexer;
+pub mod lsp;
 pub mod mir;
 pub mod module;
 /// Monomorphization: creates concrete copies of generic functions.

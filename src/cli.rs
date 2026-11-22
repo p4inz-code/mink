@@ -39,6 +39,7 @@ Commands:
                   New menu, preview) and your PATH. It asks questions;
                   --yes takes the defaults, --status shows the state, --remove
                   undoes it, --help lists every option
+  lsp                      run the language server for editors (talks over stdin/stdout)
   fmt [--check] [--diff] [--stdin] <path ...>
                   Format MINK source into one canonical layout. It never
                   changes what a program says, and refuses to write if its
@@ -129,6 +130,10 @@ enum Command {
     },
     /// `mink resource <exe> ...`: add an icon and version information.
     Resource(ResourceArgs),
+    /// `mink lsp`: the language server, speaking over stdin and stdout.
+    Lsp {
+        args: Vec<String>,
+    },
     /// `mink fmt ...`: format source.
     Fmt {
         args: Vec<String>,
@@ -312,6 +317,7 @@ pub fn main(args: &[String]) -> ExitCode {
         Ok(Command::Upgrade { args }) => crate::upgrade::main(&args),
         Ok(Command::Installer { args }) => crate::installer::main(&args),
         Ok(Command::Fmt { args }) => crate::formatter::main(&args),
+        Ok(Command::Lsp { args }) => crate::lsp::main(&args),
         Ok(Command::Versions { args, choose }) => crate::versions::main(&args, choose),
         Ok(Command::Explain { code: None }) => {
             // No code given: list all documented error codes.
@@ -972,6 +978,9 @@ fn parse(args: &[String]) -> Result<Command, String> {
         "run" => parse_run(&args[1..]),
         "shell" => parse_shell(&args[1..]),
         "resource" => parse_resource(&args[1..]),
+        "lsp" => Ok(Command::Lsp {
+            args: args[1..].to_vec(),
+        }),
         "fmt" => Ok(Command::Fmt {
             args: args[1..].to_vec(),
         }),

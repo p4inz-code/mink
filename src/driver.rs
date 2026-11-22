@@ -1057,6 +1057,13 @@ fn bundled_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// Where `mod name;` would load from for a file in `parent_dir`, if such a file exists. Editors
+/// use this to offer names from modules even when the program does not compile yet.
+pub fn locate_module(name: &str, parent_dir: &Path) -> Option<PathBuf> {
+    let found = resolve_module(name, parent_dir, &[]).path;
+    found.exists().then_some(found)
+}
+
 /// The first module file for `name` inside one search root, if any.
 fn find_in_root(root: &Path, name: &str) -> Option<PathBuf> {
     let candidate = root.join(format!("{name}.mink"));

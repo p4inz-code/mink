@@ -396,7 +396,7 @@ fn completion_after_a_module_path_lists_that_modules_members() {
 fn completion_after_an_enum_name_and_double_colon_lists_its_variants() {
     let mut p = Project::new("complete_enum");
     p.open("a.mink", "enum Color { Red, Green }\nfn main() {\n    let c = Color::\n}\n");
-    let result = p.result("textDocument/completion", "a.mink", 2, 18);
+    let result = p.result("textDocument/completion", "a.mink", 2, 19);
     let labels: Vec<String> = match result.get("items") {
         Some(Value::List(items)) => items.iter().map(|i| s(i.get("label"))).collect(),
         other => panic!("{other:?}"),

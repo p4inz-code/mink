@@ -12,7 +12,7 @@
 //! declared by its parent) may show errors that disappear when the parent is checked.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -306,6 +306,14 @@ impl Server {
         let Some(uri) = text_of(params, &["textDocument", "uri"]) else {
             return vec![error_response(id, METHOD_NOT_FOUND, &format!("unsupported request {method}"))];
         };
+        const SUPPORTED: [&str; 9] = [
+            "textDocument/completion", "textDocument/hover", "textDocument/definition", "textDocument/references",
+            "textDocument/prepareRename", "textDocument/rename", "textDocument/signatureHelp",
+            "textDocument/documentSymbol", "textDocument/formatting",
+        ];
+        if !SUPPORTED.contains(&method) {
+            return vec![error_response(id, METHOD_NOT_FOUND, &format!("unsupported request {method}"))];
+        }
         // Make sure there is a fresh analysis to answer from.
         if !self.analyses.contains_key(uri) {
             let _ = self.check(uri);
@@ -441,7 +449,9 @@ pub fn read_message(reader: &mut impl BufRead) -> Option<Result<Value, String>> 
             length = value.trim().parse().ok();
         }
     }
-    let length = length?;
+    let Some(length) = length else {
+        return Some(Err("the message has no Content-Length header".to_string()));
+    };
     // A hostile or broken client must not make the server allocate without limit.
     if length > 64 * 1024 * 1024 {
         return Some(Err("message too large".to_string()));

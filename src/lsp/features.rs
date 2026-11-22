@@ -254,6 +254,12 @@ fn reference_sites(analysis: &Analysis, file: &AnalyzedFile, token: usize) -> Op
                             continue;
                         }
                     }
+                    // `name:` in a struct literal or a parameter list labels a field or a parameter,
+                    // not the declaration being looked up.
+                    let is_declaration = owner.uri == f.uri && symbol.name_start == t.start;
+                    if !is_declaration && f.index.tokens.get(k + 1).is_some_and(|n| n.kind == TokenKind::Colon) {
+                        continue;
+                    }
                     // Field declarations and variants of other owners are not this name.
                     if f.index.symbols.iter().any(|s| s.name_start == t.start && matches!(s.kind, SymKind::Field | SymKind::Variant) && !std::ptr::eq(*symbol, s)) {
                         continue;

@@ -271,6 +271,7 @@ executed evidence and the exact claim boundary.
 | `mink version` | Print the compiler version |
 | `mink shell <run\|check\|build> <file>` | Run one of those and keep the console open until Enter; the Explorer right-click entries use it |
 | `mink setup` | Set up `.mink` files in Windows (icon, right-click entries, New menu, preview) and your PATH. It asks questions; `--yes` takes the defaults, `--status` shows the state, `--remove` undoes it |
+| `mink lsp` | Run the language server over stdin and stdout. Editors start it themselves; see [`docs/toolchain/LANGUAGE_SERVER.md`](docs/toolchain/LANGUAGE_SERVER.md) |
 | `mink fmt [path]` | Format `.mink` source into one layout (`--check` for CI, `--diff`, `--stdin` for editors). It never changes what a program says: only white space moves, and it refuses to write if its own result does not match the input token for token |
 | `mink versions`, `mink use <version>` | List the installed versions of MINK and choose which one runs by default (installer installs; a `.mink-version` file pins a project) |
 | `mink installer` | Install or remove MINK for the current user. The setup file runs this; `--help` lists the switches |
@@ -378,6 +379,12 @@ and is still unpublished:
   keeps your earlier choices and never takes `.mink` from another program. It can also put MINK on
   your PATH. `mink upgrade` checks GitHub only when you run it, and for an installer install
   verifies the download's SHA-256 before starting it. The association test is now 191 checks.
+- **`mink lsp`, a language server** (1.0.5 sprint, M8) — any editor that speaks the Language Server
+  Protocol can now show MINK errors as you type, with completion, hover, go to definition, find
+  references, rename, outline, signature help and format on save. Errors come from the real compiler, run on
+  your unsaved text. Positions are UTF-16, so accented letters and emoji do not shift anything. Rename
+  refuses names that are reserved, taken, built in or from the standard library. See
+  [`docs/toolchain/LANGUAGE_SERVER.md`](docs/toolchain/LANGUAGE_SERVER.md).
 - **`mink fmt`** (1.0.5 sprint, M7) — one layout for MINK source, with no settings. It only moves white
   space and checks its own output against the input token by token and comment by comment, so a format
   can never change what a program does. Guard clauses like `if n < 0 { return 0; }` stay on one line;

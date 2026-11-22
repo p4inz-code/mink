@@ -77,7 +77,12 @@ impl<'a> Lines<'a> {
             if units >= position.character {
                 return start + index;
             }
-            units += c.len_utf16() as u32;
+            let next = units + c.len_utf16() as u32;
+            if next > position.character {
+                // A column inside a surrogate pair lands on the character's start.
+                return start + index;
+            }
+            units = next;
         }
         start + line_text.len()
     }

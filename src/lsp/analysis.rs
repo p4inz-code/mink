@@ -186,6 +186,38 @@ pub fn analyze(
         analysis.files.push(AnalyzedFile { uri, path, text, index });
     }
 
+    // A file that does not parse stops the compiler before it loads its modules. Editors still
+    // want those modules' names, so find the ones the compiler never reached.
+    let mut at = 0;
+    while at < analysis.files.len() {
+        let wanted: Vec<(String, PathBuf)> = {
+            let f = &analysis.files[at];
+            let dir = f.path.parent().map(Path::to_path_buf).unwrap_or_default();
+            f.index
+                .symbols
+                .iter()
+                .filter(|s| s.kind == crate::lsp::scan::SymKind::Module)
+                .map(|s| (s.name.clone(), dir.clone()))
+                .collect()
+        };
+        for (name, dir) in wanted {
+            let known = analysis.files.iter().any(|f| {
+                f.path.file_stem().is_some_and(|s| s.to_string_lossy() == name)
+                    || (f.path.file_name().is_some_and(|n| n == "mod.mink")
+                        && f.path.parent().and_then(|p| p.file_name()).is_some_and(|d| d.to_string_lossy() == name))
+            });
+            if known || analysis.files.len() > 64 {
+                continue;
+            }
+            let Some(path) = driver::locate_module(&name, &dir) else { continue };
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let (text, index) = cache.get(&path, &text);
+            let uri = uri_of(&path);
+            analysis.files.push(AnalyzedFile { uri, path, text, index });
+        }
+        at += 1;
+    }
+
     for error in &errors {
         let span = error.span();
         let Some(file) = sources.get(span.file()) else { continue };
