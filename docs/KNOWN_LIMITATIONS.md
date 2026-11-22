@@ -21,7 +21,7 @@ machine. Each line says whether it is fixed, planned or accepted.
 |---|---|---|
 | P1 | Windows 10 and newer only. Linux is frozen. | By design. |
 | P2 | The installer and `mink.exe` are unsigned for now. Windows SmartScreen may warn on first run. Signing is coming. | Planned. |
-| P3 | Setup uses a local window in Microsoft Edge. If Edge is missing it prints a local address to open instead. | Accepted. |
+| P3 | Setup uses a local window in Microsoft Edge, so its title bar and border are Edge's. If Edge is missing it prints a local address to open instead. | Planned: [`implementation/SETUP_WINDOW_PLAN.md`](implementation/SETUP_WINDOW_PLAN.md). |
 
 ## Editor tooling
 
