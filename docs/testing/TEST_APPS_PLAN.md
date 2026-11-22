@@ -1,76 +1,80 @@
-# Test apps plan
+# Test apps plan (twelve small apps)
 
-**Status:** Plan, for the owner to approve. Nothing here is built yet.
+**Status:** Plan, second version, for the owner to approve. Nothing here is built yet.
 
-## Why
+## The idea
 
-A field check of 1.0.5 showed that small programs work and found one real bug. Small programs hide the
-problems that show up when code gets bigger: ownership rules across many functions, module layout,
-speed, memory, and missing library pieces. So we build real, medium-sized apps, one per area MINK says
-it is for, and write down everything that gets in the way.
+Twelve small apps. Each one is something a person would actually want, small enough to read in one
+sitting, and each one tests a part of MINK that matters. Together they are the first things we show people:
+one `.exe`, no runtime to install, starts instantly.
 
-## How each app is run
+Every app also has to work as a test. It ends with exit code 0 and no leak report, it has tests, and
+every problem it exposes goes into [`FRICTION_LOG.md`](FRICTION_LOG.md).
 
-- Lives in `testapps/<name>/` with its own README: what it does, how to run it, results.
-- Built and run with the installed release build, not a development build.
-- Must end with exit code 0 and no `E-R06` leak report.
-- Has tests (`mink test`) for its main logic.
-- Every problem goes in one list, [`FRICTION_LOG.md`](FRICTION_LOG.md), with: what happened, the smallest
-  program that shows it, and whether it is a bug, a missing feature or a rough edge.
-- A real bug gets a regression test and a fix on the `next-1.0.6` branch.
+## What "frontend", "mobile" and "app" mean here
+
+MINK compiles to native Windows programs. It does not compile to JavaScript or WebAssembly and it does
+not run in a browser, and there is no Android or iOS target. So:
+
+- **Backend:** MINK programs that serve HTTP, talk to a database, use sockets.
+- **Frontend:** a web page (HTML, CSS, JavaScript) that a MINK program serves, builds or embeds in its own
+  `.exe`. MINK is the server and the build tool. The page runs in the browser.
+- **Web development:** tools that make and serve websites.
+- **App development:** native Windows programs: a window, and a full-screen console program.
+- **CLI:** command-line tools.
+- **Mobile:** not possible with MINK today. We say so plainly.
+
+## The twelve
+
+| # | App | What it is | Area | What it tests in MINK | What people will see |
+|---|---|---|---|---|---|
+| 1 | **serve** | Static file server for a folder, like `python -m http.server` but one small `.exe` | Backend, web | HTTP server, file reading, content types, threads | Starts in milliseconds, serves a site from a single command |
+| 2 | **todo** | A full web app in one `.exe`: REST API, SQLite and a single-page front end embedded in the program | Backend and frontend | HTTP server, SQLite, JSON, embedding files, routing | Run one file, open the browser, a working app |
+| 3 | **sitegen** | Static site generator: Markdown and templates in, a folder of HTML out | Web, frontend | Text processing, files, templates, strings | Builds a 100-page site in well under a second |
+| 4 | **jsonq** | A `jq`-style JSON query tool for the command line | CLI | JSON, parsing, arguments, big input | `curl ... | jsonq .items[0].name` in one small `.exe` |
+| 5 | **fgrep** | Fast text search across a folder, with regular expressions and colour | CLI | Regex, directory walking, threads, large files | A speed number next to `findstr` |
+| 6 | **dupfind** | Finds duplicate files by size and SHA-256 | CLI, filesystem | Hashing, directory walking, memory on large trees | Scans a big folder and prints what can be deleted |
+| 7 | **paste** | A tiny pastebin and link shortener service | Backend | HTTP, SQLite, request parsing, IDs, limits | A service a person can run for a team in one command |
+| 8 | **livelog** | Streams a log file to a web page live, as lines are written | Backend and frontend | Server-sent events, long connections, file following, threads | A browser page updating in real time |
+| 9 | **mini** | A small expression language with a REPL | Language tooling | Structs, enums, `match`, recursion, ownership across many functions | Shows MINK can write a language |
+| 10 | **widget** | A real Windows window: a clock or sticky note | App | Calling Win32, window and message loop, callbacks | A native window from a 100 KB program |
+| 11 | **snake** | A terminal game with keyboard input and a game loop | App | Console input and output, timing, random numbers | The thing people share to show off a new language |
+| 12 | **bench** | A speed suite: the same work in MINK, Python and C | Evidence | Compiler output, runtime speed, memory | A table of real timings, including where MINK loses |
+
+### Coverage
+
+| Area | Apps |
+|---|---|
+| Backend | 1, 2, 7, 8 |
+| Frontend (served by MINK) | 2, 3, 8 |
+| Web development | 1, 3 |
+| App development | 10, 11 |
+| CLI | 4, 5, 6, 9 |
+| Evidence and speed | 12 |
+
+## Order
+
+1. **Risky first.** App 10 depends on whether MINK can hand Windows a callback for a window, and apps 2
+   and 8 depend on how files get embedded and how long connections behave. We try those first with a
+   throw-away spike each, and change the plan if the answer is no.
+2. **Then the quick wins.** 4, 5, 6 and 1 are mostly standard library and make the first demo.
+3. **Then the full-stack apps.** 2, 7, 8, then 3.
+4. **Then the showpieces.** 9 and 11.
+5. **Last, 12**, using the finished apps as the workload where it makes sense.
+
+## Rules for every app
+
+- Folder `testapps/<name>/` with a README: what it does, how to run it, results.
+- Built and run with the installed release build.
+- Exit code 0, no `E-R06` leak report, tests with `mink test`.
+- Numbers recorded: lines of code, compile time, `.exe` size, run time on a fixed input, peak memory.
+- Anything that goes wrong is logged; real bugs get a regression test and a fix on `next-1.0.6`.
 - Builds and runs go through `tools/dev_guard.ps1` to stay inside the machine-heat limit.
-
-## The apps
-
-Ordered by risk, lowest first.
-
-### Tier 1: quick, mostly the standard library
-
-| # | App | What it is | Areas it covers | Done when |
-|---|---|---|---|---|
-| 1 | **logscan** | Command-line log analyser: reads a large log, counts levels, finds the top error messages, writes a report as text, CSV or JSON | CLI arguments, big files, strings, regex, maps, sorting, CSV and JSON output | Handles a 100 MB log without running out of memory; output checked against a Python script |
-| 2 | **calc** | Expression language with a REPL: tokenizer, parser, evaluator, variables, functions | Structs, enums, `match`, recursion, ownership across many functions, tests | 20 or more expressions pass; syntax errors give clear messages |
-| 3 | **backup** | Folder backup tool: walks a folder, hashes files, compresses changed ones into a zip, skips unchanged ones | Filesystem, directory walking, SHA-256, zlib and zip, timing | Second run on an unchanged folder copies nothing; archive opens in Windows Explorer |
-
-### Tier 2: several parts working together
-
-| # | App | What it is | Areas it covers | Done when |
-|---|---|---|---|---|
-| 4 | **notes** | Notes web service: add, list and delete notes over HTTP, stored in SQLite, answers in JSON | HTTP server, SQLite, JSON, threads, request parsing, a client for its own tests | 1,000 requests from a test client with no crash, no leak and correct data |
-| 5 | **taskrun** | Task runner: reads a JSON file of tasks and dependencies, runs them as processes in parallel, reports time and failures | Processes and pipes, environment, threads, JSON, error handling | A 10-task graph runs in dependency order; a failing task stops its dependents |
-| 6 | **chat** | TCP chat server and client with several clients at once | Sockets, concurrency, locks, timeouts, closing cleanly | 20 clients exchange messages with none lost; shutting down leaves no open sockets |
-
-### Tier 3: measurement and ecosystem
-
-| # | App | What it is | Areas it covers | Done when |
-|---|---|---|---|---|
-| 7 | **bench** | Speed suite: loops, sorting, hashing, string building, collections, with the same work written in Python and C | Compiler output quality, runtime speed and memory | A table of real timings. Any claim of "faster than X" has a number behind it, and "slower" is recorded too |
-| 8 | **pkgdemo** | Two small packages and an app that installs and uses them | `mink install`, `mod` lookup, name clashes, shadowing diagnostics, package layout | Install, update and remove work; a clash is reported clearly |
-
-### Spikes: find out first, then decide
-
-| Spike | Question | Result decides |
-|---|---|---|
-| **Window** | Can a MINK program create a real Windows window with its own message loop, meaning can MINK hand Windows a callback? | Whether desktop apps are possible now, or need runtime work |
-| **HTTPS** | Does a fresh program reach a real HTTPS site using the standard library's TLS? | Whether web clients work outside the local machine |
-| **Big data** | How does MINK behave with a 1 GB file and with millions of small allocations? | Memory limits to document |
-
-## What we measure for every app
-
-Lines of code, time to compile, size of the `.exe`, run time on a fixed input, peak memory, and the
-number of times a compiler message was unclear. These go in the app's README, so the numbers are not
-guessed.
-
-## Order of work
-
-1. Spikes first, because they can change what the later apps are.
-2. Tier 1, then Tier 2, then Tier 3.
-3. After each app: update the friction log, fix what is a bug, and decide what to change in the
-   language or library.
+- App text and READMEs are written in plain language.
 
 ## Decisions needed from the owner
 
-1. Is this the right list, and anything to add, drop or move?
-2. Where should apps live: this repository under `testapps/`, or a separate repository?
-3. Should real bugs found this way be fixed straight away on `next-1.0.6`, or only logged until the
-   round is finished?
+1. Is this the right twelve? Tell me what to swap.
+2. Should the apps live in this repository under `testapps/`, or in their own repository so people can
+   find and star them?
+3. Fix bugs straight away on `next-1.0.6`, or log them all and fix after the round?
