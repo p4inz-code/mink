@@ -379,6 +379,9 @@ and is still unpublished:
   keeps your earlier choices and never takes `.mink` from another program. It can also put MINK on
   your PATH. `mink upgrade` checks GitHub only when you run it, and for an installer install
   verifies the download's SHA-256 before starting it. The association test is now 191 checks.
+- **Release files** (1.0.5 sprint, M11) — `tools/build_installer.ps1` builds the setup file, the portable zip and
+  their checksums; `tools/make_winget_manifest.ps1` writes the winget files from the setup file's hash. The steps
+  are in [`docs/RELEASE_1_0_5.md`](docs/RELEASE_1_0_5.md). The files are unsigned for now.
 - **Project papers** (1.0.5 sprint, M10) — [`docs/WHY_MINK.md`](docs/WHY_MINK.md) says why MINK exists and
   what it does not claim. [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md) lists what does not work
   yet. [`CHANGELOG.md`](CHANGELOG.md), [`SECURITY.md`](SECURITY.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md)

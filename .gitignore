@@ -21,3 +21,7 @@ examples/*/main.exe
 # VS Code extension build output
 /editors/vscode/node_modules/
 /editors/vscode/*.vsix
+
+# Generated release files
+/dist/
+/packaging/winget/*/
