@@ -3,11 +3,11 @@
    window, a stats strip, a four-up feature row, "three steps", a comparison table, and an honest "what it
    does not do". The logo is always flat. Fonts are bundled; nothing loads from another site.
    Layouts: phone (under 640px), tablet (640 to 1099px) and desktop. */
-@font-face { font-family: "Atkinson"; font-weight: 400; src: url(fonts/AtkinsonHyperlegibleNext-Regular.ttf) format("truetype"); font-display: swap; }
-@font-face { font-family: "Atkinson"; font-weight: 500; src: url(fonts/AtkinsonHyperlegibleNext-Medium.ttf) format("truetype"); font-display: swap; }
-@font-face { font-family: "Atkinson"; font-weight: 600; src: url(fonts/AtkinsonHyperlegibleNext-SemiBold.ttf) format("truetype"); font-display: swap; }
-@font-face { font-family: "Atkinson"; font-weight: 700; src: url(fonts/AtkinsonHyperlegibleNext-Bold.ttf) format("truetype"); font-display: swap; }
-@font-face { font-family: "Familjen"; font-weight: 400 700; src: url(fonts/FamiljenGroteskwght.ttf) format("truetype"); font-display: swap; }
+@font-face { font-family: "Atkinson"; font-weight: 400; src: url(fonts/AtkinsonHyperlegibleNext-Regular.woff2) format("woff2"); font-display: swap; }
+@font-face { font-family: "Atkinson"; font-weight: 500; src: url(fonts/AtkinsonHyperlegibleNext-Medium.woff2) format("woff2"); font-display: swap; }
+@font-face { font-family: "Atkinson"; font-weight: 600; src: url(fonts/AtkinsonHyperlegibleNext-SemiBold.woff2) format("woff2"); font-display: swap; }
+@font-face { font-family: "Atkinson"; font-weight: 700; src: url(fonts/AtkinsonHyperlegibleNext-Bold.woff2) format("woff2"); font-display: swap; }
+@font-face { font-family: "Familjen"; font-weight: 400 700; src: url(fonts/FamiljenGroteskwght.woff2) format("woff2"); font-display: swap; }
 @font-face { font-family: "Plex Mono"; font-weight: 400; src: url(fonts/ibm-plex-mono-latin-400-normal.woff2) format("woff2"); font-display: swap; }
 @font-face { font-family: "Plex Mono"; font-weight: 500; src: url(fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2"); font-display: swap; }
 
@@ -220,3 +220,31 @@ body::before { content: ""; position: fixed; inset: 0; z-index: 0; pointer-event
 main, footer { position: relative; z-index: 1; }
 .stats { background: rgba(255,255,255,.012); }
 @media (max-width: 899px) { body::before { background-position: center 62%; background-size: min(130vw, 720px); opacity: .05; } }
+
+/* copy buttons and the terminal replay */
+.has-copy { position: relative; }
+.copy, .replay { font: 500 12px/1 var(--mono); letter-spacing: .04em; color: var(--muted); background: rgba(0,0,0,.6); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 10px; cursor: pointer; transition: color .18s ease, border-color .18s ease, background-color .18s ease; }
+.copy { position: absolute; top: 46px; right: 12px; z-index: 2; opacity: 0; }
+.dlcard .copy, .dlcard.has-copy .copy { top: 20px; right: 20px; }
+.has-copy:hover .copy, .copy:focus-visible { opacity: 1; }
+@media (hover: none) { .copy { opacity: 1; } }
+.copy:hover, .replay:hover { color: #fff; border-color: #fff; }
+.replay { margin-left: auto; margin-right: 12px; padding: 5px 9px; }
+.window .bar { gap: 8px; }
+
+/* long-form pages */
+.prose { max-width: 800px; }
+.prose h2 { margin-top: 56px; }
+.prose h2:first-child { margin-top: 0; }
+.prose p { color: var(--muted); margin: 14px 0; }
+.prose .card { margin: 16px 0; }
+.prose a { color: #fff; }
+pre.plain { margin: 0; padding: 20px 22px; font-size: 14.5px; line-height: 1.6; overflow: auto; color: #e8e9ed; scrollbar-width: thin; scrollbar-color: #2e2f35 transparent; }
+.bench { margin-top: 36px; display: grid; gap: 26px; }
+.bench .row h3 { font: 500 17px/1.4 var(--body); color: #fff; margin: 0 0 12px; }
+.bench .line { display: grid; grid-template-columns: 76px minmax(0, 1fr) 84px; align-items: center; gap: 14px; margin: 7px 0; font: 500 14px var(--mono); color: var(--muted); }
+.bench .track { height: 14px; border-radius: 7px; background: rgba(255,255,255,.06); overflow: hidden; }
+.bench .fill { display: block; height: 100%; border-radius: 7px; background: linear-gradient(90deg, #5a5c64, #d8d9de); }
+.bench .mink .fill { background: var(--metal); }
+.bench .mink { color: #fff; }
+.bench .ms { text-align: right; }

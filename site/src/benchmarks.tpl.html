@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Benchmarks | MINK</title>
+<meta name="description" content="MINK against Python, Go and Rust on four small programs. Real numbers from one PC, with the method.">
+<meta name="theme-color" content="#000000">
+<link rel="canonical" href="https://p4inz-code.github.io/mink/benchmarks.html">
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="preload" href="fonts/AtkinsonHyperlegibleNext-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{HEADER}}
+<main id="main">
+  <section class="hero" style="padding-bottom:40px">
+    <div class="wrap" style="grid-template-columns:1fr">
+      <div>
+        <span class="eyebrow">Benchmarks</span>
+        <h1 style="font-size:clamp(34px,4.6vw,60px)">How fast is MINK? Measured, not claimed.</h1>
+        <p class="lead">Four small programs, written the plain way in MINK, Python, Go and Rust, timed on one PC. Python is the slowest, Go and Rust are faster than MINK, and the gap is stated below.</p>
+      </div>
+    </div>
+  </section>
+  <section style="padding-top:20px">
+    <div class="wrap">
+      <div class="kicker">Results</div>
+      <h2>Median whole-process time, in milliseconds. Lower is faster.</h2>
+{{BENCH_ROWS}}
+      <p class="note">MINK ran {{RANGE_PY}} times faster than Python 3.11 and {{RANGE_GO}} times slower than Go (2 to 5 times slower than optimized Rust). Arrays are the weakest spot: every memory read and write is checked.</p>
+
+      <div class="kicker" style="margin-top:56px">Method</div>
+      <h2>How the numbers were made.</h2>
+      <ul class="points" style="margin-top:20px;max-width:760px">
+        <li>Four programs, each written the plain way in each language, not tuned: recursive Fibonacci of 32, 30 million iterations of integer arithmetic, a sieve of Eratosthenes to 2 million, and the longest Collatz chain under 100,000.</li>
+        <li>Each program was built once and run {{RUNS}} times. The table shows the median of the whole process, from start to exit, output included. Very short runs are mostly start-up.</li>
+        <li>Every language had to print the same answer, or the run failed.</li>
+        <li>Machine: {{CPU}}, Windows 11. Tools: {{MINK_VERSION}}, {{PY_VERSION}}, {{GO_VERSION}}, {{RUST_VERSION}}.</li>
+        <li>There was no C or C++ compiler on the test PC, so Go and Rust stand in as the compiled baselines. <strong>This page does not compare MINK with C or C++.</strong></li>
+        <li>One PC, one suite. Treat these as a starting point, not a verdict. Run it yourself: <span class="mono">python testapps/bench/run.py</span>.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+{{FOOTER}}
+<script src="site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>MINK releases</title>
+  <subtitle>Native Windows programs from small, readable source.</subtitle>
+  <link href="https://p4inz-code.github.io/mink/feed.xml" rel="self"/>
+  <link href="https://p4inz-code.github.io/mink/"/>
+  <id>https://p4inz-code.github.io/mink/</id>
+  <updated>2026-11-22T00:00:00Z</updated>
+  <author><name>Atharva Patil, P4inz Interactive Labs</name></author>
+  <entry>
+    <title>MINK 1.0.5</title>
+    <link href="https://github.com/p4inz-code/mink/releases/tag/v1.0.5"/>
+    <id>https://github.com/p4inz-code/mink/releases/tag/v1.0.5</id>
+    <updated>2026-11-22T00:00:00Z</updated>
+    <summary>A setup window and portable zip, Windows file association with icon and right-click Run, Check and Build, mink fmt, mink lsp and a VS Code extension, icons and version information in built programs, mink upgrade and side-by-side versions. The files are unsigned for now.</summary>
+  </entry>
+</feed>

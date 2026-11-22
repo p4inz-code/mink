@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Learn MINK: getting started | MINK</title>
+<meta name="description" content="Install MINK, write a first program, read an error, and learn the one rule that surprises everyone: you free what you allocate.">
+<meta name="theme-color" content="#000000">
+<link rel="canonical" href="https://p4inz-code.github.io/mink/learn.html">
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="preload" href="fonts/AtkinsonHyperlegibleNext-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="MINK home"><img src="img/mink-logo-compact-white.svg" alt="MINK" width="120" height="32"></a>
+    <nav class="nav" aria-label="Main">
+      <a href="./#start">Get started</a>
+      <a href="learn.html">Learn</a>
+      <a href="examples.html">Examples</a>
+      <a href="benchmarks.html">Benchmarks</a>
+      <a href="./#compare">Compare</a>
+      <a href="faq.html">FAQ</a>
+      <a href="https://github.com/p4inz-code/mink">GitHub</a>
+      <a class="cta" href="./#download">Download</a>
+    </nav>
+    <details class="menu">
+      <summary aria-label="Menu"><span class="bars"></span></summary>
+      <div class="panel">
+        <a href="./#start">Get started</a>
+        <a href="learn.html">Learn</a>
+        <a href="examples.html">Examples</a>
+        <a href="benchmarks.html">Benchmarks</a>
+        <a href="./#compare">Compare</a>
+        <a href="faq.html">FAQ</a>
+        <a href="https://github.com/p4inz-code/mink">GitHub</a>
+        <a class="cta" href="./#download">Download for Windows</a>
+      </div>
+    </details>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" style="padding-bottom:40px">
+    <div class="wrap" style="grid-template-columns:1fr">
+      <div>
+        <span class="eyebrow">Learn</span>
+        <h1 style="font-size:clamp(34px,4.6vw,60px)">Getting started with MINK.</h1>
+        <p class="lead">From install to your first program, your first error, and the one rule that surprises everyone. Every command on this page was run, on MINK 1.0.5 unless a note says a newer version.</p>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding-top:20px">
+    <div class="wrap prose">
+      <h2 id="install">1. Install</h2>
+      <p>Download the <a href="./#download">setup file</a> and run it. It installs for your account with no administrator rights and offers to set up the .mink file type and your PATH. Or use npm:</p>
+      <div class="card has-copy"><pre class="plain">npm install -g @p4inz-code/mink</pre></div>
+      <p>Open a new terminal and check it worked:</p>
+      <div class="card has-copy"><pre class="plain">mink --version</pre></div>
+      <p>It should print <span class="mono">mink 1.0.5</span>.</p>
+
+      <h2 id="first">2. Your first program</h2>
+      <p>Make a file called <span class="mono">hello.mink</span>:</p>
+      <div class="card"><pre class="code">fn square(n: Int) -&gt; Int {
+    return n * n;
+}
+
+fn main() {
+    let mut total = 0;
+    for i in 1..6 {
+        total = total + square(i);
+    }
+    rt_print_int(total);
+}
+</pre></div>
+      <p>Run it, or build it into a program of its own:</p>
+      <div class="card has-copy"><pre class="plain">mink run hello.mink
+mink build hello.mink
+.\hello.exe</pre></div>
+      <p>Both print <span class="mono">55</span>. <span class="mono">hello.exe</span> needs nothing else installed, so you can give it to anyone on Windows 10 or newer.</p>
+
+      <h2 id="errors">3. Errors that explain themselves</h2>
+      <p>Change <span class="mono">let mut total</span> to <span class="mono">let total</span> and check the file:</p>
+      <div class="card"><pre class="plain">mink check hello.mink
+mink: error[E-S03]: cannot assign to `total`: it is not mutable
+  --&gt; hello.mink:8:9</pre></div>
+      <p>Every error has a code, a place in your file and an explanation: <span class="mono">mink explain E-S03</span> tells you what it means and what to try. Put <span class="mono">mut</span> back to fix it.</p>
+
+      <h2 id="memory">4. The rule that surprises everyone: free what you allocate</h2>
+      <p>MINK does not collect garbage. Strings and buffers that you create, or that a library call hands you, are yours to free. If any are still alive when the program ends, MINK stops with a memory-leak error and exit code 106. This program leaks one string:</p>
+      <div class="card"><pre class="code">fn main() {
+    let s = rt_str_concat("hello", " world");
+    rt_print_str(s);
+}</pre></div>
+      <div class="card"><pre class="plain">hello world
+mink: runtime error[E-R06]: memory leak: live allocations remain at exit</pre></div>
+      <p>The fix is one line, after the last use of the string:</p>
+      <div class="card"><pre class="code">fn main() {
+    let s = rt_str_concat("hello", " world");
+    rt_print_str(s);
+    rt_str_free(s);
+}</pre></div>
+      <p>Two more things to know. Most standard library functions <em>consume</em> the string you pass them, so using it again is error <span class="mono">E-S10</span>; copy it first with <span class="mono">rt_str_concat(s, "")</span> if you need it later. And a temporary that you pass straight into a call has nothing to free it, so give it its own variable. From MINK 1.0.6, <span class="mono">mink explain E-R06</span> lists the usual causes.</p>
+
+      <h2 id="modules">5. Using the standard library</h2>
+      <p>Load a module with <span class="mono">mod</span>. This reads a value out of JSON:</p>
+      <div class="card"><pre class="code">// Configuration: read a JSON document and print what it says.
+mod json;
+
+fn main() -&gt; Int {
+    let arena = rt_alloc(65536);
+    let v = json_parse("{\"name\":\"mink\",\"workers\":4,\"debug\":true}", arena);
+    if v == 0 {
+        rt_print_str("bad json");
+        return 1;
+    }
+    let name = json_as_str(arena, json_obj_get_val(arena, v, 0));
+    rt_print_str(name);
+    rt_str_free(name);
+    rt_print_int(json_as_int(arena, json_obj_get_val(arena, v, 1)));
+    let out = json_to_str(arena, v);
+    rt_print_str(out);
+    rt_str_free(out);
+    rt_free(arena);
+    return 0;
+}
+</pre></div>
+      <p>The modules are in the <a href="https://github.com/p4inz-code/mink/blob/main/docs/language/STANDARD_LIBRARY_REFERENCE.md">standard library reference</a>: files, JSON, CSV, SQLite, HTTP, threads, regular expressions, hashing, compression and more.</p>
+
+      <h2 id="format">6. One format, and an editor</h2>
+      <p><span class="mono">mink fmt hello.mink</span> puts the file in the one layout MINK has. It has no settings, and it checks that it never changes what your program does before it writes anything. Note that it needs a path: <span class="mono">mink fmt .</span> formats a whole folder.</p>
+      <p>For VS Code, the extension in the repository starts the language server for errors as you type, completion, hover and rename. See <a href="https://github.com/p4inz-code/mink/blob/main/docs/toolchain/VSCODE_EXTENSION.md">the VS Code guide</a>.</p>
+
+      <h2 id="next">7. Where next</h2>
+      <ul class="points">
+        <li><a href="examples.html">Examples</a>: twelve small programs, from a web server to a terminal game, to read and copy.</li>
+        <li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">The language guide</a>: values, functions, ownership and modules in full.</li>
+        <li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/ERROR_SYSTEM.md">Error codes</a>: what each one means.</li>
+        <li><a href="faq.html">FAQ</a>: why MINK, and when to pick something else.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <div><img src="img/mink-logo-compact-white.svg" alt="MINK" width="110" height="30"><div>Native Windows programs from<br>small, readable source.</div></div>
+      <div><h4>Learn</h4><ul><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">Language guide</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/STANDARD_LIBRARY_REFERENCE.md">Standard library</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/ERROR_SYSTEM.md">Error codes</a></li><li><a href="llms.txt">llms.txt</a></li><li><a href="feed.xml">Release feed</a></li></ul></div>
+      <div><h4>Project</h4><ul><li><a href="https://github.com/p4inz-code/mink">GitHub</a></li><li><a href="https://github.com/p4inz-code/mink/releases">Releases</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/CHANGELOG.md">Changelog</a></li><li><a href="https://github.com/p4inz-code/mink/issues">Issues</a></li></ul></div>
+      <div><h4>Site</h4><ul><li><a href="examples.html">Examples</a></li><li><a href="benchmarks.html">Benchmarks</a></li><li><a href="faq.html">FAQ</a></li><li><a href="brand.html">Brand</a></li></ul></div>
+      <div><h4>Legal</h4><ul><li><a href="https://github.com/p4inz-code/mink/blob/main/LICENSE">Apache License 2.0</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/NOTICE">Notice and credit</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/SECURITY.md">Security</a></li></ul></div>
+    </div>
+    <div class="credit">This page was built by a MINK program, <a href="https://github.com/p4inz-code/mink/tree/main/testapps/sitegen">testapps/sitegen</a>, from a template and a data file. The code samples above are the real files.<br>&copy; 2026 Atharva Patil &nbsp;|&nbsp; P4inz Interactive Labs. MINK and the MINK logo belong to their creator. Fonts: Atkinson Hyperlegible Next, Familjen Grotesk and IBM Plex Mono, all under the SIL Open Font License 1.1 (licenses in <a href="fonts/">fonts</a>).</div>
+  </div>
+</footer>
+
+<script src="site.js" defer></script>
+</body>
+</html>

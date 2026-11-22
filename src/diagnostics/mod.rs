@@ -1061,6 +1061,221 @@ const ALL_DOCS: &[ErrorDoc] = &[
         ],
         suggested_fixes: &["Run `mink install` to repair the packages directory"],
     },
+    ErrorDoc {
+        code: "E-R01",
+        title: "Runtime Start-up Failed",
+        description: "The program's runtime could not set up its memory area when it started.",
+        category: "runtime",
+        common_causes: &[
+            "Windows refused to reserve memory for the program",
+            "The machine was out of memory at start-up",
+        ],
+        suggested_fixes: &[
+            "Close other programs and run it again",
+            "Report it if it keeps happening, with the program that triggers it",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R02",
+        title: "Out of Memory",
+        description: "The program asked for more memory than the runtime could give it.",
+        category: "runtime",
+        common_causes: &[
+            "A loop that keeps allocating and never frees",
+            "A very large buffer or string",
+            "A recursive function with no end",
+        ],
+        suggested_fixes: &[
+            "Free what you allocate, including strings returned by library calls",
+            "Process big data in smaller pieces",
+            "Check that recursion stops",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R03",
+        title: "Too Many Live Allocations",
+        description: "More allocations were alive at the same moment than the runtime can track.",
+        category: "runtime",
+        common_causes: &[
+            "Many small strings or buffers kept at once",
+            "Allocations in a loop that are never freed",
+        ],
+        suggested_fixes: &[
+            "Free values as soon as you are done with them",
+            "Keep related data in one buffer instead of many small ones",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R04",
+        title: "Invalid Free",
+        description: "The program freed something that was not a live allocation, or freed it twice.",
+        category: "runtime",
+        common_causes: &[
+            "Freeing the same string or buffer twice",
+            "Freeing a value that a library call already consumed",
+            "Freeing a pointer that was never allocated",
+        ],
+        suggested_fixes: &[
+            "Free each allocation exactly once",
+            "Remember that most standard library functions consume the strings you pass them",
+            "Do not free the same value after passing it to a function that takes it",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R05",
+        title: "Out-of-Bounds Memory Access",
+        description: "The program read or wrote memory outside an allocation.",
+        category: "runtime",
+        common_causes: &[
+            "An index past the end of a buffer",
+            "A buffer that was too small for what was written to it",
+            "Using a buffer after it was freed",
+        ],
+        suggested_fixes: &[
+            "Check the size when you allocate",
+            "Check indexes against the length",
+            "Do not use a buffer after freeing it",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R06",
+        title: "Memory Leak",
+        description: "The program ended while some allocations were still alive. The exit code is 106.",
+        category: "runtime",
+        common_causes: &[
+            "A string or buffer that was never freed",
+            "A string returned by a function that was never freed, such as `rt_argv` or `rt_str_concat`",
+            "A temporary passed straight into a call, which nothing frees",
+            "An early return that skips the frees at the end",
+        ],
+        suggested_fixes: &[
+            "Free every string and buffer you create, once",
+            "Give a temporary its own variable so you can free it",
+            "Free before every early return",
+            "See the Learn page, memory section, for a worked example",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R07",
+        title: "Misaligned Access",
+        description: "The program used an address that is not aligned the way the access needs.",
+        category: "runtime",
+        common_causes: &[
+            "A pointer that was computed by hand and is off by a few bytes",
+            "Reading a word from the middle of a buffer at an odd offset",
+        ],
+        suggested_fixes: &[
+            "Step through buffers in whole words (multiples of 8 bytes)",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R08",
+        title: "Invalid Allocation Size",
+        description: "The program asked to allocate zero bytes or a negative number of bytes.",
+        category: "runtime",
+        common_causes: &[
+            "A size computed from a value that turned out to be 0 or negative",
+            "An empty input used as a size",
+        ],
+        suggested_fixes: &[
+            "Check the size before allocating",
+            "Handle the empty case separately",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R09",
+        title: "String Index Out of Range",
+        description: "The program read or changed a byte of a string at a position past its end.",
+        category: "runtime",
+        common_causes: &[
+            "An index equal to or greater than the string's length",
+            "A loop that runs one step too far",
+        ],
+        suggested_fixes: &[
+            "Check the index against `rt_str_len` first",
+            "Loop while the index is below the length",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R10",
+        title: "Array Index Out of Range",
+        description: "The program used an array index that is negative or past the end of the array.",
+        category: "runtime",
+        common_causes: &[
+            "An index equal to or greater than the array's length",
+            "A negative index from a subtraction",
+        ],
+        suggested_fixes: &[
+            "Check the index against the length before using it",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R11",
+        title: "Missing Map Key",
+        description: "The program looked up a key that is not in the map.",
+        category: "runtime",
+        common_causes: &[
+            "Using `rt_map_get` on a key that was never inserted",
+            "A typo in the key",
+        ],
+        suggested_fixes: &[
+            "Check with `rt_map_has` first",
+            "Insert the key before reading it",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R12",
+        title: "Thread Could Not Be Created",
+        description: "Windows could not create a new thread for the program.",
+        category: "runtime",
+        common_causes: &[
+            "Too many threads were already running",
+            "The machine was low on resources",
+        ],
+        suggested_fixes: &[
+            "Run fewer threads at once",
+            "Wait for threads to finish with `thread_join` before starting more",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R13",
+        title: "Invalid Task Handle",
+        description: "The program waited on a task handle that is not a live task.",
+        category: "runtime",
+        common_causes: &[
+            "Waiting twice on the same task",
+            "A handle that was never returned by a task call",
+        ],
+        suggested_fixes: &[
+            "Wait on each task exactly once",
+            "Keep the handle that the task call returned",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R14",
+        title: "Division by Zero",
+        description: "The program divided by zero, or took a remainder with a zero divisor.",
+        category: "runtime",
+        common_causes: &[
+            "A divisor read from input that was 0",
+            "A count that was never set",
+        ],
+        suggested_fixes: &[
+            "Check the divisor before dividing",
+        ],
+    },
+    ErrorDoc {
+        code: "E-R15",
+        title: "Arithmetic Overflow",
+        description: "The program divided the smallest 64-bit number by -1, which does not fit in 64 bits.",
+        category: "runtime",
+        common_causes: &[
+            "Negating or dividing the minimum Int value",
+        ],
+        suggested_fixes: &[
+            "Check for the minimum value before dividing by -1",
+        ],
+    },
 ];
 
 // =========================================================================

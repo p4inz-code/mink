@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FAQ | MINK</title>
+<meta name="description" content="Why MINK, how it compares with Go, Rust and Zig, and when to pick something else.">
+<meta name="theme-color" content="#000000">
+<link rel="canonical" href="https://p4inz-code.github.io/mink/faq.html">
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+<link rel="preload" href="fonts/AtkinsonHyperlegibleNext-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{{HEADER}}
+<main id="main">
+  <section class="hero" style="padding-bottom:40px">
+    <div class="wrap" style="grid-template-columns:1fr">
+      <div>
+        <span class="eyebrow">FAQ</span>
+        <h1 style="font-size:clamp(34px,4.6vw,60px)">Honest answers.</h1>
+        <p class="lead">Why MINK exists, what it is like to use, and when you should pick another language.</p>
+      </div>
+    </div>
+  </section>
+  <section style="padding-top:20px">
+    <div class="wrap prose">
+      <h2>Why would I use MINK instead of Go, Rust or Zig?</h2>
+      <p>Mostly you should not, yet. Go and Rust are mature, faster on our benchmarks, and run on far more systems. Pick MINK if you want a single small Windows program from a tiny compiler with no linker, readable errors with explanations, and one fixed format, and you are happy with a young language. It suits people who want to see how a compiler turns source into an .exe, or who want to ship small Windows tools with no runtime.</p>
+      <h2>Is it fast?</h2>
+      <p>Faster than Python, slower than Go and Rust, on four small programs on one PC. The numbers and the method are on the <a href="benchmarks.html">Benchmarks</a> page. We have not compared it with C or C++.</p>
+      <h2>Does it have a garbage collector?</h2>
+      <p>No. You free strings and buffers yourself, and a program that ends with any still alive stops with error E-R06 (exit code 106). This is the biggest thing to get used to. The <a href="learn.html#memory">Learn page</a> has a worked example.</p>
+      <h2>Can I build a website, or a web app, with it?</h2>
+      <p>You can build the server side: the standard library has an HTTP server and client, SQLite and JSON, and the <a href="examples.html">Examples</a> include a web app in one .exe. MINK does not compile to JavaScript or WebAssembly, so it does not run in the browser. This website is built by a MINK program.</p>
+      <h2>Can I build a Windows app with windows and buttons?</h2>
+      <p>You can create real windows today by calling Windows directly, and the Examples include a clock window. MINK cannot yet hand Windows a callback, so there is no custom window procedure and clicks must be polled. Callbacks and a <span class="mono">ui</span> module are <a href="https://github.com/p4inz-code/mink/blob/main/docs/roadmap/CALLBACKS_AND_UI_PLAN.md">planned</a>.</p>
+      <h2>Does it run on Linux or macOS?</h2>
+      <p>No. Windows 10 and newer only. Linux support is frozen.</p>
+      <h2>Is it free? Can I use it at work?</h2>
+      <p>Yes. It is under the Apache License 2.0: free for any use, including commercial. Copies must keep the copyright line and the NOTICE file, so the credit stays with its creator, Atharva Patil.</p>
+      <h2>Why does Windows warn me about the setup file?</h2>
+      <p>The files are not code-signed yet, so SmartScreen may ask you to confirm. Signing is coming. You can check a download against its SHA-256 in the <a href="./#download">download section</a>.</p>
+      <h2>Who makes it?</h2>
+      <p>One person, Atharva Patil, at P4inz Interactive Labs. If something breaks, <a href="https://github.com/p4inz-code/mink/issues">open an issue</a>.</p>
+    </div>
+  </section>
+</main>
+{{FOOTER}}
+<script src="site.js" defer></script>
+</body>
+</html>

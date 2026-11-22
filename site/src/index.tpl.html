@@ -15,38 +15,15 @@
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/svg+xml" href="img/favicon.svg">
 <link rel="manifest" href="site.webmanifest">
+<link rel="preload" href="fonts/AtkinsonHyperlegibleNext-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/FamiljenGroteskwght.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"MINK","applicationCategory":"DeveloperApplication","operatingSystem":"Windows 10, Windows 11","softwareVersion":"{{VERSION}}","license":"https://www.apache.org/licenses/LICENSE-2.0","author":{"@type":"Person","name":"Atharva Patil"},"publisher":{"@type":"Organization","name":"P4inz Interactive Labs"},"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"url":"https://p4inz-code.github.io/mink/","downloadUrl":"https://github.com/p4inz-code/mink/releases/tag/v{{VERSION}}"}</script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="top">
-  <div class="wrap">
-    <a class="brand" href="./" aria-label="MINK home"><img src="img/mink-logo-compact-white.svg" alt="MINK" width="120" height="32"></a>
-    <nav class="nav" aria-label="Main">
-      <a href="#start">Get started</a>
-      <a href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">Learn</a>
-      <a href="#docs">Docs</a>
-      <a href="#compare">Compare</a>
-      <a href="#help">Help</a>
-      <a href="https://github.com/p4inz-code/mink">GitHub</a>
-      <a class="cta" href="#download">Download</a>
-    </nav>
-    <details class="menu">
-      <summary aria-label="Menu"><span class="bars"></span></summary>
-      <div class="panel">
-        <a href="#start">Get started</a>
-        <a href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">Learn</a>
-        <a href="#docs">Docs</a>
-        <a href="#compare">Compare</a>
-        <a href="#help">Help</a>
-        <a href="https://github.com/p4inz-code/mink">GitHub</a>
-        <a class="cta" href="#download">Download for Windows</a>
-      </div>
-    </details>
-  </div>
-</header>
+{{HEADER}}
 
 <main id="main">
   <section class="hero">
@@ -173,7 +150,7 @@ hello from mink</pre></div>
     <div class="wrap">
       <div class="kicker">How it compares</div>
       <h2>Where MINK fits next to Python and C++.</h2>
-      <p class="sub">Facts about how you build and ship a program. There is no speed row because we have not measured one yet.</p>
+      <p class="sub">Facts about how you build and ship a program. Speed has its own page: on four small tests MINK ran {{RANGE_PY}} times faster than Python and {{RANGE_GO}} times slower than Go. <a href="benchmarks.html">See the numbers and how they were measured.</a></p>
       <table class="compare">
         <thead><tr><th scope="col"></th><th scope="col">MINK</th><th scope="col">Python</th><th scope="col">C++</th></tr></thead>
         <tbody>
@@ -217,6 +194,18 @@ hello from mink</pre></div>
     </div>
   </section>
 
+  <section id="news" style="padding-top:0">
+    <div class="wrap">
+      <div class="kicker">What's new</div>
+      <h2>MINK {{VERSION}}, and what comes next.</h2>
+      <div class="grid" style="grid-template-columns:repeat(2,1fr)">
+        <div class="card feature"><h3>In {{VERSION}}</h3><p>A setup window and a portable zip. Windows file association with icon, right-click Run, Check and Build. <span class="mono">mink fmt</span>, <span class="mono">mink lsp</span> and a VS Code extension. Icons and version info in built programs. <span class="mono">mink upgrade</span> and side-by-side versions. <a href="https://github.com/p4inz-code/mink/blob/main/CHANGELOG.md">Full changelog</a>.</p></div>
+        <div class="card feature"><h3>Planned, not built</h3><p>Callbacks and a <span class="mono">ui</span> module for real Windows windows. An HTML builder. A package registry, <span class="mono">mink doc</span>, debug information and real namespaces. Nothing here has a date. <a href="https://github.com/p4inz-code/mink/blob/main/docs/roadmap/CALLBACKS_AND_UI_PLAN.md">Read the plan</a>.</p></div>
+      </div>
+      <p class="note">Twelve small programs written in MINK, from a web server to a terminal game, are on the <a href="examples.html">Examples</a> page. They found and fixed bugs in the standard library, SQL engine and runtime along the way. Those fixes ship in 1.0.6.</p>
+    </div>
+  </section>
+
   <section id="download" style="padding-top:0">
     <div class="wrap">
       <div class="kicker">Download</div>
@@ -240,7 +229,7 @@ hello from mink</pre></div>
         <li><b>Windows only.</b> Windows 10 and newer. There is no Linux, macOS, browser or mobile target.</li>
         <li><b>Young.</b> Version {{VERSION}}. Expect rough edges, and tell us about them.</li>
         <li><b>You manage memory.</b> Strings and buffers are freed by hand, and leaks are reported when a program ends.</li>
-        <li><b>No speed claims.</b> A benchmark suite against Python and C is planned. Until it exists, this page does not say MINK is fast.</li>
+        <li><b>Speed is measured only on small programs.</b> Four tests so far, on one PC, against Python, Go and Rust. There was no C or C++ compiler to compare with. See <a href="benchmarks.html">Benchmarks</a>.</li>
         <li><b>VS Code only.</b> Other editors can use the language server directly. The extension is not on the Marketplace yet.</li>
         <li><b>Unsigned.</b> Signing is coming.</li>
       </ul>
@@ -263,17 +252,7 @@ hello from mink</pre></div>
   </section>
 </main>
 
-<footer>
-  <div class="wrap">
-    <div class="cols">
-      <div><img src="img/mink-logo-compact-white.svg" alt="MINK" width="110" height="30"><div>Native Windows programs from<br>small, readable source.</div></div>
-      <div><h4>Learn</h4><ul><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md">Language guide</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/STANDARD_LIBRARY_REFERENCE.md">Standard library</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/docs/language/ERROR_SYSTEM.md">Error codes</a></li><li><a href="llms.txt">llms.txt</a></li></ul></div>
-      <div><h4>Project</h4><ul><li><a href="https://github.com/p4inz-code/mink">GitHub</a></li><li><a href="https://github.com/p4inz-code/mink/releases">Releases</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/CHANGELOG.md">Changelog</a></li><li><a href="https://github.com/p4inz-code/mink/issues">Issues</a></li></ul></div>
-      <div><h4>Legal</h4><ul><li><a href="https://github.com/p4inz-code/mink/blob/main/LICENSE">Apache License 2.0</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/NOTICE">Notice and credit</a></li><li><a href="https://github.com/p4inz-code/mink/blob/main/SECURITY.md">Security</a></li></ul></div>
-    </div>
-    <div class="credit">This page was built by a MINK program, <a href="https://github.com/p4inz-code/mink/tree/main/testapps/sitegen">testapps/sitegen</a>, from a template and a data file. The code samples above are the real files.<br>&copy; 2026 Atharva Patil &nbsp;|&nbsp; P4inz Interactive Labs. MINK and the MINK logo belong to their creator. Fonts: Atkinson Hyperlegible Next, Familjen Grotesk and IBM Plex Mono, all under the SIL Open Font License 1.1 (licenses in <a href="fonts/">fonts</a>).</div>
-  </div>
-</footer>
+{{FOOTER}}
 <a class="trust" href="humans.txt" title="This site loads nothing from other sites">0 external requests &middot; 0 trackers &middot; 0 cookies</a>
 <script src="site.js" defer></script>
 </body>

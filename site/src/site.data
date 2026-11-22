@@ -1,9 +1,20 @@
-# Values for the MINK website. sitegen replaces {{NAME}} in site/src/index.tpl.html.
+# Values for the MINK website. Written by tools\update_site_data.ps1; sitegen replaces {{NAME}} in the templates.
+HEADER=@@site/src/partials/header.html
+FOOTER=@@site/src/partials/footer.html
+BENCH_ROWS=@@site/src/gen/bench_rows.html
 VERSION=1.0.5
 SETUP_SHA=3a1857275bfb2690fbbc5f84fa4f962945b9f13cb196bf5b663474f75faa2a7e
 ZIP_SHA=0c351b63b2d67ef584aaba6fd91270ae0d5d38b37e7b308df9f22681a55e4f93
 SETUP_SIZE=4.1 MB
 ZIP_SIZE=2.1 MB
+RANGE_PY=6 to 39
+RANGE_GO=1.3 to 3.9
+RUNS=7
+CPU=Intel(R) Core(TM) i9-14900K
+MINK_VERSION=mink 1.0.5
+PY_VERSION=Python 3.11.9
+GO_VERSION=go version go1.26.7 windows/amd64
+RUST_VERSION=rustc 1.97.1 (8bab26f4f 2026-07-14)
 # Code samples come from real files, escaped for HTML.
 CODE_HELLO=@site/src/code/hello.mink
 CODE_JSON=@examples/json_config/main.mink

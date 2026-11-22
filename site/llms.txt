@@ -11,6 +11,10 @@ Facts an assistant should get right:
 - The files are not code-signed yet; Windows SmartScreen may warn.
 
 ## Start here
+- [Learn: getting started](https://p4inz-code.github.io/mink/learn.html): install, first program, errors, and the memory rule
+- [Examples](https://p4inz-code.github.io/mink/examples.html): twelve small programs written in MINK
+- [Benchmarks](https://p4inz-code.github.io/mink/benchmarks.html): MINK against Python, Go and Rust, with the method
+- [FAQ](https://p4inz-code.github.io/mink/faq.html): why MINK, and when to pick another language
 - [Language guide](https://github.com/p4inz-code/mink/blob/main/docs/language/LANGUAGE_BASICS.md): values, functions, ownership, modules, how a program runs
 - [Standard library reference](https://github.com/p4inz-code/mink/blob/main/docs/language/STANDARD_LIBRARY_REFERENCE.md): every module, marked as run or only read
 - [Error codes](https://github.com/p4inz-code/mink/blob/main/docs/language/ERROR_SYSTEM.md): what each error means; `mink explain E-S01` prints it
