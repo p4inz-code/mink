@@ -1,0 +1,334 @@
+// snake: the terminal game, written in MINK.
+//
+//   mink build testapps/snake/main.mink
+//   snake                          play: arrow keys or WASD to steer, Esc to quit
+//   snake --demo [ticks] [seed]    let a simple autopilot play and print the result (no keyboard needed)
+//
+// The game is a few small functions that work on one arena of integers. Playing reads the keyboard with
+// GetAsyncKeyState and redraws by moving the console cursor, both through direct calls to Windows.
+//
+// Arena layout (words):
+//   0 length  1 dx  2 dy  3 food x  4 food y  5 score  6 alive  7 random state  8 ticks
+//   16 .. 16+300   snake x positions, head first      320 .. 320+300   snake y positions
+mod strings;
+
+fn width() -> Int {
+    return 24;
+}
+
+fn height() -> Int {
+    return 12;
+}
+
+fn get(a: Ptr<Int>, i: Int) -> Int {
+    return rt_mem_load(a + i * 8);
+}
+
+fn put(a: Ptr<Int>, i: Int, v: Int) {
+    rt_mem_store(a + i * 8, v);
+}
+
+// A small deterministic random number generator, so a seed always gives the same game.
+fn next_random(a: Ptr<Int>, limit: Int) -> Int {
+    let s = (get(a, 7) * 1103515245 + 12345) % 2147483648;
+    put(a, 7, s);
+    return (s / 65536) % limit;
+}
+
+fn on_snake(a: Ptr<Int>, x: Int, y: Int, skip_tail: Bool) -> Bool {
+    let mut n = get(a, 0);
+    if skip_tail {
+        n = n - 1;
+    }
+    let mut i = 0;
+    while i < n {
+        if get(a, 16 + i) == x && get(a, 320 + i) == y {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn place_food(a: Ptr<Int>) {
+    let mut tries = 0;
+    let mut placed = false;
+    while !placed && tries < 500 {
+        let x = next_random(a, width());
+        let y = next_random(a, height());
+        if !on_snake(a, x, y, false) {
+            put(a, 3, x);
+            put(a, 4, y);
+            placed = true;
+        }
+        tries = tries + 1;
+    }
+}
+
+fn new_game(a: Ptr<Int>, seed: Int) {
+    let mut i = 0;
+    while i < 640 {
+        put(a, i, 0);
+        i = i + 1;
+    }
+    put(a, 7, seed);
+    put(a, 0, 3);
+    put(a, 1, 1);
+    put(a, 2, 0);
+    put(a, 6, 1);
+    put(a, 16, 5);
+    put(a, 320, 6);
+    put(a, 17, 4);
+    put(a, 321, 6);
+    put(a, 18, 3);
+    put(a, 322, 6);
+    place_food(a);
+}
+
+// Moves the snake one step in its current direction.
+fn step(a: Ptr<Int>) {
+    if get(a, 6) == 0 {
+        return;
+    }
+    let nx = get(a, 16) + get(a, 1);
+    let ny = get(a, 320) + get(a, 2);
+    let eating = nx == get(a, 3) && ny == get(a, 4);
+    if nx < 0 || ny < 0 || nx >= width() || ny >= height() {
+        put(a, 6, 0);
+        return;
+    }
+    // The tail moves away this step unless the snake is eating, so it is safe to step onto it.
+    if on_snake(a, nx, ny, !eating) {
+        put(a, 6, 0);
+        return;
+    }
+    let mut n = get(a, 0);
+    if eating && n < 299 {
+        n = n + 1;
+        put(a, 0, n);
+        put(a, 5, get(a, 5) + 1);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        put(a, 16 + i, get(a, 16 + i - 1));
+        put(a, 320 + i, get(a, 320 + i - 1));
+        i = i - 1;
+    }
+    put(a, 16, nx);
+    put(a, 320, ny);
+    if eating {
+        place_food(a);
+    }
+    put(a, 8, get(a, 8) + 1);
+}
+
+// Turns, but never straight back into the neck.
+fn steer(a: Ptr<Int>, dx: Int, dy: Int) {
+    if dx == 0 - get(a, 1) && dy == 0 - get(a, 2) {
+        return;
+    }
+    if dx == 0 && dy == 0 {
+        return;
+    }
+    put(a, 1, dx);
+    put(a, 2, dy);
+}
+
+// A simple autopilot: of the safe directions, take the one that ends closest to the food.
+fn autopilot(a: Ptr<Int>) {
+    let mut best = 100000;
+    let mut bdx = get(a, 1);
+    let mut bdy = get(a, 2);
+    let mut d = 0;
+    while d < 4 {
+        let mut dx = 0;
+        let mut dy = 0;
+        if d == 0 { dx = 1; }
+        if d == 1 { dx = 0 - 1; }
+        if d == 2 { dy = 1; }
+        if d == 3 { dy = 0 - 1; }
+        let back = dx == 0 - get(a, 1) && dy == 0 - get(a, 2);
+        let nx = get(a, 16) + dx;
+        let ny = get(a, 320) + dy;
+        let eating = nx == get(a, 3) && ny == get(a, 4);
+        if !back && nx >= 0 && ny >= 0 && nx < width() && ny < height() && !on_snake(a, nx, ny, !eating) {
+            let mut dist = nx - get(a, 3);
+            if dist < 0 {
+                dist = 0 - dist;
+            }
+            let mut disty = ny - get(a, 4);
+            if disty < 0 {
+                disty = 0 - disty;
+            }
+            dist = dist + disty;
+            if dist < best {
+                best = dist;
+                bdx = dx;
+                bdy = dy;
+            }
+        }
+        d = d + 1;
+    }
+    put(a, 1, bdx);
+    put(a, 2, bdy);
+}
+
+// Draws the board, one row per line.
+fn draw(a: Ptr<Int>) {
+    let w = width();
+    let h = height();
+    let top = rt_str_alloc(w + 2);
+    let mut x = 0;
+    while x < w + 2 {
+        rt_str_set_byte(top, x, 45);
+        x = x + 1;
+    }
+    rt_print_str(top);
+    let mut y = 0;
+    while y < h {
+        let row = rt_str_alloc(w + 2);
+        rt_str_set_byte(row, 0, 124);
+        rt_str_set_byte(row, w + 1, 124);
+        x = 0;
+        while x < w {
+            let mut c = 32;
+            if x == get(a, 3) && y == get(a, 4) {
+                c = 42;
+            }
+            if on_snake(a, x, y, false) {
+                c = 111;
+                if x == get(a, 16) && y == get(a, 320) {
+                    c = 64;
+                }
+            }
+            rt_str_set_byte(row, x + 1, c);
+            x = x + 1;
+        }
+        rt_print_str(row);
+        rt_str_free(row);
+        y = y + 1;
+    }
+    rt_print_str(top);
+    rt_str_free(top);
+}
+
+fn summary(a: Ptr<Int>) {
+    rt_print_str("score:");
+    rt_print_int(get(a, 5));
+    rt_print_str("length:");
+    rt_print_int(get(a, 0));
+    rt_print_str("ticks:");
+    rt_print_int(get(a, 8));
+    if get(a, 6) == 1 {
+        rt_print_str("still alive");
+    } else {
+        rt_print_str("game over");
+    }
+}
+
+fn demo(ticks: Int, seed: Int) -> Int {
+    let a = rt_alloc(640 * 8);
+    new_game(a, seed);
+    let mut t = 0;
+    while t < ticks && get(a, 6) == 1 {
+        autopilot(a);
+        step(a);
+        t = t + 1;
+    }
+    draw(a);
+    summary(a);
+    rt_free(a);
+    return 0;
+}
+
+// Reads the keyboard through GetAsyncKeyState. Returns true while the key is down.
+fn key_down(fnptr: Int, argv: Ptr<Int>, vk: Int) -> Bool {
+    rt_mem_store(argv, vk);
+    let r = rt_sys_call(fnptr, argv, 1);
+    return (r & 32768) != 0;
+}
+
+fn play() -> Int {
+    let user = rt_sys_load_lib("user32.dll");
+    let kern = rt_sys_load_lib("kernel32.dll");
+    if user == 0 || kern == 0 {
+        rt_print_str("could not load system libraries");
+        return 1;
+    }
+    let keystate = rt_sys_get_proc(user, "GetAsyncKeyState");
+    let sleep = rt_sys_get_proc(kern, "Sleep");
+    let getstd = rt_sys_get_proc(kern, "GetStdHandle");
+    let setpos = rt_sys_get_proc(kern, "SetConsoleCursorPosition");
+    let argv = rt_alloc(64);
+    rt_mem_store(argv, 4294967285);
+    let out = rt_sys_call(getstd, argv, 1);
+    let a = rt_alloc(640 * 8);
+    new_game(a, rt_time_millis() % 100000 + 1);
+    rt_print_str("Arrow keys or WASD to steer, Esc to quit.");
+    let mut running = true;
+    while running {
+        if key_down(keystate, argv, 27) {
+            running = false;
+        }
+        if key_down(keystate, argv, 37) || key_down(keystate, argv, 65) {
+            steer(a, 0 - 1, 0);
+        }
+        if key_down(keystate, argv, 39) || key_down(keystate, argv, 68) {
+            steer(a, 1, 0);
+        }
+        if key_down(keystate, argv, 38) || key_down(keystate, argv, 87) {
+            steer(a, 0, 0 - 1);
+        }
+        if key_down(keystate, argv, 40) || key_down(keystate, argv, 83) {
+            steer(a, 0, 1);
+        }
+        step(a);
+        // Draw from the top-left corner of the console each time.
+        rt_mem_store(argv, out);
+        rt_mem_store(argv + 8, 65536);
+        rt_sys_call(setpos, argv, 2);
+        draw(a);
+        rt_print_str("score:");
+        rt_print_int(get(a, 5));
+        if get(a, 6) == 0 {
+            running = false;
+        } else {
+            rt_mem_store(argv, 120);
+            rt_sys_call(sleep, argv, 1);
+        }
+    }
+    summary(a);
+    rt_free(a);
+    rt_free(argv);
+    return 0;
+}
+
+fn main() -> Int {
+    if rt_argc() >= 1 {
+        let first = rt_argv(0);
+        if rt_str_eq(first, "--demo") {
+            rt_str_free(first);
+            let mut ticks = 400;
+            let mut seed = 1;
+            if rt_argc() >= 2 {
+                let t = rt_argv(1);
+                let parsed = str_parse_int(t);
+                if parsed.1 {
+                    ticks = parsed.0;
+                }
+            }
+            if rt_argc() >= 3 {
+                let s = rt_argv(2);
+                let parsed = str_parse_int(s);
+                if parsed.1 {
+                    seed = parsed.0;
+                }
+            }
+            return demo(ticks, seed);
+        }
+        rt_str_free(first);
+        rt_print_str("usage: snake [--demo [ticks] [seed]]");
+        return 2;
+    }
+    return play();
+}

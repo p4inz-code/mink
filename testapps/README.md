@@ -23,6 +23,7 @@ mink build testapps/jsonq/main.mink
 | [paste](paste/main.mink) | A tiny pastebin: post text, get a six-character link | 181 | see build | Newlines, tabs, quotes and backslashes come back byte for byte; exit 0 with no leaks; tested. Found a base64 decoding bug (fixed) |
 | [livelog](livelog/main.mink) | Streams a log file to a web page live, with server-sent events | 176 | see build | Last 20 lines on connect, new lines live, CRLF handled, ends cleanly with no leaks when the stream closes; tested |
 | [mini](mini/main.mink) | A calculator language with variables, error positions and a `vars` command | 392 | see build | 177 random nested expressions all matched a Python reference with C-style division; exit 0 with no leaks; tested |
+| [snake](snake/main.mink) | The terminal game, with an autopilot mode for tests | 343 | see build | Keyboard steering confirmed with a real Down-arrow key press (the snake turned and hit the wall at tick 8 instead of 18); the autopilot reached length 27 in 300 ticks; rules checked over 12 seeds; exit 0 with no leaks; tested |
 | [widget](widget/main.mink) | A real Windows window with a live clock | 133 | see build | Window found by title, closes by itself, exit 0, no leaks. Not in the automated tests, since it opens a window |
 
 Numbers were measured on the author's PC (Windows 11) with the 1.0.5 release build. More apps are added as

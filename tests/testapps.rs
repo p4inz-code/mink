@@ -332,3 +332,41 @@ fn mini_follows_precedence_keeps_variables_and_explains_errors() {
     assert_eq!(run(&exe, &[dir.join("missing.txt").to_str().unwrap()]).0, 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn snake_numbers(out: &str) -> (i64, i64, i64) {
+    let lines: Vec<&str> = out.lines().collect();
+    let pick = |label: &str| -> i64 {
+        let at = lines.iter().position(|l| *l == label).unwrap_or_else(|| panic!("no {label} in {out}"));
+        lines[at + 1].trim().parse().unwrap()
+    };
+    (pick("score:"), pick("length:"), pick("ticks:"))
+}
+
+#[test]
+fn snake_autopilot_is_deterministic_obeys_the_rules_and_ends_cleanly() {
+    let (exe, dir) = build("snake");
+    // Before any move: length 3, the head at column 5 of row 6.
+    let (code, start) = run(&exe, &["--demo", "0", "1"]);
+    assert_eq!(code, 0);
+    assert_eq!(snake_numbers(&start), (0, 3, 0));
+    assert!(start.lines().nth(7).unwrap().starts_with("| ooo@") || start.lines().nth(7).unwrap().contains("@"), "{start}");
+    assert!(start.contains("still alive"));
+    // The same seed gives the same game; a different one does not.
+    let a = run(&exe, &["--demo", "300", "7"]);
+    let b = run(&exe, &["--demo", "300", "7"]);
+    assert_eq!(a, b, "a seed always gives the same game");
+    assert_ne!(a.1, run(&exe, &["--demo", "300", "8"]).1);
+    // The rules: the score is always the growth in length, and the frame is a 24 by 12 board.
+    for seed in 1..=12 {
+        let (code, out) = run(&exe, &["--demo", "500", &seed.to_string()]);
+        assert_eq!(code, 0, "seed {seed}: no leaks");
+        let (score, length, ticks) = snake_numbers(&out);
+        assert_eq!(length, score + 3, "seed {seed}: each food adds one segment");
+        assert!(ticks <= 500);
+        assert_eq!(out.lines().filter(|l| l.starts_with('|')).count(), 12, "seed {seed}");
+        assert_eq!(out.lines().filter(|l| l.starts_with('|')).map(|l| l.matches('@').count()).sum::<usize>(), 1, "one head");
+        assert_eq!(out.lines().filter(|l| l.starts_with('|')).map(|l| l.matches('*').count()).sum::<usize>(), 1, "one piece of food");
+    }
+    assert_eq!(run(&exe, &["--nonsense"]).0, 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
