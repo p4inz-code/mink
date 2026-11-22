@@ -13,7 +13,7 @@
     PS> .\tools\build_site.ps1
 #>
 [CmdletBinding()]
-param()
+param([string]$RepoRef = 'next-1.0.6')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $dataPath = Join-Path $repo 'site\src\site.data'
@@ -29,6 +29,8 @@ if (Test-Path $dataPath) {
 }
 $v = (Select-String -Path (Join-Path $repo 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $old['VERSION'] = $v
+# The branch that links to the test apps and the newer docs point at. Use 'main' once they are merged.
+$old['REPO_REF'] = $RepoRef
 
 function Set-FromRelease($shaKey, $sizeKey, $file) {
     $path = Join-Path $repo $file
@@ -90,7 +92,7 @@ $lines = @(
     'FOOTER=@@site/src/partials/footer.html',
     'BENCH_ROWS=@@site/src/gen/bench_rows.html'
 )
-foreach ($k in @('VERSION', 'SETUP_SHA', 'ZIP_SHA', 'SETUP_SIZE', 'ZIP_SIZE', 'RANGE_PY', 'RANGE_GO', 'RUNS', 'CPU', 'MINK_VERSION', 'PY_VERSION', 'GO_VERSION', 'RUST_VERSION')) {
+foreach ($k in @('VERSION', 'REPO_REF', 'SETUP_SHA', 'ZIP_SHA', 'SETUP_SIZE', 'ZIP_SIZE', 'RANGE_PY', 'RANGE_GO', 'RUNS', 'CPU', 'MINK_VERSION', 'PY_VERSION', 'GO_VERSION', 'RUST_VERSION')) {
     if ($old.ContainsKey($k)) { $lines += "$k=$($old[$k])" }
 }
 $lines += @(

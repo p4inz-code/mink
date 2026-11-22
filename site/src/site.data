@@ -3,6 +3,7 @@ HEADER=@@site/src/partials/header.html
 FOOTER=@@site/src/partials/footer.html
 BENCH_ROWS=@@site/src/gen/bench_rows.html
 VERSION=1.0.5
+REPO_REF=next-1.0.6
 SETUP_SHA=3a1857275bfb2690fbbc5f84fa4f962945b9f13cb196bf5b663474f75faa2a7e
 ZIP_SHA=0c351b63b2d67ef584aaba6fd91270ae0d5d38b37e7b308df9f22681a55e4f93
 SETUP_SIZE=4.1 MB
