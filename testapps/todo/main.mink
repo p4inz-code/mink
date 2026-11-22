@@ -1,0 +1,289 @@
+// todo: a whole web app in one .exe. A REST API, a SQLite database kept in a file, and the web page itself.
+//
+//   mink build testapps/todo/main.mink
+//   todo [port] [database-file] [max-requests]
+//
+// Open http://127.0.0.1:8081/ in a browser. The page is inside this program; nothing else is needed.
+//   GET    /api/todos              the list, as JSON
+//   POST   /api/todos              add a todo; the request body is its title
+//   POST   /api/todos/<id>/toggle  flip done
+//   DELETE /api/todos/<id>         remove it
+// With max-requests the server stops after that many requests, which is how the tests run it.
+mod network;
+mod http;
+mod httpserver;
+mod sqlite;
+mod strings;
+
+fn page() -> Str {
+    return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Todo</title><style>body{background:#000;color:#f4f4f2;font:18px/1.5 system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px}h1{font-weight:600}form{display:flex;gap:8px}input{flex:1;padding:12px;border-radius:10px;border:1px solid #333;background:#0b0b0b;color:#fff;font:inherit}button{padding:12px 16px;border-radius:10px;border:1px solid #444;background:#eee;color:#000;font:inherit;font-weight:600;cursor:pointer}ul{list-style:none;padding:0}li{display:flex;gap:10px;align-items:center;padding:12px 0;border-bottom:1px solid #222}li.done span{text-decoration:line-through;color:#777}li span{flex:1;cursor:pointer}li button{background:none;color:#999;border:0;font-size:20px;padding:0 8px}p{color:#777}</style><h1>Todo</h1><form id=f><input id=t placeholder='What needs doing?' autofocus><button>Add</button></form><ul id=l></ul><p>One .exe, written in MINK.</p><script>async function load(){const r=await fetch('/api/todos');const a=await r.json();const l=document.getElementById('l');l.innerHTML='';for(const x of a){const li=document.createElement('li');if(x.done)li.className='done';const s=document.createElement('span');s.textContent=x.title;s.onclick=async()=>{await fetch('/api/todos/'+x.id+'/toggle',{method:'POST'});load()};const b=document.createElement('button');b.textContent='x';b.setAttribute('aria-label','Delete');b.onclick=async()=>{await fetch('/api/todos/'+x.id,{method:'DELETE'});load()};li.append(s,b);l.append(li)}}document.getElementById('f').onsubmit=async e=>{e.preventDefault();const t=document.getElementById('t');const v=t.value.trim();if(!v)return;await fetch('/api/todos',{method:'POST',body:v});t.value='';load()};load()</script>";
+}
+
+// Escapes a string for a JSON string literal. Takes (frees) it.
+fn json_escape(s: Str) -> Str {
+    let n = rt_str_len(s);
+    let mut extra = 0;
+    let mut i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b == 34 || b == 92 {
+            extra = extra + 1;
+        }
+        i = i + 1;
+    }
+    let out = rt_str_alloc(n + extra);
+    let mut o = 0;
+    i = 0;
+    while i < n {
+        let b = rt_str_byte(s, i);
+        if b == 34 || b == 92 {
+            rt_str_set_byte(out, o, 92);
+            o = o + 1;
+            rt_str_set_byte(out, o, b);
+        } else if b < 32 {
+            rt_str_set_byte(out, o, 32);
+        } else {
+            rt_str_set_byte(out, o, b);
+        }
+        o = o + 1;
+        i = i + 1;
+    }
+    rt_str_free(s);
+    return out;
+}
+
+// The whole list as a JSON array. Takes the database and gives it back.
+fn list_json(db: Str) -> (Str, Str) {
+    let r = sql_exec(db, "SELECT * FROM todos");
+    let lines = str_split(r.0, "\n");
+    let count = rt_vec_len(lines);
+    let mut out = rt_str_concat("[", "");
+    let mut first = true;
+    let mut i = 0;
+    while i < count {
+        let line = rt_vec_get(lines, i);
+        if rt_str_len(line) > 0 {
+            let id = sql_field(rt_str_concat(line, ""), 0);
+            let title = json_escape(sql_field(rt_str_concat(line, ""), 1));
+            let done = sql_field(rt_str_concat(line, ""), 2);
+            let mut flag = "false";
+            if rt_str_eq(done, "1") {
+                flag = "true";
+            }
+            let a = rt_str_concat("{\"id\":", id);
+            let b = rt_str_concat(a, ",\"title\":\"");
+            let c = rt_str_concat(b, title);
+            let d = rt_str_concat(c, "\",\"done\":");
+            let e = rt_str_concat(d, flag);
+            let piece = rt_str_concat(e, "}");
+            let mut comma = "";
+            if !first {
+                comma = ",";
+            }
+            let withc = rt_str_concat(out, comma);
+            let joined = rt_str_concat(withc, piece);
+            rt_str_free(withc);
+            rt_str_free(out);
+            out = joined;
+            first = false;
+            rt_str_free(id);
+            rt_str_free(title);
+            rt_str_free(done);
+            rt_str_free(a);
+            rt_str_free(b);
+            rt_str_free(c);
+            rt_str_free(d);
+            rt_str_free(e);
+            rt_str_free(piece);
+        }
+        i = i + 1;
+    }
+    rt_vec_free(lines);
+    let closed = rt_str_concat(out, "]");
+    rt_str_free(out);
+    return (closed, r.1);
+}
+
+fn reply(client: Int, status: Int, reason: Str, kind: Str, body: Str) {
+    let response = http_server_response(status, reason, kind, body);
+    http_server_send(client, response);
+    net_close(client);
+}
+
+// Reads the number that follows `/api/todos/` in a path. Takes (frees) the path. Returns -1 when there is none.
+fn id_in(path: Str) -> Int {
+    let n = rt_str_len(path);
+    let mut i = 11;
+    let mut id = 0;
+    let mut digits = 0;
+    while i < n && rt_str_byte(path, i) >= 48 && rt_str_byte(path, i) <= 57 {
+        id = id * 10 + (rt_str_byte(path, i) - 48);
+        digits = digits + 1;
+        i = i + 1;
+    }
+    rt_str_free(path);
+    if digits == 0 {
+        return -1;
+    }
+    return id;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    let mut port = 8081;
+    let mut dbfile = "todo.db";
+    let mut max = 0;
+    if argc >= 1 {
+        let p = rt_argv(0);
+        let parsed = str_parse_int(p);
+        if parsed.1 {
+            port = parsed.0;
+        }
+    }
+    if argc >= 2 {
+        dbfile = rt_argv(1);
+    }
+    if argc >= 3 {
+        let m = rt_argv(2);
+        let parsed = str_parse_int(m);
+        if parsed.1 {
+            max = parsed.0;
+        }
+    }
+    // Load the database, or make a new one.
+    let mut db = "";
+    if rt_fs_exists(dbfile) && rt_fs_file_size(dbfile) > 0 {
+        db = rt_fs_read(dbfile);
+    } else {
+        let made = sql_exec(sql_new(), "CREATE TABLE todos (id INT, title STR, done INT)");
+        rt_str_free(made.0);
+        db = made.1;
+    }
+    // The next id is one more than the largest in the table.
+    let mut next_id = 1;
+    let all = sql_exec(db, "SELECT * FROM todos");
+    db = all.1;
+    let rows = str_split(all.0, "\n");
+    let mut ri = 0;
+    while ri < rt_vec_len(rows) {
+        let line = rt_vec_get(rows, ri);
+        if rt_str_len(line) > 0 {
+            let idtext = sql_field(rt_str_concat(line, ""), 0);
+            let parsed = str_parse_int(idtext);
+            if parsed.1 && parsed.0 >= next_id {
+                next_id = parsed.0 + 1;
+            }
+        }
+        ri = ri + 1;
+    }
+    rt_vec_free(rows);
+
+    net_init();
+    let sock = http_server_listen("127.0.0.1", port);
+    if sock < 0 {
+        rt_print_str("todo: cannot listen on that port");
+        rt_str_free(db);
+        rt_str_free(dbfile);
+        net_cleanup();
+        return 1;
+    }
+    rt_print_str("todo on http://127.0.0.1:");
+    rt_print_int(port);
+    let mut served = 0;
+    while max == 0 || served < max {
+        let got = http_server_serve(sock, 300, 65536);
+        if got.0 != -1 {
+            served = served + 1;
+            let client = got.0;
+            let method = http_server_method(rt_str_concat(got.1, ""));
+            let path = http_server_path(rt_str_concat(got.1, ""));
+            let body = http_server_body(rt_str_concat(got.1, ""));
+            rt_str_free(got.1);
+            let mut changed = false;
+            if rt_str_eq(method, "GET") && (rt_str_eq(path, "/") || rt_str_eq(path, "/index.html")) {
+                reply(client, 200, "OK", "text/html; charset=utf-8", page());
+            } else if rt_str_eq(method, "GET") && rt_str_eq(path, "/api/todos") {
+                let listed = list_json(db);
+                db = listed.1;
+                reply(client, 200, "OK", "application/json", listed.0);
+            } else if rt_str_eq(method, "POST") && rt_str_eq(path, "/api/todos") {
+                let title = rt_str_concat(body, "");
+                if rt_str_len(title) == 0 || rt_str_len(title) > 200 {
+                    reply(client, 400, "Bad Request", "text/plain", "a title is 1 to 200 characters");
+                } else {
+                    let idtext = rt_str_from_int(next_id);
+                    let a = rt_str_concat("INSERT INTO todos VALUES (", idtext);
+                    let b = rt_str_concat(a, ", ");
+                    let quoted = sql_quote(rt_str_concat(title, ""));
+                    let c = rt_str_concat(b, quoted);
+                    rt_str_free(quoted);
+                    let sql = rt_str_concat(c, ", 0)");
+                    let r = sql_exec(db, sql);
+                    db = r.1;
+                    rt_str_free(r.0);
+                    rt_str_free(idtext);
+                    rt_str_free(a);
+                    rt_str_free(b);
+                    rt_str_free(c);
+                    next_id = next_id + 1;
+                    changed = true;
+                    reply(client, 201, "Created", "text/plain", "created");
+                }
+                rt_str_free(title);
+            } else if rt_str_eq(method, "POST") && rt_str_len(path) > 11 && id_in(rt_str_concat(path, "")) >= 0 && rt_str_len(path) > 7 {
+                let id = id_in(rt_str_concat(path, ""));
+                let idtext = rt_str_from_int(id);
+                // The SQL engine cannot select one column and cannot evaluate `done = 1 - done` (see
+                // docs/testing/FRICTION_LOG.md), so read the whole row and write the opposite value as a number.
+                let q = rt_str_concat("SELECT * FROM todos WHERE id = ", idtext);
+                let cur = sql_exec(db, q);
+                db = cur.1;
+                let current = sql_field(rt_str_concat(cur.0, ""), 2);
+                let mut flipped = "1";
+                if rt_str_eq(current, "1") {
+                    flipped = "0";
+                }
+                rt_str_free(current);
+                rt_str_free(cur.0);
+                let u1 = rt_str_concat("UPDATE todos SET done = ", flipped);
+                let u2 = rt_str_concat(u1, " WHERE id = ");
+                let u3 = rt_str_concat(u2, idtext);
+                let r = sql_exec(db, rt_str_concat(u3, ""));
+                db = r.1;
+                rt_str_free(r.0);
+                rt_str_free(idtext);
+                rt_str_free(u1);
+                rt_str_free(u2);
+                rt_str_free(u3);
+                changed = true;
+                reply(client, 200, "OK", "text/plain", "toggled");
+            } else if rt_str_eq(method, "DELETE") && rt_str_len(path) > 11 && id_in(rt_str_concat(path, "")) >= 0 {
+                let id = id_in(rt_str_concat(path, ""));
+                let idtext = rt_str_from_int(id);
+                let a = rt_str_concat("DELETE FROM todos WHERE id = ", idtext);
+                let r = sql_exec(db, rt_str_concat(a, ""));
+                db = r.1;
+                rt_str_free(r.0);
+                rt_str_free(idtext);
+                rt_str_free(a);
+                changed = true;
+                reply(client, 200, "OK", "text/plain", "deleted");
+            } else {
+                reply(client, 404, "Not Found", "text/plain", "not found");
+            }
+            if changed {
+                let copy = rt_str_concat(db, "");
+                rt_fs_write(dbfile, copy);
+                rt_str_free(copy);
+            }
+            rt_str_free(method);
+            rt_str_free(path);
+            rt_str_free(body);
+        }
+    }
+    http_server_close(sock);
+    net_cleanup();
+    rt_str_free(db);
+    rt_str_free(dbfile);
+    return 0;
+}

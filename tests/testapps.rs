@@ -164,3 +164,52 @@ fn serve_serves_files_with_types_and_refuses_bad_requests() {
     assert_eq!(status.code(), Some(0), "after its seventh request the server ends cleanly with no leaks");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn body_of(response: &str) -> &str {
+    response.split("\r\n\r\n").nth(1).unwrap_or("")
+}
+
+#[test]
+fn todo_keeps_its_list_in_a_file_and_survives_a_restart() {
+    let (exe, dir) = build("todo");
+    let db = dir.join("todo.db");
+    let port = 18_500 + (std::process::id() % 400) as u16;
+    let start = |max: &str| {
+        Command::new(&exe)
+            .args([&port.to_string(), db.to_str().unwrap(), max])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let call = |method: &str, path: &str, body: &str| {
+        http_get(
+            port,
+            &format!("{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
+        )
+    };
+
+    let mut first = start("7");
+    assert!(call("GET", "/", "").contains("<title>Todo</title>"), "the page is inside the program");
+    assert!(call("POST", "/api/todos", "Buy milk").starts_with("HTTP/1.1 201"));
+    assert!(call("POST", "/api/todos", "Say \"hi\" \\ ok").starts_with("HTTP/1.1 201"));
+    assert!(call("POST", "/api/todos", "").starts_with("HTTP/1.1 400"), "an empty title is refused");
+    assert!(call("POST", "/api/todos/1/toggle", "").starts_with("HTTP/1.1 200"));
+    let listed = call("GET", "/api/todos", "");
+    assert_eq!(
+        body_of(&listed),
+        r#"[{"id":1,"title":"Buy milk","done":true},{"id":2,"title":"Say \"hi\" \\ ok","done":false}]"#
+    );
+    assert!(call("DELETE", "/api/todos/2", "").starts_with("HTTP/1.1 200"));
+    assert_eq!(first.wait().unwrap().code(), Some(0), "no leaks");
+
+    let mut second = start("3");
+    assert_eq!(body_of(&call("GET", "/api/todos", "")), r#"[{"id":1,"title":"Buy milk","done":true}]"#, "the list came back from the file");
+    assert!(call("POST", "/api/todos", "Second run").starts_with("HTTP/1.1 201"));
+    assert_eq!(
+        body_of(&call("GET", "/api/todos", "")),
+        r#"[{"id":1,"title":"Buy milk","done":true},{"id":2,"title":"Second run","done":false}]"#,
+        "a new id is one more than the largest id in the list"
+    );
+    assert_eq!(second.wait().unwrap().code(), Some(0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
