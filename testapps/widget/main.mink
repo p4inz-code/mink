@@ -1,0 +1,133 @@
+// widget: a real Windows window with a live clock, written in MINK.
+//
+// MINK cannot hand Windows a callback yet, so the window uses the built-in STATIC window class, which
+// brings its own window procedure. The program creates the window, pumps messages itself, updates the
+// text once a second, and stops when the window is closed. Close it with the X button, or it closes
+// itself after RUN_SECONDS (0 means "stay open").
+mod time;
+
+fn run_seconds() -> Int {
+    return 4;
+}
+
+// Calls a Windows function with up to 12 arguments, taken from the word array.
+fn call(fnptr: Int, argv: Ptr<Int>, n: Int) -> Int {
+    return rt_sys_call(fnptr, argv, n);
+}
+
+fn two_digits(n: Int) -> Str {
+    if n < 10 {
+        let tail = rt_str_from_int(n);
+        let joined = rt_str_concat("0", tail);
+        rt_str_free(tail);
+        return joined;
+    }
+    return rt_str_from_int(n);
+}
+
+fn clock_text() -> Str {
+    let now = time_now();
+    let h = two_digits(time_hour(now));
+    let m = two_digits(time_minute(now));
+    let s = two_digits(time_second(now));
+    let hm = rt_str_concat(h, ":");
+    let hm2 = rt_str_concat(hm, m);
+    let hms = rt_str_concat(hm2, ":");
+    let out = rt_str_concat(hms, s);
+    rt_str_free(h);
+    rt_str_free(m);
+    rt_str_free(s);
+    rt_str_free(hm);
+    rt_str_free(hm2);
+    rt_str_free(hms);
+    return out;
+}
+
+fn main() -> Int {
+    let user = rt_sys_load_lib("user32.dll");
+    let kern = rt_sys_load_lib("kernel32.dll");
+    if user == 0 || kern == 0 {
+        rt_print_str("could not load system libraries");
+        return 1;
+    }
+    let create = rt_sys_get_proc(user, "CreateWindowExA");
+    let peek = rt_sys_get_proc(user, "PeekMessageA");
+    let translate = rt_sys_get_proc(user, "TranslateMessage");
+    let dispatch = rt_sys_get_proc(user, "DispatchMessageA");
+    let is_window = rt_sys_get_proc(user, "IsWindow");
+    let set_text = rt_sys_get_proc(user, "SetWindowTextA");
+    let destroy = rt_sys_get_proc(user, "DestroyWindow");
+    let sleep = rt_sys_get_proc(kern, "Sleep");
+
+    let class_name = rt_to_cstr("STATIC");
+    let title = rt_to_cstr("MINK clock");
+    let argv = rt_alloc(128);
+    rt_mem_store(argv, 0);
+    rt_mem_store(argv + 8, rt_ptr_to_int(class_name));
+    rt_mem_store(argv + 16, rt_ptr_to_int(title));
+    // WS_OVERLAPPEDWINDOW | WS_VISIBLE | SS_CENTER
+    rt_mem_store(argv + 24, 281280513);
+    rt_mem_store(argv + 32, 200);
+    rt_mem_store(argv + 40, 200);
+    rt_mem_store(argv + 48, 360);
+    rt_mem_store(argv + 56, 140);
+    rt_mem_store(argv + 64, 0);
+    rt_mem_store(argv + 72, 0);
+    rt_mem_store(argv + 80, 0);
+    rt_mem_store(argv + 88, 0);
+    let hwnd = call(create, argv, 12);
+    rt_free_cstr(class_name);
+    rt_free_cstr(title);
+    if hwnd == 0 {
+        rt_print_str("could not create the window");
+        rt_free(argv);
+        return 1;
+    }
+    rt_print_str("window created");
+
+    let msg = rt_alloc(64);
+    let mut ticks = 0;
+    let mut alive = true;
+    while alive {
+        // Drain every waiting message.
+        let mut more = true;
+        while more {
+            rt_mem_store(argv, rt_ptr_to_int(msg));
+            rt_mem_store(argv + 8, 0);
+            rt_mem_store(argv + 16, 0);
+            rt_mem_store(argv + 24, 0);
+            rt_mem_store(argv + 32, 1);
+            let got = call(peek, argv, 5) & 4294967295;
+            if got == 0 {
+                more = false;
+            } else {
+                rt_mem_store(argv, rt_ptr_to_int(msg));
+                call(translate, argv, 1);
+                rt_mem_store(argv, rt_ptr_to_int(msg));
+                call(dispatch, argv, 1);
+            }
+        }
+        // Refresh the clock text.
+        let text = clock_text();
+        let cstr = rt_to_cstr(text);
+        rt_mem_store(argv, hwnd);
+        rt_mem_store(argv + 8, rt_ptr_to_int(cstr));
+        call(set_text, argv, 2);
+        rt_free_cstr(cstr);
+        rt_str_free(text);
+        rt_mem_store(argv, 250);
+        call(sleep, argv, 1);
+        ticks = ticks + 1;
+        rt_mem_store(argv, hwnd);
+        alive = (call(is_window, argv, 1) & 4294967295) != 0;
+        if run_seconds() > 0 && ticks >= run_seconds() * 4 {
+            rt_mem_store(argv, hwnd);
+            call(destroy, argv, 1);
+            alive = false;
+        }
+    }
+    rt_print_str("window closed");
+    rt_free(msg);
+    rt_free(argv);
+    return 0;
+}

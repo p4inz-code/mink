@@ -9,3 +9,7 @@ program that shows it, and whether it is a bug, a missing feature or a rough edg
 | 2 | field check | A program that does not free every string ends with E-R06 and exit 106, even when its output is right | rough edge | open |
 | 3 | field check | `mink run` takes no program arguments | missing feature | open |
 | 4 | field check | A repository build cannot find the standard library when run from another folder | rough edge | open |
+| 5 | widget (spike) | A real Windows window works: create a STATIC window through `rt_sys_call`, pump messages by hand, update text, close. A window found by title, exit 0, no leaks | finding | works |
+| 6 | widget (spike) | MINK cannot hand Windows a callback, so no custom window procedure, and button clicks and painting must be polled | missing feature | open (runtime milestone) |
+| 7 | widget | `rt_to_cstr` returns `Ptr<Int>`, and `rt_mem_store` wants `Int`, so every pointer stored needs `rt_ptr_to_int` | rough edge | open |
+| 8 | https (spike) | `http_client_get` is plain HTTP only. `https_client_get(url, ca_path)` needs a CA bundle file, and with Git's `ca-bundle.crt` it returned an empty response for https://example.com/ | bug or missing feature | open, needs investigation |
