@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css">
+<style>
+.win { position:absolute; left:110px; top:110px; width:1380px; height:690px; overflow:hidden; }
+.bar { height:50px; border-bottom:1px solid rgba(255,255,255,.12); display:flex; align-items:center; justify-content:space-between; padding:0 22px; color:#aeb0b8; font-size:21px }
+.ctl { letter-spacing: 26px; color:#6f7179; font-size:20px }
+pre { padding:26px 34px; font-size:20px; line-height:1.62; white-space:pre-wrap }
+.ok { color:#fff } .err { color:#ff9a90 }
+.cap { position:absolute; left:110px; top:46px; font-size:23px; color:#b9bbc2 }
+.foot { position:absolute; left:110px; top:818px; font-size:21px; color:#8f9199 }
+</style></head><body>
+<div class="stage">
+  <div class="cap">MINK 1.0.5 &middot; <span class="dim">real output</span></div>
+  <div class="glass win">
+    <div class="bar"><span>Windows PowerShell</span><span class="ctl">&minus;&#9633;&times;</span></div>
+<pre class="mono"><span class="dim">PS F:\mink-shot&gt;</span> mink --version
+<span class="ok">mink 1.0.5</span>
+<span class="dim">PS F:\mink-shot&gt;</span> mink run hello.mink
+<span class="ok">55</span>
+<span class="dim">PS F:\mink-shot&gt;</span> mink build hello.mink
+mink: build: 'hello.mink' -&gt; 'F:\mink-shot\hello.exe' (target: x86_64-windows-pe, 2 function(s), 0 binding(s))
+<span class="dim">PS F:\mink-shot&gt;</span> .\hello.exe
+<span class="ok">55</span>
+<span class="dim">PS F:\mink-shot&gt;</span> mink check bad.mink
+<span class="err">mink: error[E-S03]: cannot assign to `total`: it is not mutable</span>
+  --&gt; bad.mink:3:5
+<span class="err">mink: error[E-S01]: cannot find name `squre` in this scope</span>
+  --&gt; bad.mink:3:21
+<span class="dim">PS F:\mink-shot&gt;</span> mink explain E-S01
+<span class="ok">Error E-S01: Unresolved Name</span>
+Common causes: typo in identifier, name used before definition, name not imported</pre>
+  </div>
+  <div class="foot">Every error has a code, a location and an explanation.</div>
+</div></body></html>

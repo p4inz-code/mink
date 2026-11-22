@@ -1,0 +1,29 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css">
+<style>
+.win { position:absolute; left:140px; top:130px; width:1320px; height:560px; overflow:hidden; }
+.tabs { height:54px; border-bottom:1px solid rgba(255,255,255,.12); display:flex; align-items:center; padding:0 26px; font-size:21px; color:#d7d8de; gap:30px }
+.tabs .on { border-bottom:2px solid #fff; padding:14px 0 12px; margin-top:2px }
+.body { display:grid; grid-template-columns: 74px 1fr; }
+.gut { padding:30px 0; text-align:right; padding-right:18px; color:#5d5f67; border-right:1px solid rgba(255,255,255,.08); font-size:34px; line-height:1.6 }
+pre { padding:30px 44px; font-size:34px; line-height:1.6 }
+.sq { text-decoration: underline wavy #ff9a90; text-underline-offset: 7px; }
+.tip { position:absolute; left:770px; top:330px; width:520px; padding:18px 24px; font-size:23px; line-height:1.45; background:#0d0d10; border:1px solid rgba(255,255,255,.22); border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.7) }
+.cap { position:absolute; left:140px; top:60px; font-size:23px; color:#b9bbc2 }
+.foot { position:absolute; left:140px; top:712px; font-size:21px; color:#8f9199; max-width:1300px }
+</style></head><body>
+<div class="stage">
+  <div class="cap">Mockup of the MINK extension for VS Code &middot; <span class="dim">the message is the real compiler's</span></div>
+  <div class="glass win">
+    <div class="tabs"><span class="on">main.mink</span><span class="dim">hello.mink</span></div>
+    <div class="body"><div class="gut mono">1<br>2<br>3<br>4<br>5<br>6<br>7</div>
+<pre class="mono"><span class="kw">fn</span> main() {
+    <span class="kw">let mut</span> total = <span class="num">0</span>;
+    <span class="kw">for</span> i <span class="kw">in</span> <span class="num">1</span>..<span class="num">6</span> {
+        total = total + <span class="sq">squre</span>(i);
+    }
+    rt_print_int(total);
+}</pre></div>
+    <div class="tip">cannot find name `squre` in this scope<br><span class="dim">mink(E-S01)</span></div>
+  </div>
+  <div class="foot">Errors as you type come from the same compiler that builds your program, through <span class="mono">mink lsp</span>. Not yet on the VS Code Marketplace.</div>
+</div></body></html>

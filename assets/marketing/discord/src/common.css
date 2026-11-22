@@ -1,0 +1,24 @@
+/* Shared look for the Discord and social images: MINK design system, black and white with grey,
+   liquid-metal and glass on surfaces only. The logo is always used flat, as supplied. */
+@font-face { font-family: "Atkinson"; font-weight: 400; src: url(../../../installer/fonts/AtkinsonHyperlegibleNext-Regular.ttf); }
+@font-face { font-family: "Atkinson"; font-weight: 600; src: url(../../../installer/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf); }
+@font-face { font-family: "Familjen"; font-weight: 400 700; src: url(../../../installer/fonts/FamiljenGroteskwght.ttf); }
+@font-face { font-family: "Plex"; font-weight: 400; src: local("Cascadia Mono"), local("Consolas"); }
+* { box-sizing: border-box; margin: 0; }
+html, body { width: 1600px; height: 900px; overflow: hidden; background: #000; color: #f4f4f2; font: 400 26px/1.5 "Atkinson", sans-serif; }
+.stage { position: relative; width: 1600px; height: 900px; padding: 72px 88px; overflow: hidden;
+  background: radial-gradient(1100px 620px at 78% 8%, #23242a 0%, #0b0b0d 52%, #000 100%); }
+.mark { position: absolute; right: -120px; bottom: -140px; width: 980px; opacity: .06; }
+.logo { height: 56px; display: block; }
+.metal { background: linear-gradient(180deg, #ffffff 0%, #d3d4da 50%, #9a9ca4 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+h1 { font: 600 92px/1.02 "Familjen", sans-serif; letter-spacing: -.02em; }
+.lead { color: #b9bbc2; font-size: 32px; max-width: 760px; }
+.glass { background: linear-gradient(145deg, rgba(255,255,255,.12), rgba(255,255,255,.025) 55%, rgba(255,255,255,.07));
+  border: 1px solid rgba(255,255,255,.17); border-radius: 18px; box-shadow: 0 1px 0 rgba(255,255,255,.18) inset, 0 30px 80px rgba(0,0,0,.6); }
+.pill { display: inline-block; padding: 8px 20px; border-radius: 99px; border: 1px solid rgba(255,255,255,.2); color: #d7d8de; font-size: 22px; background: linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,.02)); }
+.btn { display: inline-block; padding: 16px 34px; border-radius: 12px; font-weight: 600; font-size: 26px; }
+.btn.light { background: linear-gradient(180deg, #ffffff, #bfc0c6); color: #000; box-shadow: 0 1px 0 #fff inset, 0 10px 30px rgba(255,255,255,.12); }
+.btn.dark { border: 1px solid rgba(255,255,255,.25); background: linear-gradient(180deg, rgba(255,255,255,.1), rgba(255,255,255,.02)); }
+.mono { font-family: "Cascadia Mono", Consolas, monospace; }
+.dim { color: #8f9199; }
+.kw { color: #d8dae0; font-weight: 600; } .str { color: #c4c6cd; } .num { color: #fff; } .com { color: #6f7179; }
