@@ -17,3 +17,7 @@ tmp/
 examples/*/main.exe
 /report.json
 /env_report.txt
+
+# VS Code extension build output
+/editors/vscode/node_modules/
+/editors/vscode/*.vsix

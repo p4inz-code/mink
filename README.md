@@ -379,6 +379,11 @@ and is still unpublished:
   keeps your earlier choices and never takes `.mink` from another program. It can also put MINK on
   your PATH. `mink upgrade` checks GitHub only when you run it, and for an installer install
   verifies the download's SHA-256 before starting it. The association test is now 191 checks.
+- **A VS Code extension** (1.0.5 sprint, M9) — `editors/vscode` holds the MINK extension: syntax colours,
+  snippets, the MINK file icon, Run / Check / Build commands (Ctrl+F5 runs the file) and a client that starts
+  `mink lsp`, so errors, completion, hover, rename and format work in the editor. It packages cleanly as a
+  `.vsix`; it is not on the Marketplace yet. See
+  [`docs/toolchain/VSCODE_EXTENSION.md`](docs/toolchain/VSCODE_EXTENSION.md).
 - **`mink lsp`, a language server** (1.0.5 sprint, M8) — any editor that speaks the Language Server
   Protocol can now show MINK errors as you type, with completion, hover, go to definition, find
   references, rename, outline, signature help and format on save. Errors come from the real compiler, run on

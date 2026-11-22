@@ -1,0 +1,99 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "MINK",
+  "scopeName": "source.mink",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#runtime" },
+    { "include": "#calls" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.documentation.mink", "match": "///.*$" },
+        { "name": "comment.line.double-slash.mink", "match": "//.*$" },
+        { "name": "comment.block.mink", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.mink",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "name": "constant.character.escape.mink", "match": "\\\\(?:[nrt0\\\\\"']|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})" }]
+        },
+        {
+          "name": "string.quoted.single.mink",
+          "match": "'(?:\\\\(?:[nrt0\\\\\"']|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})|[^'\\\\])'"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.mink", "match": "\\b0[xX][0-9A-Fa-f_]+\\b" },
+        { "name": "constant.numeric.binary.mink", "match": "\\b0[bB][01_]+\\b" },
+        { "name": "constant.numeric.float.mink", "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?\\b" },
+        { "name": "constant.numeric.integer.mink", "match": "\\b[0-9][0-9_]*\\b" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "keyword.declaration.function.mink" }, "2": { "name": "entity.name.function.mink" } }
+        },
+        {
+          "match": "\\b(struct|enum|trait|type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "keyword.declaration.type.mink" }, "2": { "name": "entity.name.type.mink" } }
+        },
+        {
+          "match": "\\b(mod|use)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "keyword.other.module.mink" }, "2": { "name": "entity.name.namespace.mink" } }
+        },
+        {
+          "match": "\\b(const)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "storage.modifier.const.mink" }, "2": { "name": "variable.other.constant.mink" } }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.mink", "match": "\\b(if|else|match|loop|while|for|in|return|break|continue|defer|await)\\b" },
+        { "name": "storage.modifier.mink", "match": "\\b(let|mut|pub|move|async|unsafe|impl)\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [{ "name": "constant.language.mink", "match": "\\b(true|false|null)\\b" }]
+    },
+    "types": {
+      "patterns": [
+        { "name": "support.type.primitive.mink", "match": "\\b(Int|Float|Bool|Char|Str|Unit|Vec|Map|Set|Option|Result)\\b" },
+        { "name": "entity.name.type.mink", "match": "\\b[A-Z][A-Za-z0-9_]*\\b(?=\\s*(?:::|\\{|<))" }
+      ]
+    },
+    "runtime": {
+      "patterns": [{ "name": "support.function.builtin.mink", "match": "\\brt_[a-z0-9_]+\\b" }]
+    },
+    "calls": {
+      "patterns": [
+        { "name": "entity.name.function.call.mink", "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()" },
+        { "name": "entity.name.namespace.mink", "match": "\\b[a-z_][A-Za-z0-9_]*(?=::)" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.arrow.mink", "match": "->|=>" },
+        { "name": "keyword.operator.path.mink", "match": "::" },
+        { "name": "keyword.operator.mink", "match": "[-+*/%&|^!<>=]=?|&&|\\|\\||<<|>>" }
+      ]
+    }
+  }
+}

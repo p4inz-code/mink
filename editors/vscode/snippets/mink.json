@@ -1,0 +1,15 @@
+{
+  "Function": { "prefix": "fn", "body": ["fn ${1:name}(${2}) -> ${3:Int} {", "    $0", "}"], "description": "A function" },
+  "Main": { "prefix": "main", "body": ["fn main() {", "    $0", "}"], "description": "The program's entry point" },
+  "If": { "prefix": "if", "body": ["if ${1:condition} {", "    $0", "}"], "description": "if" },
+  "If else": { "prefix": "ife", "body": ["if ${1:condition} {", "    $2", "} else {", "    $0", "}"], "description": "if and else" },
+  "While": { "prefix": "while", "body": ["while ${1:condition} {", "    $0", "}"], "description": "while loop" },
+  "For": { "prefix": "for", "body": ["for ${1:i} in ${2:0}..${3:10} {", "    $0", "}"], "description": "for loop over a range" },
+  "Match": { "prefix": "match", "body": ["match ${1:value} {", "    ${2:pattern} => ${3:result},", "    _ => ${0:fallback},", "}"], "description": "match" },
+  "Struct": { "prefix": "struct", "body": ["struct ${1:Name} {", "    ${2:field}: ${3:Int},", "}"], "description": "A struct" },
+  "Enum": { "prefix": "enum", "body": ["enum ${1:Name} {", "    ${2:First},", "    ${0:Second},", "}"], "description": "An enum" },
+  "Let": { "prefix": "let", "body": ["let ${1:name} = ${0:value};"], "description": "A binding" },
+  "Let mut": { "prefix": "letm", "body": ["let mut ${1:name} = ${0:value};"], "description": "A changeable binding" },
+  "Print int": { "prefix": "print", "body": ["rt_print_int(${0:value});"], "description": "Print an integer" },
+  "Module": { "prefix": "mod", "body": ["mod ${0:name};"], "description": "Load a module" }
+}

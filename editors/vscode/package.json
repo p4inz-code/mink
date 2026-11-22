@@ -1,0 +1,87 @@
+{
+  "name": "mink-lang",
+  "displayName": "MINK",
+  "description": "MINK language support: errors as you type, completion, hover, go to definition, rename, formatting and Run, Check and Build commands.",
+  "version": "1.0.5",
+  "publisher": "p4inz",
+  "license": "Apache-2.0",
+  "author": "Atharva Patil (P4inz Interactive Labs)",
+  "homepage": "https://github.com/p4inz-code/mink",
+  "repository": { "type": "git", "url": "git+https://github.com/p4inz-code/mink.git", "directory": "editors/vscode" },
+  "bugs": { "url": "https://github.com/p4inz-code/mink/issues" },
+  "icon": "images/icon.png",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Programming Languages", "Snippets", "Formatters"],
+  "keywords": ["mink", "language server", "windows", "native"],
+  "main": "./src/extension.js",
+  "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "MINK runs the mink program from your settings. In an untrusted folder it will not start it.",
+      "restrictedConfigurations": ["mink.path"]
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "mink",
+        "aliases": ["MINK", "mink"],
+        "extensions": [".mink"],
+        "configuration": "./language-configuration.json",
+        "icon": { "light": "./images/file-icon.svg", "dark": "./images/file-icon.svg" }
+      }
+    ],
+    "grammars": [
+      { "language": "mink", "scopeName": "source.mink", "path": "./syntaxes/mink.tmLanguage.json" }
+    ],
+    "snippets": [{ "language": "mink", "path": "./snippets/mink.json" }],
+    "commands": [
+      { "command": "mink.run", "title": "MINK: Run this file", "icon": "$(play)" },
+      { "command": "mink.check", "title": "MINK: Check this file", "icon": "$(check)" },
+      { "command": "mink.build", "title": "MINK: Build this file" },
+      { "command": "mink.restartServer", "title": "MINK: Restart the language server" },
+      { "command": "mink.showOutput", "title": "MINK: Show the language server log" }
+    ],
+    "menus": {
+      "editor/title/run": [
+        { "command": "mink.run", "when": "resourceLangId == mink", "group": "navigation" }
+      ],
+      "editor/title": [
+        { "command": "mink.check", "when": "resourceLangId == mink", "group": "navigation" }
+      ]
+    },
+    "keybindings": [
+      { "command": "mink.run", "key": "ctrl+f5", "when": "editorLangId == mink" }
+    ],
+    "configuration": {
+      "title": "MINK",
+      "properties": {
+        "mink.path": {
+          "type": "string",
+          "default": "mink",
+          "scope": "machine-overridable",
+          "markdownDescription": "The `mink` program to use. The default finds it on your PATH. Put a full path here if you installed MINK somewhere else."
+        },
+        "mink.formatOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Format MINK files with mink fmt every time you save. Formatting never changes what a program says."
+        },
+        "mink.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Log the messages between VS Code and the language server."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[mink]": { "editor.tabSize": 4, "editor.insertSpaces": true }
+    }
+  },
+  "scripts": {
+    "test": "node test/validate.js"
+  },
+  "dependencies": { "vscode-languageclient": "9.0.1" }
+}
