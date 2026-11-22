@@ -245,6 +245,9 @@ pub fn detect_editors(env: &dyn Fn(&str) -> Option<String>, exists: &dyn Fn(&Pat
     add("Notepad++", &program_files, "Notepad++\\notepad++.exe");
     add("Notepad++", &program_files_x86, "Notepad++\\notepad++.exe");
     add("Sublime Text", &program_files, "Sublime Text\\sublime_text.exe");
+    add("Sublime Text", &local, "Programs\\Sublime Text\\sublime_text.exe");
+    add("Notepad++", &local, "Programs\\Notepad++\\notepad++.exe");
+    add("Cursor", &local, "Programs\\cursor\\Cursor.exe");
     let mut found: Vec<Editor> = Vec::new();
     for (name, path) in candidates {
         if exists(&path) && !found.iter().any(|e| e.name == name) {

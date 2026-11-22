@@ -533,7 +533,7 @@ pub fn open_window(port: u16, token: &str, title_dir: &Path) -> bool {
     let profile = title_dir.join("window-profile");
     std::process::Command::new(edge)
         .arg(format!("--app=http://127.0.0.1:{port}/?t={token}"))
-        .arg("--window-size=760,540")
+        .arg("--window-size=1040,720")
         .arg(format!("--user-data-dir={}", profile.display()))
         .args(["--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync"])
         .spawn()

@@ -82,6 +82,7 @@ Copy-Item -LiteralPath (Join-Path $repo 'stdlib') -Destination (Join-Path $paylo
 Copy-Item -LiteralPath (Join-Path $repo 'npm\mink\windows') -Destination (Join-Path $payload 'windows') -Recurse
 Remove-Item -LiteralPath (Join-Path $payload 'windows\README.md') -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $payload 'LICENSE')
+Copy-Item -LiteralPath (Join-Path $repo 'NOTICE') -Destination (Join-Path $payload 'NOTICE')
 
 # --- the icon and version information, added by a copy of the compiler ----------
 $driver = Join-Path $env:TEMP ("mink-driver-" + [guid]::NewGuid().ToString('N') + '.exe')

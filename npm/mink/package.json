@@ -13,7 +13,8 @@
     "stdlib",
     "windows",
     "scripts/postinstall.js",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "os": [
     "win32"
