@@ -272,6 +272,19 @@ fn e21_b64_decode_abc() {
         assert_eq!(output.trim(), "3");
     }
 }
+// The decoded bytes, not only their count. Lowercase letters used to decode as uppercase ones, so any
+// text with a lowercase letter came back wrong while the length still looked right.
+#[test]
+fn b64_decode_returns_the_right_bytes_including_lowercase_letters() {
+    let test = "fn main() { let r = base64_decode_alloc(\"aGVsbG8=\"); rt_print_str(r.0); rt_str_free(r.0); let q = base64_decode_alloc(\"c2Vjb25kIHBhc3Rl\"); rt_print_str(q.0); rt_str_free(q.0); let u = base64_url_decode_alloc(\"aGk_Pz4-\"); rt_print_str(u.0); rt_str_free(u.0); rt_exit(0); }";
+    let (code, output) = run_with_output(test);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = output.lines().map(|l| l.trim_end()).collect();
+    assert_eq!(lines[0], "hello");
+    assert_eq!(lines[1], "second paste");
+    assert_eq!(lines[2], "hi??>>", "the URL-safe alphabet decodes too");
+}
+
 #[test]
 fn e22_b64_decode_empty() {
     let test = "fn main() { let r = base64_decode_alloc(\"\"); rt_print_int(r.1); rt_str_free(r.0); rt_exit(0); }";

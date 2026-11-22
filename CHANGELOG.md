@@ -9,6 +9,8 @@ All notable changes to MINK. The newest release is first.
 
 - SQL `UPDATE` and `DELETE` no longer change every row when they meet text they do not understand (`SET n = n + 1`, a misspelt `WHERE`). They now return an error and leave the data alone. A closing `;` is no longer stored inside a value.
 
+- `base64_decode_alloc` and `base64_url_decode_alloc` decoded lowercase letters as uppercase ones, so most decoded text was wrong. They now decode correctly.
+
 ### Added
 - Four examples: `json_config`, `web_loopback`, `winapi_info`, `hash_and_compress`, and a field check of what MINK can build in `docs/language/WHAT_YOU_CAN_BUILD.md`.
 

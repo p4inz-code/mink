@@ -213,3 +213,35 @@ fn todo_keeps_its_list_in_a_file_and_survives_a_restart() {
     assert_eq!(second.wait().unwrap().code(), Some(0));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn paste_stores_any_text_and_returns_it_byte_for_byte() {
+    let (exe, dir) = build("paste");
+    let db = dir.join("paste.db");
+    let port = 18_900 + (std::process::id() % 400) as u16;
+    let mut server = Command::new(&exe)
+        .args([&port.to_string(), db.to_str().unwrap(), "6"])
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let call = |method: &str, path: &str, body: &str| {
+        http_get(
+            port,
+            &format!("{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
+        )
+    };
+    let text = "line one\nline two\ttab \"quote\" \\ end, Z and z";
+    let created = call("POST", "/paste", text);
+    assert!(created.starts_with("HTTP/1.1 201"), "{created}");
+    let id = body_of(&created).to_string();
+    assert_eq!(id.len(), 6);
+    assert!(id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()), "{id}");
+    assert_eq!(body_of(&call("GET", &format!("/p/{id}"), "")), text, "the text comes back unchanged");
+    let second = body_of(&call("POST", "/paste", "another")).to_string();
+    assert_ne!(second, id);
+    assert!(call("GET", "/p/zzzzzz", "").starts_with("HTTP/1.1 404"));
+    assert!(call("POST", "/paste", "").starts_with("HTTP/1.1 400"));
+    assert!(call("GET", "/", "").contains("<title>Paste</title>"));
+    assert_eq!(server.wait().unwrap().code(), Some(0), "no leaks");
+    let _ = std::fs::remove_dir_all(&dir);
+}

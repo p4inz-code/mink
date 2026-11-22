@@ -1,0 +1,181 @@
+// paste: a tiny pastebin. Post some text, get a short link back.
+//
+//   mink build testapps/paste/main.mink
+//   paste [port] [database-file] [max-requests]
+//
+//   POST /paste     the request body is the text (up to 10,000 bytes); the answer is the id
+//   GET  /p/<id>    the text again, as plain text
+//   GET  /          a small page with a form
+// Texts are kept in a SQLite database file (base64 inside, so any bytes are safe). With max-requests the
+// server stops after that many requests, which is how the tests run it.
+mod network;
+mod http;
+mod httpserver;
+mod sqlite;
+mod strings;
+mod encoding;
+
+fn page() -> Str {
+    return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Paste</title><style>body{background:#000;color:#f4f4f2;font:18px/1.5 system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px}textarea{width:100%;height:220px;padding:12px;border-radius:10px;border:1px solid #333;background:#0b0b0b;color:#fff;font:15px/1.5 Consolas,monospace}button{margin-top:10px;padding:12px 18px;border-radius:10px;border:1px solid #444;background:#eee;color:#000;font:inherit;font-weight:600;cursor:pointer}p{color:#999}a{color:#fff}</style><h1>Paste</h1><textarea id=t placeholder='Paste text here' autofocus></textarea><br><button id=b>Get a link</button><p id=o>One .exe, written in MINK.</p><script>document.getElementById('b').onclick=async()=>{const v=document.getElementById('t').value;if(!v)return;const r=await fetch('/paste',{method:'POST',body:v});const id=await r.text();const u=location.origin+'/p/'+id;const o=document.getElementById('o');o.textContent='';const a=document.createElement('a');a.href=u;a.textContent=u;o.append(a)}</script>";
+}
+
+fn reply(client: Int, status: Int, reason: Str, kind: Str, body: Str) {
+    let response = http_server_response(status, reason, kind, body);
+    http_server_send(client, response);
+    net_close(client);
+}
+
+// Six random lowercase letters and digits.
+fn new_id() -> Str {
+    let id = rt_str_alloc(6);
+    let mut i = 0;
+    while i < 6 {
+        let r = rt_random_next();
+        let mut v = r % 36;
+        if v < 0 {
+            v = 0 - v;
+        }
+        if v < 10 {
+            rt_str_set_byte(id, i, 48 + v);
+        } else {
+            rt_str_set_byte(id, i, 97 + v - 10);
+        }
+        i = i + 1;
+    }
+    return id;
+}
+
+// Whether an id from a URL is six lowercase letters or digits.
+fn id_ok(id: Str) -> Bool {
+    let n = rt_str_len(id);
+    let mut ok = n == 6;
+    let mut i = 0;
+    while ok && i < n {
+        let b = rt_str_byte(id, i);
+        if !((b >= 48 && b <= 57) || (b >= 97 && b <= 122)) {
+            ok = false;
+        }
+        i = i + 1;
+    }
+    rt_str_free(id);
+    return ok;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    let mut port = 8082;
+    let mut dbfile = "paste.db";
+    let mut max = 0;
+    if argc >= 1 {
+        let p = rt_argv(0);
+        let parsed = str_parse_int(p);
+        if parsed.1 {
+            port = parsed.0;
+        }
+    }
+    if argc >= 2 {
+        dbfile = rt_argv(1);
+    }
+    if argc >= 3 {
+        let m = rt_argv(2);
+        let parsed = str_parse_int(m);
+        if parsed.1 {
+            max = parsed.0;
+        }
+    }
+    let mut db = "";
+    if rt_fs_exists(dbfile) && rt_fs_file_size(dbfile) > 0 {
+        db = rt_fs_read(dbfile);
+    } else {
+        let made = sql_exec(sql_new(), "CREATE TABLE pastes (id STR, body STR)");
+        rt_str_free(made.0);
+        db = made.1;
+    }
+    rt_random_seed(rt_time_millis());
+    net_init();
+    let sock = http_server_listen("127.0.0.1", port);
+    if sock < 0 {
+        rt_print_str("paste: cannot listen on that port");
+        rt_str_free(db);
+        rt_str_free(dbfile);
+        net_cleanup();
+        return 1;
+    }
+    rt_print_str("paste on http://127.0.0.1:");
+    rt_print_int(port);
+    let mut served = 0;
+    while max == 0 || served < max {
+        let got = http_server_serve(sock, 300, 65536);
+        if got.0 != -1 {
+            served = served + 1;
+            let client = got.0;
+            let method = http_server_method(rt_str_concat(got.1, ""));
+            let path = http_server_path(rt_str_concat(got.1, ""));
+            let body = http_server_body(rt_str_concat(got.1, ""));
+            rt_str_free(got.1);
+            let mut changed = false;
+            if rt_str_eq(method, "GET") && rt_str_eq(path, "/") {
+                reply(client, 200, "OK", "text/html; charset=utf-8", page());
+            } else if rt_str_eq(method, "POST") && rt_str_eq(path, "/paste") {
+                if rt_str_len(body) == 0 || rt_str_len(body) > 10000 {
+                    reply(client, 400, "Bad Request", "text/plain", "send 1 to 10000 bytes of text");
+                } else {
+                    let id = new_id();
+                    let encoded = base64_encode(rt_str_concat(body, ""));
+                    let qid = sql_quote(rt_str_concat(id, ""));
+                    let qbody = sql_quote(encoded);
+                    let a = rt_str_concat("INSERT INTO pastes VALUES (", qid);
+                    let b = rt_str_concat(a, ", ");
+                    let c = rt_str_concat(b, qbody);
+                    let sql = rt_str_concat(c, ")");
+                    let r = sql_exec(db, sql);
+                    db = r.1;
+                    rt_str_free(r.0);
+                    rt_str_free(qid);
+                    rt_str_free(qbody);
+                    rt_str_free(a);
+                    rt_str_free(b);
+                    rt_str_free(c);
+                    changed = true;
+                    reply(client, 201, "Created", "text/plain", id);
+                }
+            } else if rt_str_eq(method, "GET") && rt_str_len(path) == 9 && rt_str_byte(path, 1) == 112 && rt_str_byte(path, 2) == 47 {
+                let id = str_sub(rt_str_concat(path, ""), 3, 9);
+                if !id_ok(rt_str_concat(id, "")) {
+                    rt_str_free(id);
+                    reply(client, 404, "Not Found", "text/plain", "not found");
+                } else {
+                    let qid = sql_quote(id);
+                    let q = rt_str_concat("SELECT * FROM pastes WHERE id = ", qid);
+                    let found = sql_exec(db, q);
+                    db = found.1;
+                    rt_str_free(qid);
+                    if rt_str_len(found.0) < 8 {
+                        rt_str_free(found.0);
+                        reply(client, 404, "Not Found", "text/plain", "not found");
+                    } else {
+                        let data = sql_field(rt_str_concat(found.0, ""), 1);
+                        rt_str_free(found.0);
+                        let decoded = base64_decode_alloc(data);
+                        reply(client, 200, "OK", "text/plain; charset=utf-8", decoded.0);
+                    }
+                }
+            } else {
+                reply(client, 404, "Not Found", "text/plain", "not found");
+            }
+            if changed {
+                let copy = rt_str_concat(db, "");
+                rt_fs_write(dbfile, copy);
+                rt_str_free(copy);
+            }
+            rt_str_free(method);
+            rt_str_free(path);
+            rt_str_free(body);
+        }
+    }
+    http_server_close(sock);
+    net_cleanup();
+    rt_str_free(db);
+    rt_str_free(dbfile);
+    return 0;
+}
