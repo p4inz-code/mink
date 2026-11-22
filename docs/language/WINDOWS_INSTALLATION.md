@@ -182,6 +182,49 @@ and puts your registry back exactly as it found it. Do not hand-edit `HKCU\Softw
 or `MINK.SourceFile`, and do not associate `.mink` with `mink.exe` directly: the compiler is not an
 editor, and a bare association can run source unexpectedly.
 
+### The setup file and the portable zip
+
+Besides npm, the 1.0.5 release comes as a Windows setup file and a portable zip. (Neither exists for 1.0.4.)
+
+- **`mink-Setup-<version>.exe`** opens a setup window with the steps Welcome, Location, Options, Install and
+  Finish. The last choices are the Windows ones (icon, right-click entries, New menu, preview, Default apps, PATH,
+  editor), the same ones `mink setup` asks about. It installs for your account in
+  `%LOCALAPPDATA%\Programs\MINK` without administrator rights, and adds MINK to Apps & features so you can
+  remove it from there.
+- **`mink-<version>-portable.zip`** is the same files with nothing installed. Unzip it anywhere, run
+  `bin\mink.exe`, and run `bin\mink.exe setup` if you want the icon and the PATH.
+- Each file has a `.sha256` next to it on the release page. To check one:
+  `certutil -hashfile mink-Setup-1.0.5.exe SHA256`.
+- The setup file is not code-signed yet, so Windows SmartScreen may ask you to confirm it. Signing is planned.
+
+For scripts, the setup file takes `/SILENT` (or `--silent`) and passes every other switch to MINK:
+
+```powershell
+mink-Setup-1.0.5.exe /SILENT --dir C:\Tools\MINK --no-path --editor notepad
+```
+
+| Switch | Effect |
+| --- | --- |
+| `--dir <folder>` | where to install |
+| `--no-association` | do not set up the `.mink` file type |
+| `--no-context-menu`, `--no-new-menu`, `--no-preview`, `--no-default-apps` | leave that part out |
+| `--no-path` | do not touch your PATH |
+| `--editor <path>` (or `notepad`) | what double-click opens |
+| `--log <file>` | write what happened to a file |
+| `--uninstall` | remove MINK |
+
+It exits with 0 when it worked. A folder that already holds other files is refused, and a damaged download is
+refused before anything is written. The full list of switches and exit codes is in
+[`docs/implementation/INSTALLER.md`](../implementation/INSTALLER.md).
+
+### More than one version
+
+The installer keeps every version in its own folder, so a new version never overwrites one that is running.
+`mink versions` lists them and `mink use <version>` changes the default. To pin a project, put the version on
+the first line of a `.mink-version` file in the project folder, for example `1.0.4`. The `MINK_VERSION` variable
+overrides both. A `mink.exe` that did not come from the installer (an npm install, a portable folder) is just the
+version it is.
+
 ### Updating
 
 `mink upgrade --check` tells you whether a newer version exists. MINK contacts the network only when

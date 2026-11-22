@@ -39,6 +39,11 @@ Commands:
                   New menu, preview) and your PATH. It asks questions;
                   --yes takes the defaults, --status shows the state, --remove
                   undoes it, --help lists every option
+  installer [--silent] [--uninstall] [--dir <folder>] ...
+                  Install or remove MINK for the current user (the setup file
+                  runs this; --help lists every option)
+  versions        List the installed versions of MINK, and which one runs
+  use <version>   Choose which installed version runs by default
   upgrade [--check] [--yes] [--to <version>]
                   Look for a newer MINK on GitHub and, for an installer install,
                   download it, verify its checksum and run it
@@ -120,6 +125,15 @@ enum Command {
     },
     /// `mink resource <exe> ...`: add an icon and version information.
     Resource(ResourceArgs),
+    /// `mink installer ...`: install or remove MINK for the current user.
+    Installer {
+        args: Vec<String>,
+    },
+    /// `mink versions` and `mink use <version>`.
+    Versions {
+        args: Vec<String>,
+        choose: bool,
+    },
     /// `mink upgrade ...`: look for a newer MINK.
     Upgrade {
         args: Vec<String>,
@@ -183,6 +197,10 @@ enum EnvCommand {
 /// Prints help and version information to stdout; reports all errors to
 /// stderr.
 pub fn main(args: &[String]) -> ExitCode {
+    // When this is the installer's launcher, run the version the project or the user chose.
+    if let Some(code) = crate::versions::dispatch(args) {
+        return code;
+    }
     match parse(args) {
         Ok(Command::Version) => {
             println!("mink {VERSION}");
@@ -284,6 +302,8 @@ pub fn main(args: &[String]) -> ExitCode {
         Ok(Command::Resource(args)) => run_resource_command(&args),
         Ok(Command::Setup { args }) => crate::setup::main(&args),
         Ok(Command::Upgrade { args }) => crate::upgrade::main(&args),
+        Ok(Command::Installer { args }) => crate::installer::main(&args),
+        Ok(Command::Versions { args, choose }) => crate::versions::main(&args, choose),
         Ok(Command::Explain { code: None }) => {
             // No code given: list all documented error codes.
             let mut codes = crate::diagnostics::all_codes();
@@ -943,6 +963,17 @@ fn parse(args: &[String]) -> Result<Command, String> {
         "run" => parse_run(&args[1..]),
         "shell" => parse_shell(&args[1..]),
         "resource" => parse_resource(&args[1..]),
+        "installer" => Ok(Command::Installer {
+            args: args[1..].to_vec(),
+        }),
+        "versions" => Ok(Command::Versions {
+            args: args[1..].to_vec(),
+            choose: false,
+        }),
+        "use" => Ok(Command::Versions {
+            args: args[1..].to_vec(),
+            choose: true,
+        }),
         "upgrade" => Ok(Command::Upgrade {
             args: args[1..].to_vec(),
         }),

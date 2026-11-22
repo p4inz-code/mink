@@ -380,6 +380,9 @@ pub fn find_kit_file(mink_exe: &Path, name: &str) -> Option<PathBuf> {
     [
         dir.join("..").join("windows").join(name),
         dir.join("windows").join(name),
+        // An installed version, `<install>\versions\<version>\bin\mink.exe`, shares the
+        // kit at `<install>\windows`.
+        dir.join("..").join("..").join("..").join("windows").join(name),
         dir.join("..").join("..").join("npm").join("mink").join("windows").join(name),
     ]
     .into_iter()
@@ -944,7 +947,8 @@ pub fn run_with(args: &SetupArgs, env: &Environment, console: &mut dyn Console, 
 // The real console and PowerShell
 // ---------------------------------------------------------------------------
 
-struct StdConsole;
+/// The real terminal.
+pub struct StdConsole;
 
 impl Console for StdConsole {
     fn print(&mut self, text: &str) {
@@ -965,7 +969,8 @@ impl Console for StdConsole {
     }
 }
 
-struct PowerShellRunner;
+/// Runs scripts with Windows PowerShell, from its full path.
+pub struct PowerShellRunner;
 
 impl PowerShellRunner {
     fn executable() -> PathBuf {

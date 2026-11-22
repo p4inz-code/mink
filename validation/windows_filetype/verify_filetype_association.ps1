@@ -66,6 +66,7 @@ $PlainTextFilter = '{5e941d80-bf96-11cd-b579-08002b30bfeb}'
 $CapabilitiesSubKey = 'Software\MINK\Capabilities'
 $MinkAppSubKey = 'Software\MINK'
 $RegisteredAppsSubKey = 'Software\RegisteredApplications'
+$UninstallSubKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\MINK'
 
 if (-not $KitDir) {
     $KitDir = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'npm\mink\windows'
@@ -340,6 +341,7 @@ function Restore-MachineState {
     Restore-Snapshot -SubKey $ProgIdSubKey $snapshots[1]
     Restore-Snapshot -SubKey $FileExtsSubKey $snapshots[2]
     Restore-Snapshot -SubKey $MinkAppSubKey $snapshots[3]
+    Restore-Snapshot -SubKey $UninstallSubKey $snapshots[5]
     # RegisteredApplications is shared with every other program, so only the MINK value
     # is put back; the other values are never read or rewritten.
     if ($null -eq $snapshots[4]) {
@@ -365,6 +367,7 @@ try {
     $snapshots[2] = Get-Snapshot -SubKey $FileExtsSubKey
     $snapshots[3] = Get-Snapshot -SubKey $MinkAppSubKey
     $snapshots[4] = Get-KeyValue -SubKey $RegisteredAppsSubKey -Name 'MINK'
+    $snapshots[5] = Get-Snapshot -SubKey $UninstallSubKey
     for ($index = 0; $index -lt 4; $index++) {
         $state = if ($null -eq $snapshots[$index]) { 'absent' } else { "$($snapshots[$index].Values.Count) value(s)" }
         Write-Note "snapshot ${index}: $state"
@@ -747,6 +750,105 @@ try {
     }
     else { Write-Note 'target\debug\mink.exe not built; the mink setup checks are skipped' }
 
+    # ---------------------------------------------------------------- step 6f
+    Write-Step '6f. the installer (mink installer) installs, upgrades and removes end to end'
+    if (Test-Path -LiteralPath $realMinkForSetup) {
+        # Native programs that print errors must not stop the script; their exit codes are asserted.
+        $ErrorActionPreference = 'Continue'
+        $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        function New-TestPayload {
+            param([string]$Dir, [string]$Version)
+            if (Test-Path -LiteralPath $Dir) { Remove-Item -LiteralPath $Dir -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path (Join-Path $Dir 'bin') | Out-Null
+            Copy-Item -LiteralPath $realMinkForSetup -Destination (Join-Path $Dir 'bin\mink.exe')
+            Copy-Item -LiteralPath (Join-Path $repoRoot 'stdlib') -Destination (Join-Path $Dir 'stdlib') -Recurse
+            Copy-Item -LiteralPath $KitDir -Destination (Join-Path $Dir 'windows') -Recurse
+            Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination (Join-Path $Dir 'LICENSE')
+            & $realMinkForSetup installer --make-manifest $Dir --version $Version | Out-Null
+        }
+        $null = Invoke-RegisterScript -Arguments @('-Uninstall', '-Quiet') -ScriptPath $packageScript
+        $payloadOne = Join-Path $work 'payload one'
+        $payloadTwo = Join-Path $work 'payload two'
+        New-TestPayload -Dir $payloadOne -Version '1.0.5'
+        New-TestPayload -Dir $payloadTwo -Version '1.0.6'
+        $installRoot = Join-Path $work 'installed root'
+        $payloadExe = Join-Path $payloadOne 'bin\mink.exe'
+
+        & $payloadExe installer --silent --payload $payloadOne --dir $installRoot --no-path --editor notepad 2>&1 | Out-Null
+        Assert-Equal -What 'installer --silent exits 0' -Expected 0 -Actual $LASTEXITCODE
+        Assert-True -What 'the version folder, launcher, kit and record exist' `
+            -Condition ((Test-Path (Join-Path $installRoot 'versions\1.0.5\bin\mink.exe')) -and (Test-Path (Join-Path $installRoot 'bin\mink.exe')) -and
+                (Test-Path (Join-Path $installRoot 'windows\register-mink-filetype.ps1')) -and (Test-Path (Join-Path $installRoot 'mink-install.json')))
+        $shim = (Resolve-Path -LiteralPath (Join-Path $installRoot 'bin\mink.exe')).Path
+        $stableIcon = (Resolve-Path -LiteralPath (Join-Path $installRoot 'windows\mink-file.ico')).Path
+        Assert-Equal -What 'the installer registered .mink' -Expected $ProgId -Actual (Get-KeyValue -SubKey $ExtensionSubKey)
+        Assert-Equal -What 'the icon is the stable copy in the install folder, not a version folder' `
+            -Expected ('"{0}",0' -f $stableIcon) -Actual (Get-KeyValue -SubKey $DefaultIconSubKey)
+        Assert-Equal -What 'the right-click entries run the launcher' -Expected ('"{0}" shell run "%1"' -f $shim) `
+            -Actual (Get-KeyValue -SubKey "$ShellSubKey\run\command")
+        Assert-Equal -What 'Apps & features lists MINK 1.0.5' -Expected '1.0.5' -Actual (Get-KeyValue -SubKey $UninstallSubKey -Name 'DisplayVersion')
+        Assert-Equal -What 'the uninstall command runs the launcher' -Expected ('"{0}" installer --uninstall' -f $shim) `
+            -Actual (Get-KeyValue -SubKey $UninstallSubKey -Name 'UninstallString')
+        Assert-Equal -What 'the launcher runs and reports the version' -Expected ('mink ' + (& $realMinkForSetup --version | ForEach-Object { $_ -replace '^mink ', '' })) `
+            -Actual ((& $shim --version) -join '')
+
+        # An upgrade keeps the old version; the launcher follows the new one.
+        $payloadTwoExe = Join-Path $payloadTwo 'bin\mink.exe'
+        & $payloadTwoExe installer --silent --payload $payloadTwo --dir $installRoot --no-path --editor notepad 2>&1 | Out-Null
+        Assert-Equal -What 'upgrading exits 0' -Expected 0 -Actual $LASTEXITCODE
+        $listing = (& $shim versions) -join "`n"
+        Assert-True -What 'mink versions lists both, with the new one as the default' `
+            -Condition ($listing -match '1\.0\.6\s+\(default' -and $listing -match '1\.0\.5')
+        Assert-Equal -What 'Apps & features now says 1.0.6' -Expected '1.0.6' -Actual (Get-KeyValue -SubKey $UninstallSubKey -Name 'DisplayVersion')
+        $pinDir = Join-Path $work 'pinned project'
+        New-Item -ItemType Directory -Force -Path $pinDir | Out-Null
+        Set-Content -Path (Join-Path $pinDir '.mink-version') -Value '1.0.5' -Encoding Ascii
+        Push-Location $pinDir
+        $pinned = (& $shim versions) -join "`n"
+        Pop-Location
+        Assert-True -What 'a .mink-version file pins the version in that folder' -Condition ($pinned -match '\* 1\.0\.5')
+        & $shim use 1.0.5 | Out-Null
+        Assert-True -What 'mink use switches the default' -Condition (((& $shim versions) -join "`n") -match '1\.0\.5\s+\(default')
+
+        # A folder with someone else's files is refused and left alone.
+        $foreign = Join-Path $work 'foreign folder'
+        New-Item -ItemType Directory -Force -Path $foreign | Out-Null
+        Set-Content -Path (Join-Path $foreign 'mine.txt') -Value 'keep' -Encoding Ascii
+        & $payloadExe installer --silent --payload $payloadOne --dir $foreign --no-association --no-path 2>&1 | Out-Null
+        Assert-Equal -What 'a folder that holds other files is refused with exit code 6' -Expected 6 -Actual $LASTEXITCODE
+        Assert-Equal -What 'and nothing was added to it' -Expected 1 -Actual @(Get-ChildItem -LiteralPath $foreign).Count
+
+        # A damaged payload is refused before anything is written.
+        $damaged = Join-Path $work 'payload damaged'
+        Copy-Item -LiteralPath $payloadOne -Destination $damaged -Recurse
+        Add-Content -Path (Join-Path $damaged 'LICENSE') -Value 'tampered'
+        $damagedRoot = Join-Path $work 'damaged root'
+        & (Join-Path $damaged 'bin\mink.exe') installer --silent --payload $damaged --dir $damagedRoot --no-association --no-path 2>&1 | Out-Null
+        Assert-Equal -What 'a damaged payload exits 7' -Expected 7 -Actual $LASTEXITCODE
+        Assert-True -What 'and creates nothing' -Condition (-not (Test-Path -LiteralPath $damagedRoot))
+
+        # Removal from the launcher: the copy in temp finishes the job.
+        $removalStart = (Get-Date).AddSeconds(-2)
+        & $shim installer --uninstall --silent 2>&1 | Out-Null
+        Assert-Equal -What 'installer --uninstall --silent exits 0' -Expected 0 -Actual $LASTEXITCODE
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Test-Path -LiteralPath $installRoot) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+        Assert-True -What 'the install folder is gone' -Condition (-not (Test-Path -LiteralPath $installRoot))
+        Assert-True -What 'the .mink file type is gone' -Condition (-not (Test-KeyExists -SubKey $ProgIdSubKey) -and -not (Test-KeyExists -SubKey $ExtensionSubKey))
+        Assert-True -What 'MINK is gone from Apps & features' -Condition (-not (Test-KeyExists -SubKey $UninstallSubKey))
+        $leftover = @()
+        $tempDeadline = (Get-Date).AddSeconds(15)
+        do {
+            $leftover = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'mink-uninstall-*' -ErrorAction SilentlyContinue |
+                Where-Object { $_.CreationTime -ge $removalStart })
+            if ($leftover.Count -gt 0) { Start-Sleep -Milliseconds 300 }
+        } while ($leftover.Count -gt 0 -and (Get-Date) -lt $tempDeadline)
+        Assert-Equal -What 'no temporary removal folder is left behind' -Expected 0 -Actual $leftover.Count
+        $null = Invoke-RegisterScript -Arguments @() -ScriptPath $packageScript
+        $ErrorActionPreference = 'Stop'
+    }
+    else { Write-Note 'target\debug\mink.exe not built; the installer checks are skipped' }
+
     # ---------------------------------------------------------------- step 7
     Write-Step '7. open behaviour with an editor bound'
     $probeExe = Join-Path $package 'probe-editor.exe'
@@ -989,13 +1091,13 @@ public static class MinkFiletypeProbe
     # ---------------------------------------------------------------- step 15
     Write-Step '15. previous machine state restored'
     Restore-MachineState
-    $subKeys = @($ExtensionSubKey, $ProgIdSubKey, $FileExtsSubKey, $MinkAppSubKey)
+    $subKeys = @($ExtensionSubKey, $ProgIdSubKey, $FileExtsSubKey, $MinkAppSubKey, $null, $UninstallSubKey)
     $restored = $true
     if ("$(Get-KeyValue -SubKey $RegisteredAppsSubKey -Name 'MINK')" -ne "$($snapshots[4])") {
         $restored = $false
         Write-Note 'not restored: the MINK value under RegisteredApplications'
     }
-    for ($index = 0; $index -lt 4; $index++) {
+    foreach ($index in @(0, 1, 2, 3, 5)) {
         if (-not (Test-Snapshot -SubKey $subKeys[$index] -Snapshot $snapshots[$index])) {
             $restored = $false
             Write-Note "not restored: $($subKeys[$index])"

@@ -271,6 +271,8 @@ executed evidence and the exact claim boundary.
 | `mink version` | Print the compiler version |
 | `mink shell <run\|check\|build> <file>` | Run one of those and keep the console open until Enter; the Explorer right-click entries use it |
 | `mink setup` | Set up `.mink` files in Windows (icon, right-click entries, New menu, preview) and your PATH. It asks questions; `--yes` takes the defaults, `--status` shows the state, `--remove` undoes it |
+| `mink versions`, `mink use <version>` | List the installed versions of MINK and choose which one runs by default (installer installs; a `.mink-version` file pins a project) |
+| `mink installer` | Install or remove MINK for the current user. The setup file runs this; `--help` lists the switches |
 | `mink upgrade` | Check GitHub for a newer MINK (`--check`), and for an installer install download, verify and run it |
 | `mink resource <exe> --icon <ico> ...` | Add an icon and version information to a Windows executable that has none |
 | `mink help` | Show usage information |
@@ -375,6 +377,12 @@ and is still unpublished:
   keeps your earlier choices and never takes `.mink` from another program. It can also put MINK on
   your PATH. `mink upgrade` checks GitHub only when you run it, and for an installer install
   verifies the download's SHA-256 before starting it. The association test is now 191 checks.
+- **A setup file, a portable zip and side-by-side versions** (1.0.5 sprint, M6) — `mink-Setup-<version>.exe`
+  opens a setup window (Welcome, Location, Options, Install, Finish) and installs for your account without
+  administrator rights. It adds MINK to Apps & features and removes it again cleanly. Every version lives in its
+  own folder, `mink versions` and `mink use` pick one, and a `.mink-version` file pins a project. There is also
+  a portable zip. Both are built by `tools/build_installer.ps1`, come with SHA-256 files, and are not code-signed
+  yet. See [`docs/implementation/INSTALLER.md`](docs/implementation/INSTALLER.md).
 - **A clearer error when a local file hides a bundled module** — a leftover `json.mink`
   next to your program is loaded instead of the bundled `json` module, as it always was. When
   that breaks the build, the compiler now says which file it loaded, where the bundled one is,
