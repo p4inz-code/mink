@@ -245,3 +245,60 @@ fn paste_stores_any_text_and_returns_it_byte_for_byte() {
     assert_eq!(server.wait().unwrap().code(), Some(0), "no leaks");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn livelog_streams_history_and_new_lines_and_ends_cleanly() {
+    use std::io::{Read, Write};
+    let (exe, dir) = build("livelog");
+    let log = dir.join("app.log");
+    std::fs::write(&log, "old 1\nold 2\n").unwrap();
+    let port = 19_300 + (std::process::id() % 400) as u16;
+    let mut server = Command::new(&exe)
+        .args([log.to_str().unwrap(), &port.to_string(), "2"])
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(http_get(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").contains("EventSource"), "the page streams from /events");
+    let mut stream = None;
+    for _ in 0..40 {
+        if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            stream = Some(s);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let mut stream = stream.expect("the server never answered");
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(300))).unwrap();
+    stream.write_all(b"GET /events HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    let mut seen = String::new();
+    let mut read_until = |wanted: &str, seen: &mut String| {
+        for _ in 0..40 {
+            let mut buf = [0u8; 1024];
+            if let Ok(n) = stream.read(&mut buf) {
+                seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            if seen.contains(wanted) {
+                return true;
+            }
+        }
+        false
+    };
+    assert!(read_until("data: old 2", &mut seen), "history first: {seen}");
+    assert!(seen.contains("text/event-stream") && seen.contains("data: old 1"), "{seen}");
+    let mut file = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    file.write_all(b"new A\r\n").unwrap();
+    assert!(read_until("data: new A\n", &mut seen), "a new line arrives live, without its carriage return: {seen:?}");
+    drop(stream);
+    // Streams that were closed are noticed on the next keep-alive, then the server ends.
+    let mut waited = 0;
+    let status = loop {
+        if let Some(s) = server.try_wait().unwrap() {
+            break s;
+        }
+        waited += 1;
+        assert!(waited < 100, "the server did not end after the stream closed");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert_eq!(status.code(), Some(0), "no leaks");
+    let _ = std::fs::remove_dir_all(&dir);
+}

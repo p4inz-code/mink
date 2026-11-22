@@ -10199,7 +10199,7 @@ fn emit_fs_exists(code: &mut Code) {
     code.sub_rsp(64); // RSP = RBP-96
     code.mov_rr(Reg::Rcx, Reg::Rax); // lpFileName
     code.movabs(Reg::Rdx, 0x8000_0000u64); // dwDesiredAccess = GENERIC_READ
-    code.mov_r32_imm32(Reg::R8, 1); // dwShareMode = FILE_SHARE_READ
+    code.mov_r32_imm32(Reg::R8, 7); // dwShareMode = FILE_SHARE_READ | WRITE | DELETE, so a file another program is writing can still be read
     code.xor_rr32(Reg::R9, Reg::R9); // lpSecurityAttributes = NULL
     code.mov_mem_imm32(Reg::Rsp, 32, 3); // dwCreationDisposition = OPEN_EXISTING
     code.mov_mem_imm32(Reg::Rsp, 40, 0x0200_0000); // dwFlagsAndAttributes = FILE_FLAG_BACKUP_SEMANTICS (allows dirs)
@@ -10250,7 +10250,7 @@ fn emit_fs_file_size(code: &mut Code) {
     code.sub_rsp(64); // RSP = RBP-96 ≡ 0 mod 16
     code.mov_rr(Reg::Rcx, Reg::Rax); // lpFileName
     code.movabs(Reg::Rdx, 0x8000_0000u64); // dwDesiredAccess = GENERIC_READ
-    code.mov_r32_imm32(Reg::R8, 1); // dwShareMode = FILE_SHARE_READ
+    code.mov_r32_imm32(Reg::R8, 7); // dwShareMode = FILE_SHARE_READ | WRITE | DELETE, so a file another program is writing can still be read
     code.xor_rr32(Reg::R9, Reg::R9); // lpSecurityAttributes = NULL
     code.mov_mem_imm32(Reg::Rsp, 32, 3); // dwCreationDisposition = OPEN_EXISTING
     code.mov_mem_imm32(Reg::Rsp, 40, 0); // dwFlagsAndAttributes = 0
@@ -10316,11 +10316,11 @@ fn emit_fs_read(code: &mut Code) {
     // [rbp-48]=LARGE_INTEGER size from GetFileSizeEx
     code.sub_rsp(64);
     code.mov_mem_r(Reg::Rbp, -8, Reg::Rax); // cstr
-    // CreateFileA(cstr, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
+    // CreateFileA(cstr, GENERIC_READ, FILE_SHARE_READ|WRITE|DELETE, NULL, OPEN_EXISTING, 0, NULL)
     code.sub_rsp(64); // 32 shadow + 24 stack args + 8 pad = 64
     code.mov_rr(Reg::Rcx, Reg::Rax);
     code.movabs(Reg::Rdx, 0x8000_0000u64);
-    code.mov_r32_imm32(Reg::R8, 1);
+    code.mov_r32_imm32(Reg::R8, 7); // FILE_SHARE_READ | WRITE | DELETE
     code.xor_rr32(Reg::R9, Reg::R9);
     code.mov_mem_imm32(Reg::Rsp, 32, 3); // OPEN_EXISTING
     code.mov_mem_imm32(Reg::Rsp, 40, 0);

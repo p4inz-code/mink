@@ -21,6 +21,7 @@ mink build testapps/jsonq/main.mink
 | [serve](serve/main.mink) | A static file server for one folder on 127.0.0.1, with content types and refusal of `..` paths | 198 | see build | 300 requests for a 19 KB file, all correct, server exit 0 with no leaks. Serves this website; tested |
 | [todo](todo/main.mink) | A whole web app in one .exe: REST API, SQLite database in a file, and the page itself | 289 | see build | Add, toggle, delete and restart verified over HTTP, JSON escaping correct, exit 0 with no leaks; tested |
 | [paste](paste/main.mink) | A tiny pastebin: post text, get a six-character link | 181 | see build | Newlines, tabs, quotes and backslashes come back byte for byte; exit 0 with no leaks; tested. Found a base64 decoding bug (fixed) |
+| [livelog](livelog/main.mink) | Streams a log file to a web page live, with server-sent events | 176 | see build | Last 20 lines on connect, new lines live, CRLF handled, ends cleanly with no leaks when the stream closes; tested |
 | [widget](widget/main.mink) | A real Windows window with a live clock | 133 | see build | Window found by title, closes by itself, exit 0, no leaks. Not in the automated tests, since it opens a window |
 
 Numbers were measured on the author's PC (Windows 11) with the 1.0.5 release build. More apps are added as

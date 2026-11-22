@@ -11,6 +11,8 @@ All notable changes to MINK. The newest release is first.
 
 - `base64_decode_alloc` and `base64_url_decode_alloc` decoded lowercase letters as uppercase ones, so most decoded text was wrong. They now decode correctly.
 
+- A MINK program can now read a file that another program has open for writing, such as a live log. Before, the read failed with a sharing violation and returned nothing.
+
 ### Added
 - Four examples: `json_config`, `web_loopback`, `winapi_info`, `hash_and_compress`, and a field check of what MINK can build in `docs/language/WHAT_YOU_CAN_BUILD.md`.
 
