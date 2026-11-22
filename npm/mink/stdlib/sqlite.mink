@@ -347,7 +347,7 @@ fn _vtok(a: Ptr<Int>, p: Int) -> (Int, Int, Int) {
     let mut i = s;
     while i < n {
         let d = _sq(a, i);
-        if _is_ws(d) || d == 44 || d == 41 {
+        if _is_ws(d) || d == 44 || d == 41 || d == 59 {
             break;
         }
         i = i + 1;
@@ -906,6 +906,21 @@ fn _where(a: Ptr<Int>, cp: Int, cend: Int, tst: Int, ten: Int, r1: Int, r2: Int)
 }
 
 // Position of the WHERE condition, or -1.
+// Whether the rest of a statement from `q` is empty (or a closing `;`) or starts with WHERE. UPDATE and
+// DELETE check this so that text they do not understand, such as `SET n = n + 1` or a misspelt WHERE, is an
+// error and never turns into a statement that changes every row.
+fn _tail_ok(a: Ptr<Int>, q: Int) -> Bool {
+    let s = _iscan_skip(a, q);
+    if s >= _slen(a) {
+        return true;
+    }
+    if _sq(a, s) == 59 {
+        return true;
+    }
+    let w = _iscan_kw(a, q);
+    return _ieq(a, w.0, w.1, "WHERE");
+}
+
 fn _where_start(a: Ptr<Int>, q: Int) -> Int {
     let w = _iscan_kw(a, q);
     if _ieq(a, w.0, w.1, "WHERE") {
@@ -1305,6 +1320,9 @@ fn _do_delete(a: Ptr<Int>, p: Int) -> (Ptr<Int>, Ptr<Int>, Int) {
     if tbl.0 < 0 {
         return _err(a, "ERROR: no such table");
     }
+    if !_tail_ok(a, nt.1) {
+        return _err(a, "ERROR: expected WHERE or the end of the statement after the table name");
+    }
     let cp = _where_start(a, nt.1);
     let cend = _slen(a);
     let dn = _dlen(a);
@@ -1378,6 +1396,9 @@ fn _do_update(a: Ptr<Int>, p: Int) -> (Ptr<Int>, Ptr<Int>, Int) {
     let nv1 = t.0;
     let nv2 = t.1;
     let nvk = t.2;
+    if !_tail_ok(a, t.1 + 1) {
+        return _err(a, "ERROR: SET takes one plain value, not an expression; expected WHERE or the end");
+    }
     let cp = _where_start(a, t.1 + 1);
     let cend = _slen(a);
     let ncols = _ncols(a, tbl.0, tbl.1);
