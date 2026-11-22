@@ -86,7 +86,7 @@ editor and print use.
 | Content type | `text/x-mink` |
 | Perceived type | `text` |
 | Default icon | `mink-file.ico` (quoted path, index 0) |
-| Default action | **none** — Windows' normal "Open with" flow |
+| Default action | **Edit** (Notepad, or the editor given with `-Editor`); never run or build |
 | Scope | per-user (`HKCU`), no administrator rights, `HKLM` untouched |
 
 Registry layout written by the script:
@@ -96,15 +96,35 @@ Registry layout written by the script:
 | `HKCU\Software\Classes\.mink` | `(default)` = `MINK.SourceFile`, `Content Type`, `PerceivedType` |
 | `HKCU\Software\Classes\MINK.SourceFile` | `(default)` and `FriendlyTypeName` = `MINK Source File` |
 | `HKCU\Software\Classes\MINK.SourceFile\DefaultIcon` | `"<install>\mink-file.ico",0` |
-| `HKCU\Software\Classes\MINK.SourceFile\shell\open\command` | only with `-Editor`: `"<editor.exe>" "%1"` |
+| `HKCU\Software\Classes\MINK.SourceFile\shell` | `(default)` = `edit` (or `open` when `-Editor` is given): the double-click verb |
+| `...\shell\run`, `check`, `build` | `Run with MINK`, `Check with MINK`, `Build executable`; command `"<install>\mink.exe" shell <verb> "%1"`; `Icon` = `mink-app.ico`; `MultiSelectModel` = `Single` |
+| `...\shell\edit\command` | `"<notepad.exe>" "%1"` (not added when an editor is bound; `open` does that job) |
+| `...\shell\open\command` | only with `-Editor`: `"<editor.exe>" "%1"`, labelled `Edit` |
+| `HKCU\Software\Classes\.mink\ShellNew` | `FileName` = `windows\template.mink` (or `NullFile` when the template is missing) |
+| `HKCU\Software\Classes\.mink\PersistentHandler` | the plain-text search filter, as `.txt` uses |
+| `HKCU\Software\Classes\.mink\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}` | the preview handler read from this PC's `.txt`, so it is right for the Windows version |
+| `HKCU\Software\MINK\Capabilities` and `HKCU\Software\RegisteredApplications\MINK` | the Settings > Default apps entry |
+| `HKCU\Software\Classes\MINK.SourceFile\MinkOwned` | which of the optional facilities this script added, so uninstall removes exactly those |
 | `HKCU\...\Explorer\FileExts\.mink\OpenWithProgids` | `MINK.SourceFile` (REG_NONE), so the type appears in the Open-with list |
 
-**Double-clicking a `.mink` file never compiles or runs it.** No `open` verb is
-registered by default, so the shell cannot execute anything for the type: Windows shows
-its normal picker, the user's answer is remembered by Windows in the user-owned
-`FileExts\.mink\UserChoice`, and MINK never becomes the handler of its own source files.
-To bind one editor explicitly, pass `-Editor`; the command is then the editor applied to
-the file, with both paths quoted.
+**Double-clicking a `.mink` file never compiles or runs it.** The default verb, named by the
+`(default)` value of the `shell` key, is `edit`, which opens Notepad. With `-Editor` the default
+is `open`, the chosen editor applied to the file with both paths quoted. The right-click verbs
+`run`, `check` and `build` only run when the user picks them. They are single-selection, so
+selecting several files does not offer them. If the user has already chosen an app in
+Windows (`FileExts\.mink\UserChoice`), that choice is Windows' and wins; the script never
+writes or removes it. `edit` is always registered when any verb is, because without a named
+default Windows would pick the first verb alphabetically, which is `build`.
+
+The verb commands run `mink.exe shell <run|check|build> "<file>"`, a small command that runs
+the named action, then waits for Enter when it has a terminal, so Explorer's console window
+does not vanish before the output can be read. `mink.exe` is started directly, without
+`cmd.exe`, so characters such as `&` or `%` in a file name are never interpreted by a shell.
+
+**Ownership of the extras.** The New-menu entry, the search filter and the preview handler are
+only written when `.mink` has none of its own. If another application registered one, it is left
+alone and the run says so. The ones this script adds are listed in `MinkOwned`, and `-Uninstall`
+removes exactly those.
 
 **Taking `.mink` over from another application.** If another ProgID currently owns
 `.mink`, registration refuses and changes nothing until `-Force` is given. `-Force`
@@ -134,7 +154,7 @@ set found in the compiler, the package manager, the standard library, `examples/
 
 | Extension | Purpose | Status | Opening application | Windows association | Icon | Registration | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `.mink` | MINK source: programs, modules (`mod x;` → `x.mink`), the 27 stdlib modules, tests | **supported** | none by design (Windows' own "Open with"; `-Editor` binds one) | `HKCU\Software\Classes\.mink` → `MINK.SourceFile`, content type `text/x-mink`, perceived type `text` | `mink-file.ico` — 7 frames | `register-mink-filetype.ps1` (per-user) | 88-check harness, live registry cycle on this machine, Explorer visual check at 16 px and large-icon view, shell bitmap pixel-compared with the official frame |
+| `.mink` | MINK source: programs, modules (`mod x;` → `x.mink`), the 27 stdlib modules, tests | **supported** | Notepad by default; `-Editor` binds another | `HKCU\Software\Classes\.mink` → `MINK.SourceFile`, content type `text/x-mink`, perceived type `text` | `mink-file.ico` — 7 frames | `register-mink-filetype.ps1` (per-user) | 140-check harness, live registry cycle on this machine, Explorer visual check at 16 px and large-icon view, shell bitmap pixel-compared with the official frame |
 | `mink.toml` | Package manifest read and edited by `mink init/add/remove/install/update` (`src/package/manifest.rs`) | **supported** (project metadata) | any TOML/text editor the user chooses | **not registered**, and must not be: the extension is `.toml`, shared with unrelated applications | none — no manifest artwork exists in the brand kit, so none was invented | none | static inspection of `src/package/` and `tests/package_manager.rs`; deliberately outside the association |
 | `mink.lock` | Lockfile written by `mink install`/`update` (`src/package/lock.rs`) | **supported, generated** — not hand-edited | text editor | **not registered** (`.lock` is shared) | none | none | same as `mink.toml` |
 | `.mink/` | Per-project state directory: installed packages, environment state (`src/package/env.rs`, `STATE_DIR`) | **internal** | not applicable — it is a directory | not applicable | not applicable | not applicable | static inspection |
@@ -205,7 +225,9 @@ powershell -ExecutionPolicy Bypass -File "$package\windows\register-mink-filetyp
 ```
 
 Useful switches: `-InstallDir <dir>` (`mink.exe`'s `bin` directory or its parent),
-`-MinkExe <path>`, `-IconPath <ico>`, `-Editor <editor.exe>`, `-Force`, `-Uninstall`. The
+`-MinkExe <path>`, `-IconPath <ico>`, `-Editor <editor.exe>`, `-Verbs run,check,build,edit`,
+`-NoContextMenu`, `-NoNewMenu`, `-NoPreview`, `-NoDefaultApps`, `-Quiet`, `-Force`,
+`-Uninstall`. The
 script exits 0 on success and 1 on refusal or error, and it is idempotent: repeated runs
 produce the same registry state, including repair after manual edits.
 
@@ -281,7 +303,7 @@ CRCs, IDAT length, alpha channel, file-name/dimension agreement), checks both IC
 confirms the shipped kit copies are byte-identical to the brand tree, and reports whether
 `mink.exe` has a resource directory.
 
-`verify_filetype_association.ps1` (88 checks, 15 steps) works in a temporary install tree
+`verify_filetype_association.ps1` (88 checks, 15 steps at the time; 140 checks after the 1.0.5 sprint, see 10.1) works in a temporary install tree
 whose path contains a space: it snapshots the keys it touches, proves that an association
 owned by another application is not taken over without `-Force` and that `-Force`
 preserves that application's entries, registers from the package layout alone, and then
@@ -376,6 +398,25 @@ the ICO and visually inspected as rendered frames, but Explorer was driven only 
 details and large-icon views, not at every size. No installer exists, so persistence
 across an upgrade or uninstall of MINK itself is untested (§11.2); the icon path is
 captured at registration time, so moving the package requires re-running the script.
+
+### 10.1 1.0.5 sprint, M3: the extras
+
+The validator now has **140 checks** (it had 88). The 52 new ones cover:
+
+- the double-click default verb is `edit`, and a real double-click on this PC opened Notepad
+  and did not compile the file;
+- each right-click entry's label, command, icon and single-selection setting, and that
+  Windows itself resolves the `run` verb to `mink.exe shell run "%1"`;
+- the New-menu template, the search filter, the preview handler (compared with what `.txt` uses
+  on the same PC), the Default apps entry and the `MinkOwned` record;
+- each option (`-NoContextMenu`, `-NoNewMenu`, `-NoPreview`, `-NoDefaultApps`, `-Verbs`) turning
+  its facility off and the rest staying;
+- the `check` verb's registered command line, executed with a real compiler: exit 0, header and
+  result printed, no `.exe` produced;
+- with an editor bound: `open` is the default and no duplicate `edit` entry is added;
+- another application's New-menu entry surviving both a `-Force` takeover and `-Uninstall`;
+- uninstall leaving none of the extras behind, and the machine returning to its starting state,
+  including the `MINK` value under `RegisteredApplications`.
 
 ## 11. Limitations
 

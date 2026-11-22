@@ -31,6 +31,9 @@ Commands:
   repl [path]     Start an interactive compile-eval session (EOF/:quit exits)
   explain [code]  Explain an error code (e.g., mink explain E-T01);
                   with no code, list all documented error codes
+  shell <run|check|build> <path>
+                  Run one of those commands and keep the console open until
+                  Enter is pressed (the Explorer right-click entries use this)
   version         Print the compiler version
   help            Print this help
 
@@ -101,6 +104,11 @@ enum Command {
     },
     Explain {
         code: Option<String>,
+    },
+    /// `mink shell <run|check|build> <path>`: run a command, then wait for Enter.
+    Shell {
+        verb: String,
+        path: PathBuf,
     },
     /// `mink init [path]`: write a starter manifest.
     Init {
@@ -249,6 +257,7 @@ pub fn main(args: &[String]) -> ExitCode {
                 }
             }
         }
+        Ok(Command::Shell { verb, path }) => run_shell_command(&verb, &path),
         Ok(Command::Explain { code: None }) => {
             // No code given: list all documented error codes.
             let mut codes = crate::diagnostics::all_codes();
@@ -612,6 +621,51 @@ fn parse_build(args: &[String], command: &str) -> Result<Command, String> {
     Ok(Command::Build { path, target })
 }
 
+/// Parses `mink shell <run|check|build> <path>`.
+fn parse_shell(args: &[String]) -> Result<Command, String> {
+    const USAGE: &str = "usage: mink shell <run|check|build> <path>";
+    let verb = args
+        .first()
+        .ok_or(format!("missing command for 'shell' ({USAGE})"))?;
+    if !matches!(verb.as_str(), "run" | "check" | "build") {
+        return Err(format!("unknown shell command '{verb}' ({USAGE})"));
+    }
+    let path = args
+        .get(1)
+        .ok_or(format!("missing path argument for 'shell {verb}' ({USAGE})"))?;
+    if let Some(extra) = args.get(2) {
+        return Err(format!("unexpected argument '{extra}' for 'shell'"));
+    }
+    Ok(Command::Shell {
+        verb: verb.clone(),
+        path: PathBuf::from(path),
+    })
+}
+
+/// Runs `run`, `check` or `build` on `path` and keeps the console open.
+///
+/// Windows Explorer starts a console program in a new window that closes as
+/// soon as the program exits, so a right-click "Run with MINK" would flash and
+/// vanish before its output could be read. This waits for Enter first, but
+/// only when standard input is a terminal: a script or a test that pipes input
+/// gets the plain exit code with no pause.
+fn run_shell_command(verb: &str, path: &Path) -> ExitCode {
+    use std::io::{BufRead, IsTerminal, Write};
+
+    println!("MINK {verb}: {}", path.display());
+    println!();
+    let code = main(&[verb.to_string(), path.display().to_string()]);
+    println!();
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        print!("Press Enter to close this window.");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        let _ = stdin.lock().read_line(&mut line);
+    }
+    code
+}
+
 /// Parses the arguments of the `run` command: a path plus an optional
 /// `--target <name>` (or `--target=<name>`) in either order.
 fn parse_run(args: &[String]) -> Result<Command, String> {
@@ -703,6 +757,7 @@ fn parse(args: &[String]) -> Result<Command, String> {
             Ok(Command::Explain { code })
         }
         "run" => parse_run(&args[1..]),
+        "shell" => parse_shell(&args[1..]),
         "repl" => parse_repl(&args[1..]),
         "test" => parse_build(&args[1..], "test").map(|cmd| match cmd {
             Command::Build { path, target } => Command::Test { path, target },

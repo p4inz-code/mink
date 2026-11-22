@@ -17,7 +17,9 @@
          replaced without -Force, and -Force preserves that application's own entries
       4. uninstall after a takeover restores the previous owner
       5. from a clean extension, register through the package layout alone and check the
-         file type, source-file icon and open behaviour as the shell reports them
+         file type, source-file icon, right-click entries, New menu, preview, Default apps
+         entry and open behaviour as the shell reports them
+     5b. (step 6b below) each option turns its facility off, and a registered verb runs
       6. repeated registration is idempotent (same values, same subkeys, one session)
       7. with an editor bound, opening the file through the association reaches the
          editor and never compiles or runs the source
@@ -56,6 +58,14 @@ $DefaultIconSubKey = 'Software\Classes\MINK.SourceFile\DefaultIcon'
 $OpenCommandSubKey = 'Software\Classes\MINK.SourceFile\shell\open\command'
 $FileExtsSubKey = 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.mink'
 $OpenWithSubKey = 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.mink\OpenWithProgids'
+$ShellSubKey = 'Software\Classes\MINK.SourceFile\shell'
+$NewMenuSubKey = 'Software\Classes\.mink\ShellNew'
+$PersistentHandlerSubKey = 'Software\Classes\.mink\PersistentHandler'
+$PreviewSubKey = 'Software\Classes\.mink\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}'
+$PlainTextFilter = '{5e941d80-bf96-11cd-b579-08002b30bfeb}'
+$CapabilitiesSubKey = 'Software\MINK\Capabilities'
+$MinkAppSubKey = 'Software\MINK'
+$RegisteredAppsSubKey = 'Software\RegisteredApplications'
 
 if (-not $KitDir) {
     $KitDir = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'npm\mink\windows'
@@ -287,12 +297,12 @@ function Get-ShellFileInfo {
 }
 
 function Get-AssocString {
-    param([string]$Association, [int]$StringType)
+    param([string]$Association, [int]$StringType, [string]$Extra = $null)
     $bufferSize = [uint32]1024
     $buffer = New-Object System.Text.StringBuilder 1024
     try {
         [MinkFiletypeTest.ShellApi]::AssocQueryString($ASSOCF_NONE, $StringType, $Association,
-            $null, $buffer, [ref]$bufferSize)
+            $Extra, $buffer, [ref]$bufferSize)
         return $buffer.ToString()
     }
     catch {
@@ -329,6 +339,18 @@ function Restore-MachineState {
     Restore-Snapshot -SubKey $ExtensionSubKey $snapshots[0]
     Restore-Snapshot -SubKey $ProgIdSubKey $snapshots[1]
     Restore-Snapshot -SubKey $FileExtsSubKey $snapshots[2]
+    Restore-Snapshot -SubKey $MinkAppSubKey $snapshots[3]
+    # RegisteredApplications is shared with every other program, so only the MINK value
+    # is put back; the other values are never read or rewritten.
+    if ($null -eq $snapshots[4]) {
+        $key = Get-CurrentUserKey -SubKey $RegisteredAppsSubKey -Writable
+        if ($key) {
+            try { $key.DeleteValue('MINK', $false) } finally { $key.Dispose() }
+        }
+    }
+    else {
+        Set-KeyValue -SubKey $RegisteredAppsSubKey -Name 'MINK' -Value $snapshots[4]
+    }
 }
 
 try {
@@ -341,7 +363,9 @@ try {
     $snapshots[0] = Get-Snapshot -SubKey $ExtensionSubKey
     $snapshots[1] = Get-Snapshot -SubKey $ProgIdSubKey
     $snapshots[2] = Get-Snapshot -SubKey $FileExtsSubKey
-    for ($index = 0; $index -lt 3; $index++) {
+    $snapshots[3] = Get-Snapshot -SubKey $MinkAppSubKey
+    $snapshots[4] = Get-KeyValue -SubKey $RegisteredAppsSubKey -Name 'MINK'
+    for ($index = 0; $index -lt 4; $index++) {
         $state = if ($null -eq $snapshots[$index]) { 'absent' } else { "$($snapshots[$index].Values.Count) value(s)" }
         Write-Note "snapshot ${index}: $state"
     }
@@ -368,6 +392,7 @@ try {
     Set-KeyValue -SubKey $ExtensionSubKey -Name '' -Value 'Contoso.SourceFile'
     Set-KeyValue -SubKey $ExtensionSubKey -Name 'DecoyOwned' -Value 'keep'
     Set-KeyValue -SubKey "$ExtensionSubKey\OpenWithProgids" -Name 'Contoso.SourceFile' -Value ''
+    Set-KeyValue -SubKey $NewMenuSubKey -Name 'FileName' -Value 'C:\Contoso\template.txt'
 
     $run = Invoke-RegisterScript -Arguments @('-InstallDir', $package)
     Assert-Equal -What 'refuses without -Force' -Expected 1 -Actual $run.ExitCode
@@ -387,6 +412,10 @@ try {
         -Condition ((Get-KeySubNames -SubKey $ExtensionSubKey) -contains 'OpenWithProgids')
     Assert-Equal -What 'previous owner recorded for undo' -Expected 'Contoso.SourceFile' `
         -Actual (Get-KeyValue -SubKey $ProgIdSubKey -Name 'PreviousDotMinkOwner')
+    Assert-Equal -What "the other application's New-menu entry is not replaced" `
+        -Expected 'C:\Contoso\template.txt' -Actual (Get-KeyValue -SubKey $NewMenuSubKey -Name 'FileName')
+    Assert-True -What 'the New-menu entry is not recorded as MINK-owned' `
+        -Condition ((Get-KeyValue -SubKey $ProgIdSubKey -Name 'MinkOwned') -notmatch 'NewMenu')
     Write-Note ('while another application''s class-level OpenWithProgids list exists, Windows treats')
     Write-Note ('.mink as "open with" and asks the user to confirm the application once.')
 
@@ -405,6 +434,8 @@ try {
         -Condition ((Get-KeyValueNames -SubKey "$ExtensionSubKey\OpenWithProgids") -contains 'Contoso.SourceFile')
     Assert-True -What 'extension key kept for the other application' `
         -Condition (Test-KeyExists -SubKey $ExtensionSubKey)
+    Assert-Equal -What "the other application's New-menu entry survives uninstall" `
+        -Expected 'C:\Contoso\template.txt' -Actual (Get-KeyValue -SubKey $NewMenuSubKey -Name 'FileName')
 
     # ---------------------------------------------------------------- step 5
     Write-Step '5. clean extension: file type, icon and open behaviour'
@@ -432,6 +463,53 @@ try {
         -Expected 7 -Actual (Get-IconFrameCount -Path $installIcon)
     Assert-True -What 'no open command: a .mink file is never executed' `
         -Condition (-not (Test-KeyExists -SubKey $OpenCommandSubKey))
+
+    # Facilities beyond the icon.
+    $installExe = (Resolve-Path -LiteralPath (Join-Path $packageBin 'mink.exe')).Path
+    $installAppIcon = (Resolve-Path -LiteralPath (Join-Path $packageBin 'mink-app.ico')).Path
+    Assert-Equal -What 'double-click runs the safe default verb, edit' -Expected 'edit' `
+        -Actual (Get-KeyValue -SubKey $ShellSubKey)
+    foreach ($pair in @(@('run', 'Run with MINK'), @('check', 'Check with MINK'),
+            @('build', 'Build executable'), @('edit', 'Edit'))) {
+        Assert-Equal -What ("right-click entry label: " + $pair[0]) -Expected $pair[1] `
+            -Actual (Get-KeyValue -SubKey ("$ShellSubKey\" + $pair[0]))
+    }
+    foreach ($verb in @('run', 'check', 'build')) {
+        Assert-Equal -What "the $verb entry runs mink.exe shell $verb on the file" `
+            -Expected ('"{0}" shell {1} "%1"' -f $installExe, $verb) `
+            -Actual (Get-KeyValue -SubKey "$ShellSubKey\$verb\command")
+        Assert-Equal -What "the $verb entry carries the MINK icon" `
+            -Expected ('"{0}",0' -f $installAppIcon) -Actual (Get-KeyValue -SubKey "$ShellSubKey\$verb" -Name 'Icon')
+    }
+    Assert-Equal -What 'run is single-selection, so many files cannot start many programs' -Expected 'Single' `
+        -Actual (Get-KeyValue -SubKey "$ShellSubKey\run" -Name 'MultiSelectModel')
+    Assert-Equal -What 'the edit entry opens Notepad when no editor is bound' `
+        -Expected ('"{0}" "%1"' -f (Join-Path $env:SystemRoot 'notepad.exe')) `
+        -Actual (Get-KeyValue -SubKey "$ShellSubKey\edit\command")
+    $templatePath = (Resolve-Path -LiteralPath (Join-Path $package 'windows\template.mink')).Path
+    Assert-Equal -What 'New menu copies the shipped template' -Expected $templatePath `
+        -Actual (Get-KeyValue -SubKey $NewMenuSubKey -Name 'FileName')
+    Assert-Equal -What 'Windows Search reads .mink as plain text' -Expected $PlainTextFilter `
+        -Actual (Get-KeyValue -SubKey $PersistentHandlerSubKey)
+    $txtPreview = $null
+    $classesKey = [Microsoft.Win32.Registry]::ClassesRoot.OpenSubKey('.txt\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}')
+    if ($classesKey) { try { $txtPreview = $classesKey.GetValue('') } finally { $classesKey.Dispose() } }
+    if ($txtPreview) {
+        Assert-Equal -What 'the preview pane uses the same handler as .txt' -Expected $txtPreview `
+            -Actual (Get-KeyValue -SubKey $PreviewSubKey)
+    }
+    else { Write-Note 'this Windows has no .txt preview handler; preview registration is skipped by design' }
+    Assert-Equal -What 'MINK is listed under Default apps' -Expected 'MINK' `
+        -Actual (Get-KeyValue -SubKey $CapabilitiesSubKey -Name 'ApplicationName')
+    Assert-Equal -What 'the Default apps entry maps .mink to the MINK file type' -Expected $ProgId `
+        -Actual (Get-KeyValue -SubKey "$CapabilitiesSubKey\FileAssociations" -Name '.mink')
+    Assert-Equal -What 'MINK is registered as an application' -Expected 'Software\MINK\Capabilities' `
+        -Actual (Get-KeyValue -SubKey $RegisteredAppsSubKey -Name 'MINK')
+    Assert-True -What 'every facility is recorded as MINK-owned' `
+        -Condition ((Get-KeyValue -SubKey $ProgIdSubKey -Name 'MinkOwned') -match 'NewMenu.*PersistentHandler')
+    $shellRun = Get-AssocString -Association $Extension -StringType $ASSOCSTR_COMMAND -Extra 'run'
+    Assert-Equal -What 'the shell resolves the run verb to mink.exe shell run' `
+        -Expected ('"{0}" shell run "{1}"' -f $installExe, '%1') -Actual $shellRun
     Assert-True -What 'MINK is offered in "Open with"' `
         -Condition ((Get-KeyValueNames -SubKey $OpenWithSubKey) -contains $ProgId)
 
@@ -483,6 +561,47 @@ try {
     Assert-True -What 'repeated runs in one session do not fail on the shell-refresh type' `
         -Condition ($first -notmatch 'already exists' -and $second -notmatch 'already exists')
 
+    # ---------------------------------------------------------------- step 6b
+    Write-Step '6b. options turn facilities off, and a right-click verb really runs'
+    $run = Invoke-RegisterScript -Arguments @('-NoContextMenu', '-NoNewMenu', '-NoPreview', '-NoDefaultApps') `
+        -ScriptPath $packageScript
+    Assert-Equal -What 'registration with every option off exits 0' -Expected 0 -Actual $run.ExitCode
+    Assert-True -What 'no right-click entries' -Condition (-not (Test-KeyExists -SubKey $ShellSubKey))
+    Assert-True -What 'no New-menu entry' -Condition (-not (Test-KeyExists -SubKey $NewMenuSubKey))
+    Assert-True -What 'no search filter' -Condition (-not (Test-KeyExists -SubKey $PersistentHandlerSubKey))
+    Assert-True -What 'no preview handler' -Condition (-not (Test-KeyExists -SubKey $PreviewSubKey))
+    Assert-True -What 'not listed under Default apps' -Condition (-not (Test-KeyExists -SubKey $CapabilitiesSubKey))
+    Assert-Equal -What 'no RegisteredApplications value' -Expected $null `
+        -Actual (Get-KeyValue -SubKey $RegisteredAppsSubKey -Name 'MINK')
+    Assert-Equal -What 'the file type itself is still registered' -Expected $ProgId `
+        -Actual (Get-KeyValue -SubKey $ExtensionSubKey)
+
+    $run = Invoke-RegisterScript -Arguments @('-Verbs', 'run') -ScriptPath $packageScript
+    Assert-Equal -What 'registration with only the run verb exits 0' -Expected 0 -Actual $run.ExitCode
+    Assert-True -What 'run is present' -Condition (Test-KeyExists -SubKey "$ShellSubKey\run")
+    Assert-True -What 'edit is added because it is the safe double-click default' `
+        -Condition (Test-KeyExists -SubKey "$ShellSubKey\edit")
+    Assert-True -What 'check is absent' -Condition (-not (Test-KeyExists -SubKey "$ShellSubKey\check"))
+    Assert-True -What 'build is absent' -Condition (-not (Test-KeyExists -SubKey "$ShellSubKey\build"))
+    Assert-Equal -What 'the default verb is still edit' -Expected 'edit' -Actual (Get-KeyValue -SubKey $ShellSubKey)
+
+    # Back to everything on, then execute the registered check verb with the real compiler.
+    $run = Invoke-RegisterScript -Arguments @() -ScriptPath $packageScript
+    Assert-Equal -What 'registration with everything on exits 0' -Expected 0 -Actual $run.ExitCode
+    $realMink = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'target\debug\mink.exe'
+    if (Test-Path -LiteralPath $realMink) {
+        $run = Invoke-RegisterScript -Arguments @('-MinkExe', $realMink) -ScriptPath $packageScript
+        $verbCommand = (Get-KeyValue -SubKey "$ShellSubKey\check\command") -replace '%1', $helloMink
+        $verbOutput = & cmd.exe /d /c "$verbCommand < nul" 2>&1 | Out-String
+        Assert-Equal -What 'the check verb command exits 0 on a valid file' -Expected 0 -Actual $LASTEXITCODE
+        Assert-True -What 'the check verb prints its header and the compiler result' `
+            -Condition ($verbOutput -match 'MINK check:' -and $verbOutput -match 'passed parsing')
+        Assert-True -What 'running the check verb did not build or run the file' `
+            -Condition (-not (Test-Path -LiteralPath (Join-Path $package 'hello.exe')))
+        $run = Invoke-RegisterScript -Arguments @() -ScriptPath $packageScript
+    }
+    else { Write-Note 'target\debug\mink.exe not built; the verb execution check is skipped' }
+
     # ---------------------------------------------------------------- step 7
     Write-Step '7. open behaviour with an editor bound'
     $probeExe = Join-Path $package 'probe-editor.exe'
@@ -506,6 +625,13 @@ public static class MinkFiletypeProbe
     Assert-Equal -What 'registration with -Editor exits 0' -Expected 0 -Actual $run.ExitCode
     Assert-Equal -What 'open command is the editor applied to the file, quoted' `
         -Expected ('"{0}" "%1"' -f $probeExe) -Actual (Get-KeyValue -SubKey $OpenCommandSubKey)
+    Assert-Equal -What 'with an editor bound, open is the double-click default' -Expected 'open' `
+        -Actual (Get-KeyValue -SubKey $ShellSubKey)
+    Assert-True -What 'a separate edit entry is not added next to the editor open entry' `
+        -Condition (-not (Test-KeyExists -SubKey "$ShellSubKey\edit"))
+    Assert-True -What 'run, check and build are still there' `
+        -Condition ((Test-KeyExists -SubKey "$ShellSubKey\run") -and (Test-KeyExists -SubKey "$ShellSubKey\check") `
+            -and (Test-KeyExists -SubKey "$ShellSubKey\build"))
 
     if (Test-Path -LiteralPath $probeLog) { Remove-Item -LiteralPath $probeLog -Force }
     $env:MINK_PROBE_LOG = $probeLog
@@ -527,8 +653,10 @@ public static class MinkFiletypeProbe
     $run = Invoke-RegisterScript -Arguments @() -ScriptPath $packageScript
     Assert-Equal -What 're-registration exits 0' -Expected 0 -Actual $run.ExitCode
     Assert-True -What 'open command removed again' -Condition (-not (Test-KeyExists -SubKey $OpenCommandSubKey))
-    Assert-Equal -What 'ProgID keeps only its own subkeys' -Expected 'DefaultIcon' `
+    Assert-Equal -What 'ProgID keeps only its own subkeys' -Expected 'DefaultIcon,shell' `
         -Actual ((Get-KeySubNames -SubKey $ProgIdSubKey) -join ',')
+    Assert-Equal -What 'double-click is back to the safe edit verb' -Expected 'edit' `
+        -Actual (Get-KeyValue -SubKey $ShellSubKey)
 
     # ---------------------------------------------------------------- step 9
     Write-Step '9. unicode installation path (and a path with a space)'
@@ -565,6 +693,12 @@ public static class MinkFiletypeProbe
     Assert-True -What 'no empty .mink key left behind' -Condition (-not (Test-KeyExists -SubKey $ExtensionSubKey))
     Assert-True -What 'MINK removed from "Open with"' `
         -Condition (-not ((Get-KeyValueNames -SubKey $OpenWithSubKey) -contains $ProgId))
+    Assert-True -What 'no New-menu entry left behind' -Condition (-not (Test-KeyExists -SubKey $NewMenuSubKey))
+    Assert-True -What 'no search filter left behind' -Condition (-not (Test-KeyExists -SubKey $PersistentHandlerSubKey))
+    Assert-True -What 'no preview handler left behind' -Condition (-not (Test-KeyExists -SubKey $PreviewSubKey))
+    Assert-True -What 'no Default apps entry left behind' -Condition (-not (Test-KeyExists -SubKey $MinkAppSubKey))
+    Assert-Equal -What 'no RegisteredApplications value left behind' -Expected $null `
+        -Actual (Get-KeyValue -SubKey $RegisteredAppsSubKey -Name 'MINK')
 
     # ---------------------------------------------------------------- step 11
     Write-Step '11. npm package layout: the icon lives in windows\, not in bin\'
@@ -671,6 +805,8 @@ public static class MinkFiletypeProbe
     Assert-True -What 'the kit ships mink-file.ico and mink-app.ico' `
         -Condition ((Test-Path -LiteralPath (Join-Path $KitDir 'mink-file.ico')) -and
         (Test-Path -LiteralPath (Join-Path $KitDir 'mink-app.ico')))
+    Assert-True -What 'the kit ships template.mink for the New menu' `
+        -Condition (Test-Path -LiteralPath (Join-Path $KitDir 'template.mink'))
     Assert-True -What 'the kit ships mink.rc and README.md' `
         -Condition ((Test-Path -LiteralPath (Join-Path $KitDir 'mink.rc')) -and
         (Test-Path -LiteralPath (Join-Path $KitDir 'README.md')))
@@ -708,9 +844,13 @@ public static class MinkFiletypeProbe
     # ---------------------------------------------------------------- step 15
     Write-Step '15. previous machine state restored'
     Restore-MachineState
-    $subKeys = @($ExtensionSubKey, $ProgIdSubKey, $FileExtsSubKey)
+    $subKeys = @($ExtensionSubKey, $ProgIdSubKey, $FileExtsSubKey, $MinkAppSubKey)
     $restored = $true
-    for ($index = 0; $index -lt 3; $index++) {
+    if ("$(Get-KeyValue -SubKey $RegisteredAppsSubKey -Name 'MINK')" -ne "$($snapshots[4])") {
+        $restored = $false
+        Write-Note 'not restored: the MINK value under RegisteredApplications'
+    }
+    for ($index = 0; $index -lt 4; $index++) {
         if (-not (Test-Snapshot -SubKey $subKeys[$index] -Snapshot $snapshots[$index])) {
             $restored = $false
             Write-Note "not restored: $($subKeys[$index])"

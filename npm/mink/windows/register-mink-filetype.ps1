@@ -41,6 +41,30 @@
     "C:\Program Files\Microsoft VS Code\Code.exe". Omit it (recommended for a first
     install) to leave the choice to Windows.
 
+.PARAMETER Verbs
+    Which right-click entries to add to `.mink` files: `run` ("Run with MINK"), `check`
+    ("Check with MINK"), `build` ("Build executable") and `edit` ("Edit"). All four by
+    default. Each runs `mink.exe shell <verb> "<file>"`, which keeps the console window open
+    so the output can be read. `edit` opens the file in -Editor, or in Notepad when none is
+    given. Entries that are not listed are removed if an earlier run added them.
+
+.PARAMETER NoContextMenu
+    Add no right-click entries at all (and remove the ones an earlier run added). Whenever
+    any entry exists, "Edit" is among them: it is the default for double-click, so a
+    double-click opens the file in an editor and never runs or builds it.
+
+.PARAMETER NoNewMenu
+    Do not add "MINK Source File" to Explorer's New menu.
+
+.PARAMETER NoDefaultApps
+    Do not list MINK under Settings > Apps > Default apps.
+
+.PARAMETER NoPreview
+    Do not register `.mink` as plain text for the Explorer preview pane and Windows Search.
+
+.PARAMETER Quiet
+    Print nothing except errors. The exit code still reports the result.
+
 .PARAMETER Force
     Replace a `.mink` association that another application currently owns. The previous
     owner is recorded and restored by -Uninstall. Another application's own values, and
@@ -80,6 +104,13 @@ param(
     [string]$MinkExe,
     [string]$IconPath,
     [string]$Editor,
+    [ValidateSet('run', 'check', 'build', 'edit')]
+    [string[]]$Verbs = @('run', 'check', 'build', 'edit'),
+    [switch]$NoContextMenu,
+    [switch]$NoNewMenu,
+    [switch]$NoDefaultApps,
+    [switch]$NoPreview,
+    [switch]$Quiet,
     [switch]$Force,
     [switch]$Uninstall
 )
@@ -103,6 +134,25 @@ $OpenVerbSubKey = "$ShellSubKey\open"
 $OpenCommandSubKey = "$OpenVerbSubKey\command"
 $OpenWithSubKey = 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.mink\OpenWithProgids'
 $OpenWithParentSubKey = Split-Path -Parent $OpenWithSubKey
+
+# Facilities beyond the icon, all per-user. Each one is recorded in the `MinkOwned`
+# value of the ProgID key so -Uninstall removes exactly what this script added.
+$NewMenuSubKey = "$ExtensionSubKey\ShellNew"
+$PersistentHandlerSubKey = "$ExtensionSubKey\PersistentHandler"
+$PreviewHandlerKeyName = '{8895b1c6-b41f-4c1c-a562-0d564250836f}'
+$PreviewSubKey = "$ExtensionSubKey\shellex\$PreviewHandlerKeyName"
+$PlainTextFilter = '{5e941d80-bf96-11cd-b579-08002b30bfeb}'
+$CapabilitiesSubKey = 'Software\MINK\Capabilities'
+$CapabilitiesParentSubKey = 'Software\MINK'
+$RegisteredAppsSubKey = 'Software\RegisteredApplications'
+$RegisteredAppName = 'MINK'
+$OwnedValue = 'MinkOwned'
+$VerbLabels = [ordered]@{
+    run   = 'Run with MINK'
+    check = 'Check with MINK'
+    build = 'Build executable'
+    edit  = 'Edit'
+}
 
 # Remembers the ProgID that owned `.mink` before -Force replaced it, so -Uninstall can
 # put it back. Lives inside the MINK ProgID tree, which -Uninstall removes.
@@ -304,18 +354,184 @@ public static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwIte
 
 function Write-PathState {
     param([string]$Label, [string]$Value)
+    if ($Quiet) { return }
     Write-Host ("  {0,-12}: {1}" -f $Label, $Value)
+}
+
+# --- Facilities beyond the icon --------------------------------------------
+function Read-ClassesRootValue {
+    param([string]$SubKey)
+    # HKEY_CLASSES_ROOT is the merged per-user and per-machine view, which is where
+    # Windows keeps the handlers registered for plain text.
+    $key = [Microsoft.Win32.Registry]::ClassesRoot.OpenSubKey($SubKey, $false)
+    if (-not $key) { return $null }
+    try { return $key.GetValue('') }
+    finally { $key.Dispose() }
+}
+
+function Resolve-AppIcon {
+    param([string]$ResolvedInstallDir)
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($ResolvedInstallDir) { $candidates.Add((Join-Path $ResolvedInstallDir 'mink-app.ico')) }
+    $candidates.Add((Join-Path $PSScriptRoot 'mink-app.ico'))
+    foreach ($candidate in $candidates) {
+        if (Test-IconFile -Path $candidate) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+    return $null
+}
+
+function Get-VerbCommand {
+    param([string]$Verb, [string]$ResolvedMinkExe, [string]$ResolvedEditor)
+    if ($Verb -eq 'edit') {
+        $target = $ResolvedEditor
+        if (-not $target) { $target = Join-Path $env:SystemRoot 'notepad.exe' }
+        return ('"{0}" "%1"' -f $target)
+    }
+    return ('"{0}" shell {1} "%1"' -f $ResolvedMinkExe, $Verb)
+}
+
+function Register-ContextMenu {
+    param([string]$ResolvedMinkExe, [string]$ResolvedEditor, [string]$AppIcon, [string[]]$Wanted)
+
+    foreach ($verb in $VerbLabels.Keys) {
+        $verbKey = "$ShellSubKey\$verb"
+        if ($Wanted -contains $verb) {
+            if ($verb -ne 'edit' -and -not $ResolvedMinkExe) {
+                $notes.Add("skipped the '$verb' right-click entry: mink.exe was not found")
+                continue
+            }
+            Set-RegistryValue -SubKey $verbKey -Name '' -Value $VerbLabels[$verb]
+            if ($AppIcon -and $verb -ne 'edit') {
+                Set-RegistryValue -SubKey $verbKey -Name 'Icon' -Value ('"{0}",0' -f $AppIcon)
+            }
+            if ($verb -ne 'edit') {
+                # One program at a time: selecting many files must not start many consoles.
+                Set-RegistryValue -SubKey $verbKey -Name 'MultiSelectModel' -Value 'Single'
+            }
+            Set-RegistryValue -SubKey "$verbKey\command" -Name '' -Value (
+                Get-VerbCommand -Verb $verb -ResolvedMinkExe $ResolvedMinkExe -ResolvedEditor $ResolvedEditor)
+        }
+        elseif (Test-RegistryKey -SubKey $verbKey) {
+            Remove-RegistryTree -SubKey $verbKey
+            $notes.Add("removed the '$verb' right-click entry added by an earlier run")
+        }
+    }
+}
+
+function Test-Owned {
+    param($Owned, [string]$Token)
+    return $Owned.Contains($Token)
+}
+
+function Register-Facilities {
+    param($Owned)
+
+    # New menu: a template copied into each new file, or an empty file without one.
+    if (-not $NoNewMenu) {
+        if ((Test-RegistryKey -SubKey $NewMenuSubKey) -and -not (Test-Owned $Owned 'NewMenu')) {
+            $notes.Add('left the existing New-menu entry for .mink alone (not created by MINK)')
+        }
+        else {
+            Remove-RegistryTree -SubKey $NewMenuSubKey
+            $template = Join-Path $PSScriptRoot 'template.mink'
+            if (Test-Path -LiteralPath $template -PathType Leaf) {
+                Set-RegistryValue -SubKey $NewMenuSubKey -Name 'FileName' -Value (Resolve-Path -LiteralPath $template).Path
+            }
+            else {
+                Set-RegistryValue -SubKey $NewMenuSubKey -Name 'NullFile' -Value ''
+                $notes.Add('template.mink not found; the New menu creates an empty file')
+            }
+            [void]$Owned.Add('NewMenu')
+        }
+    }
+    elseif (Test-Owned $Owned 'NewMenu') {
+        Remove-RegistryTree -SubKey $NewMenuSubKey
+        [void]$Owned.Remove('NewMenu')
+        $notes.Add('removed the New-menu entry added by an earlier run')
+    }
+
+    # Preview pane and Windows Search treat .mink as plain text, the way .txt is treated.
+    if (-not $NoPreview) {
+        if ((Test-RegistryKey -SubKey $PersistentHandlerSubKey) -and -not (Test-Owned $Owned 'PersistentHandler')) {
+            $notes.Add('left the existing search filter for .mink alone (not created by MINK)')
+        }
+        else {
+            Set-RegistryValue -SubKey $PersistentHandlerSubKey -Name '' -Value $PlainTextFilter
+            [void]$Owned.Add('PersistentHandler')
+        }
+        if ((Test-RegistryKey -SubKey $PreviewSubKey) -and -not (Test-Owned $Owned 'PreviewHandler')) {
+            $notes.Add('left the existing preview handler for .mink alone (not created by MINK)')
+        }
+        else {
+            # Copy whatever handler this Windows version uses for .txt rather than
+            # hard-coding a class id that differs between releases.
+            $handler = Read-ClassesRootValue -SubKey ".txt\shellex\$PreviewHandlerKeyName"
+            if ($handler) {
+                Set-RegistryValue -SubKey $PreviewSubKey -Name '' -Value $handler
+                [void]$Owned.Add('PreviewHandler')
+            }
+            else {
+                $notes.Add('no text preview handler found for .txt on this PC; the preview pane is not enabled')
+            }
+        }
+    }
+    else {
+        Remove-OwnedPreview -Owned $Owned
+    }
+
+    # "MINK" in Settings > Apps > Default apps.
+    if (-not $NoDefaultApps) {
+        Set-RegistryValue -SubKey $CapabilitiesSubKey -Name 'ApplicationName' -Value 'MINK'
+        Set-RegistryValue -SubKey $CapabilitiesSubKey -Name 'ApplicationDescription' -Value 'The MINK programming language'
+        Set-RegistryValue -SubKey "$CapabilitiesSubKey\FileAssociations" -Name $Extension -Value $ProgId
+        Set-RegistryValue -SubKey $RegisteredAppsSubKey -Name $RegisteredAppName -Value $CapabilitiesSubKey
+    }
+    else {
+        Remove-DefaultAppsEntry
+    }
+}
+
+function Remove-OwnedPreview {
+    param($Owned)
+    if (Test-Owned $Owned 'PersistentHandler') {
+        Remove-RegistryTree -SubKey $PersistentHandlerSubKey
+        [void]$Owned.Remove('PersistentHandler')
+    }
+    if (Test-Owned $Owned 'PreviewHandler') {
+        Remove-RegistryTree -SubKey $PreviewSubKey
+        Remove-RegistryKeyIfEmpty -SubKey (Split-Path -Parent $PreviewSubKey)
+        [void]$Owned.Remove('PreviewHandler')
+    }
+}
+
+function Remove-DefaultAppsEntry {
+    if (Test-RegistryKey -SubKey $RegisteredAppsSubKey) {
+        if (Remove-RegistryValue -SubKey $RegisteredAppsSubKey -Name $RegisteredAppName) { $script:removed++ }
+    }
+    if (Test-RegistryKey -SubKey $CapabilitiesSubKey) { Remove-RegistryTree -SubKey $CapabilitiesSubKey }
+    Remove-RegistryKeyIfEmpty -SubKey $CapabilitiesParentSubKey
+}
+
+function Read-OwnedSet {
+    $owned = New-Object 'System.Collections.Generic.HashSet[string]'
+    $raw = Read-RegistryValue -SubKey $ProgIdSubKey -Name $OwnedValue
+    if ($raw) {
+        foreach ($token in ($raw -split ';')) { if ($token) { [void]$owned.Add($token) } }
+    }
+    return , $owned
 }
 
 # --- Register --------------------------------------------------------------
 function Register-MinkFileType {
-    param([string]$ResolvedIcon, [string]$ResolvedEditor)
+    param([string]$ResolvedIcon, [string]$ResolvedEditor, [string]$ResolvedMinkExe, [string]$AppIcon)
 
     $currentOwner = Read-RegistryValue -SubKey $ExtensionSubKey
     if ($currentOwner -and $currentOwner -ne $ProgId -and -not $Force) {
         Stop-WithError ("The extension $Extension is currently associated with '$currentOwner'. " +
             "Nothing was changed. Re-run with -Force to replace it, or remove that association first.")
     }
+
+    $owned = Read-OwnedSet
 
     Set-RegistryValue -SubKey $ExtensionSubKey -Name '' -Value $ProgId
     Set-RegistryValue -SubKey $ExtensionSubKey -Name 'Content Type' -Value $ContentType
@@ -327,17 +543,40 @@ function Register-MinkFileType {
     # Quoted because installation paths contain spaces; ",0" selects the first image.
     Set-RegistryValue -SubKey $DefaultIconSubKey -Name '' -Value ('"{0}",0' -f $ResolvedIcon)
 
+    # Double-clicking runs the default verb, and a default verb must never run or build
+    # the file. With an editor bound, "open" is the default and is labelled "Edit". With no
+    # editor, the "edit" verb (Notepad) is the default. Without any verb, Windows asks.
+    $defaultVerb = $null
     if ($ResolvedEditor) {
+        Set-RegistryValue -SubKey $OpenVerbSubKey -Name '' -Value $VerbLabels['edit']
         Set-RegistryValue -SubKey $OpenCommandSubKey -Name '' -Value ('"{0}" "%1"' -f $ResolvedEditor)
+        $defaultVerb = 'open'
     }
-    elseif (Test-RegistryKey -SubKey $OpenCommandSubKey) {
+    elseif (Test-RegistryKey -SubKey $OpenVerbSubKey) {
         # A previous run bound an editor; with no -Editor the association must go back to
-        # letting Windows choose, so the MINK-owned open command is removed.
-        Remove-RegistryTree -SubKey $OpenCommandSubKey
-        Remove-RegistryKeyIfEmpty -SubKey $OpenVerbSubKey
-        Remove-RegistryKeyIfEmpty -SubKey $ShellSubKey
+        # letting Windows choose, so the MINK-owned open verb is removed.
+        Remove-RegistryTree -SubKey $OpenVerbSubKey
         $notes.Add('removed the previously bound editor command (-Editor not given)')
     }
+
+    $wanted = @()
+    if (-not $NoContextMenu) {
+        $wanted = @($Verbs)
+        # The edit verb is the safe default for double-click, so it is always there when
+        # any entry is; with an editor bound the "open" verb already does that job.
+        if ($ResolvedEditor) { $wanted = @($wanted | Where-Object { $_ -ne 'edit' }) }
+        elseif ($wanted -notcontains 'edit') { $wanted += 'edit' }
+        if (-not $ResolvedEditor -and $wanted -contains 'edit') { $defaultVerb = 'edit' }
+    }
+    Register-ContextMenu -ResolvedMinkExe $ResolvedMinkExe -ResolvedEditor $ResolvedEditor `
+        -AppIcon $AppIcon -Wanted $wanted
+    if ($defaultVerb) {
+        Set-RegistryValue -SubKey $ShellSubKey -Name '' -Value $defaultVerb
+    }
+    elseif (Test-RegistryKey -SubKey $ShellSubKey) {
+        [void](Remove-RegistryValue -SubKey $ShellSubKey -Name '')
+    }
+    Remove-RegistryKeyIfEmpty -SubKey $ShellSubKey
 
     # Make the MINK file type appear in Explorer's "Open with" list. The value is
     # REG_NONE with no data, which is what the shell expects for a ProgID list.
@@ -347,6 +586,11 @@ function Register-MinkFileType {
         $openWith.SetValue($ProgId, [byte[]]@(), [Microsoft.Win32.RegistryValueKind]::None)
     }
     finally { $openWith.Dispose() }
+
+    Register-Facilities -Owned $owned
+
+    # What this run added beyond the basics, so -Uninstall removes exactly that.
+    Set-RegistryValue -SubKey $ProgIdSubKey -Name $OwnedValue -Value (($owned | Sort-Object) -join ';')
 
     # Bookkeeping for -Uninstall: only the first takeover is remembered, so repeated
     # -Force runs cannot overwrite the original owner with 'MINK.SourceFile'.
@@ -360,6 +604,7 @@ function Register-MinkFileType {
 # --- Uninstall -------------------------------------------------------------
 function Unregister-MinkFileType {
     $previousOwner = Read-RegistryValue -SubKey $ProgIdSubKey -Name $PreviousOwnerValue
+    $owned = Read-OwnedSet
 
     if (Test-RegistryKey -SubKey $ExtensionSubKey) {
         $owner = Read-RegistryValue -SubKey $ExtensionSubKey
@@ -379,12 +624,16 @@ function Unregister-MinkFileType {
         if ((Read-RegistryValue -SubKey $ExtensionSubKey -Name 'PerceivedType') -eq $PerceivedType) {
             if (Remove-RegistryValue -SubKey $ExtensionSubKey -Name 'PerceivedType') { $script:removed++ }
         }
+        if (Test-Owned $owned 'NewMenu') { Remove-RegistryTree -SubKey $NewMenuSubKey }
+        Remove-OwnedPreview -Owned $owned
     }
 
     if (Test-RegistryKey -SubKey $ProgIdSubKey) {
         Remove-RegistryTree -SubKey $ProgIdSubKey
         $notes.Add("removed HKCU:\$ProgIdSubKey")
     }
+
+    Remove-DefaultAppsEntry
 
     if (Test-RegistryKey -SubKey $OpenWithSubKey) {
         if (Remove-RegistryValue -SubKey $OpenWithSubKey -Name $ProgId) { $script:removed++ }
@@ -400,26 +649,34 @@ function Unregister-MinkFileType {
 }
 
 # --- Main ------------------------------------------------------------------
-Write-Host 'MINK file association (.mink)'
-Write-Host ''
+function Write-Info {
+    param([string]$Text = '')
+    if (-not $Quiet) { Write-Host $Text }
+}
+
+Write-Info 'MINK file association (.mink)'
+Write-Info ''
 
 if ($Uninstall) {
     Unregister-MinkFileType
     Update-ShellAssociations
-    Write-Host 'State'
+    Write-Info 'State'
     Write-PathState -Label 'extension' -Value "$Extension is no longer owned by $ProgId"
     Write-PathState -Label 'prog id' -Value "HKCU:\$ProgIdSubKey removed"
     Write-PathState -Label 'removed' -Value "$removed MINK-owned value(s)"
     Write-PathState -Label 'explorer' -Value 'association change broadcast, icon cache refreshed'
-    Write-Host ''
-    foreach ($note in $notes) { Write-Host "  note        : $note" }
-    Write-Host ''
-    Write-Host 'Done. MINK-owned file-association entries were removed.'
+    Write-Info ''
+    foreach ($note in $notes) { Write-Info "  note        : $note" }
+    Write-Info ''
+    Write-Info 'Done. MINK-owned file-association entries were removed.'
     exit 0
 }
 
 $resolvedInstallDir = Resolve-InstallDirectory -ExplicitDir $InstallDir -ExplicitExe $MinkExe
 $resolvedIcon = Resolve-FileIcon -Explicit $IconPath -ResolvedInstallDir $resolvedInstallDir
+$resolvedMinkExe = $null
+if ($resolvedInstallDir) { $resolvedMinkExe = Join-Path $resolvedInstallDir 'mink.exe' }
+$appIcon = Resolve-AppIcon -ResolvedInstallDir $resolvedInstallDir
 $resolvedEditor = $null
 if ($Editor) {
     $resolvedEditor = Resolve-EditorPath -Value $Editor
@@ -429,10 +686,11 @@ if ($Editor) {
     }
 }
 
-Register-MinkFileType -ResolvedIcon $resolvedIcon -ResolvedEditor $resolvedEditor
+Register-MinkFileType -ResolvedIcon $resolvedIcon -ResolvedEditor $resolvedEditor `
+    -ResolvedMinkExe $resolvedMinkExe -AppIcon $appIcon
 Update-ShellAssociations
 
-Write-Host 'State'
+Write-Info 'State'
 Write-PathState -Label 'file type' -Value "$TypeName ($Extension, $ContentType)"
 Write-PathState -Label 'prog id' -Value $ProgId
 if ($resolvedInstallDir) {
@@ -448,16 +706,31 @@ if ($resolvedEditor) {
 else {
     Write-PathState -Label 'open with' -Value 'Windows "Open with"; no command registered, source is never executed'
 }
-Write-PathState -Label 'registry' -Value "HKCU:\$ExtensionSubKey -> $ProgId (per-user)"
-Write-PathState -Label 'explorer' -Value 'association change broadcast, icon cache refreshed'
-Write-Host ''
-foreach ($note in $notes) { Write-Host "  note        : $note" }
-Write-Host ''
-if ($resolvedEditor) {
-    Write-Host 'Done. Double-clicking a .mink file opens it in the registered editor.'
+$shownVerbs = @()
+if (-not $NoContextMenu) {
+    $shownVerbs = @($Verbs)
+    if ($resolvedEditor) { $shownVerbs = @($shownVerbs | Where-Object { $_ -ne 'edit' }) + 'edit' }
+    elseif ($shownVerbs -notcontains 'edit') { $shownVerbs += 'edit' }
+}
+if ($shownVerbs.Count -gt 0) {
+    Write-PathState -Label 'right-click' -Value (($shownVerbs | ForEach-Object { $VerbLabels[$_] }) -join ', ')
 }
 else {
-    Write-Host 'Done. Double-clicking a .mink file asks Windows which application to use the first'
-    Write-Host 'time and remembers that choice; the source is never compiled or run.'
+    Write-PathState -Label 'right-click' -Value 'no MINK entries'
+}
+Write-PathState -Label 'new menu' -Value $(if ($NoNewMenu) { 'off' } else { 'MINK Source File' })
+Write-PathState -Label 'preview' -Value $(if ($NoPreview) { 'off' } else { 'plain text preview and search' })
+Write-PathState -Label 'default apps' -Value $(if ($NoDefaultApps) { 'off' } else { 'MINK is listed' })
+Write-PathState -Label 'registry' -Value "HKCU:\$ExtensionSubKey -> $ProgId (per-user)"
+Write-PathState -Label 'explorer' -Value 'association change broadcast, icon cache refreshed'
+Write-Info ''
+foreach ($note in $notes) { Write-Info "  note        : $note" }
+Write-Info ''
+if ($resolvedEditor) {
+    Write-Info 'Done. Double-clicking a .mink file opens it in the registered editor.'
+}
+else {
+    Write-Info 'Done. Double-clicking a .mink file asks Windows which application to use the first'
+    Write-Info 'time and remembers that choice; the source is never compiled or run.'
 }
 exit 0

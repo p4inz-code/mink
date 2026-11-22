@@ -113,10 +113,18 @@ mink --version
 ### Optional: give `.mink` files their own Windows identity
 
 The official MINK source-file icon and a per-user registration script make `.mink` a real
-Windows file type — **MINK Source File**, content type `text/x-mink`, with the MINK source-file
-icon. It applies to your account only, needs no administrator rights, and double-clicking a
-`.mink` file never compiles or runs it: Windows asks once which editor to use and remembers that
-answer.
+Windows file type, **MINK Source File**, with the MINK icon at every size. It applies to your
+account only and needs no administrator rights. The same script adds:
+
+- **Right-click entries**: Run with MINK, Check with MINK, Build executable, Edit.
+- **New > MINK Source File**, which starts you from a small hello-world program.
+- **Preview pane and search** support, so `.mink` is read as plain text like `.txt`.
+- A **MINK** entry under Settings > Apps > Default apps.
+
+Double-clicking a `.mink` file opens it in an editor (Notepad, or the one you choose). It never
+compiles or runs the file; only the right-click entries you pick do that. Another program that
+already owns `.mink` is left alone unless you pass `-Force`. The 1.0.5 sprint extends the script,
+and the unreleased installer and `mink setup` command will run it for you.
 
 **The published 1.0.4 package does not include this kit** — its 28 files are the compiler
 binary, `stdlib/`, `package.json` and `LICENSE`, with no `windows/` directory. The 1.0.5
@@ -142,7 +150,8 @@ intend to keep.
 
 Bind one editor immediately with `-Editor "C:\Program Files\Microsoft VS Code\Code.exe"`, or
 take over an existing `.mink` association with `-Force` (the previous owner is restored by
-`-Uninstall`). Registry layout, open behaviour and limitations:
+`-Uninstall`). Leave out parts you do not want with `-NoContextMenu`, `-NoNewMenu`,
+`-NoPreview` and `-NoDefaultApps`. Registry layout, open behaviour and limitations:
 [`docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md`](docs/brand/BRAND_AND_WINDOWS_INTEGRATION.md).
 
 ## Quick Start
@@ -344,6 +353,11 @@ and is still unpublished:
   `math::math_abs(-42)`. It means the same as `math_abs(-42)`, because MINK still shares one
   namespace across modules, but a misspelled member now reads
   `cannot find math_absx in module math` instead of an unrelated type error.
+- **Fuller Windows file integration** (1.0.5 sprint, M3) — the registration script now adds
+  right-click Run, Check, Build and Edit entries, a New > MINK Source File entry, preview and
+  search support, and a Default apps entry, all per user and all removed again by `-Uninstall`.
+  Double-click opens an editor and never runs anything. A new `mink shell` command keeps the
+  console open for those entries. The association test grew from 88 to 140 checks.
 - **A clearer error when a local file hides a bundled module** — a leftover `json.mink`
   next to your program is loaded instead of the bundled `json` module, as it always was. When
   that breaks the build, the compiler now says which file it loaded, where the bundled one is,

@@ -1,0 +1,4 @@
+// A new MINK program. Run it with: mink run <this file>
+fn main() {
+    rt_print_str("Hello from MINK!\n");
+}

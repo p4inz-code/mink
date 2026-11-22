@@ -224,6 +224,7 @@ fn m6_rc_package_manifest_is_complete() {
         "windows/mink-file.ico",
         "windows/mink-app.ico",
         "windows/mink.rc",
+        "windows/template.mink",
     ] {
         assert!(
             pkg_dir.join(asset).exists(),
