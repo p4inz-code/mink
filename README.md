@@ -478,6 +478,13 @@ MINK is explicit about its edges:
 
 ## What's Next
 
+**1.0.5 release work is under way.** The baseline is recorded in
+[`docs/implementation/SPRINT_1_0_5_M1_BASELINE.md`](docs/implementation/SPRINT_1_0_5_M1_BASELINE.md):
+3,640 tests passed, 0 failed, 10 ignored on `d7c979e`. The release will cover the module
+lookup fixes, a much fuller Windows file association with a proper installer and a `mink setup`
+command, a formatter, and the first editor support. Nothing in this paragraph is shipped until
+1.0.5 is published.
+
 Planning is governed by the **canonical locked roadmap** ([`docs/roadmap/IMPLEMENTATION_ROADMAP.md`](docs/roadmap/IMPLEMENTATION_ROADMAP.md)).
 **M1 through M5 are complete**: M1 validated 10 real applications with 228 executable cases
 and caught one real semantic defect; M2 ran the practical stress validation and closed in
