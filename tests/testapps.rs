@@ -302,3 +302,33 @@ fn livelog_streams_history_and_new_lines_and_ends_cleanly() {
     assert_eq!(status.code(), Some(0), "no leaks");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn mini_follows_precedence_keeps_variables_and_explains_errors() {
+    use std::io::Write;
+    let (exe, dir) = build("mini");
+    let script = "let x = 3 + 4 * 2\n(x - 1) % 4\nlet y = -x * (2 + 3)\ny\n100 / 7 % 5\n-7 / 2\nx / 0\n2 +\n(1 + 2\nfoo + 1\n3 4\n\nvars\n";
+    let mut child = Command::new(&exe)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "no leaks");
+    let text = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+    let expected = "x = 11\n2\ny = -55\n-55\n4\n-3\n\
+        line 7, column 6: division by zero\n\
+        line 8, column 4: the line ends too soon\n\
+        line 9, column 7: missing )\n\
+        line 10, column 1: unknown name\n\
+        line 11, column 3: unexpected text after the expression\n\
+        x = 11\ny = -55\n";
+    assert_eq!(text, expected);
+    // A file path works too.
+    let file = dir.join("s.txt");
+    std::fs::write(&file, "1 + 1\n").unwrap();
+    assert_eq!(run(&exe, &[file.to_str().unwrap()]), (0, "2\n".to_string()));
+    assert_eq!(run(&exe, &[dir.join("missing.txt").to_str().unwrap()]).0, 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
