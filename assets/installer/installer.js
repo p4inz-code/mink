@@ -13,7 +13,6 @@
   const stepsEl = document.getElementById('steps');
   const sideNote = document.getElementById('side-note');
   const overlay = document.getElementById('overlay');
-  const root = document.documentElement;
 
   let state = null;
   let screen = '';
@@ -128,43 +127,10 @@
     if (first) first.focus({ preventScroll: true });
   }
 
-  // ---------------------------------------------------------------- display settings
-  const SIZES = { normal: '17px', large: '20px', larger: '23px' };
-
-  function remember(key, value) {
-    try { window.localStorage.setItem(key, value); } catch (error) { /* private window: skip */ }
-  }
-  function recall(key) {
-    try { return window.localStorage.getItem(key); } catch (error) { return null; }
-  }
-
-  function applySize(name) {
-    if (!SIZES[name]) name = 'normal';
-    root.style.fontSize = SIZES[name];
-    remember('mink-setup-size', name);
-    for (const b of document.querySelectorAll('[data-size]')) b.setAttribute('aria-pressed', String(b.dataset.size === name));
-  }
-
-  function applyTheme(name) {
-    if (name !== 'light' && name !== 'dark') name = 'dark';
-    root.setAttribute('data-theme', name);
-    remember('mink-setup-theme', name);
-    for (const b of document.querySelectorAll('[data-theme-choice]')) b.setAttribute('aria-pressed', String(b.dataset.themeChoice === name));
-  }
-
+  // ---------------------------------------------------------------- side links
   function buildTools() {
     const tools = document.getElementById('tools');
-    const sizeButton = (name, text, label) => h('button', { class: 'chip', type: 'button', 'data-size': name, 'aria-label': label, onclick: () => applySize(name), text });
-    const themeButton = (name, text) => h('button', { class: 'chip', type: 'button', 'data-theme-choice': name, onclick: () => applyTheme(name), text });
-    tools.replaceChildren(
-      h('div', { class: 'tool-row' }, h('span', { class: 'tool-label', text: 'Text size' }),
-        h('span', { class: 'chips' }, sizeButton('normal', 'A', 'Normal text'), sizeButton('large', 'A+', 'Large text'), sizeButton('larger', 'A++', 'Largest text'))),
-      h('div', { class: 'tool-row' }, h('span', { class: 'tool-label', text: 'Colours' }),
-        h('span', { class: 'chips' }, themeButton('dark', 'Dark'), themeButton('light', 'Light'))),
-      h('div', { class: 'tool-row links' }, button('About', openAbout, 'ghost'), button('Help & support', openHelp, 'ghost')),
-    );
-    applySize(recall('mink-setup-size') || 'normal');
-    applyTheme(recall('mink-setup-theme') || 'dark');
+    tools.replaceChildren(button('About', openAbout, 'ghost'), button('Help & support', openHelp, 'ghost'));
   }
 
   // ---------------------------------------------------------------- about and help

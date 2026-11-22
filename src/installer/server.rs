@@ -26,7 +26,9 @@ pub const INDEX_HTML: &str = include_str!("../../assets/installer/index.html");
 pub const APP_CSS: &str = include_str!("../../assets/installer/installer.css");
 /// Its script.
 pub const APP_JS: &str = include_str!("../../assets/installer/installer.js");
-/// The MINK logo for dark backgrounds, used as supplied.
+/// The white MINK symbol, shown faintly behind the setup window.
+pub const MARK_SVG: &str = include_str!("../../assets/brand/logo/symbol/mink-symbol-white.svg");
+/// The compact logo shown in the side panel.
 pub const LOGO_SVG: &str = include_str!("../../assets/brand/logo/compact/mink-logo-compact-white.svg");
 
 const MAX_BODY: usize = 64 * 1024;
@@ -395,6 +397,7 @@ impl Server {
             ("GET", "/installer.js") => {
                 respond(stream, "200 OK", "text/javascript; charset=utf-8", APP_JS.as_bytes(), false)
             }
+            ("GET", "/mark.svg") => respond(stream, "200 OK", "image/svg+xml", MARK_SVG.as_bytes(), false),
             ("GET", "/logo.svg") => respond(stream, "200 OK", "image/svg+xml", LOGO_SVG.as_bytes(), false),
             (_, path) if path.starts_with("/api/") => {
                 if !self.token_ok(&request) {
