@@ -83,6 +83,8 @@ Copy-Item -LiteralPath (Join-Path $repo 'npm\mink\windows') -Destination (Join-P
 Remove-Item -LiteralPath (Join-Path $payload 'windows\README.md') -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $payload 'LICENSE')
 Copy-Item -LiteralPath (Join-Path $repo 'NOTICE') -Destination (Join-Path $payload 'NOTICE')
+New-Item -ItemType Directory -Force -Path (Join-Path $payload 'licenses') | Out-Null
+Copy-Item -Path (Join-Path $repo 'assets\installer\fonts\OFL-*.txt') -Destination (Join-Path $payload 'licenses')
 
 # --- the icon and version information, added by a copy of the compiler ----------
 $driver = Join-Path $env:TEMP ("mink-driver-" + [guid]::NewGuid().ToString('N') + '.exe')

@@ -107,7 +107,7 @@
     const canGo = !busy && BACKABLE.has(screen) && names === INSTALL_STEPS;
     names.forEach((name, index) => {
       const cls = index < current ? 'done' : index === current ? 'current' : '';
-      const dot = h('span', { class: 'dot', text: index < current ? '✓' : String(index + 1) });
+      const dot = h('span', { class: 'dot', 'aria-hidden': 'true' });
       const label = h('span', { class: 'step-name', text: name });
       const goes = canGo && index < current && GO_BACK[name];
       const item = goes
@@ -213,10 +213,7 @@
       h('h1', { text: 'Install MINK ' + state.version }),
       h('p', { class: 'strong', text: 'MINK builds native Windows programs from small, readable source files.' }),
       h('p', { text: 'This sets MINK up for your account only. It does not need administrator rights, and you can remove it any time from Apps & features.' }),
-      h('ul', { class: 'facts' },
-        h('li', { text: 'Takes about a minute' }),
-        h('li', { text: 'Nothing leaves your PC' }),
-        h('li', { text: 'You can go back at any step' })),
+      h('p', { text: 'It takes about a minute. Nothing leaves your PC, and you can go back at any step.' }),
     ];
     if (state.existing) {
       lines.push(

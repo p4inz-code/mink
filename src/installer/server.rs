@@ -28,11 +28,19 @@ pub const APP_CSS: &str = include_str!("../../assets/installer/installer.css");
 pub const APP_JS: &str = include_str!("../../assets/installer/installer.js");
 /// The white MINK symbol, shown faintly behind the setup window.
 pub const MARK_SVG: &str = include_str!("../../assets/brand/logo/symbol/mink-symbol-white.svg");
+/// The fonts, bundled so setup looks the same on every PC and never uses a system font.
+const FONTS: &[(&str, &[u8])] = &[
+    ("AtkinsonHyperlegibleNext-Regular.ttf", include_bytes!("../../assets/installer/fonts/AtkinsonHyperlegibleNext-Regular.ttf")),
+    ("AtkinsonHyperlegibleNext-Medium.ttf", include_bytes!("../../assets/installer/fonts/AtkinsonHyperlegibleNext-Medium.ttf")),
+    ("AtkinsonHyperlegibleNext-SemiBold.ttf", include_bytes!("../../assets/installer/fonts/AtkinsonHyperlegibleNext-SemiBold.ttf")),
+    ("AtkinsonHyperlegibleNext-Bold.ttf", include_bytes!("../../assets/installer/fonts/AtkinsonHyperlegibleNext-Bold.ttf")),
+    ("FamiljenGroteskwght.ttf", include_bytes!("../../assets/installer/fonts/FamiljenGroteskwght.ttf")),
+];
 /// The compact logo shown in the side panel.
 pub const LOGO_SVG: &str = include_str!("../../assets/brand/logo/compact/mink-logo-compact-white.svg");
 
 const MAX_BODY: usize = 64 * 1024;
-const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'";
+const CSP: &str = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'";
 
 /// What the window is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,6 +404,12 @@ impl Server {
             ("GET", "/installer.css") => respond(stream, "200 OK", "text/css; charset=utf-8", APP_CSS.as_bytes(), false),
             ("GET", "/installer.js") => {
                 respond(stream, "200 OK", "text/javascript; charset=utf-8", APP_JS.as_bytes(), false)
+            }
+            ("GET", path) if path.starts_with("/fonts/") => {
+                match FONTS.iter().find(|(name, _)| path["/fonts/".len()..] == **name) {
+                    Some((_, bytes)) => respond(stream, "200 OK", "font/ttf", bytes, false),
+                    None => respond(stream, "404 Not Found", "text/plain", b"not found", false),
+                }
             }
             ("GET", "/mark.svg") => respond(stream, "200 OK", "image/svg+xml", MARK_SVG.as_bytes(), false),
             ("GET", "/logo.svg") => respond(stream, "200 OK", "image/svg+xml", LOGO_SVG.as_bytes(), false),

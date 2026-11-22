@@ -6,3 +6,9 @@ https://github.com/p4inz-code/mink
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 Copies and changed copies of MINK must keep this notice.
+
+The MINK Setup window bundles two fonts under the SIL Open Font License 1.1:
+Atkinson Hyperlegible Next (The Atkinson Hyperlegible Next Project Authors) and
+Familjen Grotesk (The Familjen Grotesk Project Authors). Their licenses are in
+assets/installer/fonts/ in the source, and in the licenses folder of the setup
+file and the portable zip.
