@@ -54,8 +54,7 @@ code, pre, .mono { font-family: var(--mono); }
 .menu .panel a.cta { margin-top: 12px; justify-content: center; border-radius: 12px; border: 0; color: #000; background: var(--metal); font-weight: 600; }
 
 /* hero */
-.hero { position: relative; overflow: hidden; padding: 84px 0 70px; background: radial-gradient(1100px 560px at 75% -10%, #26272d 0%, #0c0c0e 55%, #000 100%); }
-.hero .mark { position: absolute; right: -160px; top: 10px; width: 780px; opacity: .05; pointer-events: none; }
+.hero { position: relative; overflow: hidden; padding: 84px 0 70px; background: radial-gradient(1100px 560px at 75% -10%, rgba(40,41,48,.85) 0%, rgba(12,12,14,.4) 55%, transparent 100%); }
 .hero .wrap { position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 56px; align-items: center; }
 .eyebrow { display: inline-flex; align-items: center; gap: 12px; font: 500 13px/1.4 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); text-decoration: none; }
 .eyebrow::before { content: ""; width: 26px; height: 1px; background: var(--muted); }
@@ -156,7 +155,6 @@ footer li a { text-decoration: none; display: inline-flex; min-height: 36px; ali
 /* tablet */
 @media (max-width: 1099px) {
   .hero .wrap { grid-template-columns: 1fr; gap: 44px; }
-  .hero .mark { width: 560px; right: -140px; }
   .grid.four { grid-template-columns: repeat(2, 1fr); }
   .stats ul { grid-template-columns: repeat(3, 1fr); }
   .stats li:nth-child(4) { border-left: 0; } .stats li:nth-child(n+4) { border-top: 1px solid var(--line); }
@@ -216,3 +214,9 @@ footer li a { text-decoration: none; display: inline-flex; min-height: 36px; ali
 .trust:hover { color: #fff; border-color: #fff; }
 .credit a { text-decoration-color: var(--line-strong); }
 @media (max-width: 639px) { .trust { left: 10px; right: 10px; bottom: 10px; text-align: center; font-size: 11px; } footer { padding-bottom: 96px; } }
+
+/* the MINK symbol, faint, behind every page */
+body::before { content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none; background: url(img/mink-symbol-white.svg) 62% 58% / min(78vw, 1000px) no-repeat; opacity: .045; }
+main, footer { position: relative; z-index: 1; }
+.stats { background: rgba(255,255,255,.012); }
+@media (max-width: 899px) { body::before { background-position: center 62%; background-size: min(130vw, 720px); opacity: .05; } }
