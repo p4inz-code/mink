@@ -348,7 +348,7 @@ fn cli_run_compiles_and_executes() {
 fn cli_unknown_commands_rejected() {
     // `test` and `repl` became real subcommands in Sessions 108/109, so the
     // unknown-command check must use names that are not subcommands at all.
-    for command in ["fmt", "frobnicate"] {
+    for command in ["format", "frobnicate"] {
         let output = mink().arg(command).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "for command '{command}'");
         let stderr = String::from_utf8_lossy(&output.stderr);

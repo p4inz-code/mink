@@ -39,6 +39,10 @@ Commands:
                   New menu, preview) and your PATH. It asks questions;
                   --yes takes the defaults, --status shows the state, --remove
                   undoes it, --help lists every option
+  fmt [--check] [--diff] [--stdin] <path ...>
+                  Format MINK source into one canonical layout. It never
+                  changes what a program says, and refuses to write if its
+                  own result does not match the input token for token
   installer [--silent] [--uninstall] [--dir <folder>] ...
                   Install or remove MINK for the current user (the setup file
                   runs this; --help lists every option)
@@ -125,6 +129,10 @@ enum Command {
     },
     /// `mink resource <exe> ...`: add an icon and version information.
     Resource(ResourceArgs),
+    /// `mink fmt ...`: format source.
+    Fmt {
+        args: Vec<String>,
+    },
     /// `mink installer ...`: install or remove MINK for the current user.
     Installer {
         args: Vec<String>,
@@ -303,6 +311,7 @@ pub fn main(args: &[String]) -> ExitCode {
         Ok(Command::Setup { args }) => crate::setup::main(&args),
         Ok(Command::Upgrade { args }) => crate::upgrade::main(&args),
         Ok(Command::Installer { args }) => crate::installer::main(&args),
+        Ok(Command::Fmt { args }) => crate::formatter::main(&args),
         Ok(Command::Versions { args, choose }) => crate::versions::main(&args, choose),
         Ok(Command::Explain { code: None }) => {
             // No code given: list all documented error codes.
@@ -963,6 +972,9 @@ fn parse(args: &[String]) -> Result<Command, String> {
         "run" => parse_run(&args[1..]),
         "shell" => parse_shell(&args[1..]),
         "resource" => parse_resource(&args[1..]),
+        "fmt" => Ok(Command::Fmt {
+            args: args[1..].to_vec(),
+        }),
         "installer" => Ok(Command::Installer {
             args: args[1..].to_vec(),
         }),

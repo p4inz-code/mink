@@ -30,6 +30,7 @@ pub mod backend;
 pub mod cli;
 pub mod diagnostics;
 pub mod driver;
+pub mod formatter;
 pub mod installer;
 pub mod hir;
 pub mod lexer;

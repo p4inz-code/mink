@@ -271,6 +271,7 @@ executed evidence and the exact claim boundary.
 | `mink version` | Print the compiler version |
 | `mink shell <run\|check\|build> <file>` | Run one of those and keep the console open until Enter; the Explorer right-click entries use it |
 | `mink setup` | Set up `.mink` files in Windows (icon, right-click entries, New menu, preview) and your PATH. It asks questions; `--yes` takes the defaults, `--status` shows the state, `--remove` undoes it |
+| `mink fmt [path]` | Format `.mink` source into one layout (`--check` for CI, `--diff`, `--stdin` for editors). It never changes what a program says: only white space moves, and it refuses to write if its own result does not match the input token for token |
 | `mink versions`, `mink use <version>` | List the installed versions of MINK and choose which one runs by default (installer installs; a `.mink-version` file pins a project) |
 | `mink installer` | Install or remove MINK for the current user. The setup file runs this; `--help` lists the switches |
 | `mink upgrade` | Check GitHub for a newer MINK (`--check`), and for an installer install download, verify and run it |
@@ -377,6 +378,12 @@ and is still unpublished:
   keeps your earlier choices and never takes `.mink` from another program. It can also put MINK on
   your PATH. `mink upgrade` checks GitHub only when you run it, and for an installer install
   verifies the download's SHA-256 before starting it. The association test is now 191 checks.
+- **`mink fmt`** (1.0.5 sprint, M7) — one layout for MINK source, with no settings. It only moves white
+  space and checks its own output against the input token by token and comment by comment, so a format
+  can never change what a program does. Guard clauses like `if n < 0 { return 0; }` stay on one line;
+  longer blocks go one statement per line. `--check` is for CI and `--stdin` is for editors. It was run over
+  all 300 `.mink` files in this repository: every one formats, formats again to the same text, and keeps its
+  tokens. See [`docs/toolchain/FORMATTER.md`](docs/toolchain/FORMATTER.md).
 - **A setup file, a portable zip and side-by-side versions** (1.0.5 sprint, M6) — `mink-Setup-<version>.exe`
   opens a setup window (Welcome, Location, Options, Install, Finish) and installs for your account without
   administrator rights. It adds MINK to Apps & features and removes it again cleanly. Every version lives in its
