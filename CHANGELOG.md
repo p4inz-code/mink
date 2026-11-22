@@ -7,6 +7,8 @@ All notable changes to MINK. The newest release is first.
 ### Fixed
 - Calls into Windows with no arguments (`GetTickCount64`, `GetCurrentProcessId`, `GetLastError` and others) through `rt_sys_call` always returned 0. They now make the call. A function that could not be found returns 0 instead of crashing.
 
+- SQL `UPDATE` and `DELETE` no longer change every row when they meet text they do not understand (`SET n = n + 1`, a misspelt `WHERE`). They now return an error and leave the data alone. A closing `;` is no longer stored inside a value.
+
 ### Added
 - Four examples: `json_config`, `web_loopback`, `winapi_info`, `hash_and_compress`, and a field check of what MINK can build in `docs/language/WHAT_YOU_CAN_BUILD.md`.
 

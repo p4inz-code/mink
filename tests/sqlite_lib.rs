@@ -144,6 +144,32 @@ fn s41_create_insert_select_count() {
     );
 }
 
+/// Text that UPDATE or DELETE does not understand must be an error. It used to be ignored, which turned
+/// `SET n = n + 1 WHERE id = 1` and a misspelt WHERE into statements that changed every row.
+#[test]
+fn update_and_delete_refuse_text_they_do_not_understand() {
+    let (code, out) = build_and_run(
+        SCHEMA,
+        "let mut db = seed();\n\
+         db = ex(db, \"UPDATE users SET id = id + 1 WHERE id = 1\");\n\
+         db = ex(db, \"DELETE FROM users WEHRE id = 1\");\n\
+         db = ex(db, \"SELECT * FROM users\");\n\
+         db = ex(db, \"UPDATE users SET name = 'z' WHERE id = 2;\");\n\
+         db = ex(db, \"DELETE FROM users WHERE id = 3;\");\n\
+         db = ex(db, \"SELECT * FROM users\");\n\
+         sql_free(db);\n",
+    );
+    assert_eq!(code, 0, "exit={code}\n{out}");
+    let r = results(&out);
+    assert_eq!(&r[0..4], &SEED);
+    assert!(r[4].starts_with("ERROR: SET takes one plain value"), "{r:?}");
+    assert!(r[5].starts_with("ERROR: expected WHERE or the end"), "{r:?}");
+    assert_eq!(r[6], "1\talice\n2\tbob\n3\tNULL", "the refused statements changed nothing");
+    assert_eq!(r[7], "OK 1");
+    assert_eq!(r[8], "OK 1", "a closing semicolon is fine");
+    assert_eq!(r[9], "1\talice\n2\tz");
+}
+
 /// M7 Phase E: the engine supports `COUNT(*)` and deliberately not `SUM`.
 /// The rejection is a structured text result (never a crash), the database it
 /// was handed is not modified, and the next statement still works. This pins
