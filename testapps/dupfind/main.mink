@@ -1,0 +1,136 @@
+// dupfind: find duplicate files under a folder by size and SHA-256.
+//
+//   mink build testapps/dupfind/main.mink
+//   dupfind <folder>
+//
+// Files are grouped by size first; only files with the same size are hashed. Empty files and files larger
+// than 100 MB are ignored. Nothing is changed or deleted: the program only reports.
+mod hashing;
+
+// Adds every file under `dir` to `paths`. Takes (frees) `dir`.
+fn collect(dir: Str, paths: Vec<Str>) -> Vec<Str> {
+    let mut out = paths;
+    let h = rt_dir_open(dir);
+    if h != 0 {
+        let mut more = true;
+        while more {
+            let name = rt_dir_next(h);
+            if rt_str_len(name) == 0 {
+                more = false;
+                rt_str_free(name);
+            } else if rt_str_eq(name, ".") || rt_str_eq(name, "..") {
+                rt_str_free(name);
+            } else {
+                let sep = rt_str_concat(dir, "\\");
+                let full = rt_str_concat(sep, name);
+                rt_str_free(sep);
+                rt_str_free(name);
+                if rt_fs_file_size(full) < 0 {
+                    out = collect(full, out);
+                } else {
+                    out = rt_vec_push(out, full);
+                }
+            }
+        }
+        rt_dir_close(h);
+    }
+    rt_str_free(dir);
+    return out;
+}
+
+// The SHA-256 of a file, or "" when it cannot be read.
+// Takes (frees) the path.
+fn file_hash(path: Str) -> Str {
+    if !rt_fs_exists(path) {
+        rt_str_free(path);
+        return "";
+    }
+    let text = rt_fs_read(path);
+    rt_str_free(path);
+    return hash_sha256(text);
+}
+
+fn main() -> Int {
+    if rt_argc() < 1 {
+        rt_print_str("usage: dupfind <folder>");
+        return 2;
+    }
+    let root = rt_argv(0);
+    if !rt_fs_exists(root) || rt_fs_file_size(root) >= 0 {
+        rt_print_str("dupfind: not a folder");
+        rt_str_free(root);
+        return 2;
+    }
+    let paths = collect(root, rt_vec_new(16));
+    let n = rt_vec_len(paths);
+    let mut sizes = rt_vec_new(n + 1);
+    let mut hashes = rt_vec_new(n + 1);
+    let mut claimed = rt_vec_new(n + 1);
+    let mut i = 0;
+    while i < n {
+        sizes = rt_vec_push(sizes, rt_fs_file_size(rt_vec_get(paths, i)));
+        hashes = rt_vec_push(hashes, "");
+        claimed = rt_vec_push(claimed, 0);
+        i = i + 1;
+    }
+    let mut groups = 0;
+    let mut extra = 0;
+    let mut saved = 0;
+    i = 0;
+    while i < n {
+        let size = rt_vec_get(sizes, i);
+        if rt_vec_get(claimed, i) == 0 && size > 0 && size <= 100000000 {
+            let mut members = 1;
+            let mut j = i + 1;
+            while j < n {
+                if rt_vec_get(claimed, j) == 0 && rt_vec_get(sizes, j) == size {
+                    if rt_str_len(rt_vec_get(hashes, i)) == 0 {
+                        rt_vec_set(hashes, i, file_hash(rt_str_concat(rt_vec_get(paths, i), "")));
+                    }
+                    if rt_str_len(rt_vec_get(hashes, j)) == 0 {
+                        rt_vec_set(hashes, j, file_hash(rt_str_concat(rt_vec_get(paths, j), "")));
+                    }
+                    if rt_str_len(rt_vec_get(hashes, i)) > 0 && rt_str_eq(rt_vec_get(hashes, i), rt_vec_get(hashes, j)) {
+                        if members == 1 {
+                            let count_text = rt_str_from_int(size);
+                            let head = rt_str_concat("duplicate group, each file is ", count_text);
+                            let head2 = rt_str_concat(head, " bytes:");
+                            rt_print_str(head2);
+                            rt_str_free(count_text);
+                            rt_str_free(head);
+                            rt_str_free(head2);
+                            let first = rt_str_concat("  ", rt_vec_get(paths, i));
+                            rt_print_str(first);
+                            rt_str_free(first);
+                        }
+                        let line = rt_str_concat("  ", rt_vec_get(paths, j));
+                        rt_print_str(line);
+                        rt_str_free(line);
+                        rt_vec_set(claimed, j, 1);
+                        members = members + 1;
+                        extra = extra + 1;
+                        saved = saved + size;
+                    }
+                }
+                j = j + 1;
+            }
+            if members > 1 {
+                groups = groups + 1;
+            }
+        }
+        i = i + 1;
+    }
+    rt_print_str("files scanned:");
+    rt_print_int(n);
+    rt_print_str("duplicate groups:");
+    rt_print_int(groups);
+    rt_print_str("extra copies:");
+    rt_print_int(extra);
+    rt_print_str("bytes that could be saved:");
+    rt_print_int(saved);
+    rt_vec_free(paths);
+    rt_vec_free(sizes);
+    rt_vec_free(hashes);
+    rt_vec_free(claimed);
+    return 0;
+}

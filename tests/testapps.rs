@@ -70,3 +70,52 @@ fn sitegen_fills_tokens_escapes_code_and_leaves_unknown_tokens() {
     assert_eq!(run(&exe, &[]).0, 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn fgrep_searches_folders_ignores_case_and_skips_binary_files() {
+    let (exe, dir) = build("fgrep");
+    let tree = dir.join("tree");
+    std::fs::create_dir_all(tree.join("sub")).unwrap();
+    std::fs::write(tree.join("a.txt"), "one\nneedle here\nthree\n").unwrap();
+    std::fs::write(tree.join("sub").join("b.txt"), "NEEDLE in caps\r\nnothing\r\n").unwrap();
+    std::fs::write(tree.join("bin.dat"), b"needle\0binary").unwrap();
+    let t = tree.to_str().unwrap();
+    let (code, out) = run(&exe, &["needle", t]);
+    assert_eq!(code, 0);
+    assert_eq!(out.lines().count(), 1, "case-sensitive, binary skipped: {out}");
+    assert!(out.contains("a.txt:2:needle here"), "{out}");
+    let (code, out) = run(&exe, &["-i", "needle", t]);
+    assert_eq!(code, 0);
+    assert_eq!(out.lines().count(), 2, "{out}");
+    assert!(out.contains("b.txt:1:NEEDLE in caps"), "carriage return is not part of the line: {out}");
+    assert_eq!(run(&exe, &["absent", t]).0, 1);
+    assert_eq!(run(&exe, &["x"]).0, 2);
+    assert_eq!(run(&exe, &["x", dir.join("nope").to_str().unwrap()]).0, 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dupfind_groups_identical_files_and_ignores_empty_and_same_size_files() {
+    let (exe, dir) = build("dupfind");
+    let tree = dir.join("tree");
+    std::fs::create_dir_all(tree.join("sub")).unwrap();
+    std::fs::write(tree.join("a.txt"), "same content here").unwrap();
+    std::fs::write(tree.join("sub").join("b.txt"), "same content here").unwrap();
+    std::fs::write(tree.join("d.txt"), "different but same!").unwrap();
+    std::fs::write(tree.join("e.txt"), "different but diff..").unwrap();
+    std::fs::write(tree.join("empty1.txt"), "").unwrap();
+    std::fs::write(tree.join("empty2.txt"), "").unwrap();
+    let (code, out) = run(&exe, &[tree.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("each file is 17 bytes"), "{out}");
+    assert!(out.contains("a.txt") && out.contains("b.txt"), "{out}");
+    assert!(!out.contains("d.txt") && !out.contains("empty"), "{out}");
+    let numbers: Vec<&str> = out.lines().skip_while(|l| !l.starts_with("files scanned")).collect();
+    assert_eq!(numbers[1], "6", "{out}");
+    assert_eq!(numbers[3], "1", "one group: {out}");
+    assert_eq!(numbers[5], "1", "one extra copy: {out}");
+    assert_eq!(numbers[7], "17", "{out}");
+    assert_eq!(run(&exe, &[]).0, 2);
+    assert_eq!(run(&exe, &[tree.join("a.txt").to_str().unwrap()]).0, 2, "a file is not a folder");
+    let _ = std::fs::remove_dir_all(&dir);
+}

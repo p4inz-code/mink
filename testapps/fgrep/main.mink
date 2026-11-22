@@ -1,0 +1,171 @@
+// fgrep: find text in the files under a folder, like a small grep or ripgrep.
+//
+//   mink build testapps/fgrep/main.mink
+//   fgrep [-i] <text> <folder-or-file>
+//
+// Prints path:line:text for every line that contains the text. -i ignores case. Files that look binary
+// or are larger than 8 MB are skipped. Exit code 0 means something matched, 1 means nothing did.
+mod strings;
+
+fn lower(b: Int) -> Int {
+    if b >= 65 && b <= 90 {
+        return b + 32;
+    }
+    return b;
+}
+
+// Searches one file and prints its matching lines. Takes (frees) both strings. Returns the match count.
+fn scan_file(path: Str, pat: Str, ci: Int) -> Int {
+    let mut hits = 0;
+    let size = rt_fs_file_size(path);
+    if size > 0 && size <= 8000000 {
+        let text = rt_fs_read(path);
+        let n = rt_str_len(text);
+        let plen = rt_str_len(pat);
+        // Skip binary files: a zero byte in the first 512 bytes.
+        let mut binary = false;
+        let mut probe = 0;
+        while probe < n && probe < 512 && !binary {
+            if rt_str_byte(text, probe) == 0 {
+                binary = true;
+            }
+            probe = probe + 1;
+        }
+        if !binary && plen > 0 {
+            let mut line_start = 0;
+            let mut line_no = 1;
+            let mut i = 0;
+            while i <= n {
+                if i == n || rt_str_byte(text, i) == 10 {
+                    // Look for the pattern between line_start and i.
+                    let mut end = i;
+                    if end > line_start && rt_str_byte(text, end - 1) == 13 {
+                        end = end - 1;
+                    }
+                    let mut found = false;
+                    let mut s = line_start;
+                    while !found && s + plen <= end {
+                        let mut j = 0;
+                        let mut same = true;
+                        while same && j < plen {
+                            let a = rt_str_byte(text, s + j);
+                            let b = rt_str_byte(pat, j);
+                            if ci == 1 {
+                                if lower(a) != lower(b) {
+                                    same = false;
+                                }
+                            } else if a != b {
+                                same = false;
+                            }
+                            j = j + 1;
+                        }
+                        if same {
+                            found = true;
+                        }
+                        s = s + 1;
+                    }
+                    if found {
+                        let num = rt_str_from_int(line_no);
+                        let head = rt_str_concat(path, ":");
+                        let head2 = rt_str_concat(head, num);
+                        let head3 = rt_str_concat(head2, ":");
+                        let body = str_sub(rt_str_concat(text, ""), line_start, end);
+                        let full = rt_str_concat(head3, body);
+                        rt_print_str(full);
+                        rt_str_free(num);
+                        rt_str_free(head);
+                        rt_str_free(head2);
+                        rt_str_free(head3);
+                        rt_str_free(body);
+                        rt_str_free(full);
+                        hits = hits + 1;
+                    }
+                    line_start = i + 1;
+                    line_no = line_no + 1;
+                }
+                i = i + 1;
+            }
+        }
+        rt_str_free(text);
+    }
+    rt_str_free(path);
+    rt_str_free(pat);
+    return hits;
+}
+
+// Walks a folder. Takes (frees) both strings. Returns the total match count.
+fn scan_dir(dir: Str, pat: Str, ci: Int) -> Int {
+    let mut total = 0;
+    let h = rt_dir_open(dir);
+    if h != 0 {
+        let mut more = true;
+        while more {
+            let name = rt_dir_next(h);
+            if rt_str_len(name) == 0 {
+                more = false;
+                rt_str_free(name);
+            } else if rt_str_eq(name, ".") || rt_str_eq(name, "..") {
+                rt_str_free(name);
+            } else {
+                let sep = rt_str_concat(dir, "\\");
+                let full = rt_str_concat(sep, name);
+                rt_str_free(sep);
+                rt_str_free(name);
+                if rt_fs_file_size(full) < 0 {
+                    total = total + scan_dir(full, rt_str_concat(pat, ""), ci);
+                } else {
+                    total = total + scan_file(full, rt_str_concat(pat, ""), ci);
+                }
+            }
+        }
+        rt_dir_close(h);
+    }
+    rt_str_free(dir);
+    rt_str_free(pat);
+    return total;
+}
+
+fn main() -> Int {
+    let argc = rt_argc();
+    let mut ci = 0;
+    let mut pat = "";
+    let mut target = "";
+    let mut seen = 0;
+    let mut a = 0;
+    while a < argc {
+        let arg = rt_argv(a);
+        if rt_str_eq(arg, "-i") {
+            ci = 1;
+            rt_str_free(arg);
+        } else if seen == 0 {
+            pat = arg;
+            seen = 1;
+        } else {
+            target = arg;
+            seen = seen + 1;
+        }
+        a = a + 1;
+    }
+    if seen < 2 {
+        rt_print_str("usage: fgrep [-i] <text> <folder-or-file>");
+        rt_str_free(pat);
+        rt_str_free(target);
+        return 2;
+    }
+    if !rt_fs_exists(target) {
+        rt_print_str("fgrep: no such folder or file");
+        rt_str_free(pat);
+        rt_str_free(target);
+        return 2;
+    }
+    let mut total = 0;
+    if rt_fs_file_size(target) < 0 {
+        total = scan_dir(target, pat, ci);
+    } else {
+        total = scan_file(target, pat, ci);
+    }
+    if total > 0 {
+        return 0;
+    }
+    return 1;
+}
